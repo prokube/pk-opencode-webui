@@ -1,0 +1,4 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "disabled_providers": ["amazon-bedrock"]
+}

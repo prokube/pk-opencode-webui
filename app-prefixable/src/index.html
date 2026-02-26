@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>OpenCode</title>
+    <!-- Base path will be injected here by server or set statically -->
+    <base href="/" />
+    <link rel="icon" type="image/svg+xml" href="./favicon.svg" />
+    <link rel="stylesheet" href="./styles.css" />
+    <link rel="stylesheet" href="./entry.css" />
+    <style>
+      /* Minimal loading state before CSS loads */
+      .loading-initial {
+        min-height: 100vh;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background-color: #0a0a0a;
+        color: #6b7280;
+        font-family:
+          system-ui,
+          -apple-system,
+          sans-serif;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="root">
+      <div class="loading-initial">Loading...</div>
+    </div>
+    <script>
+      // Runtime configuration injection point
+      window.__OPENCODE__ = window.__OPENCODE__ || {}
+      // Server can inject: window.__OPENCODE__.basePath = "/my-prefix/";
+      // Server can inject: window.__OPENCODE__.serverUrl = "http://localhost:4096";
+    </script>
+    <script type="module" src="./entry.js"></script>
+  </body>
+</html>

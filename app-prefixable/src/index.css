@@ -1,0 +1,426 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/**
+ * OpenCode ProKube UI Component Styles
+ * 
+ * Basiert auf dem OpenCode Design-System mit CSS-Variablen
+ */
+
+@layer base {
+  /* Override browser default focus outline (orange/yellow) with brand color */
+  *:focus {
+    outline-color: var(--interactive-base);
+  }
+  
+  *:focus-visible {
+    outline: 2px solid var(--interactive-base);
+    outline-offset: 2px;
+  }
+
+  :root {
+    /* Background colors */
+    --background-base: #ffffff;
+    --background-stronger: #fafafa;
+    --background-strongest: #f4f4f5;
+
+    /* Surface colors */
+    --surface-base: #ffffff;
+    --surface-inset: #f4f4f5;
+    --surface-strong: #e4e4e7;
+
+    /* Text colors */
+    --text-base: #3f3f46;
+    --text-strong: #18181b;
+    --text-weak: #71717a;
+    --text-interactive-base: #958dff;
+
+    /* Icon colors */
+    --icon-base: #52525b;
+    --icon-weak: #a1a1aa;
+    --icon-strong: #18181b;
+
+    /* Border colors */
+    --border-base: #e4e4e7;
+    --border-strong: #d4d4d8;
+
+    /* Interactive */
+    --interactive-base: #958dff;
+    --interactive-hover: #7b72e8;
+    --interactive-critical: #dc2626;
+    --interactive-critical-hover: #b91c1c;
+  }
+
+  .dark {
+    --background-base: #18181b;
+    --background-stronger: #09090b;
+    --background-strongest: #27272a;
+
+    --surface-base: #18181b;
+    --surface-inset: #27272a;
+    --surface-strong: #3f3f46;
+
+    --text-base: #a1a1aa;
+    --text-strong: #fafafa;
+    --text-weak: #71717a;
+    --text-interactive-base: #a8a3ff;
+
+    --icon-base: #a1a1aa;
+    --icon-weak: #52525b;
+    --icon-strong: #fafafa;
+
+    --border-base: #27272a;
+    --border-strong: #3f3f46;
+
+    --interactive-base: #a8a3ff;
+    --interactive-hover: #958dff;
+    --interactive-critical: #ef4444;
+    --interactive-critical-hover: #dc2626;
+  }
+}
+
+@layer components {
+  /* ============================================
+     BUTTONS
+     ============================================ */
+
+  .pk-button {
+    @apply inline-flex items-center justify-center whitespace-nowrap rounded-md text-sm font-medium;
+    @apply transition-colors;
+    @apply focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-2;
+    @apply disabled:pointer-events-none disabled:opacity-50;
+    @apply h-10 px-4 py-2;
+  }
+
+  .pk-button-primary {
+    @apply pk-button bg-brand-500 text-white hover:bg-brand-600;
+  }
+
+  .pk-button-outline {
+    @apply pk-button border border-gray-300 bg-white hover:bg-gray-50 hover:text-gray-900;
+  }
+
+  .pk-button-destructive {
+    @apply pk-button text-red-600 hover:text-red-700 hover:border-red-300;
+  }
+
+  .pk-button-ghost {
+    @apply pk-button hover:bg-gray-100;
+  }
+
+  .pk-button-sm {
+    @apply h-9 rounded-md px-3 text-sm;
+  }
+
+  .pk-button-lg {
+    @apply h-11 rounded-md px-8 text-base;
+  }
+
+  /* ============================================
+     CARDS
+     ============================================ */
+
+  .pk-card {
+    @apply bg-white rounded-xl shadow-sm border;
+  }
+
+  .pk-card-header {
+    @apply p-6 border-b;
+  }
+
+  .pk-card-title {
+    @apply text-lg font-semibold text-gray-900;
+  }
+
+  .pk-card-content {
+    @apply p-6;
+  }
+
+  /* ============================================
+     FORMS
+     ============================================ */
+
+  .pk-label {
+    @apply block text-sm font-medium text-gray-700 mb-2;
+  }
+
+  .pk-input {
+    @apply w-full px-3 py-2 border border-gray-300 rounded-md;
+    @apply focus:ring-brand-500 focus:border-brand-500 focus:outline-none;
+    @apply disabled:bg-gray-50 disabled:text-gray-500;
+  }
+
+  .pk-textarea {
+    @apply pk-input resize-none;
+  }
+
+  .pk-help-text {
+    @apply text-xs text-gray-500 mt-1;
+  }
+
+  /* ============================================
+     STATUS BADGES
+     ============================================ */
+
+  .pk-badge {
+    @apply px-2 py-1 text-xs font-medium rounded-full;
+  }
+
+  .pk-badge-success {
+    @apply pk-badge bg-green-100 text-green-800;
+  }
+
+  .pk-badge-warning {
+    @apply pk-badge bg-yellow-100 text-yellow-800;
+  }
+
+  .pk-badge-error {
+    @apply pk-badge bg-red-100 text-red-800;
+  }
+
+  .pk-badge-info {
+    @apply pk-badge bg-blue-100 text-blue-800;
+  }
+
+  .pk-badge-neutral {
+    @apply pk-badge bg-gray-100 text-gray-800;
+  }
+
+  /* ============================================
+     LAYOUT
+     ============================================ */
+
+  .pk-page {
+    @apply min-h-screen bg-gray-50;
+  }
+
+  .pk-page-content {
+    @apply p-8 max-w-7xl mx-auto;
+  }
+
+  .pk-section-spacing {
+    @apply space-y-6;
+  }
+
+  .pk-header {
+    @apply bg-white border-b border-gray-200 px-6 py-4;
+  }
+
+  .pk-header-title {
+    @apply text-xl font-semibold text-gray-900;
+  }
+
+  /* ============================================
+     CHAT / SESSION SPECIFIC
+     ============================================ */
+
+  .pk-chat-container {
+    @apply flex flex-col h-[calc(100vh-8rem)];
+  }
+
+  .pk-chat-messages {
+    @apply flex-1 overflow-y-auto space-y-4 p-4;
+  }
+
+  .pk-chat-message {
+    @apply p-4 rounded-lg;
+  }
+
+  .pk-chat-message-user {
+    @apply pk-chat-message bg-brand-50 border border-brand-100 ml-12;
+  }
+
+  .pk-chat-message-assistant {
+    @apply pk-chat-message bg-white border border-gray-200 mr-12 shadow-sm;
+  }
+
+  .pk-chat-message-role {
+    @apply text-xs font-medium text-gray-500 mb-2 uppercase tracking-wide;
+  }
+
+  .pk-chat-message-content {
+    @apply text-gray-800 whitespace-pre-wrap;
+  }
+
+  .pk-chat-input-container {
+    @apply p-4 border-t border-gray-200 bg-white;
+  }
+
+  .pk-chat-input {
+    @apply flex gap-3;
+  }
+
+  .pk-chat-input-field {
+    @apply flex-1 px-4 py-3 border border-gray-300 rounded-lg;
+    @apply focus:ring-2 focus:ring-brand-500 focus:border-brand-500 focus:outline-none;
+    @apply disabled:bg-gray-50 disabled:text-gray-500;
+  }
+
+  .pk-chat-send-button {
+    @apply px-6 py-3 bg-brand-500 text-white rounded-lg font-medium;
+    @apply hover:bg-brand-600 transition-colors;
+    @apply disabled:opacity-50 disabled:cursor-not-allowed;
+  }
+
+  /* ============================================
+     SESSION LIST
+     ============================================ */
+
+  .pk-session-list {
+    @apply space-y-2;
+  }
+
+  .pk-session-item {
+    @apply block p-4 bg-white border border-gray-200 rounded-lg;
+    @apply hover:border-brand-300 hover:shadow-sm transition-all;
+  }
+
+  .pk-session-item-title {
+    @apply font-medium text-gray-900;
+  }
+
+  .pk-session-item-meta {
+    @apply text-sm text-gray-500 mt-1;
+  }
+
+  /* ============================================
+     EMPTY STATES
+     ============================================ */
+
+  .pk-empty-state {
+    @apply flex flex-col items-center justify-center py-12 text-center;
+  }
+
+  .pk-empty-state-icon {
+    @apply w-16 h-16 bg-brand-100 rounded-full flex items-center justify-center mb-4;
+  }
+
+  .pk-empty-state-title {
+    @apply text-lg font-medium text-gray-900 mb-2;
+  }
+
+  .pk-empty-state-description {
+    @apply text-gray-500;
+  }
+
+  /* ============================================
+     LOADING STATES
+     ============================================ */
+
+  .pk-loading {
+    @apply flex items-center justify-center py-12;
+  }
+
+  .pk-loading-spinner {
+    @apply animate-spin h-8 w-8 border-4 border-brand-500 border-t-transparent rounded-full;
+  }
+
+  .pk-loading-text {
+    @apply text-gray-500 ml-3;
+  }
+
+  .pk-thinking {
+    @apply p-4 bg-gray-50 border border-gray-200 rounded-lg mr-12;
+    @apply animate-pulse;
+  }
+
+  /* ============================================
+     MARKDOWN CONTENT
+     ============================================ */
+
+  .markdown-content {
+    @apply text-gray-800 leading-relaxed;
+  }
+
+  .markdown-content p {
+    @apply mb-4 last:mb-0;
+  }
+
+  .markdown-content h1 {
+    @apply text-2xl font-bold mb-4 mt-6 first:mt-0;
+  }
+
+  .markdown-content h2 {
+    @apply text-xl font-bold mb-3 mt-5 first:mt-0;
+  }
+
+  .markdown-content h3 {
+    @apply text-lg font-semibold mb-2 mt-4 first:mt-0;
+  }
+
+  .markdown-content h4,
+  .markdown-content h5,
+  .markdown-content h6 {
+    @apply font-semibold mb-2 mt-3 first:mt-0;
+  }
+
+  .markdown-content ul {
+    @apply list-disc list-inside mb-4 space-y-1;
+  }
+
+  .markdown-content ol {
+    @apply list-decimal list-inside mb-4 space-y-1;
+  }
+
+  .markdown-content li {
+    @apply pl-1;
+  }
+
+  .markdown-content code {
+    @apply bg-gray-100 text-brand-700 px-1.5 py-0.5 rounded text-sm font-mono;
+  }
+
+  .markdown-content pre {
+    @apply bg-gray-900 text-gray-100 p-4 rounded-lg mb-4 overflow-x-auto;
+  }
+
+  .markdown-content pre code {
+    @apply bg-transparent text-gray-100 p-0 text-sm;
+  }
+
+  .markdown-content blockquote {
+    @apply border-l-4 border-brand-300 pl-4 italic text-gray-600 mb-4;
+  }
+
+  .markdown-content a {
+    @apply text-brand-600 hover:text-brand-700 underline;
+  }
+
+  .markdown-content hr {
+    @apply border-gray-200 my-6;
+  }
+
+  .markdown-content table {
+    @apply w-full border-collapse mb-4;
+  }
+
+  .markdown-content th {
+    @apply bg-gray-100 border border-gray-300 px-3 py-2 text-left font-semibold;
+  }
+
+  .markdown-content td {
+    @apply border border-gray-300 px-3 py-2;
+  }
+
+  .markdown-content strong {
+    @apply font-semibold;
+  }
+
+  .markdown-content em {
+    @apply italic;
+  }
+
+  /* ============================================
+     TERMINAL (xterm.js fixes)
+     ============================================ */
+
+  /* Hide xterm.js helper/composition elements that appear as white boxes */
+  .xterm-helper-textarea {
+    opacity: 0 !important;
+  }
+
+  .xterm .composition-view {
+    display: none !important;
+  }
+}

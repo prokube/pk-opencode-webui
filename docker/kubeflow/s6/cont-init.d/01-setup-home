@@ -1,0 +1,27 @@
+#!/command/with-contenv sh
+
+# This script sets up the OpenCode home directory and config paths
+# It ensures that OpenCode configuration is stored in the persistent /home/jovyan volume
+
+# setting umask to 0002 makes copied files/folders writable by group
+# this is needed to run the container as an arbitrary UID
+umask 0002
+
+# the home directory is usually a PVC
+# we need to copy the contents of $HOME_TMP that we populated during the build
+# NOTE: -n prevents overwriting existing files
+# NOTE: -T ensures that the CONTENTS of $HOME_TMP are copied, and not the directory itself
+echo "INFO: Copying contents of '$HOME_TMP' to '$HOME'..."
+if ! cp -n -r -T "$HOME_TMP" "$HOME" 2>/dev/null; then
+    echo "WARNING: Failed to copy some files from '$HOME_TMP' to '$HOME'. This might be normal if files already exist." >&2
+fi
+
+# Create OpenCode config directories if they don't exist
+echo "INFO: Setting up OpenCode config directories..."
+mkdir -p "$HOME/.config/opencode"
+mkdir -p "$HOME/.local/share/opencode"
+
+echo "INFO: OpenCode home setup completed successfully"
+
+# Ensure we always exit with 0
+exit 0

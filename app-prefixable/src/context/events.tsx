@@ -1,0 +1,102 @@
+import { createContext, useContext, onCleanup, type ParentProps } from "solid-js"
+import { createStore } from "solid-js/store"
+import type { Event, SessionStatus } from "../sdk/client"
+import { useBasePath } from "./base-path"
+import { useSDK } from "./sdk"
+
+type EventHandler = (event: Event) => void
+
+interface EventContextValue {
+  subscribe: (handler: EventHandler) => () => void
+  status: Record<string, SessionStatus>
+}
+
+const EventContext = createContext<EventContextValue>()
+
+export function EventProvider(props: ParentProps) {
+  const { prefix } = useBasePath()
+  const { directory } = useSDK()
+  const handlers = new Set<EventHandler>()
+  const [status, setStatus] = createStore<Record<string, SessionStatus>>({})
+
+  // Connect to SSE endpoint
+  let eventSource: EventSource | null = null
+  let reconnectTimer: ReturnType<typeof setTimeout> | null = null
+
+  function connect() {
+    if (eventSource) return
+
+    // Use prefixed path with directory parameter so events are scoped to the correct instance
+    const dirParam = directory ? `?directory=${encodeURIComponent(directory)}` : ""
+    const eventUrl = prefix(`/event${dirParam}`)
+    eventSource = new EventSource(eventUrl)
+    console.log("[Events] Connecting to SSE:", eventUrl)
+
+    eventSource.onopen = () => {
+      console.log("[Events] Connected")
+    }
+
+    eventSource.onmessage = (e) => {
+      try {
+        const data = JSON.parse(e.data)
+        // Handle both formats: direct event or wrapped in payload
+        const event = (data?.payload ?? data) as Event
+        if (!event || !event.type) {
+          console.warn("[Events] Received event without type:", data)
+          return
+        }
+        console.log("[Events] Received:", event.type, event.properties)
+
+        // Update session status
+        if (event.type === "session.status") {
+          const props = event.properties
+          if (props?.sessionID && props?.status) {
+            setStatus(props.sessionID, props.status)
+          }
+        }
+
+        // Notify all handlers
+        for (const handler of handlers) {
+          handler(event)
+        }
+      } catch (err) {
+        console.error("[Events] Parse error:", err)
+      }
+    }
+
+    eventSource.onerror = (e) => {
+      console.error("[Events] Connection error, reconnecting...", e)
+      eventSource?.close()
+      eventSource = null
+
+      // Reconnect after delay
+      if (!reconnectTimer) {
+        reconnectTimer = setTimeout(() => {
+          reconnectTimer = null
+          connect()
+        }, 3000)
+      }
+    }
+  }
+
+  // Start connection
+  connect()
+
+  onCleanup(() => {
+    eventSource?.close()
+    if (reconnectTimer) clearTimeout(reconnectTimer)
+  })
+
+  function subscribe(handler: EventHandler) {
+    handlers.add(handler)
+    return () => handlers.delete(handler)
+  }
+
+  return <EventContext.Provider value={{ subscribe, status }}>{props.children}</EventContext.Provider>
+}
+
+export function useEvents() {
+  const ctx = useContext(EventContext)
+  if (!ctx) throw new Error("useEvents must be used within EventProvider")
+  return ctx
+}

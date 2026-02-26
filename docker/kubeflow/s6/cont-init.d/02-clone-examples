@@ -1,0 +1,28 @@
+#!/command/with-contenv sh
+
+# Clone the kf-examples repository to the user's home directory
+# This provides starter examples for users
+# NOTE: This runs in the background to not block container startup
+
+# Skip if KF_EXAMPLES_REPO is not set or empty
+if [ -z "$KF_EXAMPLES_REPO" ]; then
+    echo "INFO: KF_EXAMPLES_REPO not set, skipping clone"
+    exit 0
+fi
+
+# Change to the user's home directory
+cd "$HOME"
+
+# Skip if directory already exists
+REPO_NAME=$(basename "$KF_EXAMPLES_REPO" .git)
+if [ -d "$REPO_NAME" ]; then
+    echo "INFO: $REPO_NAME already exists, skipping clone"
+    exit 0
+fi
+
+# Clone in background to not block startup
+echo "INFO: Cloning $REPO_NAME in background..."
+(git clone --depth 1 "$KF_EXAMPLES_REPO" 2>/dev/null && echo "INFO: Clone completed: $REPO_NAME") &
+
+# Ensure we always exit with 0
+exit 0

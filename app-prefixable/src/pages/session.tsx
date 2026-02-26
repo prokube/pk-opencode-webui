@@ -1,0 +1,1440 @@
+import {
+  createSignal,
+  createResource,
+  Show,
+  For,
+  onMount,
+  createEffect,
+  onCleanup,
+  createMemo,
+} from "solid-js";
+import { useParams, useNavigate } from "@solidjs/router";
+import { Button } from "../components/ui/button";
+import { Spinner } from "../components/ui/spinner";
+import { useSDK } from "../context/sdk";
+import { useEvents } from "../context/events";
+import { useSync } from "../context/sync";
+import { useProviders } from "../context/providers";
+import { useMCP } from "../context/mcp";
+import { usePermission } from "../context/permission";
+import { useLayout } from "../context/layout";
+import { useBranding } from "../context/branding";
+import { MessageTimeline } from "../components/message-timeline";
+import { MCPDialog } from "../components/mcp-dialog";
+import { MCPAddDialog } from "../components/mcp-add-dialog";
+import { PickerDialog } from "../components/picker-dialog";
+import { QuestionPrompt } from "../components/question-prompt";
+import { PermissionPrompt } from "../components/permission-prompt";
+import { SessionInfo } from "../components/session-info";
+import { SessionSidebar } from "../components/session-sidebar";
+import { ReviewPanel } from "../components/review-panel";
+import { SessionHeader } from "../components/session-header";
+import { ResizeHandle } from "../components/resize-handle";
+import { base64Encode } from "../utils/path";
+import type { Part, QuestionRequest } from "../sdk/client";
+import { Plus, Settings, Paperclip, Upload } from "lucide-solid";
+import { ContextItems, type FileContext } from "../components/context-items";
+import { FilePickerDialog } from "../components/file-picker-dialog";
+import {
+  ImageAttachments,
+  type ImageAttachment,
+} from "../components/image-attachments";
+
+const ACCEPTED_TYPES = [
+  "image/png",
+  "image/jpeg",
+  "image/gif",
+  "image/webp",
+  "application/pdf",
+];
+const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB limit
+
+interface Command {
+  id: string;
+  title: string;
+  description?: string;
+  slash?: string;
+  onSelect: () => void;
+}
+
+interface DisplayMessage {
+  id: string;
+  role: "user" | "assistant";
+  parts: Part[];
+  error?: { name: string; data?: { message?: string } };
+}
+
+export function Session() {
+  const params = useParams<{ dir: string; id?: string }>();
+  const navigate = useNavigate();
+  const { client, directory } = useSDK();
+  const events = useEvents();
+  const sync = useSync();
+  const providers = useProviders();
+  const mcp = useMCP();
+  const permission = usePermission();
+  const layout = useLayout();
+  const branding = useBranding();
+
+  // Helper to get the current directory slug
+  const dirSlug = createMemo(() =>
+    directory ? base64Encode(directory) : params.dir,
+  );
+
+  const [input, setInput] = createSignal("");
+  const [optimisticMessage, setOptimisticMessage] =
+    createSignal<DisplayMessage | null>(null);
+  const [loading, setLoading] = createSignal(false);
+  const [processing, setProcessing] = createSignal(false);
+  const [loadingHistory, setLoadingHistory] = createSignal(false);
+  const [sessionId, setSessionId] = createSignal(params.id);
+  const [showSlashPopover, setShowSlashPopover] = createSignal(false);
+  const [slashQuery, setSlashQuery] = createSignal("");
+  const [slashIndex, setSlashIndex] = createSignal(0);
+  const [showMCPDialog, setShowMCPDialog] = createSignal(false);
+  const [showMCPAddDialog, setShowMCPAddDialog] = createSignal(false);
+  const [showModelPicker, setShowModelPicker] = createSignal(false);
+  const [showAgentPicker, setShowAgentPicker] = createSignal(false);
+  const [showFilePicker, setShowFilePicker] = createSignal(false);
+  const [fileContext, setFileContext] = createSignal<FileContext[]>([]);
+  const [imageAttachments, setImageAttachments] = createSignal<
+    ImageAttachment[]
+  >([]);
+  const [error, setError] = createSignal<string | null>(null);
+  const [pendingQuestion, setPendingQuestion] =
+    createSignal<QuestionRequest | null>(null);
+  const [pendingUserMessageText, setPendingUserMessageText] = createSignal<
+    string | null
+  >(null);
+
+  // Keep sessionId in sync with URL params and sync session data
+  createEffect(() => {
+    const id = params.id;
+    console.log("[Session] URL param changed:", id);
+    setSessionId(id);
+    setPendingUserMessageText(null); // Clear pending text on session change
+    setFileContext([]); // Clear file context on session change
+    setImageAttachments([]); // Clear image attachments on session change
+    if (id) {
+      // Use sync context to load session data - no local state needed
+      setLoadingHistory(true);
+      setProcessing(false); // Reset processing state for new session
+      sync.session.sync(id).then(() => {
+        setLoadingHistory(false);
+      });
+
+      // Check if this session is actually busy
+      client.session
+        .status({})
+        .then((res: { data?: Record<string, { type: string }> }) => {
+          const statuses = res.data;
+          if (!statuses) return;
+          if (statuses[id]) {
+            const isBusy =
+              statuses[id].type === "busy" || statuses[id].type === "retry";
+            console.log(
+              "[Session] Initial status for",
+              id,
+              ":",
+              statuses[id].type,
+              "isBusy:",
+              isBusy,
+            );
+            setProcessing(isBusy);
+          }
+        });
+    } else {
+      setLoadingHistory(false);
+      setProcessing(false);
+    }
+  });
+
+  // Get messages from sync context - reactive, automatically updated via SSE
+  // Cache the base messages array to avoid recreating on every call
+  const syncMessages = createMemo(() => {
+    const id = sessionId();
+    if (!id) return [];
+    return sync.messages(id).map((msg) => ({
+      id: msg.info.id,
+      role: msg.info.role as "user" | "assistant",
+      parts: msg.parts,
+      error: (msg.info as { error?: DisplayMessage["error"] }).error,
+    }));
+  });
+
+  // Includes optimistic message if present and not yet in sync
+  const messages = createMemo(() => {
+    const syncMsgs = syncMessages();
+    if (syncMsgs.length === 0 && !optimisticMessage()) return syncMsgs;
+
+    // Add optimistic message if it exists and isn't already in sync
+    const opt = optimisticMessage();
+    if (opt) {
+      // Check if the pending user message text matches any message in sync
+      const pendingText = pendingUserMessageText();
+      if (pendingText) {
+        const alreadyInSync = syncMsgs.some((m) => {
+          if (m.role !== "user") return false;
+          // Check all text parts for a match
+          return m.parts
+            .filter((p) => p.type === "text")
+            .some(
+              (p) =>
+                (p as { text?: string }).text?.trim() === pendingText.trim(),
+            );
+        });
+        if (!alreadyInSync) {
+          return [...syncMsgs, opt];
+        }
+      }
+    }
+    return syncMsgs;
+  });
+  let inputRef: HTMLTextAreaElement | undefined;
+  let slashPopoverRef: HTMLDivElement | undefined;
+  let fileInputRef: HTMLInputElement | undefined;
+
+  // Base slash commands (static ones)
+  const baseSlashCommands: Command[] = [
+    {
+      id: "session.new",
+      title: "New Session",
+      description: "Create a new chat session",
+      slash: "new",
+      onSelect: async () => {
+        console.log("[Command] New session - creating...");
+        try {
+          const res = await client.session.create({});
+          if (res.data) {
+            console.log("[Command] Created session:", res.data.id);
+            navigate(`/${dirSlug()}/session/${res.data.id}`);
+          }
+        } catch (e) {
+          console.error("[Command] Failed to create session:", e);
+        }
+      },
+    },
+    {
+      id: "settings.open",
+      title: "Settings",
+      description: "Open settings page",
+      slash: "settings",
+      onSelect: () => {
+        console.log("[Command] Settings");
+        navigate(`/${dirSlug()}/settings`);
+      },
+    },
+    {
+      id: "provider.connect",
+      title: "Connect Provider",
+      description: "Add an AI provider",
+      slash: "connect",
+      onSelect: () => {
+        console.log("[Command] Connect");
+        navigate(`/${dirSlug()}/settings`);
+      },
+    },
+    {
+      id: "model.choose",
+      title: "Choose Model",
+      description: "Select the AI model to use",
+      slash: "model",
+      onSelect: () => {
+        setShowModelPicker(true);
+      },
+    },
+    {
+      id: "agent.choose",
+      title: "Choose Agent",
+      description: "Select the agent to use",
+      slash: "agent",
+      onSelect: () => {
+        setShowAgentPicker(true);
+      },
+    },
+    {
+      id: "mcp.manage",
+      title: "MCP Servers",
+      description: "Manage MCP server connections",
+      slash: "mcp",
+      onSelect: () => {
+        console.log("[Command] MCP dialog");
+        setShowMCPDialog(true);
+      },
+    },
+  ];
+
+  // Filtered slash commands based on query
+  const filteredSlashCommands = createMemo(() => {
+    const q = slashQuery().toLowerCase();
+    if (!q) return baseSlashCommands;
+
+    return baseSlashCommands.filter(
+      (c) =>
+        c.slash?.toLowerCase().startsWith(q) ||
+        c.title.toLowerCase().includes(q) ||
+        c.description?.toLowerCase().includes(q),
+    );
+  });
+
+  // Close slash popover on click outside
+  function handleClickOutside(e: MouseEvent) {
+    const target = e.target as Node;
+    if (inputRef?.contains(target)) return;
+    if (slashPopoverRef && !slashPopoverRef.contains(target)) {
+      setShowSlashPopover(false);
+    }
+  }
+
+  // Handle slash command selection
+  function selectSlashCommand(cmd: Command) {
+    console.log("[Session] Selecting command:", cmd.id);
+    setInput("");
+    setShowSlashPopover(false);
+    setSlashQuery("");
+
+    // Use setTimeout to ensure state updates before command runs
+    setTimeout(() => {
+      console.log("[Session] Executing command:", cmd.id);
+      cmd.onSelect();
+    }, 0);
+  }
+
+  // Handle input changes to detect slash commands
+  function handleInputChange(value: string) {
+    setInput(value);
+
+    // Detect slash command pattern: starts with / followed by command name (no spaces)
+    const slashMatch = value.match(/^\/(\S*)$/);
+    if (slashMatch) {
+      const query = slashMatch[1];
+      setSlashQuery(query);
+      setShowSlashPopover(true);
+      setSlashIndex(0);
+    } else {
+      setShowSlashPopover(false);
+      setSlashQuery("");
+    }
+  }
+
+  // Handle keyboard navigation in slash popover
+  function handleInputKeyDown(e: KeyboardEvent) {
+    if (!showSlashPopover()) return;
+
+    const cmds = filteredSlashCommands();
+    if (cmds.length === 0) return;
+
+    if (e.key === "ArrowDown") {
+      e.preventDefault();
+      setSlashIndex((i) => (i + 1) % cmds.length);
+    } else if (e.key === "ArrowUp") {
+      e.preventDefault();
+      setSlashIndex((i) => (i - 1 + cmds.length) % cmds.length);
+    } else if (e.key === "Enter" || e.key === "Tab") {
+      e.preventDefault();
+      const cmd = cmds[slashIndex()];
+      if (cmd) {
+        selectSlashCommand(cmd);
+      }
+    } else if (e.key === "Escape") {
+      e.preventDefault();
+      setShowSlashPopover(false);
+      setSlashQuery("");
+    }
+  }
+
+  onMount(() => {
+    document.addEventListener("click", handleClickOutside);
+  });
+
+  onCleanup(() => {
+    document.removeEventListener("click", handleClickOutside);
+  });
+
+  // Get session from sync context - reactive, automatically updated via SSE
+  const session = createMemo(() => {
+    const id = params.id;
+    if (!id) return null;
+    return sync.session.get(id) ?? null;
+  });
+
+  // Refetch is now just re-syncing
+  const refetchSession = async () => {
+    const id = params.id;
+    if (id) await sync.session.sync(id);
+  };
+
+  // Start processing state - SSE events will handle updates and completion
+  function startProcessing() {
+    console.log("[Session] Starting processing, relying on SSE events");
+    setProcessing(true);
+  }
+
+  // Subscribe to events for status changes and session updates
+  // Note: Message updates are handled by sync context, no need to manage here
+  onMount(() => {
+    const unsub = events.subscribe(
+      (event: { type: string; properties: Record<string, unknown> }) => {
+        const id = sessionId();
+        if (!id) return;
+
+        // Handle message part updates - clear optimistic message when user message is echoed
+        if (event.type === "message.part.updated") {
+          const part = event.properties.part as {
+            sessionID: string;
+            type: string;
+            text?: string;
+          };
+          if (part.sessionID !== id) return;
+
+          // Check if this is the backend echo of the user message we just sent
+          const pendingText = pendingUserMessageText();
+          if (
+            pendingText &&
+            part.type === "text" &&
+            part.text?.trim() === pendingText.trim()
+          ) {
+            console.log(
+              "[Session] User message echoed from server, clearing optimistic message",
+            );
+            setPendingUserMessageText(null);
+            setOptimisticMessage(null);
+          }
+        }
+
+        // Handle status changes
+        if (event.type === "session.status") {
+          const props = event.properties as {
+            sessionID: string;
+            status: { type: string };
+          };
+          if (props.sessionID === id && props.status.type === "idle") {
+            console.log("[Session] Status idle");
+            // Only clear optimistic message if no pending text or it was already matched
+            if (!pendingUserMessageText()) {
+              setOptimisticMessage(null);
+            }
+            setPendingUserMessageText(null);
+            setProcessing(false);
+          } else if (props.sessionID === id) {
+            setProcessing(true);
+          }
+        }
+
+        // Handle session updates
+        if (event.type === "session.updated") {
+          refetchSession();
+        }
+      },
+    );
+
+    return unsub;
+  });
+
+  // Load questions on mount and subscribe to question events
+  createEffect(() => {
+    const id = sessionId();
+    if (!id) {
+      setPendingQuestion(null);
+      return;
+    }
+
+    // Initial load
+    const loadQuestions = async () => {
+      try {
+        const res = await client.question.list({ directory });
+        console.log("[Session] Question list response:", res);
+        const questions = Array.isArray(res.data) ? res.data : [];
+        const q = questions.find((q) => q.sessionID === id);
+        if (q) {
+          console.log("[Session] Found pending question:", q);
+          setPendingQuestion(q);
+          return;
+        }
+        setPendingQuestion(null);
+      } catch (e) {
+        console.error("[Session] Failed to load questions:", e);
+      }
+    };
+    loadQuestions();
+
+    // Subscribe to question events for real-time updates
+    const unsub = events.subscribe((event) => {
+      const type = event.type as string;
+      if (type === "question.asked") {
+        const props = event.properties as QuestionRequest;
+        if (props.sessionID === id) {
+          console.log("[Session] Question event received:", props);
+          setPendingQuestion(props);
+        }
+      }
+      // Clear question when answered or rejected
+      if (type === "question.replied" || type === "question.rejected") {
+        const props = event.properties as { sessionID?: string };
+        if (props.sessionID === id) {
+          console.log("[Session] Question cleared:", type);
+          setPendingQuestion(null);
+        }
+      }
+    });
+
+    onCleanup(unsub);
+  });
+
+  async function handleQuestionReply(answers: string[][]) {
+    const q = pendingQuestion();
+    if (!q) return;
+
+    try {
+      await client.question.reply({ requestID: q.id, answers, directory });
+      setPendingQuestion(null);
+    } catch (e) {
+      console.error("[Session] Failed to reply to question:", e);
+    }
+  }
+
+  async function handleQuestionReject() {
+    const q = pendingQuestion();
+    if (!q) return;
+
+    try {
+      await client.question.reject({ requestID: q.id, directory });
+      setPendingQuestion(null);
+    } catch (e) {
+      console.error("[Session] Failed to reject question:", e);
+    }
+  }
+
+  async function handleAbort() {
+    const id = sessionId();
+    if (!id) return;
+
+    try {
+      console.log("[Session] Aborting session:", id);
+      await client.session.abort({ sessionID: id, directory });
+      setProcessing(false);
+      setPendingQuestion(null);
+    } catch (e) {
+      console.error("[Session] Failed to abort session:", e);
+    }
+  }
+
+  // Focus input on mount
+  onMount(() => {
+    inputRef?.focus();
+  });
+
+  function addFileToContext(path: string) {
+    const key = `file:${path}`;
+    const existing = fileContext().find((f) => f.key === key);
+    if (existing) return;
+    setFileContext((prev) => [...prev, { path, key }]);
+  }
+
+  function removeFileFromContext(key: string) {
+    setFileContext((prev) => prev.filter((f) => f.key !== key));
+  }
+
+  function addUpload(file: File) {
+    setError(null); // Clear previous errors
+    if (!ACCEPTED_TYPES.includes(file.type)) {
+      setError(
+        `Unsupported file type: ${file.type}. Accepted: images and PDFs.`,
+      );
+      return;
+    }
+    if (file.size > MAX_FILE_SIZE) {
+      setError(
+        `File too large: ${file.name} (${(file.size / 1024 / 1024).toFixed(1)}MB). Max size: 10MB.`,
+      );
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = () => {
+      const dataUrl = reader.result as string;
+      const attachment: ImageAttachment = {
+        id: crypto.randomUUID(),
+        name: file.name,
+        mime: file.type,
+        dataUrl,
+      };
+      setImageAttachments((prev) => [...prev, attachment]);
+    };
+    reader.readAsDataURL(file);
+  }
+
+  function removeUpload(id: string) {
+    setImageAttachments((prev) => prev.filter((a) => a.id !== id));
+  }
+
+  function handleFileInputChange(e: Event) {
+    const target = e.target as HTMLInputElement;
+    const files = target.files;
+    if (!files) return;
+    for (const file of files) {
+      addUpload(file);
+    }
+    target.value = ""; // Reset to allow re-selecting same file
+  }
+
+  // Handle paste events (Ctrl+V) to extract files from clipboard
+  function handlePaste(e: ClipboardEvent) {
+    const items = e.clipboardData?.items;
+    if (!items) return;
+
+    for (const item of items) {
+      if (item.kind === "file") {
+        const file = item.getAsFile();
+        if (file) {
+          e.preventDefault(); // Prevent default paste behavior for files
+          addUpload(file);
+        }
+      }
+    }
+  }
+
+  // Drag & Drop state and handlers
+  const [isDragging, setIsDragging] = createSignal(false);
+  let dragCounter = 0; // Track nested drag events
+
+  function handleDragEnter(e: DragEvent) {
+    e.preventDefault();
+    e.stopPropagation();
+    // Only track drag events that include files
+    if (!e.dataTransfer?.types.includes("Files")) return;
+    dragCounter++;
+    setIsDragging(true);
+  }
+
+  function handleDragLeave(e: DragEvent) {
+    e.preventDefault();
+    e.stopPropagation();
+    // Only track drag events that include files (consistent with handleDragEnter)
+    if (!e.dataTransfer?.types.includes("Files")) return;
+    // Only decrement if counter is positive to prevent negative values
+    if (dragCounter > 0) {
+      dragCounter--;
+    }
+    if (dragCounter === 0) {
+      setIsDragging(false);
+    }
+  }
+
+  function handleDragOver(e: DragEvent) {
+    e.preventDefault();
+    e.stopPropagation();
+  }
+
+  function handleDrop(e: DragEvent) {
+    e.preventDefault();
+    e.stopPropagation();
+    dragCounter = 0;
+    setIsDragging(false);
+
+    const files = e.dataTransfer?.files;
+    if (!files) return;
+
+    for (const file of files) {
+      addUpload(file);
+    }
+  }
+
+  async function sendMessage(e: SubmitEvent) {
+    e.preventDefault();
+    const text = input().trim();
+    const files = fileContext();
+    const images = imageAttachments();
+    if ((!text && files.length === 0 && images.length === 0) || loading())
+      return;
+
+    // Require explicit model selection to avoid OpenCode auto-selecting a broken provider
+    if (!providers.selectedModel) {
+      setError(
+        "Please select a model before sending messages. Click the model button in the header.",
+      );
+      return;
+    }
+
+    // Check if the selected model's provider is connected
+    if (!providers.connected.includes(providers.selectedModel.providerID)) {
+      setError(
+        `Provider "${providers.selectedModel.providerID}" is not connected. Please configure it in Settings.`,
+      );
+      return;
+    }
+
+    setError(null);
+    setLoading(true);
+    setInput("");
+    setFileContext([]); // Clear file context after sending
+    setImageAttachments([]); // Clear image attachments after sending
+
+    // Track pending user message text to match backend echoes
+    setPendingUserMessageText(text);
+
+    // Optimistic update - show user message immediately while waiting for server
+    const userMessage: DisplayMessage = {
+      id: crypto.randomUUID(),
+      role: "user",
+      parts: [
+        {
+          id: crypto.randomUUID(),
+          sessionID: sessionId() || "",
+          messageID: "",
+          type: "text",
+          text: text || "(files attached)",
+        },
+      ] as Part[],
+    };
+    setOptimisticMessage(userMessage);
+
+    try {
+      let id = sessionId();
+
+      if (!id) {
+        console.log("[Session] Creating new session...");
+        const createRes = await client.session.create({});
+        console.log("[Session] Create response:", createRes);
+        if (!createRes.data) throw new Error("Failed to create session");
+
+        id = createRes.data.id;
+        setSessionId(id);
+        navigate(`/${dirSlug()}/session/${id}`, { replace: true });
+      }
+
+      // Build parts array with text and file attachments
+      // Always include a text part (even if empty) to ensure SSE reconciliation works
+      const parts: (
+        | { type: "text"; text: string }
+        | { type: "file"; mime: string; url: string; filename: string }
+      )[] = [{ type: "text", text: text || "" }];
+
+      // Add file parts from file context
+      for (const file of files) {
+        // Construct absolute path, avoiding double slashes
+        const dir = directory || "";
+        const absolute = file.path.startsWith("/")
+          ? file.path
+          : `${dir.replace(/\/$/, "")}/${file.path.replace(/^\//, "")}`;
+        const filename = file.path.split("/").pop() || file.path;
+        // Encode path segments individually to match SDK behavior
+        const encoded = absolute
+          .split("/")
+          .map((segment) => encodeURIComponent(segment))
+          .join("/");
+        parts.push({
+          type: "file",
+          mime: "text/plain",
+          url: `file://${encoded}`,
+          filename,
+        });
+      }
+
+      // Add image/PDF attachments from device uploads
+      for (const img of images) {
+        parts.push({
+          type: "file",
+          mime: img.mime,
+          url: img.dataUrl,
+          filename: img.name,
+        });
+      }
+
+      // Send message with agent and model
+      console.log("[Session] Sending message to session:", id);
+      const promptPayload: {
+        sessionID: string;
+        parts: typeof parts;
+        agent: string;
+        model?: { providerID: string; modelID: string };
+      } = {
+        sessionID: id,
+        parts,
+        agent: providers.selectedAgent || "build",
+      };
+
+      if (providers.selectedModel) {
+        promptPayload.model = providers.selectedModel;
+      }
+
+      const promptRes = await client.session.promptAsync(promptPayload);
+      console.log("[Session] Prompt response:", promptRes);
+
+      // Start processing - SSE events will handle updates and completion
+      startProcessing();
+    } catch (err) {
+      console.error("[Session] Error sending message:", err);
+      setError(
+        `Failed to send message: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  // Welcome screen component for when no session is selected
+  function WelcomeScreen() {
+    return (
+      <div
+        class="flex flex-col h-full"
+        style={{ background: "var(--background-stronger)" }}
+      >
+        <div class="flex flex-col items-center justify-center flex-1 text-center px-6">
+          {/* OpenCode Logo */}
+          <div class="mb-8">
+            <svg
+              class="w-80 mx-auto opacity-60"
+              style={{ color: "var(--text-strong)" }}
+              viewBox="0 0 640 115"
+              fill="none"
+              xmlns="http://www.w3.org/2000/svg"
+            >
+              <g clip-path="url(#clip0_welcome)">
+                <mask
+                  id="mask0_welcome"
+                  style="mask-type:luminance"
+                  maskUnits="userSpaceOnUse"
+                  x="0"
+                  y="0"
+                  width="640"
+                  height="115"
+                >
+                  <path d="M640 0H0V115H640V0Z" fill="white" />
+                </mask>
+                <g mask="url(#mask0_welcome)">
+                  <path
+                    d="M49.2346 82.1433H16.4141V49.2861H49.2346V82.1433Z"
+                    fill="#CFCECD"
+                  />
+                  <path
+                    d="M49.2308 32.8573H16.4103V82.143H49.2308V32.8573ZM65.641 98.5716H0V16.4287H65.641V98.5716Z"
+                    fill="#656363"
+                  />
+                  <path
+                    d="M131.281 82.1433H98.4609V49.2861H131.281V82.1433Z"
+                    fill="#CFCECD"
+                  />
+                  <path
+                    d="M98.4649 82.143H131.285V32.8573H98.4649V82.143ZM147.696 98.5716H98.4649V115H82.0547V16.4287H147.696V98.5716Z"
+                    fill="#656363"
+                  />
+                  <path
+                    d="M229.746 65.7139V82.1424H180.516V65.7139H229.746Z"
+                    fill="#CFCECD"
+                  />
+                  <path
+                    d="M229.743 65.7144H180.512V82.143H229.743V98.5716H164.102V16.4287H229.743V65.7144ZM180.512 49.2859H213.332V32.8573H180.512V49.2859Z"
+                    fill="#656363"
+                  />
+                  <path
+                    d="M295.383 98.5718H262.562V49.2861H295.383V98.5718Z"
+                    fill="#CFCECD"
+                  />
+                  <path
+                    d="M295.387 32.8573H262.567V98.5716H246.156V16.4287H295.387V32.8573ZM311.797 98.5716H295.387V32.8573H311.797V98.5716Z"
+                    fill="#656363"
+                  />
+                  <path
+                    d="M393.848 82.1433H344.617V49.2861H393.848V82.1433Z"
+                    fill="#CFCECD"
+                  />
+                  <path
+                    d="M393.844 32.8573H344.613V82.143H393.844V98.5716H328.203V16.4287H393.844V32.8573Z"
+                    fill="currentColor"
+                  />
+                  <path
+                    d="M459.485 82.1433H426.664V49.2861H459.485V82.1433Z"
+                    fill="#CFCECD"
+                  />
+                  <path
+                    d="M459.489 32.8573H426.668V82.143H459.489V32.8573ZM475.899 98.5716H410.258V16.4287H475.899V98.5716Z"
+                    fill="currentColor"
+                  />
+                  <path
+                    d="M541.539 82.1433H508.719V49.2861H541.539V82.1433Z"
+                    fill="#CFCECD"
+                  />
+                  <path
+                    d="M541.535 32.8571H508.715V82.1428H541.535V32.8571ZM557.946 98.5714H492.305V16.4286H541.535V0H557.946V98.5714Z"
+                    fill="currentColor"
+                  />
+                  <path
+                    d="M639.996 65.7139V82.1424H590.766V65.7139H639.996Z"
+                    fill="#CFCECD"
+                  />
+                  <path
+                    d="M590.77 32.8573V49.2859H623.59V32.8573H590.77ZM640 65.7144H590.77V82.143H640V98.5716H574.359V16.4287H640V65.7144Z"
+                    fill="currentColor"
+                  />
+                </g>
+              </g>
+              <defs>
+                <clipPath id="clip0_welcome">
+                  <rect width="640" height="115" fill="white" />
+                </clipPath>
+              </defs>
+            </svg>
+          </div>
+
+          <Show when={branding.enabled}>
+            <div
+              class="flex items-center justify-center gap-2 mb-8"
+              style={{ color: "var(--text-weak)" }}
+            >
+              <span>Powered by</span>
+              <Show
+                when={branding.url}
+                fallback={
+                  <span class="font-medium" style={{ color: "var(--text-strong)" }}>
+                    {branding.name}
+                  </span>
+                }
+              >
+                <a
+                  href={branding.url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  class="font-medium transition-opacity hover:opacity-80"
+                  style={{ color: "var(--text-interactive-base)" }}
+                >
+                  {branding.name}
+                </a>
+              </Show>
+            </div>
+          </Show>
+
+          {/* Action buttons */}
+          <div class="flex flex-col gap-3 w-full max-w-xs">
+            <Button
+              onClick={async () => {
+                console.log(
+                  "[Welcome] New Session clicked, directory:",
+                  directory,
+                  "dirSlug:",
+                  dirSlug(),
+                );
+                if (!directory) {
+                  console.error("[Welcome] No directory available");
+                  return;
+                }
+                try {
+                  console.log("[Welcome] Creating session...");
+                  const res = await client.session.create({});
+                  console.log("[Welcome] Create response:", res);
+                  if (res.data) {
+                    const url = `/${dirSlug()}/session/${res.data.id}`;
+                    console.log("[Welcome] Navigating to:", url);
+                    navigate(url);
+                  }
+                } catch (e) {
+                  console.error("[Welcome] Failed to create session:", e);
+                }
+              }}
+              variant="ghost"
+              class="w-full"
+              size="sm"
+            >
+              <Plus class="w-4 h-4" />
+              <span>New Session</span>
+            </Button>
+
+            <Button
+              onClick={() => navigate(`/${dirSlug()}/settings`)}
+              variant="ghost"
+              class="w-full"
+              size="sm"
+            >
+              <Settings class="w-4 h-4" />
+              <span>Settings</span>
+            </Button>
+          </div>
+
+          <p
+            class="mt-10 text-sm"
+            style={{ color: "var(--text-weak)", opacity: 0.7 }}
+          >
+            Select a session from the sidebar or start a new one
+          </p>
+        </div>
+      </div>
+    );
+  }
+
+  // Chat view component
+  function ChatView() {
+    return (
+      <div class="flex flex-col h-full">
+        {/* Header with panel toggle buttons */}
+        <SessionHeader
+          session={session()}
+          processing={processing()}
+          onOpenMCPDialog={() => setShowMCPDialog(true)}
+        />
+
+        {/* Messages - using rich message timeline with lazy rendering */}
+        <div class="flex-1 flex flex-col overflow-hidden">
+          <MessageTimeline
+            messages={messages()}
+            processing={
+              processing() &&
+              !pendingQuestion() &&
+              permission.pending().length === 0
+            }
+            loadingHistory={loadingHistory()}
+          />
+
+          {/* Question Prompt - rendered outside timeline for proper focus */}
+          <Show when={pendingQuestion()}>
+            {(q) => (
+              <div
+                class="px-6 pb-4"
+                style={{ background: "var(--background-stronger)" }}
+              >
+                <QuestionPrompt
+                  request={q()}
+                  onReply={handleQuestionReply}
+                  onReject={handleQuestionReject}
+                />
+              </div>
+            )}
+          </Show>
+
+          {/* Permission Prompt - rendered outside timeline for proper focus */}
+          <Show when={permission.pending().length > 0}>
+            <div
+              class="px-6 pb-4"
+              style={{ background: "var(--background-stronger)" }}
+            >
+              <PermissionPrompt
+                requests={permission.pending()}
+                onRespond={permission.respond}
+                onAutoAccept={permission.enableAutoAccept}
+                autoAcceptEnabled={permission.autoAcceptEnabled()}
+              />
+            </div>
+          </Show>
+        </div>
+
+        {/* Input */}
+        <div
+          class="p-4"
+          style={{
+            background: "var(--background-base)",
+            "border-top": "1px solid var(--border-base)",
+          }}
+        >
+          <div class="relative w-full">
+            {/* Slash Command Popover */}
+            <Show
+              when={showSlashPopover() && filteredSlashCommands().length > 0}
+            >
+              <div
+                ref={slashPopoverRef}
+                class="absolute bottom-full left-0 mb-2 w-80 max-h-96 rounded-lg shadow-lg z-20 flex flex-col"
+                style={{
+                  background: "var(--background-base)",
+                  border: "1px solid var(--border-base)",
+                }}
+              >
+                {/* Header */}
+                <div
+                  class="px-3 py-2 text-xs font-medium sticky top-0"
+                  style={{
+                    color: "var(--text-weak)",
+                    background: "var(--surface-inset)",
+                    "border-bottom": "1px solid var(--border-base)",
+                  }}
+                >
+                  <span>Commands</span>
+                </div>
+
+                {/* List */}
+                <div
+                  class="overflow-y-auto flex-1"
+                  ref={(el) => {
+                    createEffect(() => {
+                      const idx = slashIndex();
+                      const selected = el.querySelector(
+                        `[data-index="${idx}"]`,
+                      );
+                      if (selected) {
+                        selected.scrollIntoView({ block: "nearest" });
+                      }
+                    });
+                  }}
+                >
+                  <For each={filteredSlashCommands()}>
+                    {(cmd, idx) => {
+                      const isSelected = () => idx() === slashIndex();
+                      return (
+                        <button
+                          type="button"
+                          data-index={idx()}
+                          onMouseDown={(e) => {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            selectSlashCommand(cmd);
+                          }}
+                          class="w-full px-3 py-2 text-left text-sm flex items-start gap-3 transition-colors"
+                          style={{
+                            background: isSelected()
+                              ? "rgba(147, 112, 219, 0.15)"
+                              : "transparent",
+                            "border-left": isSelected()
+                              ? "2px solid rgb(147, 112, 219)"
+                              : "2px solid transparent",
+                          }}
+                          onMouseEnter={(e) => {
+                            if (!isSelected())
+                              e.currentTarget.style.background =
+                                "var(--surface-inset)";
+                          }}
+                          onMouseLeave={(e) => {
+                            if (!isSelected())
+                              e.currentTarget.style.background = "transparent";
+                          }}
+                        >
+                          <Show when={cmd.slash}>
+                            <span
+                              class="font-mono"
+                              style={{ color: "var(--text-interactive-base)" }}
+                            >
+                              /{cmd.slash}
+                            </span>
+                          </Show>
+                          <div class="flex-1">
+                            <div
+                              class="font-medium"
+                              style={{ color: "var(--text-strong)" }}
+                            >
+                              {cmd.title}
+                            </div>
+                            <Show when={cmd.description}>
+                              <div
+                                class="text-xs"
+                                style={{ color: "var(--text-weak)" }}
+                              >
+                                {cmd.description}
+                              </div>
+                            </Show>
+                          </div>
+                        </button>
+                      );
+                    }}
+                  </For>
+                </div>
+              </div>
+            </Show>
+
+            {/* Error message */}
+            <Show when={error()}>
+              <div
+                class="px-4 py-2 rounded-lg text-sm mb-2"
+                style={{
+                  background: "var(--status-danger-dim)",
+                  color: "var(--status-danger-text)",
+                }}
+              >
+                {error()}
+              </div>
+            </Show>
+
+            <form
+              onSubmit={sendMessage}
+              onDragEnter={handleDragEnter}
+              onDragLeave={handleDragLeave}
+              onDragOver={handleDragOver}
+              onDrop={handleDrop}
+            >
+              <div
+                class="relative flex flex-col rounded-lg focus-within:ring-2 transition-all"
+                style={
+                  {
+                    background: "var(--background-base)",
+                    border: isDragging()
+                      ? "2px dashed var(--interactive-base)"
+                      : "1px solid var(--border-base)",
+                    "--tw-ring-color": "var(--interactive-base)",
+                  } as any
+                }
+              >
+                {/* File context items */}
+                <ContextItems
+                  items={fileContext()}
+                  onRemove={removeFileFromContext}
+                />
+
+                {/* Device uploads (images/PDFs) */}
+                <ImageAttachments
+                  attachments={imageAttachments()}
+                  onRemove={removeUpload}
+                />
+
+                {/* Hidden file input for device uploads */}
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept={ACCEPTED_TYPES.join(",")}
+                  multiple
+                  class="hidden"
+                  onChange={handleFileInputChange}
+                />
+
+                {/* Drag overlay */}
+                <Show when={isDragging()}>
+                  <div
+                    class="absolute inset-0 flex items-center justify-center rounded-lg z-10 pointer-events-none"
+                    style={{
+                      background: "color-mix(in srgb, var(--interactive-base) 10%, transparent)",
+                    }}
+                  >
+                    <span
+                      class="text-sm font-medium"
+                      style={{ color: "var(--text-interactive-base)" }}
+                    >
+                      Drop files here
+                    </span>
+                  </div>
+                </Show>
+
+                <div class="relative flex-1">
+                  <textarea
+                    ref={inputRef}
+                    value={input()}
+                    onPaste={handlePaste}
+                    onInput={(e) => {
+                      handleInputChange(e.currentTarget.value);
+                      // Auto-grow: reset height then set to scrollHeight
+                      e.currentTarget.style.height = "auto";
+                      e.currentTarget.style.height =
+                        Math.min(e.currentTarget.scrollHeight, 200) + "px";
+                    }}
+                    onKeyDown={(e) => {
+                      // Handle slash command navigation first
+                      if (showSlashPopover()) {
+                        handleInputKeyDown(e);
+                        return;
+                      }
+                      // Tab to cycle agents (when input is empty)
+                      if (e.key === "Tab" && !input().trim()) {
+                        e.preventDefault();
+                        const agents = providers.agents;
+                        if (agents.length > 1) {
+                          const currentIdx = agents.findIndex(
+                            (a) => a.name === providers.selectedAgent,
+                          );
+                          const nextIdx = e.shiftKey
+                            ? (currentIdx - 1 + agents.length) % agents.length
+                            : (currentIdx + 1) % agents.length;
+                          providers.setSelectedAgent(agents[nextIdx].name);
+                        }
+                        return;
+                      }
+                      // Enter to submit (without shift), Shift+Enter for newline
+                      if (e.key === "Enter" && !e.shiftKey) {
+                        e.preventDefault();
+                        const form = e.currentTarget.closest("form");
+                        if (form) form.requestSubmit();
+                      }
+                    }}
+                    placeholder="Type a message... (Tab to switch agent, / for commands)"
+                    rows={1}
+                    class="w-full px-4 py-3 pr-10 focus:outline-none resize-none bg-transparent"
+                    style={{
+                      color: "var(--text-base)",
+                      "min-height": "48px",
+                      "max-height": "200px",
+                      "overflow-y": "auto",
+                    }}
+                  />
+                  {/* Attach buttons - inside input area */}
+                  <div class="absolute right-2 top-2 flex items-center gap-1">
+                    {/* Upload from device button */}
+                    <button
+                      type="button"
+                      onClick={() => fileInputRef?.click()}
+                      class="p-1.5 rounded transition-colors"
+                      style={{ color: "var(--text-weak)" }}
+                      onMouseEnter={(e) => {
+                        e.currentTarget.style.background =
+                          "var(--surface-inset)";
+                        e.currentTarget.style.color = "var(--text-strong)";
+                      }}
+                      onMouseLeave={(e) => {
+                        e.currentTarget.style.background = "transparent";
+                        e.currentTarget.style.color = "var(--text-weak)";
+                      }}
+                      title="Upload image or PDF"
+                      aria-label="Upload image or PDF"
+                    >
+                      <Upload class="w-4 h-4" />
+                    </button>
+                    {/* Attach file from project button */}
+                    <button
+                      type="button"
+                      onClick={() => setShowFilePicker(true)}
+                      class="p-1.5 rounded transition-colors"
+                      style={{ color: "var(--text-weak)" }}
+                      onMouseEnter={(e) => {
+                        e.currentTarget.style.background =
+                          "var(--surface-inset)";
+                        e.currentTarget.style.color = "var(--text-strong)";
+                      }}
+                      onMouseLeave={(e) => {
+                        e.currentTarget.style.background = "transparent";
+                        e.currentTarget.style.color = "var(--text-weak)";
+                      }}
+                      title="Attach file from project"
+                      aria-label="Attach file from project"
+                    >
+                      <Paperclip class="w-4 h-4" />
+                    </button>
+                  </div>
+                </div>
+
+                {/* Session info: Git branch, Agent, Model, Token usage */}
+                <SessionInfo
+                  input={input}
+                  loading={loading}
+                  processing={processing}
+                  onAbort={handleAbort}
+                />
+              </div>
+            </form>
+          </div>
+        </div>
+
+        {/* MCP Dialogs */}
+        <Show when={showMCPDialog()}>
+          <MCPDialog
+            onClose={() => setShowMCPDialog(false)}
+            onAddServer={() => {
+              setShowMCPDialog(false);
+              setShowMCPAddDialog(true);
+            }}
+          />
+        </Show>
+
+        <Show when={showMCPAddDialog()}>
+          <MCPAddDialog
+            onClose={() => setShowMCPAddDialog(false)}
+            onBack={() => {
+              setShowMCPAddDialog(false);
+              setShowMCPDialog(true);
+            }}
+          />
+        </Show>
+
+        {/* Model Picker Dialog */}
+        <Show when={showModelPicker()}>
+          <PickerDialog
+            title="Select Model"
+            placeholder="Filter models..."
+            emptyMessage="No models found. Connect a provider in settings."
+            items={providers.providers
+              .filter((p) => providers.connected.includes(p.id))
+              .flatMap((p) =>
+                Object.values(p.models).map((m) => ({
+                  id: `${p.id}:${m.id}`,
+                  title: m.name || m.id,
+                  description: `${p.id}/${m.id}`,
+                  group: p.name,
+                })),
+              )}
+            onSelect={(item) => {
+              const parts = item.id.split(":");
+              const providerID = parts[0];
+              const modelID = parts.slice(1).join(":");
+              providers.setSelectedModel({ providerID, modelID });
+            }}
+            onClose={() => setShowModelPicker(false)}
+          />
+        </Show>
+
+        {/* Agent Picker Dialog */}
+        <Show when={showAgentPicker()}>
+          <PickerDialog
+            title="Select Agent"
+            placeholder="Filter agents..."
+            emptyMessage="No agents available."
+            items={providers.agents.map((a) => ({
+              id: a.name,
+              title: a.name,
+              description: `${a.mode} mode`,
+            }))}
+            onSelect={(item) => {
+              providers.setSelectedAgent(item.id);
+            }}
+            onClose={() => setShowAgentPicker(false)}
+          />
+        </Show>
+
+        {/* File Picker Dialog */}
+        <Show when={showFilePicker()}>
+          <FilePickerDialog
+            title="Attach File"
+            placeholder="Search files..."
+            onSelect={addFileToContext}
+            onClose={() => setShowFilePicker(false)}
+          />
+        </Show>
+      </div>
+    );
+  }
+
+  // Use Show to reactively switch between welcome and chat views
+  return (
+    <Show when={sessionId()} fallback={<WelcomeScreen />}>
+      <div class="flex h-full overflow-hidden">
+        {/* Main chat area */}
+        <div class="flex-1 min-w-0 flex flex-col">
+          <ChatView />
+        </div>
+
+        {/* Review Panel - collapsible with resize handle */}
+        <Show when={layout.review.opened()}>
+          <div class="flex shrink-0">
+            <ResizeHandle
+              direction="horizontal"
+              edge="start"
+              size={layout.review.width()}
+              min={200}
+              max={600}
+              onResize={layout.review.resize}
+              onCollapse={layout.review.close}
+              collapseThreshold={100}
+            />
+            <div
+              class="shrink-0 overflow-hidden"
+              style={{ width: `${layout.review.width()}px` }}
+            >
+              <ReviewPanel sessionId={sessionId()!} />
+            </div>
+          </div>
+        </Show>
+
+        {/* Info Panel (Session Sidebar) - collapsible with resize handle */}
+        <Show when={layout.info.opened()}>
+          <div class="flex shrink-0">
+            <ResizeHandle
+              direction="horizontal"
+              edge="start"
+              size={layout.info.width()}
+              min={180}
+              max={400}
+              onResize={layout.info.resize}
+              onCollapse={layout.info.close}
+              collapseThreshold={80}
+            />
+            <div
+              class="shrink-0 overflow-hidden"
+              style={{ width: `${layout.info.width()}px` }}
+            >
+              <SessionSidebar sessionId={sessionId()} />
+            </div>
+          </div>
+        </Show>
+      </div>
+    </Show>
+  );
+}

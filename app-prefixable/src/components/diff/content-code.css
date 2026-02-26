@@ -1,0 +1,35 @@
+.content-code {
+  border: 1px solid var(--border-base);
+  background-color: var(--surface-inset);
+  border-radius: 0.25rem;
+  padding: 0.5rem calc(0.5rem + 3px);
+  /* Base styling for fallback pre */
+  line-height: 1.6;
+  font-size: 0.75rem;
+  font-family:
+    ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  white-space: pre-wrap;
+  word-break: break-word;
+  margin: 0;
+}
+
+.content-code[data-flush="true"] {
+  border: none;
+  background-color: transparent;
+  padding: 0;
+  border-radius: 0;
+}
+
+.content-code pre {
+  --shiki-dark-bg: transparent !important;
+  background-color: transparent !important;
+  line-height: 1.6;
+  font-size: 0.75rem;
+  white-space: pre-wrap;
+  word-break: break-word;
+  margin: 0;
+}
+
+.content-code pre span {
+  white-space: break-spaces;
+}

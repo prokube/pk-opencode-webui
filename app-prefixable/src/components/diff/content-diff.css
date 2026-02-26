@@ -1,0 +1,142 @@
+.content-diff {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--border-base);
+  background-color: var(--surface-inset);
+  border-radius: 0.25rem;
+  overflow: hidden;
+}
+
+/* Desktop view */
+.diff-desktop {
+  display: block;
+}
+
+.diff-mobile {
+  display: none;
+}
+
+.diff-block {
+  display: flex;
+  flex-direction: column;
+}
+
+.diff-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  align-items: stretch;
+}
+
+.diff-row:first-child .diff-slot {
+  padding-top: 0.25rem;
+}
+
+.diff-row:last-child .diff-slot {
+  padding-bottom: 0.25rem;
+}
+
+.diff-slot {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  overflow-x: visible;
+  min-width: 0;
+  align-items: stretch;
+  padding: 0 1rem 0 2.2ch;
+}
+
+.diff-before {
+  border-right: 1px solid var(--border-base);
+}
+
+/* Removed lines (fuchsia/magenta) */
+.diff-slot[data-diff-type="removed"] {
+  background-color: rgba(192, 38, 211, 0.12);
+}
+
+.diff-slot[data-diff-type="removed"]::before {
+  content: "-";
+  position: absolute;
+  left: 0.6ch;
+  top: 0;
+  user-select: none;
+  color: #c026d3;
+  font-weight: 600;
+  font-size: 0.75rem;
+  line-height: 1.6;
+}
+
+/* Added lines (indigo) */
+.diff-slot[data-diff-type="added"] {
+  background-color: rgba(99, 102, 241, 0.12);
+}
+
+.diff-slot[data-diff-type="added"]::before {
+  content: "+";
+  position: absolute;
+  user-select: none;
+  color: #6366f1;
+  left: 0.6ch;
+  top: 0;
+  font-weight: 600;
+  font-size: 0.75rem;
+  line-height: 1.6;
+}
+
+/* Mobile view */
+.diff-mobile > .diff-block:first-child > div {
+  padding-top: 0.25rem;
+}
+
+.diff-mobile > .diff-block:last-child > div {
+  padding-bottom: 0.25rem;
+}
+
+.diff-mobile > .diff-block > div {
+  padding: 0 1rem 0 2.2ch;
+}
+
+.diff-mobile > .diff-block > div[data-diff-type="removed"] {
+  position: relative;
+  background-color: rgba(192, 38, 211, 0.12);
+}
+
+.diff-mobile > .diff-block > div[data-diff-type="removed"]::before {
+  content: "-";
+  position: absolute;
+  left: 0.6ch;
+  top: 0;
+  user-select: none;
+  color: #c026d3;
+  font-weight: 600;
+  font-size: 0.75rem;
+  line-height: 1.6;
+}
+
+.diff-mobile > .diff-block > div[data-diff-type="added"] {
+  position: relative;
+  background-color: rgba(99, 102, 241, 0.12);
+}
+
+.diff-mobile > .diff-block > div[data-diff-type="added"]::before {
+  content: "+";
+  position: absolute;
+  left: 0.6ch;
+  top: 0;
+  user-select: none;
+  color: #6366f1;
+  font-weight: 600;
+  font-size: 0.75rem;
+  line-height: 1.6;
+}
+
+/* Responsive: switch to mobile layout on small screens */
+@media (max-width: 40rem) {
+  .diff-desktop {
+    display: none;
+  }
+
+  .diff-mobile {
+    display: block;
+  }
+}

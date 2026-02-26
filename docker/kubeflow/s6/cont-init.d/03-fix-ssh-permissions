@@ -1,0 +1,26 @@
+#!/command/with-contenv sh
+
+# This script fixes SSH key permissions on startup
+# This is important because Kubernetes PVCs can change file permissions on pod restart
+
+# Check if .ssh directory exists
+if [ -d "$HOME/.ssh" ]; then
+    echo "INFO: Fixing SSH directory and key permissions..."
+    
+    # Fix .ssh directory permissions (should be 700)
+    chmod 700 "$HOME/.ssh" 2>/dev/null || echo "WARNING: Failed to chmod .ssh directory" >&2
+    
+    # Fix private key permissions (should be 600)
+    # Find all files in .ssh that don't have .pub extension
+    find "$HOME/.ssh" -type f ! -name "*.pub" -exec chmod 600 {} \; 2>/dev/null || echo "WARNING: Failed to chmod private keys" >&2
+    
+    # Fix public key permissions (should be 644)
+    find "$HOME/.ssh" -type f -name "*.pub" -exec chmod 644 {} \; 2>/dev/null || echo "WARNING: Failed to chmod public keys" >&2
+    
+    echo "INFO: SSH permissions fixed successfully"
+else
+    echo "INFO: No .ssh directory found, skipping SSH permissions fix"
+fi
+
+# Ensure we always exit with 0
+exit 0

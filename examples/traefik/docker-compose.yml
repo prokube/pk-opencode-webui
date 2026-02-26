@@ -1,0 +1,45 @@
+# Docker Compose example with Traefik reverse proxy
+#
+# This serves opencode-web at http://localhost/apps/opencode/
+#
+# Usage:
+#   1. Start the OpenCode API server in your project directory:
+#      cd /your/project && opencode serve
+#   2. Run this compose file:
+#      docker compose up
+
+services:
+  opencode-ui:
+    build:
+      context: ../..
+      dockerfile: docker/Dockerfile
+    environment:
+      - BASE_PATH=/apps/opencode/
+      - API_URL=http://host.docker.internal:4096
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.opencode.rule=PathPrefix(`/apps/opencode`)"
+      - "traefik.http.routers.opencode.entrypoints=web"
+      - "traefik.http.middlewares.opencode-strip.stripprefix.prefixes=/apps/opencode"
+      - "traefik.http.routers.opencode.middlewares=opencode-strip"
+      - "traefik.http.services.opencode.loadbalancer.server.port=8080"
+    expose:
+      - "8080"
+
+  # NOTE: This configuration is for LOCAL DEVELOPMENT only.
+  # The --api.insecure=true flag exposes the dashboard without authentication.
+  # For production, remove this flag or configure proper authentication.
+  traefik:
+    image: traefik:v3.0
+    command:
+      - "--api.insecure=true"  # Development only! Disable in production.
+      - "--providers.docker=true"
+      - "--providers.docker.exposedbydefault=false"
+      - "--entrypoints.web.address=:80"
+    ports:
+      - "80:80"
+      - "8081:8080"  # Traefik dashboard (development only)
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro

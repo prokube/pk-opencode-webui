@@ -1,0 +1,4 @@
+#!/command/with-contenv sh
+
+# Run the combined OpenCode API + UI server
+exec /usr/local/bin/start-server.sh

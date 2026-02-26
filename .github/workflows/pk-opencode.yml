@@ -1,0 +1,177 @@
+name: Build pk-opencode
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "app-prefixable/**"
+      - "docker/**"
+      - "shared/**"
+      - ".github/workflows/pk-opencode.yml"
+    tags:
+      - "v*"
+    # Note: For tags, paths filter is ignored by GitHub Actions
+    # Tags matching v* will always trigger, regardless of paths
+  pull_request:
+    branches:
+      - main
+    paths:
+      - "app-prefixable/**"
+      - "docker/**"
+      - "shared/**"
+      - ".github/workflows/pk-opencode.yml"
+  workflow_dispatch:
+
+env:
+  IMAGE_NAME: pk-opencode
+  IMAGE_PUSH_PATH: "${{ secrets.GCP_ARTIFACT_REGISTRY_PATH }}"
+
+jobs:
+  build-prefixable-image:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+      packages: write
+      pull-requests: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Generate dynamic version
+        id: version
+        run: |
+          CURRENT_TAG=$(git tag --points-at HEAD | head -n 1)
+
+          if [ -n "$CURRENT_TAG" ]; then
+            VERSION="${CURRENT_TAG}"
+          else
+            LATEST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "v0.0.0")
+            SHORT_COMMIT=$(git rev-parse --short HEAD)
+            VERSION="${LATEST_TAG}-${SHORT_COMMIT}"
+          fi
+
+          echo "VERSION=${VERSION}" >> $GITHUB_OUTPUT
+          echo "Generated version: ${VERSION}"
+
+      - name: Determine Docker tag
+        run: |
+          if [ -n "${{ steps.version.outputs.VERSION }}" ]; then
+            echo "DOCKER_TAG=${{ steps.version.outputs.VERSION }}" >> $GITHUB_ENV
+          else
+            echo "DOCKER_TAG=latest" >> $GITHUB_ENV
+          fi
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: "${{ secrets.GCP_SA_KEY }}"
+
+      - name: Docker Login to Google Artifact Registry
+        uses: docker/login-action@v3
+        with:
+          registry: europe-west3-docker.pkg.dev
+          username: _json_key
+          password: ${{ secrets.GCP_SA_KEY }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and push image
+        run: |
+          # GCP Artifact Registry tags
+          LATEST_TAG="${{ env.IMAGE_PUSH_PATH }}/${{ env.IMAGE_NAME }}:latest"
+          VERSION_TAG="${{ env.IMAGE_PUSH_PATH }}/${{ env.IMAGE_NAME }}:${{ env.DOCKER_TAG }}"
+          COMMIT_TAG="${{ env.IMAGE_PUSH_PATH }}/${{ env.IMAGE_NAME }}:commit-${{ github.sha }}"
+
+          # Build the Kubeflow image
+          docker build \
+            -t $LATEST_TAG \
+            -f docker/kubeflow/Dockerfile \
+            --platform linux/amd64 \
+            --build-arg S6_OVERLAY_VERSION=3.1.6.2 \
+            --build-arg KF_EXAMPLES_REPO=https://github.com/prokube-ai/kubeflow-examples.git \
+            --label "org.opencontainers.image.title=OpenCode Prefixable UI" \
+            --label "org.opencontainers.image.description=Prefix-aware OpenCode Web UI for Kubeflow" \
+            --label "org.opencontainers.image.source=${{ github.event.repository.html_url }}" \
+            --label "org.opencontainers.image.revision=${{ github.sha }}" \
+            .
+
+          # Tag for different versions
+          docker tag $LATEST_TAG $VERSION_TAG
+          docker tag $LATEST_TAG $COMMIT_TAG
+
+          # Push to GCP Artifact Registry
+          docker push $LATEST_TAG
+          docker push $VERSION_TAG
+          docker push $COMMIT_TAG
+
+          # Save tags for summary
+          echo "LATEST_TAG=$LATEST_TAG" >> $GITHUB_ENV
+          echo "VERSION_TAG=$VERSION_TAG" >> $GITHUB_ENV
+          echo "COMMIT_TAG=$COMMIT_TAG" >> $GITHUB_ENV
+
+      - name: Generate summary
+        run: |
+          cat <<EOF > summary.md
+          ## Docker Image Published
+
+          **Version:** \`${{ env.DOCKER_TAG }}\`
+
+          ### Image Tags
+          | Tag | URL |
+          |-----|-----|
+          | latest | \`${{ env.LATEST_TAG }}\` |
+          | version | \`${{ env.VERSION_TAG }}\` |
+          | commit | \`${{ env.COMMIT_TAG }}\` |
+
+          <details>
+          <summary>Full image URLs for copy/paste</summary>
+
+          \`\`\`
+          ${{ env.LATEST_TAG }}
+          ${{ env.VERSION_TAG }}
+          ${{ env.COMMIT_TAG }}
+          \`\`\`
+          </details>
+          EOF
+
+          cat summary.md >> $GITHUB_STEP_SUMMARY
+
+      - name: Comment on PR
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const summary = fs.readFileSync('summary.md', 'utf8');
+
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+            });
+
+            const botComment = comments.find(comment =>
+              comment.user.type === 'Bot' &&
+              comment.body.includes('## Docker Image Published')
+            );
+
+            if (botComment) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: botComment.id,
+                body: summary
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body: summary
+              });
+            }
