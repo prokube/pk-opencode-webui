@@ -269,12 +269,23 @@ export function SyncProvider(props: ParentProps) {
     if (event.type === "message.updated") {
       const msgProps = props as { info?: Message; parts?: Part[] }
       const info = msgProps.info
+      const parts = msgProps.parts
       if (!info?.sessionID) return
 
       setStore("message", info.sessionID, (existing: MessageWithParts[]) => {
         if (!existing || existing.length === 0) return existing
-        return existing.map((m) => (m.info.id === info.id ? { ...m, info } : m))
+        return existing.map((m) => {
+          if (m.info.id !== info.id) return m
+          // Merge info and optionally update parts if provided
+          const updatedParts = parts ? sortParts(parts) : m.parts
+          return { info, parts: updatedParts }
+        })
       })
+
+      // Also update parts store if parts were provided
+      if (parts && info.id) {
+        setStore("part", info.id, sortParts(parts))
+      }
     }
 
     // Provider events
