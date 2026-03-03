@@ -42,7 +42,7 @@ interface ReviewPanelProps {
 }
 
 export function ReviewPanel(props: ReviewPanelProps) {
-  const { client } = useSDK();
+  const { client, directory } = useSDK();
   const events = useEvents();
   const layout = useLayout();
 
@@ -58,7 +58,7 @@ export function ReviewPanel(props: ReviewPanelProps) {
   async function checkGitRepo() {
     try {
       // Try to get VCS info - if it fails or returns no branch, it's not a git repo
-      const res = await client.vcs.get();
+      const res = await client.vcs.get({ directory });
       setIsGitRepo(res.data?.branch !== undefined);
     } catch {
       setIsGitRepo(false);
@@ -69,7 +69,7 @@ export function ReviewPanel(props: ReviewPanelProps) {
     const current = ++version;
     setLoading(true);
     try {
-      const res = await client.session.diff({ sessionID: props.sessionId });
+      const res = await client.session.diff({ sessionID: props.sessionId, directory });
       // Only update state if this is still the latest request
       if (current !== version) return;
       if (res.data) {
