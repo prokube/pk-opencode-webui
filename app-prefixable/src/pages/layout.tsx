@@ -998,7 +998,6 @@ export function Layout(props: ParentProps) {
           }}
           onDragEnd={() => {
             setSidebarDragging(false);
-            layout.sidebar.persist();
           }}
           onCollapse={toggleSidebar}
           collapseThreshold={100}

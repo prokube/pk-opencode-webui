@@ -56,7 +56,6 @@ interface LayoutContextValue {
   sidebar: {
     width: () => number;
     resize: (width: number) => void;
-    persist: () => void;
   };
   // File tabs
   tabs: {
@@ -207,8 +206,8 @@ export function LayoutProvider(props: ParentProps) {
       width: sidebarWidth,
       resize: (width: number) => {
         setSidebarWidth(Math.max(SIDEBAR_MIN_WIDTH, Math.min(SIDEBAR_MAX_WIDTH, width)));
+        persist();
       },
-      persist,
     },
     tabs: {
       all: fileTabs,
