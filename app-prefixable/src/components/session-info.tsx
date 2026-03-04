@@ -9,6 +9,7 @@ interface SessionInfoProps {
   loading: () => boolean
   processing: () => boolean
   onAbort: () => void
+  onAgentClick: () => void
 }
 
 export function SessionInfo(props: SessionInfoProps) {
@@ -99,12 +100,16 @@ export function SessionInfo(props: SessionInfoProps) {
     <div class="flex items-center gap-3 px-4 py-1.5 text-xs flex-wrap" style={{ color: "var(--text-weak)" }}>
       {/* Agent */}
       <Show when={providers.selectedAgent}>
-        <span class="flex items-center gap-1 shrink-0">
+        <button
+          type="button"
+          class="flex items-center gap-1 shrink-0 hover:opacity-80 cursor-pointer"
+          onClick={() => props.onAgentClick()}
+        >
           <span class="opacity-60">Agent:</span>
           <span class="capitalize" style={{ color: "var(--text-base)" }}>
             {providers.selectedAgent}
           </span>
-        </span>
+        </button>
       </Show>
 
       {/* Model */}

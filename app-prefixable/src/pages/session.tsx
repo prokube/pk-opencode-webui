@@ -1376,6 +1376,7 @@ export function Session() {
                   loading={loading}
                   processing={processing}
                   onAbort={handleAbort}
+                  onAgentClick={() => setShowAgentPicker(true)}
                 />
               </div>
             </form>
