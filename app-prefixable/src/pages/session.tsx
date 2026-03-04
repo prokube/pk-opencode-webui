@@ -374,6 +374,7 @@ export function Session() {
   createEffect(() => {
     const id = params.id;
     if (!id || !sync.ready) return;
+    if (loadingHistory()) return; // wait for sync to finish
     const found = sync.session.get(id);
     if (found) return;
     const dir = directory || base64Decode(params.dir);
