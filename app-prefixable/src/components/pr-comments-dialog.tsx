@@ -42,7 +42,7 @@ export function PrCommentsDialog(props: Props) {
     async (open) => {
       if (!open) return null
       const dirParam = directory ? `directory=${encodeURIComponent(directory)}` : ""
-      const res = await fetch(prefix(`/api/ext/pr/comments${dirParam ? "?" + dirParam.slice(1) : ""}`))
+      const res = await fetch(prefix(`/api/ext/pr/comments${dirParam ? `?${dirParam}` : ""}`))
       if (!res.ok) throw new Error(await res.text())
       return res.json() as Promise<CommentsData>
     },
