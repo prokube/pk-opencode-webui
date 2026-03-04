@@ -18,6 +18,7 @@ interface SessionHeaderProps {
   processing: boolean
   onOpenMCPDialog: () => void
   onRename?: (sessionId: string, title: string) => void
+  onArchive?: () => void
   onDelete?: () => void
 }
 
@@ -103,7 +104,9 @@ export function SessionHeader(props: SessionHeaderProps) {
       return
     }
 
-    const cleanup = () => client.session.delete({ sessionID: childID }).catch(() => {})
+    const cleanup = () =>
+      client.session.delete({ sessionID: childID })
+        .catch(err => console.warn("[AI Rename] Failed to delete child session:", childID, err))
 
     const res = await client.session
       .prompt({
@@ -152,7 +155,13 @@ export function SessionHeader(props: SessionHeaderProps) {
     const session = props.session
     if (!session) return
     client.session.update({ sessionID: session.id, time: { archived: Date.now() } })
-      .then(() => navigate(`/${dirSlug()}/session`))
+      .then(() => {
+        if (props.onArchive) {
+          props.onArchive()
+        } else {
+          navigate(`/${dirSlug()}/session`)
+        }
+      })
       .catch(err => console.error("Failed to archive session", err))
   }
 

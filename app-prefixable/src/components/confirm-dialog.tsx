@@ -128,7 +128,10 @@ export function ConfirmDialog(props: Props) {
                 onClick={props.onConfirm}
                 disabled={props.confirmDisabled}
                 class="px-4 py-2 text-sm font-medium rounded-md transition-colors"
-                style={confirmStyle()}
+                style={{
+                  ...confirmStyle(),
+                  ...(props.confirmDisabled ? { opacity: "0.6", cursor: "not-allowed" } : {}),
+                }}
               >
                 {props.confirmLabel ?? "Confirm"}
               </button>

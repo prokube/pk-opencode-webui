@@ -364,6 +364,19 @@ export function Session() {
     if (id) await sync.session.sync(id);
   };
 
+  // Navigate to next/previous session after archive or delete
+  function navigateAfterRemove() {
+    const id = params.id;
+    const all = sync.sessions().filter((s) => s.directory === directory && !s.time?.archived);
+    const idx = all.findIndex((s) => s.id === id);
+    const next = all[idx + 1] ?? all[idx - 1];
+    if (next) {
+      navigate(`/${dirSlug()}/session/${next.id}`);
+    } else {
+      navigate(`/${dirSlug()}/session`);
+    }
+  }
+
   // Start processing state - SSE events will handle updates and completion
   function startProcessing() {
     console.log("[Session] Starting processing, relying on SSE events");
@@ -965,11 +978,13 @@ export function Session() {
     return (
       <div class="flex flex-col h-full">
         {/* Header with panel toggle buttons */}
-         <SessionHeader
-           session={session()}
-           processing={processing()}
-           onOpenMCPDialog={() => setShowMCPDialog(true)}
-         />
+        <SessionHeader
+          session={session()}
+          processing={processing()}
+          onOpenMCPDialog={() => setShowMCPDialog(true)}
+          onArchive={navigateAfterRemove}
+          onDelete={navigateAfterRemove}
+        />
 
         {/* Messages - using rich message timeline with lazy rendering */}
         <div class="flex-1 flex flex-col overflow-hidden">
