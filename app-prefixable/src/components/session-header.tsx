@@ -18,6 +18,7 @@ interface SessionHeaderProps {
   onOpenMCPDialog: () => void
   onSendPrompt: (prompt: string) => void
   onRename?: (sessionId: string, title: string) => void
+  onDelete?: () => void
 }
 
 export function SessionHeader(props: SessionHeaderProps) {
@@ -42,37 +43,51 @@ export function SessionHeader(props: SessionHeaderProps) {
     navigate(`/${dirSlug()}/session/${id}`)
   }
 
+  // Comment 9: use .catch() instead of try/catch; setRenaming(false) after update
   async function commitRename(value: string) {
-    setRenaming(false)
     const trimmed = value.trim()
     const session = props.session
-    if (!session || !trimmed || trimmed === session.title) return
+    if (!trimmed || trimmed === session?.title) { setRenaming(false); return }
+    if (!session) { setRenaming(false); return }
     await client.session.update({ sessionID: session.id, title: trimmed })
+      .catch(err => console.error("Failed to rename session", err))
     props.onRename?.(session.id, trimmed)
+    setRenaming(false)
   }
 
+  // Comment 9: add .catch() for error handling
   async function archiveSession() {
     setMenuOpen(false)
     const session = props.session
     if (!session) return
     await client.session.update({ sessionID: session.id, time: { archived: Date.now() } })
+      .catch(err => console.error("Failed to archive session", err))
     navigate(`/${dirSlug()}/session`)
   }
 
-  async function confirmAndDelete() {
+  // Comments 1 + 9: call onDelete callback if provided; use .then/.catch/.finally
+  function confirmAndDelete() {
     const session = props.session
     if (!session) return
     setDeleting(true)
-    await client.session.delete({ sessionID: session.id })
-    setDeleting(false)
-    setConfirmDelete(false)
-    navigate(`/${dirSlug()}/session`)
+    client.session.delete({ sessionID: session.id })
+      .then(() => {
+        setConfirmDelete(false)
+        if (props.onDelete) {
+          props.onDelete()
+        } else {
+          navigate(`/${dirSlug()}/session`)
+        }
+      })
+      .catch(err => console.error("Failed to delete session", err))
+      .finally(() => setDeleting(false))
   }
 
-  // Close menu on outside click
+  // Comment 7: use instanceof Element guard instead of casting e.target as HTMLElement
   function handleDocClick(e: MouseEvent) {
     if (!menuOpen()) return
-    const target = e.target as HTMLElement
+    const target = e.target
+    if (!(target instanceof Element)) return
     if (!target.closest("[data-session-menu]")) setMenuOpen(false)
   }
 
@@ -137,6 +152,8 @@ export function SessionHeader(props: SessionHeaderProps) {
                 </h1>
               }
             >
+              {/* Comments 6 + 8: dataset cancel flag prevents Escape triggering onBlur commit;
+                  ref selects all text on mount */}
               <input
                 class="text-sm font-medium bg-transparent outline-none border-b min-w-0"
                 style={{
@@ -146,15 +163,22 @@ export function SessionHeader(props: SessionHeaderProps) {
                 }}
                 value={props.session?.title || ""}
                 autofocus
+                ref={(el) => setTimeout(() => { el.focus(); el.select() }, 0)}
                 onKeyDown={(e) => {
                   if (e.key === "Enter") commitRename(e.currentTarget.value)
-                  else if (e.key === "Escape") setRenaming(false)
+                  else if (e.key === "Escape") {
+                    e.currentTarget.dataset.cancelRename = "true"
+                    setRenaming(false)
+                  }
                 }}
-                onBlur={(e) => commitRename(e.currentTarget.value)}
+                onBlur={(e) => {
+                  if (e.currentTarget.dataset.cancelRename === "true") return
+                  commitRename(e.currentTarget.value)
+                }}
               />
             </Show>
 
-            {/* ⋯ more-options dropdown — only show when a session is loaded */}
+            {/* ... more-options dropdown - only show when a session is loaded */}
             <Show when={props.session}>
               <div class="relative" data-session-menu>
                 <button
@@ -384,7 +408,7 @@ export function SessionHeader(props: SessionHeaderProps) {
         open={confirmDelete()}
         title="Delete session?"
         message={`This will permanently delete "${props.session?.title || "this session"}". This cannot be undone.`}
-        confirmLabel={deleting() ? "Deleting…" : "Delete"}
+        confirmLabel={deleting() ? "Deleting..." : "Delete"}
         cancelLabel="Cancel"
         variant="danger"
         onConfirm={confirmAndDelete}

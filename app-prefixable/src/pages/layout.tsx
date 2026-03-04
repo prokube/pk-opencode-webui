@@ -398,23 +398,8 @@ export function Layout(props: ParentProps) {
     }
   }
 
-  async function deleteSession(session: Session) {
-    const current = projectSessions();
-    const index = current.findIndex((s) => s.id === session.id);
-    const next = current[index + 1] ?? current[index - 1];
-    // Optimistic removal
-    setSessions((prev) => prev.filter((s) => s.id !== session.id));
-    try {
-      await client.session.delete({ sessionID: session.id });
-      if (isActive(session.id)) {
-        navigate(next ? `/${dirSlug()}/session/${next.id}` : `/${dirSlug()}/session`);
-      }
-    } catch (e) {
-      console.error("Failed to delete session:", e);
-      // Revert on failure
-      setSessions((prev) => [...prev, session]);
-    }
-  }
+  // Comment 4: deleteSession removed - session-header handles deletion directly;
+  // sidebar updates reactively via SSE (session.deleted event triggers loadSessions)
 
   function isActive(sessionId: string) {
     return location.pathname.includes(sessionId);
@@ -748,20 +733,24 @@ export function Layout(props: ParentProps) {
                                       <CircleHelp class="w-4 h-4" style={{ color: "var(--icon-warning-base)" }} />
                                     </Show>
                                   </span>
+                                  {/* dataset cancel flag for Escape; ref to select all text */}
                                   <input
                                     class="flex-1 min-w-0 text-sm bg-transparent outline-none"
                                     style={{ color: "var(--text-base)" }}
                                     value={session.title || ""}
                                     autofocus
+                                    ref={(el) => setTimeout(() => { el.focus(); el.select() }, 0)}
                                     onKeyDown={(e) => {
                                       if (e.key === "Enter") {
                                         renameSession(session, e.currentTarget.value);
                                         setRenamingId(null);
                                       } else if (e.key === "Escape") {
+                                        e.currentTarget.dataset.cancelRename = "true";
                                         setRenamingId(null);
                                       }
                                     }}
                                     onBlur={(e) => {
+                                      if (e.currentTarget.dataset.cancelRename === "true") return;
                                       renameSession(session, e.currentTarget.value);
                                       setRenamingId(null);
                                     }}
@@ -816,10 +805,6 @@ export function Layout(props: ParentProps) {
                             </div>
                           )}
                         </For>
-                      </div>
-                    </div>
-                  )}
-                </For>
                       </div>
                     </div>
                   )}
