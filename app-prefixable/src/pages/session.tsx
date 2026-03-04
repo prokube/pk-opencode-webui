@@ -423,6 +423,43 @@ export function Session() {
     }
   });
 
+  // Navigate to next/previous session after a successful delete.
+  // Receives the full Session object from SessionHeader.
+  function navigateAfterRemove(session: { id: string; parentID?: string }) {
+    if (session.parentID) {
+      navigate(`/${dirSlug()}/session/${session.parentID}`);
+      return;
+    }
+    // Navigate to neighbor session after delete. Note: sync.sessions() may already
+    // have removed the deleted session via SSE, so idx may be -1 (fallback to all[0]).
+    const all = sync.sessions()
+      .filter(s => s.directory === directory && !s.time?.archived && !s.parentID)
+      .slice()
+      .sort((a, b) => (b.time?.updated ?? 0) - (a.time?.updated ?? 0));
+    const idx = all.findIndex(s => s.id === session.id);
+    const next = idx === -1 ? all[0] : (all[idx + 1] ?? all[idx - 1]);
+    navigate(next ? `/${dirSlug()}/session/${next.id}` : `/${dirSlug()}/session`);
+  }
+
+  // Archive from the header: compute neighbor first, then API call, navigate on success.
+  function handleArchive(session: { id: string; directory?: string; time?: { updated?: number; archived?: number } }) {
+    const all = sync.sessions()
+      .filter(s => s.directory === directory && !s.time?.archived && !s.parentID)
+      .slice()
+      .sort((a, b) => (b.time?.updated ?? 0) - (a.time?.updated ?? 0));
+    const idx = all.findIndex(s => s.id === session.id);
+    const neighbor = all[idx + 1] ?? all[idx - 1];
+
+    client.session.update({
+      sessionID: session.id,
+      time: { archived: Date.now() },
+    })
+      .then(() => {
+        navigate(neighbor ? `/${dirSlug()}/session/${neighbor.id}` : `/${dirSlug()}/session`);
+      })
+      .catch((err: unknown) => console.error("Failed to archive session", err));
+  }
+
   // Start processing state - SSE events will handle updates and completion
   function startProcessing() {
     console.log("[Session] Starting processing, relying on SSE events");
@@ -1042,11 +1079,16 @@ export function Session() {
     return (
       <div class="flex flex-col h-full">
         {/* Header with panel toggle buttons */}
+        {/* onRename is intentionally not wired: SessionHeader already uses
+            optimisticTitle for immediate display, and SSE sync propagates the
+            server-confirmed title to the sidebar automatically. */}
         <SessionHeader
           session={session()}
           processing={processing()}
           onOpenMCPDialog={() => setShowMCPDialog(true)}
           onSendPrompt={(prompt) => setInput(prompt)}
+          onArchive={handleArchive}
+          onDelete={navigateAfterRemove}
         />
 
         {/* Messages - using rich message timeline with lazy rendering */}

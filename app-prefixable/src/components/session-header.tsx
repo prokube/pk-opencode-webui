@@ -1,13 +1,15 @@
-import { Show, createMemo } from "solid-js"
+import { Show, createEffect, createSignal, onCleanup } from "solid-js"
 import { useNavigate, useParams } from "@solidjs/router"
 import { Spinner } from "./ui/spinner"
 import { useLayout } from "../context/layout"
-import { useProviders } from "../context/providers"
 import { useMCP } from "../context/mcp"
 import { usePermission } from "../context/permission"
 import { useTerminal } from "../context/terminal"
 import { useSDK } from "../context/sdk"
-import { PanelBottom, FileCode, ListTodo, Plug, ArrowLeft, Users } from "lucide-solid"
+import { useProviders } from "../context/providers"
+import { useSync } from "../context/sync"
+import { ConfirmDialog } from "./confirm-dialog"
+import { PanelBottom, FileCode, ListTodo, Plug, ArrowLeft, Users, MoreHorizontal, Pencil, Archive, Trash2, Sparkles } from "lucide-solid"
 import { base64Encode } from "../utils/path"
 import { PrButton } from "./pr-button"
 import type { Session } from "../sdk/client"
@@ -16,27 +18,197 @@ interface SessionHeaderProps {
   session: Session | null | undefined
   processing: boolean
   onOpenMCPDialog: () => void
-  onSendPrompt: (prompt: string) => void
+  onSendPrompt?: (prompt: string) => void
+  onRename?: (sessionId: string, title: string) => void
+  onArchive: (session: Session) => void
+  onDelete: (session: Session) => void
 }
 
 export function SessionHeader(props: SessionHeaderProps) {
   const layout = useLayout()
-  const providers = useProviders()
   const mcp = useMCP()
   const permission = usePermission()
   const terminal = useTerminal()
-  const { directory } = useSDK()
+  const { client, directory } = useSDK()
+  const providers = useProviders()
+  const sync = useSync()
   const navigate = useNavigate()
   const params = useParams<{ dir: string }>()
 
-  const dirSlug = createMemo(() => (directory ? base64Encode(directory) : params.dir))
+  const dirSlug = () => (directory ? base64Encode(directory) : params.dir)
   const parentId = () => props.session?.parentID
+  const [renaming, setRenaming] = createSignal(false)
+  const [renameValue, setRenameValue] = createSignal("")
+  const [menuOpen, setMenuOpen] = createSignal(false)
+  const [confirmDelete, setConfirmDelete] = createSignal(false)
+  const [deleting, setDeleting] = createSignal(false)
+  const [deleteError, setDeleteError] = createSignal<string | null>(null)
+  const [optimisticTitle, setOptimisticTitle] = createSignal<string | null>(null)
+  const [aiRenaming, setAiRenaming] = createSignal(false)
+
+  // Clear optimistic title when SSE confirms the rename (server title matches)
+  createEffect(() => {
+    const title = props.session?.title
+    const optimistic = optimisticTitle()
+    if (optimistic === null) return
+    if (title === optimistic) setOptimisticTitle(null)
+  })
+
+  // Clear when switching sessions (different ID)
+  createEffect(() => {
+    props.session?.id
+    setOptimisticTitle(null)
+  })
 
   function navigateToParent() {
     const id = parentId()
     if (!id) return
     navigate(`/${dirSlug()}/session/${id}`)
   }
+
+  function commitRename(value: string) {
+    const trimmed = value.trim()
+    const session = props.session
+    if (!trimmed || trimmed === session?.title) { setRenaming(false); return }
+    if (!session) { setRenaming(false); return }
+    setOptimisticTitle(trimmed)
+    setRenaming(false)
+    client.session.update({ sessionID: session.id, title: trimmed })
+      .then(() => props.onRename?.(session.id, trimmed))
+      .catch((err: unknown) => {
+        console.error("Failed to rename session", err)
+        setOptimisticTitle(null)
+      })
+  }
+
+  function archiveSession() {
+    setMenuOpen(false)
+    const session = props.session
+    if (!session) return
+    props.onArchive(session)
+  }
+
+  function confirmAndDelete() {
+    if (deleting()) return
+    const session = props.session
+    if (!session) return
+    setDeleteError(null)
+    setDeleting(true)
+    client.session.delete({ sessionID: session.id })
+      .then(() => {
+        setConfirmDelete(false)
+        props.onDelete(session)
+      })
+      .catch((err: unknown) => {
+        console.error("Failed to delete session", err)
+        setDeleteError("Failed to delete session. Please try again.")
+      })
+      .finally(() => setDeleting(false))
+  }
+
+  function renameWithAI() {
+    if (aiRenaming()) return
+    const session = props.session
+    if (!session) return
+
+    // Find the last assistant message via reverse scan (no .reverse().find())
+    const msgs = sync.messages(session.id)
+    const ref = { msg: undefined as typeof msgs[number] | undefined }
+    for (const m of msgs) {
+      if (m.info.role === "assistant") ref.msg = m
+    }
+    if (!ref.msg) return
+
+    // Build summary from text parts
+    const summary = ref.msg.parts
+      .filter(p => p.type === "text")
+      .map(p => (p as { text?: string }).text ?? "")
+      .join("\n")
+      .slice(0, 500)
+
+    if (!summary.trim()) return
+
+    setAiRenaming(true)
+    setMenuOpen(false)
+
+    const model = (() => {
+      const sel = providers.selectedModel
+      if (!sel) return undefined
+      if (typeof sel.providerID === "string" && sel.providerID && typeof sel.modelID === "string" && sel.modelID) {
+        return { providerID: sel.providerID, modelID: sel.modelID }
+      }
+      return undefined
+    })()
+
+    const agent = providers.selectedAgent || "build"
+    const prompt = `Suggest a concise session title (8 words or fewer) for this conversation based on the following assistant reply. Reply with ONLY the title text, nothing else.\n\n${summary}`
+
+    // Create a child session for the rename suggestion
+    const ref2 = { childId: "" }
+    client.session.create({ parentID: session.id })
+      .then((res) => {
+        if (!res.data) throw new Error("Failed to create child session")
+        ref2.childId = res.data.id
+        const payload: {
+          sessionID: string
+          parts: { type: "text"; text: string }[]
+          agent: string
+          model?: { providerID: string; modelID: string }
+        } = {
+          sessionID: ref2.childId,
+          parts: [{ type: "text", text: prompt }],
+          agent,
+        }
+        if (model) payload.model = model
+        return client.session.prompt(payload)
+      })
+      .then((res) => {
+        // Extract the suggestion text from response parts
+        const parts = res.data?.parts ?? []
+        const suggestion = parts
+          .filter((p: { type: string }) => p.type === "text")
+          .map((p: { type: string; text?: string }) => p.text ?? "")
+          .join("")
+          .trim()
+          // Strip surrounding quotes
+          .replace(/^["']|["']$/g, "")
+          .trim()
+
+        if (suggestion) {
+          setRenameValue(suggestion)
+          setRenaming(true)
+        }
+      })
+      .catch((err: unknown) => console.error("AI rename failed", err))
+      .finally(() => {
+        setAiRenaming(false)
+        // Clean up child session
+        if (ref2.childId) {
+          client.session.delete({ sessionID: ref2.childId })
+            .catch((err: unknown) => console.warn("Failed to clean up AI rename child session", err))
+        }
+      })
+  }
+
+  function handleDocClick(e: MouseEvent) {
+    if (!menuOpen()) return
+    const target = e.target
+    if (!(target instanceof Element)) return
+    if (!target.closest("[data-session-menu]")) setMenuOpen(false)
+  }
+
+  // Attach/detach document click listener reactively
+  createEffect(() => {
+    if (menuOpen()) {
+      document.addEventListener("click", handleDocClick, { capture: true })
+    } else {
+      document.removeEventListener("click", handleDocClick, { capture: true })
+    }
+  })
+
+  onCleanup(() => {
+    document.removeEventListener("click", handleDocClick, { capture: true })
+  })
 
   return (
     <header
@@ -73,9 +245,140 @@ export function SessionHeader(props: SessionHeaderProps) {
             <Show when={parentId()}>
               <Users class="w-3.5 h-3.5 shrink-0" style={{ color: "var(--text-interactive-base)" }} />
             </Show>
-            <h1 class="text-sm font-medium truncate" style={{ color: "var(--text-strong)" }}>
-              {props.session?.title || "New Session"}
-            </h1>
+            <Show
+              when={renaming()}
+              fallback={
+                <h1
+                  class="text-sm font-medium truncate cursor-text"
+                  style={{ color: "var(--text-strong)" }}
+                  title="Double-click to rename"
+                  onDblClick={() => {
+                    if (!props.session) return
+                    setRenameValue(props.session.title ?? "")
+                    setRenaming(true)
+                  }}
+                >
+                  {optimisticTitle() ?? (props.session?.title || "New Session")}
+                </h1>
+              }
+            >
+              <input
+                class="text-sm font-medium bg-transparent outline-none border-b min-w-0"
+                style={{
+                  color: "var(--text-strong)",
+                  "border-color": "var(--border-interactive)",
+                  width: "16rem",
+                }}
+                value={renameValue()}
+                ref={(el) => queueMicrotask(() => { if (!el?.isConnected) return; el.focus(); el.select() })}
+                onInput={(e) => setRenameValue(e.currentTarget.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") commitRename(e.currentTarget.value)
+                  else if (e.key === "Escape") {
+                    e.currentTarget.dataset.cancelRename = "true"
+                    setRenaming(false)
+                  }
+                }}
+                onBlur={(e) => {
+                  if (e.currentTarget.dataset.cancelRename === "true") return
+                  commitRename(e.currentTarget.value)
+                }}
+              />
+            </Show>
+
+            {/* More-options dropdown -- only show when session is loaded */}
+            <Show when={props.session}>
+              <div class="relative" data-session-menu>
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    setMenuOpen((v) => !v)
+                  }}
+                  class="p-0.5 rounded transition-colors"
+                  style={{ color: "var(--icon-weak)" }}
+                  onMouseEnter={(e) => (e.currentTarget.style.color = "var(--icon-base)")}
+                  onMouseLeave={(e) => (e.currentTarget.style.color = "var(--icon-weak)")}
+                  title="More options"
+                  aria-label="More session options"
+                  aria-haspopup="true"
+                  aria-expanded={menuOpen()}
+                >
+                  <MoreHorizontal class="w-4 h-4" />
+                </button>
+
+                <Show when={menuOpen()}>
+                  <div
+                    class="absolute left-0 top-full mt-1 w-44 rounded-md shadow-lg z-30 py-1"
+                    style={{
+                      background: "var(--background-base)",
+                      border: "1px solid var(--border-base)",
+                    }}
+                    data-session-menu
+                  >
+                    {/* Rename */}
+                    <button
+                      class="w-full flex items-center gap-2 px-3 py-1.5 text-sm text-left transition-colors"
+                      style={{ color: "var(--text-base)" }}
+                      onMouseEnter={(e) => (e.currentTarget.style.background = "var(--surface-inset)")}
+                      onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
+                      onClick={() => {
+                        setMenuOpen(false)
+                        setRenameValue(props.session?.title ?? "")
+                        setRenaming(true)
+                      }}
+                    >
+                      <Pencil class="w-3.5 h-3.5 shrink-0" style={{ color: "var(--icon-weak)" }} />
+                      Rename
+                    </button>
+
+                    {/* Rename with AI */}
+                    <button
+                      class="w-full flex items-center gap-2 px-3 py-1.5 text-sm text-left transition-colors"
+                      style={{ color: "var(--text-base)", ...(aiRenaming() ? { opacity: "0.6" } : {}) }}
+                      onMouseEnter={(e) => (e.currentTarget.style.background = "var(--surface-inset)")}
+                      onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
+                      onClick={renameWithAI}
+                    >
+                      <Show when={aiRenaming()} fallback={<Sparkles class="w-3.5 h-3.5 shrink-0" style={{ color: "var(--icon-weak)" }} />}>
+                        <Spinner class="w-3.5 h-3.5 shrink-0" />
+                      </Show>
+                      {aiRenaming() ? "Suggesting..." : "Rename with AI"}
+                    </button>
+
+                    {/* Archive */}
+                    <button
+                      class="w-full flex items-center gap-2 px-3 py-1.5 text-sm text-left transition-colors"
+                      style={{ color: "var(--text-base)" }}
+                      onMouseEnter={(e) => (e.currentTarget.style.background = "var(--surface-inset)")}
+                      onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
+                      onClick={archiveSession}
+                    >
+                      <Archive class="w-3.5 h-3.5 shrink-0" style={{ color: "var(--icon-weak)" }} />
+                      Archive
+                    </button>
+
+                    {/* Separator */}
+                    <div class="my-1" style={{ "border-top": "1px solid var(--border-base)" }} />
+
+                    {/* Delete */}
+                    <button
+                      class="w-full flex items-center gap-2 px-3 py-1.5 text-sm text-left transition-colors"
+                      style={{ color: "var(--text-critical-base)" }}
+                      onMouseEnter={(e) => (e.currentTarget.style.background = "var(--surface-inset)")}
+                      onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
+                      onClick={() => {
+                        setMenuOpen(false)
+                        setDeleteError(null)
+                        setConfirmDelete(true)
+                      }}
+                    >
+                      <Trash2 class="w-3.5 h-3.5 shrink-0" />
+                      Delete
+                    </button>
+                  </div>
+                </Show>
+              </div>
+            </Show>
           </div>
           <Show when={props.session}>
             <p class="text-[11px] truncate" style={{ color: "var(--text-weak)" }}>
@@ -127,12 +430,22 @@ export function SessionHeader(props: SessionHeaderProps) {
             <span>Processing...</span>
           </div>
         </Show>
+
+        {/* AI rename spinner */}
+        <Show when={aiRenaming()}>
+          <div class="flex items-center gap-1.5 text-xs" style={{ color: "var(--text-weak)" }}>
+            <Spinner class="w-3.5 h-3.5" />
+            <span>AI renaming...</span>
+          </div>
+        </Show>
       </div>
 
       {/* Right side: PR button + panel toggles in one container */}
       <div class="flex items-center gap-1">
-        {/* PR button */}
-        <PrButton onSendPrompt={props.onSendPrompt} />
+        {/* PR button — only render when onSendPrompt is provided */}
+        <Show when={props.onSendPrompt}>{(sendPrompt) =>
+          <PrButton onSendPrompt={sendPrompt()} />
+        }</Show>
 
         {/* Divider */}
         <div class="w-px h-4 mx-1" style={{ background: "var(--border-base)" }} />
@@ -223,6 +536,25 @@ export function SessionHeader(props: SessionHeaderProps) {
           <PanelBottom class="w-4 h-4" />
         </button>
       </div>
+
+      {/* Delete confirmation dialog */}
+      <ConfirmDialog
+        open={confirmDelete()}
+        title="Delete session?"
+        message={`This will permanently delete "${props.session?.title || "this session"}". This cannot be undone.`}
+        confirmLabel={deleting() ? "Deleting..." : "Delete"}
+        confirmDisabled={deleting()}
+        cancelDisabled={deleting()}
+        cancelLabel="Cancel"
+        variant="danger"
+        error={deleteError() ?? undefined}
+        onConfirm={confirmAndDelete}
+        onCancel={() => {
+          if (deleting()) return
+          setDeleteError(null)
+          setConfirmDelete(false)
+        }}
+      />
     </header>
   )
 }
