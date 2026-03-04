@@ -26,8 +26,6 @@ export function PrMergeDialog(props: Props) {
   const [error, setError] = createSignal("")
 
   const hasConflicts = () => props.pr.mergeable === "CONFLICTING"
-  const isApproved = () => props.pr.reviewDecision === "APPROVED"
-
   async function handleMerge() {
     setError("")
     setSubmitting(true)

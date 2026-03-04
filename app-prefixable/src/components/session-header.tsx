@@ -129,12 +129,14 @@ export function SessionHeader(props: SessionHeaderProps) {
         </Show>
       </div>
 
-      {/* Right side: PR button + panel toggles */}
-      <div class="flex items-center gap-2">
-        <PrButton onSendPrompt={props.onSendPrompt} />
-      </div>
-
+      {/* Right side: PR button + panel toggles in one container */}
       <div class="flex items-center gap-1">
+        {/* PR button */}
+        <PrButton onSendPrompt={props.onSendPrompt} />
+
+        {/* Divider */}
+        <div class="w-px h-4 mx-1" style={{ background: "var(--border-base)" }} />
+
         {/* MCP toggle */}
         <button
           onClick={props.onOpenMCPDialog}
