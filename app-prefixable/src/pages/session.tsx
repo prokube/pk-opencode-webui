@@ -370,20 +370,33 @@ export function Session() {
     if (!id) return;
     if (loadingHistory()) return; // wait for sync to finish
     const found = sync.session.get(id);
-    if (found) return; // valid session (including archived) — keep it
-    // stale: clear and redirect
+    // Non-archived session exists — keep it
+    if (found && !found.time?.archived) return;
+    // For archived sessions: only treat as stale when it matches the stored last-session
+    // (allows direct navigation to archived sessions from the sidebar)
+    if (found?.time?.archived) {
+      try {
+        const dir = directory || base64Decode(params.dir);
+        if (dir && typeof window !== "undefined") {
+          const key = `opencode.lastSession.${dir}`;
+          const stored = window.localStorage.getItem(key);
+          if (stored === id) {
+            window.localStorage.removeItem(key);
+            navigate(`/${dirSlug()}/session`, { replace: true });
+          }
+        }
+      } catch {}
+      return;
+    }
+    // Session not found at all: clear and redirect
     try {
       const dir = directory || base64Decode(params.dir);
       if (dir && typeof window !== "undefined") {
         const key = `opencode.lastSession.${dir}`;
-        const storedId = window.localStorage.getItem(key);
-        if (storedId === id) {
-          window.localStorage.removeItem(key);
-        }
+        const stored = window.localStorage.getItem(key);
+        if (stored === id) window.localStorage.removeItem(key);
       }
-    } catch (err) {
-      console.error("[Session] Failed to remove stale session key:", err);
-    }
+    } catch {}
     navigate(`/${dirSlug()}/session`, { replace: true });
   });
 

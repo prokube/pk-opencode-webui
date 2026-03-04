@@ -16,7 +16,8 @@ function getLastSessionHref(encodedDir: string): string {
     const last = typeof window !== "undefined"
       ? window.localStorage.getItem(`opencode.lastSession.${dir}`)
       : null
-    return last ? `session/${last}` : "session"
+    if (!last || last.includes("..") || /[\/\\]/.test(last)) return "session"
+    return `session/${last}`
   } catch {
     return "session"
   }
