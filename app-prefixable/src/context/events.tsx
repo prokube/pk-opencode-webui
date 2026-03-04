@@ -95,19 +95,17 @@ export function EventProvider(props: ParentProps) {
     }
   }
 
-  // Start connection
-  connect()
-
-  // Seed pending questions from server on mount
+  // Seed pending questions then connect to SSE (seed first to avoid race
+  // where a question.replied event arrives before the list resolves)
   onMount(() => {
-    client.question.list({ directory }).then((res) => {
-      const questions = Array.isArray(res.data) ? res.data : []
-      for (const q of questions) {
-        setPendingQuestions(q.sessionID, q)
-      }
-    }).catch((err) => {
-      console.error("[Events] Failed to load questions:", err)
-    })
+    if (!directory) { connect(); return }
+    client.question.list({ directory })
+      .then((res) => {
+        const questions = Array.isArray(res.data) ? res.data : []
+        for (const q of questions) setPendingQuestions(q.sessionID, q)
+      })
+      .catch((err) => console.error("[Events] Failed to load questions:", err))
+      .finally(() => connect())
   })
 
   onCleanup(() => {
