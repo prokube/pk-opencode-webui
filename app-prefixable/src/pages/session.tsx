@@ -446,7 +446,9 @@ export function Session() {
     // clearing events are always processed even before the HTTP result lands.
     // receivedViaSse guards against the HTTP result overwriting a live question
     // that arrived via SSE during the HTTP flight.
-    const state = { loaded: false, receivedViaSse: false };
+    // clearedViaSse guards against the HTTP result restoring an already-answered
+    // question when the reply SSE arrives before the HTTP response.
+    const state = { loaded: false, receivedViaSse: false, clearedViaSse: false };
     const unsub = events.subscribe((event) => {
       const type = event.type as string;
       if (type === "question.asked") {
@@ -454,6 +456,7 @@ export function Session() {
         if (props.sessionID === id) {
           console.log("[Session] Question event received:", props);
           state.receivedViaSse = true;
+          state.clearedViaSse = false;
           setPendingQuestion(props);
         }
         return;
@@ -468,6 +471,7 @@ export function Session() {
           if (!state.loaded && !state.receivedViaSse) return;
           console.log("[Session] Question cleared:", type);
           state.receivedViaSse = false;
+          state.clearedViaSse = true;
           setPendingQuestion(null);
         }
       }
@@ -479,8 +483,9 @@ export function Session() {
         console.log("[Session] Question list response:", res);
         const questions = Array.isArray(res.data) ? res.data : [];
         const q = questions.find((q) => q.sessionID === id);
-        if (!state.receivedViaSse) {
+        if (!state.receivedViaSse && !state.clearedViaSse) {
           // Only apply HTTP result if no live SSE question arrived during flight
+          // and no clearing event was already processed (question already answered)
           setPendingQuestion(q ?? null);
         }
         state.loaded = true;
