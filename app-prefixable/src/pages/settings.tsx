@@ -1,4 +1,4 @@
-import { createSignal, For, Show, type JSX, createMemo, onMount } from "solid-js"
+import { createSignal, For, Show, type JSX, createMemo, onMount, onCleanup } from "solid-js"
 import { Portal } from "solid-js/web"
 import { Spinner } from "../components/ui/spinner"
 import { useProviders } from "../context/providers"
@@ -1464,101 +1464,15 @@ export function Settings() {
 
       {/* Prompt Add/Edit Dialog */}
       <Show when={promptDialogOpen()}>
-        <Portal>
-          <div
-            class="fixed inset-0 z-[100] flex items-center justify-center"
-            style={{ background: "rgba(0,0,0,0.5)" }}
-            onClick={(e) => {
-              if (e.target === e.currentTarget) setPromptDialogOpen(false)
-            }}
-            onKeyDown={(e) => {
-              if (e.key === "Escape") setPromptDialogOpen(false)
-            }}
-            role="presentation"
-          >
-            <div
-              role="dialog"
-              aria-modal="true"
-              class="w-full max-w-md rounded-lg shadow-xl overflow-hidden"
-              style={{
-                background: "var(--background-base)",
-                border: "1px solid var(--border-base)",
-              }}
-            >
-              <div class="px-4 py-3" style={{ "border-bottom": "1px solid var(--border-base)" }}>
-                <h2 class="text-base font-medium" style={{ color: "var(--text-strong)" }}>
-                  {editingPromptId() ? "Edit Prompt" : "Add Prompt"}
-                </h2>
-              </div>
-              <div class="p-4 space-y-4">
-                <div>
-                  <label class="block text-sm font-medium mb-1" style={{ color: "var(--text-base)" }}>
-                    Title
-                  </label>
-                  <input
-                    ref={(el) => setTimeout(() => el.focus(), 0)}
-                    type="text"
-                    value={promptTitle()}
-                    onInput={(e) => setPromptTitle(e.currentTarget.value)}
-                    placeholder="e.g. Code Review"
-                    class="w-full px-3 py-2 rounded-md text-sm"
-                    style={{
-                      background: "var(--background-base)",
-                      border: "1px solid var(--border-base)",
-                      color: "var(--text-base)",
-                    }}
-                  />
-                </div>
-                <div>
-                  <label class="block text-sm font-medium mb-1" style={{ color: "var(--text-base)" }}>
-                    Prompt Text
-                  </label>
-                  <textarea
-                    value={promptText()}
-                    onInput={(e) => setPromptText(e.currentTarget.value)}
-                    placeholder="Enter the prompt text..."
-                    rows={6}
-                    class="w-full px-3 py-2 rounded-md text-sm resize-y"
-                    style={{
-                      background: "var(--background-base)",
-                      border: "1px solid var(--border-base)",
-                      color: "var(--text-base)",
-                      "min-height": "120px",
-                    }}
-                  />
-                </div>
-              </div>
-              <div
-                class="px-4 py-3 flex justify-end gap-2"
-                style={{ "border-top": "1px solid var(--border-base)" }}
-              >
-                <button
-                  type="button"
-                  onClick={() => setPromptDialogOpen(false)}
-                  class="px-4 py-2 text-sm font-medium rounded-md transition-colors"
-                  style={{
-                    background: "var(--surface-inset)",
-                    color: "var(--text-base)",
-                  }}
-                >
-                  Cancel
-                </button>
-                <button
-                  type="button"
-                  onClick={savePromptDialog}
-                  disabled={!promptTitle().trim() || !promptText().trim()}
-                  class="px-4 py-2 text-sm font-medium rounded-md transition-colors disabled:opacity-50"
-                  style={{
-                    background: "var(--interactive-base)",
-                    color: "white",
-                  }}
-                >
-                  {editingPromptId() ? "Save Changes" : "Save"}
-                </button>
-              </div>
-            </div>
-          </div>
-        </Portal>
+        <PromptDialog
+          editing={editingPromptId()}
+          title={promptTitle}
+          setTitle={setPromptTitle}
+          text={promptText}
+          setText={setPromptText}
+          onSave={savePromptDialog}
+          onClose={() => setPromptDialogOpen(false)}
+        />
       </Show>
 
       {/* Prompt Delete Confirmation */}
@@ -1572,5 +1486,121 @@ export function Settings() {
         onCancel={() => setPromptToDelete(null)}
       />
     </div>
+  )
+}
+
+function PromptDialog(props: {
+  editing: string | null
+  title: () => string
+  setTitle: (v: string) => void
+  text: () => string
+  setText: (v: string) => void
+  onSave: () => void
+  onClose: () => void
+}) {
+  onMount(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        e.preventDefault()
+        props.onClose()
+      }
+    }
+    document.addEventListener("keydown", handler)
+    onCleanup(() => document.removeEventListener("keydown", handler))
+  })
+
+  return (
+    <Portal>
+      <div
+        class="fixed inset-0 z-[100] flex items-center justify-center"
+        style={{ background: "rgba(0,0,0,0.5)" }}
+        onClick={(e) => {
+          if (e.target === e.currentTarget) props.onClose()
+        }}
+        role="presentation"
+      >
+        <div
+          role="dialog"
+          aria-modal="true"
+          class="w-full max-w-md rounded-lg shadow-xl overflow-hidden"
+          style={{
+            background: "var(--background-base)",
+            border: "1px solid var(--border-base)",
+          }}
+        >
+          <div class="px-4 py-3" style={{ "border-bottom": "1px solid var(--border-base)" }}>
+            <h2 class="text-base font-medium" style={{ color: "var(--text-strong)" }}>
+              {props.editing ? "Edit Prompt" : "Add Prompt"}
+            </h2>
+          </div>
+          <div class="p-4 space-y-4">
+            <div>
+              <label class="block text-sm font-medium mb-1" style={{ color: "var(--text-base)" }}>
+                Title
+              </label>
+              <input
+                ref={(el) => setTimeout(() => el.focus(), 0)}
+                type="text"
+                value={props.title()}
+                onInput={(e) => props.setTitle(e.currentTarget.value)}
+                placeholder="e.g. Code Review"
+                class="w-full px-3 py-2 rounded-md text-sm"
+                style={{
+                  background: "var(--background-base)",
+                  border: "1px solid var(--border-base)",
+                  color: "var(--text-base)",
+                }}
+              />
+            </div>
+            <div>
+              <label class="block text-sm font-medium mb-1" style={{ color: "var(--text-base)" }}>
+                Prompt Text
+              </label>
+              <textarea
+                value={props.text()}
+                onInput={(e) => props.setText(e.currentTarget.value)}
+                placeholder="Enter the prompt text..."
+                rows={6}
+                class="w-full px-3 py-2 rounded-md text-sm resize-y"
+                style={{
+                  background: "var(--background-base)",
+                  border: "1px solid var(--border-base)",
+                  color: "var(--text-base)",
+                  "min-height": "120px",
+                }}
+              />
+            </div>
+          </div>
+          <div
+            class="px-4 py-3 flex justify-end gap-2"
+            style={{ "border-top": "1px solid var(--border-base)" }}
+          >
+            <button
+              type="button"
+              onClick={props.onClose}
+              class="px-4 py-2 text-sm font-medium rounded-md transition-colors"
+              style={{
+                background: "var(--surface-inset)",
+                color: "var(--text-base)",
+              }}
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              onClick={props.onSave}
+              disabled={!props.title().trim() || !props.text().trim()}
+              class="px-4 py-2 text-sm font-medium rounded-md transition-colors disabled:opacity-50"
+              style={{
+                background: "var(--interactive-base)",
+                color: "white",
+              }}
+            >
+              {props.editing ? "Save Changes" : "Save"}
+            </button>
+          </div>
+        </div>
+      </div>
+    </Portal>
   )
 }

@@ -1636,122 +1636,19 @@ export function Session() {
 
         {/* Save Prompt Dialog */}
         <Show when={showSavePrompt()}>
-          <Portal>
-            <div
-              class="fixed inset-0 z-[100] flex items-center justify-center"
-              style={{ background: "rgba(0,0,0,0.5)" }}
-              onClick={(e) => {
-                if (e.target === e.currentTarget) setShowSavePrompt(false);
-              }}
-              onKeyDown={(e) => {
-                if (e.key === "Escape") setShowSavePrompt(false);
-              }}
-              role="presentation"
-            >
-              <div
-                role="dialog"
-                aria-modal="true"
-                class="w-full max-w-sm rounded-lg shadow-xl overflow-hidden"
-                style={{
-                  background: "var(--background-base)",
-                  border: "1px solid var(--border-base)",
-                }}
-              >
-                <div
-                  class="px-4 py-3"
-                  style={{
-                    "border-bottom": "1px solid var(--border-base)",
-                  }}
-                >
-                  <h2
-                    class="text-base font-medium"
-                    style={{ color: "var(--text-strong)" }}
-                  >
-                    Save as Prompt
-                  </h2>
-                </div>
-                <div class="p-4 space-y-3">
-                  <div>
-                    <label
-                      class="block text-sm font-medium mb-1"
-                      style={{ color: "var(--text-base)" }}
-                    >
-                      Title
-                    </label>
-                    <input
-                      ref={(el) => setTimeout(() => el.focus(), 0)}
-                      type="text"
-                      value={savePromptTitle()}
-                      onInput={(e) =>
-                        setSavePromptTitle(e.currentTarget.value)
-                      }
-                      placeholder="Prompt title"
-                      class="w-full px-3 py-2 rounded-md text-sm"
-                      style={{
-                        background: "var(--background-base)",
-                        border: "1px solid var(--border-base)",
-                        color: "var(--text-base)",
-                      }}
-                      onKeyDown={(e) => {
-                        if (e.key === "Enter") {
-                          e.preventDefault();
-                          const title = savePromptTitle().trim();
-                          if (!title) return;
-                          savedPrompts.add(title, input().trim());
-                          setShowSavePrompt(false);
-                          setSavePromptSuccess(true);
-                          setTimeout(
-                            () => setSavePromptSuccess(false),
-                            2000,
-                          );
-                        }
-                      }}
-                    />
-                  </div>
-                  <p class="text-xs" style={{ color: "var(--text-weak)" }}>
-                    The current input text will be saved as the prompt body.
-                  </p>
-                </div>
-                <div
-                  class="px-4 py-3 flex justify-end gap-2"
-                  style={{
-                    "border-top": "1px solid var(--border-base)",
-                  }}
-                >
-                  <button
-                    type="button"
-                    onClick={() => setShowSavePrompt(false)}
-                    class="px-4 py-2 text-sm font-medium rounded-md transition-colors"
-                    style={{
-                      background: "var(--surface-inset)",
-                      color: "var(--text-base)",
-                    }}
-                  >
-                    Cancel
-                  </button>
-                  <button
-                    type="button"
-                    disabled={!savePromptTitle().trim()}
-                    onClick={() => {
-                      const title = savePromptTitle().trim();
-                      if (!title) return;
-                      savedPrompts.add(title, input().trim());
-                      setShowSavePrompt(false);
-                      setSavePromptSuccess(true);
-                      setTimeout(() => setSavePromptSuccess(false), 2000);
-                    }}
-                    class="px-4 py-2 text-sm font-medium rounded-md transition-colors disabled:opacity-50"
-                    style={{
-                      background: "var(--interactive-base)",
-                      color: "white",
-                    }}
-                  >
-                    Save
-                  </button>
-                </div>
-              </div>
-            </div>
-          </Portal>
+          <SavePromptDialog
+            title={savePromptTitle}
+            setTitle={setSavePromptTitle}
+            onSave={() => {
+              const title = savePromptTitle().trim();
+              if (!title) return;
+              savedPrompts.add(title, input().trim());
+              setShowSavePrompt(false);
+              setSavePromptSuccess(true);
+              setTimeout(() => setSavePromptSuccess(false), 2000);
+            }}
+            onClose={() => setShowSavePrompt(false)}
+          />
         </Show>
 
         {/* Save Prompt Success Toast */}
@@ -1826,3 +1723,123 @@ export function Session() {
     </Show>
   );
 }
+
+function SavePromptDialog(props: {
+  title: () => string
+  setTitle: (v: string) => void
+  onSave: () => void
+  onClose: () => void
+}) {
+  onMount(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        props.onClose();
+      }
+    };
+    document.addEventListener("keydown", handler);
+    onCleanup(() => document.removeEventListener("keydown", handler));
+  });
+
+  return (
+    <Portal>
+      <div
+        class="fixed inset-0 z-[100] flex items-center justify-center"
+        style={{ background: "rgba(0,0,0,0.5)" }}
+        onClick={(e) => {
+          if (e.target === e.currentTarget) props.onClose();
+        }}
+        role="presentation"
+      >
+        <div
+          role="dialog"
+          aria-modal="true"
+          class="w-full max-w-sm rounded-lg shadow-xl overflow-hidden"
+          style={{
+            background: "var(--background-base)",
+            border: "1px solid var(--border-base)",
+          }}
+        >
+          <div
+            class="px-4 py-3"
+            style={{
+              "border-bottom": "1px solid var(--border-base)",
+            }}
+          >
+            <h2
+              class="text-base font-medium"
+              style={{ color: "var(--text-strong)" }}
+            >
+              Save as Prompt
+            </h2>
+          </div>
+          <div class="p-4 space-y-3">
+            <div>
+              <label
+                class="block text-sm font-medium mb-1"
+                style={{ color: "var(--text-base)" }}
+              >
+                Title
+              </label>
+              <input
+                ref={(el) => setTimeout(() => el.focus(), 0)}
+                type="text"
+                value={props.title()}
+                onInput={(e) =>
+                  props.setTitle(e.currentTarget.value)
+                }
+                placeholder="Prompt title"
+                class="w-full px-3 py-2 rounded-md text-sm"
+                style={{
+                  background: "var(--background-base)",
+                  border: "1px solid var(--border-base)",
+                  color: "var(--text-base)",
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    e.preventDefault();
+                    props.onSave();
+                  }
+                }}
+              />
+            </div>
+            <p class="text-xs" style={{ color: "var(--text-weak)" }}>
+              The current input text will be saved as the prompt body.
+            </p>
+          </div>
+          <div
+            class="px-4 py-3 flex justify-end gap-2"
+            style={{
+              "border-top": "1px solid var(--border-base)",
+            }}
+          >
+            <button
+              type="button"
+              onClick={props.onClose}
+              class="px-4 py-2 text-sm font-medium rounded-md transition-colors"
+              style={{
+                background: "var(--surface-inset)",
+                color: "var(--text-base)",
+              }}
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              disabled={!props.title().trim()}
+              onClick={props.onSave}
+              class="px-4 py-2 text-sm font-medium rounded-md transition-colors disabled:opacity-50"
+              style={{
+                background: "var(--interactive-base)",
+                color: "white",
+              }}
+            >
+              Save
+            </button>
+          </div>
+        </div>
+      </div>
+    </Portal>
+  );
+}
+
