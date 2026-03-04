@@ -150,13 +150,13 @@ function PromptDropdown(props: {
   }
 
   onMount(() => {
-    document.addEventListener("mousedown", handleClickOutside);
+    document.addEventListener("click", handleClickOutside);
     document.addEventListener("keydown", handleKeyDown);
     ref?.focus();
   });
 
   onCleanup(() => {
-    document.removeEventListener("mousedown", handleClickOutside);
+    document.removeEventListener("click", handleClickOutside);
     document.removeEventListener("keydown", handleKeyDown);
   });
 
@@ -473,10 +473,18 @@ export function Layout(props: ParentProps) {
     }
   }
 
-  function createSessionWithPrompt(text: string) {
+  async function createSessionWithPrompt(text: string) {
     if (!directory) return;
     setPromptDropdownOpen(false);
-    navigate(`/${dirSlug()}/session?prompt=${encodeURIComponent(text)}`);
+    try {
+      const res = await client.session.create({});
+      if (res.data) {
+        setSessions((prev) => [res.data as Session, ...prev]);
+        navigate(`/${dirSlug()}/session/${res.data.id}?prompt=${encodeURIComponent(text)}`);
+      }
+    } catch (e) {
+      console.error("Failed to create session for prompt:", e);
+    }
   }
 
   async function restoreSession(session: Session) {
