@@ -905,17 +905,19 @@ export function Layout(props: ParentProps) {
                             </A>
                             <div
                               class="absolute right-0 top-0 bottom-0 hidden group-hover:flex items-center rounded-r-md"
+                              style={{ "pointer-events": "none" }}
                             >
                               <div
                                 class="w-6 h-full"
                                 style={{
-                                  background: `linear-gradient(to right, transparent, ${isActive(session.id) ? "var(--surface-inset)" : "var(--background-stronger)"})`,
+                                  background: `linear-gradient(to right, transparent, var(--surface-inset))`,
                                 }}
                               />
                               <div
                                 class="flex items-center pr-1.5"
                                 style={{
-                                  background: isActive(session.id) ? "var(--surface-inset)" : "var(--background-stronger)",
+                                  "pointer-events": "auto",
+                                  background: "var(--surface-inset)",
                                 }}
                               >
                                 <button
