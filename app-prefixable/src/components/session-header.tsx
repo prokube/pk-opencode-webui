@@ -1,4 +1,4 @@
-import { Show, createEffect, createSignal, onCleanup } from "solid-js"
+import { Show, createEffect, createMemo, createSignal, onCleanup } from "solid-js"
 import { useNavigate, useParams } from "@solidjs/router"
 import { Spinner } from "./ui/spinner"
 import { useLayout } from "../context/layout"
@@ -46,12 +46,21 @@ export function SessionHeader(props: SessionHeaderProps) {
   const [optimisticTitle, setOptimisticTitle] = createSignal<string | null>(null)
   const [aiRenaming, setAiRenaming] = createSignal(false)
   const [renameError, setRenameError] = createSignal<string | null>(null)
+  const errorTimer = { id: undefined as ReturnType<typeof setTimeout> | undefined }
 
-  const hasMessages = () => {
+  const hasMessages = createMemo(() => {
     const session = props.session
     if (!session) return false
     return sync.messages(session.id).length > 0
+  })
+
+  function showRenameError(msg: string) {
+    if (errorTimer.id !== undefined) clearTimeout(errorTimer.id)
+    setRenameError(msg)
+    errorTimer.id = setTimeout(() => { setRenameError(null); errorTimer.id = undefined }, 4000)
   }
+
+  onCleanup(() => { if (errorTimer.id !== undefined) clearTimeout(errorTimer.id) })
 
   // Clear optimistic title when SSE confirms the rename (server title matches)
   createEffect(() => {
@@ -61,10 +70,19 @@ export function SessionHeader(props: SessionHeaderProps) {
     if (title === optimistic) setOptimisticTitle(null)
   })
 
-  // Clear when switching sessions (different ID)
+  // Reset all session-scoped UI state when switching sessions
   createEffect(() => {
     props.session?.id
     setOptimisticTitle(null)
+    setRenaming(false)
+    setRenameValue("")
+    setMenuOpen(false)
+    setConfirmDelete(false)
+    setDeleting(false)
+    setDeleteError(null)
+    setAiRenaming(false)
+    setRenameError(null)
+    if (errorTimer.id !== undefined) { clearTimeout(errorTimer.id); errorTimer.id = undefined }
   })
 
   function navigateToParent() {
@@ -203,14 +221,12 @@ export function SessionHeader(props: SessionHeaderProps) {
           setRenameValue(suggestion)
           setRenaming(true)
         } else {
-          setRenameError("AI returned an empty suggestion. Try again.")
-          setTimeout(() => setRenameError(null), 4000)
+          showRenameError("AI returned an empty suggestion. Try again.")
         }
       })
       .catch((err: unknown) => {
         console.error("AI rename failed", err)
-        setRenameError("AI rename failed. Please try again.")
-        setTimeout(() => setRenameError(null), 4000)
+        showRenameError("AI rename failed. Please try again.")
       })
       .finally(() => {
         setAiRenaming(false)
