@@ -364,35 +364,33 @@ export function Session() {
     if (id) await sync.session.sync(id);
   };
 
-  // Navigate to next/previous session after archive or delete.
-  // Must be called BEFORE the session is removed so it still appears in sync.sessions().
-  const navigateAfterRemove = (id: string) => {
-    const current = sync.sessions().find(s => s.id === id);
-    if (current?.parentID) {
-      navigate(`/${dirSlug()}/session/${current.parentID}`);
-      return;
-    }
-    // compute neighbor NOW, before the session disappears
+  // Compute the navigation destination after archive/delete.
+  // Accepts parentID directly so it works even after the session is removed from sync.sessions().
+  const computeDestination = (id: string, parentID?: string): string => {
+    if (parentID) return `/${dirSlug()}/session/${parentID}`;
     const all = sync.sessions()
       .filter(s => s.directory === directory && !s.time?.archived && !s.parentID)
       .slice()
       .sort((a, b) => (b.time?.updated ?? 0) - (a.time?.updated ?? 0));
+    if (!all.length) return `/${dirSlug()}/session`;
     const idx = all.findIndex(s => s.id === id);
     const next = idx === -1 ? all[0] : (all[idx + 1] ?? all[idx - 1]);
-    navigate(next ? `/${dirSlug()}/session/${next.id}` : `/${dirSlug()}/session`);
+    return next ? `/${dirSlug()}/session/${next.id}` : `/${dirSlug()}/session`;
   };
 
-  // Archive a session: compute neighbor first, then call API
-  async function handleArchive(session: Session) {
-    navigateAfterRemove(session.id);
-    await client.session.update({ sessionID: session.id, time: { archived: Date.now() } })
+  // Archive a session: compute destination first (session still in sync), then call API, then navigate.
+  const handleArchive = async (s: Session) => {
+    const dest = computeDestination(s.id, s.parentID);
+    await client.session.update({ sessionID: s.id, time: { archived: Date.now() } })
       .catch(err => console.error("Failed to archive session", err));
-  }
+    navigate(dest);
+  };
 
-  // Navigate after a successful delete (API call handled by SessionHeader)
-  function handleDelete(session: Session) {
-    navigateAfterRemove(session.id);
-  }
+  // Delete a session: compute destination first, then navigate (API call handled by SessionHeader).
+  const handleDelete = (s: Session) => {
+    const dest = computeDestination(s.id, s.parentID);
+    navigate(dest);
+  };
 
   // Start processing state - SSE events will handle updates and completion
   function startProcessing() {

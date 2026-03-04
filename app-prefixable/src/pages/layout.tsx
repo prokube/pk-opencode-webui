@@ -233,7 +233,7 @@ export function Layout(props: ParentProps) {
         event.type === "session.deleted"
       ) {
         // Only reload for root sessions; child sessions (sub-agents) don't affect the sidebar list
-        if ((event.properties as { session?: { parentID?: string } }).session?.parentID) return;
+        if ((event.properties as { info?: { parentID?: string } }).info?.parentID) return;
         loadSessions();
       }
     });
