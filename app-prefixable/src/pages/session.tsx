@@ -442,16 +442,16 @@ export function Session() {
     // Subscribe immediately so we don't miss question.asked events during HTTP
     // flight. Clearing events (question.replied / question.rejected) are
     // ignored until the initial HTTP seed completes via the loaded flag.
-    const state = { loaded: false };
-    const unsub = { fn: undefined as (() => void) | undefined };
-    onCleanup(() => unsub.fn?.());
-
-    unsub.fn = events.subscribe((event) => {
+    // receivedViaSse guards against the HTTP result overwriting a live question
+    // that arrived via SSE during the HTTP flight.
+    const state = { loaded: false, receivedViaSse: false };
+    const unsub = events.subscribe((event) => {
       const type = event.type as string;
       if (type === "question.asked") {
         const props = event.properties as QuestionRequest;
         if (props.sessionID === id) {
           console.log("[Session] Question event received:", props);
+          state.receivedViaSse = true;
           setPendingQuestion(props);
         }
       }
@@ -461,23 +461,28 @@ export function Session() {
         const props = event.properties as { sessionID?: string };
         if (props.sessionID === id) {
           console.log("[Session] Question cleared:", type);
+          state.receivedViaSse = false;
           setPendingQuestion(null);
         }
       }
     });
+    onCleanup(unsub);
 
-    client.question.list({ directory }).then((res) => {
-      console.log("[Session] Question list response:", res);
-      const questions = Array.isArray(res.data) ? res.data : [];
-      const q = questions.find((q) => q.sessionID === id);
-      if (q) {
-        console.log("[Session] Found pending question:", q);
-        setPendingQuestion(q);
-      } else {
-        setPendingQuestion(null);
-      }
-      state.loaded = true;
-    });
+    client.question.list({ directory })
+      .then((res) => {
+        console.log("[Session] Question list response:", res);
+        const questions = Array.isArray(res.data) ? res.data : [];
+        const q = questions.find((q) => q.sessionID === id);
+        if (!state.receivedViaSse) {
+          // Only apply HTTP result if no live SSE question arrived during flight
+          setPendingQuestion(q ?? null);
+        }
+        state.loaded = true;
+      })
+      .catch((e) => {
+        console.error("[Session] Failed to load question list:", e);
+        state.loaded = true;
+      });
   });
 
   async function handleQuestionReply(answers: string[][]) {
