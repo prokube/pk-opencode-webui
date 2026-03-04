@@ -58,8 +58,12 @@ function groupSessionsByDate(
     new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
 
   const todayStart = startOfDay(now);
-  const yesterdayStart = todayStart - 86400000;
-  const sevenDaysStart = todayStart - 6 * 86400000;
+  const yesterdayStart = startOfDay(
+    new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1),
+  );
+  const sevenDaysStart = startOfDay(
+    new Date(now.getFullYear(), now.getMonth(), now.getDate() - 6),
+  );
 
   const buckets: Record<string, Session[]> = {
     Today: [],
@@ -239,8 +243,21 @@ export function Layout(props: ParentProps) {
       .sort((a, b) => (b.time?.archived || 0) - (a.time?.archived || 0)),
   );
 
+  const [now, setNow] = createSignal(new Date());
+
+  onMount(() => {
+    const timer = { id: 0 as ReturnType<typeof setTimeout> };
+    const schedule = () => {
+      const next = new Date();
+      next.setHours(24, 0, 0, 0);
+      timer.id = setTimeout(() => { setNow(new Date()); schedule(); }, next.getTime() - Date.now());
+    };
+    schedule();
+    onCleanup(() => clearTimeout(timer.id));
+  });
+
   const groupedSessions = createMemo(() =>
-    groupSessionsByDate(projectSessions(), new Date()),
+    groupSessionsByDate(projectSessions(), now()),
   );
 
   async function loadSessions() {
@@ -610,7 +627,7 @@ export function Layout(props: ParentProps) {
                 <For each={groupedSessions()}>
                   {(group) => (
                     <div class="pb-2">
-                      <div
+                      <h3
                         class="px-2.5 pt-2 pb-1 text-xs font-semibold uppercase tracking-wide"
                         style={{
                           color: "var(--text-weak)",
@@ -619,7 +636,7 @@ export function Layout(props: ParentProps) {
                         }}
                       >
                         {group.label}
-                      </div>
+                      </h3>
                       <div class="space-y-0.5">
                         <For each={group.sessions}>
                           {(session) => (
