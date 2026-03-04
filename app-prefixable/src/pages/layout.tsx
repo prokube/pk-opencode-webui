@@ -14,7 +14,7 @@ import { useSDK } from "../context/sdk";
 import { useEvents } from "../context/events";
 import { useProviders } from "../context/providers";
 import { useTerminal } from "../context/terminal";
-import { useLayout } from "../context/layout";
+import { useLayout, SIDEBAR_MIN_WIDTH, SIDEBAR_MAX_WIDTH } from "../context/layout";
 import { base64Encode } from "../utils/path";
 import { Spinner } from "../components/ui/spinner";
 import { Button } from "../components/ui/button";
@@ -44,6 +44,7 @@ import {
   Pencil,
 } from "lucide-solid";
 import { useSync } from "../context/sync";
+import { ResizeHandle } from "../components/resize-handle";
 
 // Storage keys
 const PROJECTS_STORAGE_KEY = "opencode.projects";
@@ -107,6 +108,7 @@ export function Layout(props: ParentProps) {
   const [windowWidth, setWindowWidth] = createSignal(
     typeof window !== "undefined" ? window.innerWidth : 1200,
   );
+  const [sidebarDragging, setSidebarDragging] = createSignal(false);
 
   // Responsive breakpoint - collapse sidebar below 900px
   const COLLAPSE_BREAKPOINT = 900;
@@ -116,6 +118,11 @@ export function Layout(props: ParentProps) {
     if (location.pathname.endsWith("/settings")) return false;
     if (windowWidth() < COLLAPSE_BREAKPOINT) return false;
     return sidebarExpanded();
+  });
+
+  // Reset dragging state when sidebar hides (unmount mid-drag safety)
+  createEffect(() => {
+    if (!showSidebar()) setSidebarDragging(false);
   });
 
   // Load state from storage
@@ -560,9 +567,9 @@ export function Layout(props: ParentProps) {
 
       {/* Sessions Panel (collapsible) */}
       <div
-        class="shrink-0 flex flex-col transition-all duration-200"
+        class={`shrink-0 flex flex-col ${sidebarDragging() ? "" : "transition-all duration-200"}`}
         style={{
-          width: showSidebar() ? "256px" : "0px",
+          width: showSidebar() ? `${layout.sidebar.width()}px` : "0px",
           overflow: "hidden",
           background: "var(--background-stronger)",
           "border-right": showSidebar()
@@ -570,7 +577,7 @@ export function Layout(props: ParentProps) {
             : "none",
         }}
       >
-        <div class="w-64 h-full flex flex-col">
+        <div class="h-full flex flex-col" style={{ "min-width": `${layout.sidebar.width()}px` }}>
           {/* Project Header with collapse toggle */}
           <div
             class="px-3 h-12 flex items-center gap-2"
@@ -665,7 +672,7 @@ export function Layout(props: ParentProps) {
                                 fallback={
                                   <A
                                     href={`/${dirSlug()}/session/${session.id}`}
-                                    class="flex items-center gap-2 px-2.5 py-2 pr-16 rounded-md text-sm transition-colors"
+                                    class="flex items-center gap-2 px-2.5 py-2 rounded-md text-sm transition-colors"
                                     style={{
                                       color: isActive(session.id)
                                         ? "var(--text-interactive-base)"
@@ -706,7 +713,7 @@ export function Layout(props: ParentProps) {
                                         <CircleHelp class="w-4 h-4" style={{ color: "var(--icon-warning-base)" }} />
                                       </Show>
                                     </span>
-                                    <span class="truncate">
+                                    <span class="min-w-0 flex-1 truncate">
                                       {session.title || "Untitled"}
                                     </span>
                                   </A>
@@ -764,50 +771,67 @@ export function Layout(props: ParentProps) {
                                 </div>
                               </Show>
                               <Show when={renamingId() !== session.id}>
-                                <div class="absolute right-1.5 top-1/2 -translate-y-1/2 hidden group-hover:flex group-focus-within:flex items-center gap-0.5">
-                                  <button
-                                    onClick={(e) => {
-                                      e.preventDefault();
-                                      e.stopPropagation();
-                                      setEditTitle(session.title || "");
-                                      setRenamingId(session.id);
+                                <div
+                                  class="absolute right-0 top-0 bottom-0 hidden group-hover:flex group-focus-within:flex items-center rounded-r-md"
+                                  style={{ "pointer-events": "none" }}
+                                >
+                                   <div
+                                    class="w-6 h-full"
+                                    style={{
+                                      background: `linear-gradient(to right, transparent, var(${isActive(session.id) ? "--surface-inset" : "--background-stronger"}))`,
                                     }}
-                                    class="p-1 rounded transition-colors"
-                                    style={{ color: "var(--icon-weak)" }}
-                                    onMouseEnter={(e) =>
-                                      (e.currentTarget.style.color =
-                                        "var(--icon-base)")
-                                    }
-                                    onMouseLeave={(e) =>
-                                      (e.currentTarget.style.color =
-                                        "var(--icon-weak)")
-                                    }
-                                    title="Rename session"
-                                    aria-label="Rename session"
-                                  >
-                                    <Pencil class="w-3.5 h-3.5" />
-                                  </button>
-                                  <button
-                                    onClick={(e) => {
-                                      e.preventDefault();
-                                      e.stopPropagation();
-                                      archiveAndNavigate(session);
+                                  />
+                                  <div
+                                    class="flex items-center gap-0.5 pr-1.5"
+                                    style={{
+                                      "pointer-events": "auto",
+                                      background: isActive(session.id) ? "var(--surface-inset)" : "var(--background-stronger)",
                                     }}
-                                    class="p-1 rounded transition-colors"
-                                    style={{ color: "var(--icon-weak)" }}
-                                    onMouseEnter={(e) =>
-                                      (e.currentTarget.style.color =
-                                        "var(--icon-base)")
-                                    }
-                                    onMouseLeave={(e) =>
-                                      (e.currentTarget.style.color =
-                                        "var(--icon-weak)")
-                                    }
-                                    title="Archive session"
-                                    aria-label="Archive session"
                                   >
-                                    <Archive class="w-3.5 h-3.5" />
-                                  </button>
+                                    <button
+                                      onClick={(e) => {
+                                        e.preventDefault();
+                                        e.stopPropagation();
+                                        setEditTitle(session.title || "");
+                                        setRenamingId(session.id);
+                                      }}
+                                      class="p-1 rounded transition-colors"
+                                      style={{ color: "var(--icon-weak)" }}
+                                      onMouseEnter={(e) =>
+                                        (e.currentTarget.style.color =
+                                          "var(--icon-base)")
+                                      }
+                                      onMouseLeave={(e) =>
+                                        (e.currentTarget.style.color =
+                                          "var(--icon-weak)")
+                                      }
+                                      title="Rename session"
+                                      aria-label="Rename session"
+                                    >
+                                      <Pencil class="w-3.5 h-3.5" />
+                                    </button>
+                                    <button
+                                      onClick={(e) => {
+                                        e.preventDefault();
+                                        e.stopPropagation();
+                                        archiveAndNavigate(session);
+                                      }}
+                                      class="p-1 rounded transition-colors"
+                                      style={{ color: "var(--icon-weak)" }}
+                                      onMouseEnter={(e) =>
+                                        (e.currentTarget.style.color =
+                                          "var(--icon-base)")
+                                      }
+                                      onMouseLeave={(e) =>
+                                        (e.currentTarget.style.color =
+                                          "var(--icon-weak)")
+                                      }
+                                      title="Archive session"
+                                      aria-label="Archive session"
+                                    >
+                                      <Archive class="w-3.5 h-3.5" />
+                                    </button>
+                                  </div>
                                 </div>
                               </Show>
                             </div>
@@ -846,10 +870,10 @@ export function Layout(props: ParentProps) {
                     <div class="space-y-0.5 pb-2">
                       <For each={archivedSessions()}>
                         {(session) => (
-                          <div class="group relative">
+                           <div class="group relative">
                             <A
                               href={`/${dirSlug()}/session/${session.id}`}
-                              class="flex items-center gap-2 px-2.5 py-2 pr-8 rounded-md text-sm transition-colors"
+                              class="flex items-center gap-2 px-2.5 py-2 rounded-md text-sm transition-colors"
                               style={{
                                 color: isActive(session.id)
                                   ? "var(--text-interactive-base)"
@@ -880,31 +904,50 @@ export function Layout(props: ParentProps) {
                               >
                                 <Archive class="w-4 h-4" />
                               </span>
-                              <span class="truncate">
+                              <span class="min-w-0 flex-1 truncate">
                                 {session.title || "Untitled"}
                               </span>
                             </A>
-                            <button
-                              onClick={(e) => {
-                                e.preventDefault();
-                                e.stopPropagation();
-                                restoreSession(session);
-                              }}
-                              class="absolute right-1.5 top-1/2 -translate-y-1/2 p-1 rounded hidden group-hover:flex items-center justify-center transition-colors"
-                              style={{ color: "var(--icon-weak)" }}
-                              onMouseEnter={(e) =>
-                                (e.currentTarget.style.color =
-                                  "var(--icon-base)")
-                              }
-                              onMouseLeave={(e) =>
-                                (e.currentTarget.style.color =
-                                  "var(--icon-weak)")
-                              }
-                              title="Restore session"
-                              aria-label="Restore session"
+                            <div
+                              class="absolute right-0 top-0 bottom-0 hidden group-hover:flex group-focus-within:flex items-center rounded-r-md"
+                              style={{ "pointer-events": "none" }}
                             >
-                              <ArchiveRestore class="w-4 h-4" />
-                            </button>
+                              <div
+                                class="w-6 h-full"
+                                style={{
+                                  background: `linear-gradient(to right, transparent, var(${isActive(session.id) ? "--surface-inset" : "--background-stronger"}))`,
+                                }}
+                              />
+                              <div
+                                class="flex items-center pr-1.5"
+                                style={{
+                                  "pointer-events": "auto",
+                                  background: isActive(session.id) ? "var(--surface-inset)" : "var(--background-stronger)",
+                                }}
+                              >
+                                <button
+                                  onClick={(e) => {
+                                    e.preventDefault();
+                                    e.stopPropagation();
+                                    restoreSession(session);
+                                  }}
+                                  class="p-1 rounded transition-colors"
+                                  style={{ color: "var(--icon-weak)" }}
+                                  onMouseEnter={(e) =>
+                                    (e.currentTarget.style.color =
+                                      "var(--icon-base)")
+                                  }
+                                  onMouseLeave={(e) =>
+                                    (e.currentTarget.style.color =
+                                      "var(--icon-weak)")
+                                  }
+                                  title="Restore session"
+                                  aria-label="Restore session"
+                                >
+                                  <ArchiveRestore class="w-4 h-4" />
+                                </button>
+                              </div>
+                            </div>
                           </div>
                         )}
                       </For>
@@ -940,6 +983,26 @@ export function Layout(props: ParentProps) {
           </div>
         </div>
       </div>
+
+      {/* Sidebar resize handle */}
+      <Show when={showSidebar()}>
+        <ResizeHandle
+          direction="horizontal"
+          edge="end"
+          size={layout.sidebar.width()}
+          min={SIDEBAR_MIN_WIDTH}
+          max={SIDEBAR_MAX_WIDTH}
+          onResize={(width) => {
+            setSidebarDragging(true);
+            layout.sidebar.resize(width);
+          }}
+          onDragEnd={() => {
+            setSidebarDragging(false);
+          }}
+          onCollapse={toggleSidebar}
+          collapseThreshold={100}
+        />
+      </Show>
 
       {/* Expand button when manually collapsed (not on settings or small screens) */}
       <Show
