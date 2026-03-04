@@ -49,6 +49,43 @@ const PROJECTS_STORAGE_KEY = "opencode.projects";
 const SIDEBAR_EXPANDED_KEY = "opencode.sidebarExpanded";
 const SHOW_ARCHIVED_KEY = "opencode.showArchived";
 
+// Group sessions by date bucket
+function groupSessionsByDate(
+  sessions: Session[],
+  now: Date,
+): { label: string; sessions: Session[] }[] {
+  const startOfDay = (d: Date) =>
+    new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+
+  const todayStart = startOfDay(now);
+  const yesterdayStart = todayStart - 86400000;
+  const sevenDaysStart = todayStart - 6 * 86400000;
+
+  const buckets: Record<string, Session[]> = {
+    Today: [],
+    Yesterday: [],
+    "Last 7 days": [],
+    Older: [],
+  };
+
+  for (const session of sessions) {
+    const t = session.time?.updated || 0;
+    if (t >= todayStart) {
+      buckets["Today"].push(session);
+    } else if (t >= yesterdayStart) {
+      buckets["Yesterday"].push(session);
+    } else if (t >= sevenDaysStart) {
+      buckets["Last 7 days"].push(session);
+    } else {
+      buckets["Older"].push(session);
+    }
+  }
+
+  return (["Today", "Yesterday", "Last 7 days", "Older"] as const)
+    .filter((label) => buckets[label].length > 0)
+    .map((label) => ({ label, sessions: buckets[label] }));
+}
+
 export function Layout(props: ParentProps) {
   const { client, directory } = useSDK();
   const { basePath } = useBasePath();
@@ -200,6 +237,10 @@ export function Layout(props: ParentProps) {
       .archivedSessions()
       .filter((s) => s.directory === directory)
       .sort((a, b) => (b.time?.archived || 0) - (a.time?.archived || 0)),
+  );
+
+  const groupedSessions = createMemo(() =>
+    groupSessionsByDate(projectSessions(), new Date()),
   );
 
   async function loadSessions() {
@@ -565,79 +606,98 @@ export function Layout(props: ParentProps) {
                   </div>
                 }
               >
-                {/* Active Sessions */}
-                <div class="space-y-0.5 pb-2">
-                  <For each={projectSessions()}>
-                    {(session) => (
-                      <div class="group relative">
-                        <A
-                          href={`/${dirSlug()}/session/${session.id}`}
-                          class="flex items-center gap-2 px-2.5 py-2 pr-8 rounded-md text-sm transition-colors"
-                          style={{
-                            color: isActive(session.id)
-                              ? "var(--text-interactive-base)"
-                              : "var(--text-base)",
-                            background: isActive(session.id)
-                              ? "var(--surface-inset)"
-                              : "transparent",
-                          }}
-                          onMouseEnter={(e) => {
-                            if (!isActive(session.id))
-                              e.currentTarget.style.background =
-                                "var(--surface-inset)";
-                          }}
-                          onMouseLeave={(e) => {
-                            if (!isActive(session.id))
-                              e.currentTarget.style.background = "transparent";
-                          }}
-                        >
-                          <span
-                            class="shrink-0"
-                            style={{ color: "var(--icon-weak)" }}
-                          >
-                            <Show
-                              when={!!events.pendingQuestions[session.id]}
-                              fallback={
-                                <Show
-                                  when={
-                                    events.status[session.id]?.type === "busy" ||
-                                    events.status[session.id]?.type === "retry"
-                                  }
-                                  fallback={<MessageCircle class="w-4 h-4" />}
-                                >
-                                  <Loader2 class="w-4 h-4 animate-spin" />
-                                </Show>
-                              }
-                            >
-                              <CircleHelp class="w-4 h-4" style={{ color: "var(--icon-warning-base)" }} />
-                            </Show>
-                          </span>
-                          <span class="truncate">
-                            {session.title || "Untitled"}
-                          </span>
-                        </A>
-                        <button
-                          onClick={(e) => {
-                            e.preventDefault();
-                            e.stopPropagation();
-                            archiveSession(session);
-                          }}
-                          class="absolute right-1.5 top-1/2 -translate-y-1/2 p-1 rounded hidden group-hover:flex items-center justify-center transition-colors"
-                          style={{ color: "var(--icon-weak)" }}
-                          onMouseEnter={(e) =>
-                            (e.currentTarget.style.color = "var(--icon-base)")
-                          }
-                          onMouseLeave={(e) =>
-                            (e.currentTarget.style.color = "var(--icon-weak)")
-                          }
-                          title="Archive session"
-                        >
-                          <Archive class="w-4 h-4" />
-                        </button>
+                {/* Active Sessions — grouped by date */}
+                <For each={groupedSessions()}>
+                  {(group) => (
+                    <div class="pb-2">
+                      <div
+                        class="px-2.5 pt-2 pb-1 text-xs font-semibold uppercase tracking-wide"
+                        style={{
+                          color: "var(--text-weak)",
+                          "letter-spacing": "0.06em",
+                          "font-size": "0.65rem",
+                        }}
+                      >
+                        {group.label}
                       </div>
-                    )}
-                  </For>
-                </div>
+                      <div class="space-y-0.5">
+                        <For each={group.sessions}>
+                          {(session) => (
+                            <div class="group relative">
+                              <A
+                                href={`/${dirSlug()}/session/${session.id}`}
+                                class="flex items-center gap-2 px-2.5 py-2 pr-8 rounded-md text-sm transition-colors"
+                                style={{
+                                  color: isActive(session.id)
+                                    ? "var(--text-interactive-base)"
+                                    : "var(--text-base)",
+                                  background: isActive(session.id)
+                                    ? "var(--surface-inset)"
+                                    : "transparent",
+                                }}
+                                onMouseEnter={(e) => {
+                                  if (!isActive(session.id))
+                                    e.currentTarget.style.background =
+                                      "var(--surface-inset)";
+                                }}
+                                onMouseLeave={(e) => {
+                                  if (!isActive(session.id))
+                                    e.currentTarget.style.background =
+                                      "transparent";
+                                }}
+                              >
+                                <span
+                                  class="shrink-0"
+                                  style={{ color: "var(--icon-weak)" }}
+                                >
+                                  <Show
+                                    when={!!events.pendingQuestions[session.id]}
+                                    fallback={
+                                      <Show
+                                        when={
+                                          events.status[session.id]?.type === "busy" ||
+                                          events.status[session.id]?.type === "retry"
+                                        }
+                                        fallback={<MessageCircle class="w-4 h-4" />}
+                                      >
+                                        <Loader2 class="w-4 h-4 animate-spin" />
+                                      </Show>
+                                    }
+                                  >
+                                    <CircleHelp class="w-4 h-4" style={{ color: "var(--icon-warning-base)" }} />
+                                  </Show>
+                                </span>
+                                <span class="truncate">
+                                  {session.title || "Untitled"}
+                                </span>
+                              </A>
+                              <button
+                                onClick={(e) => {
+                                  e.preventDefault();
+                                  e.stopPropagation();
+                                  archiveSession(session);
+                                }}
+                                class="absolute right-1.5 top-1/2 -translate-y-1/2 p-1 rounded hidden group-hover:flex items-center justify-center transition-colors"
+                                style={{ color: "var(--icon-weak)" }}
+                                onMouseEnter={(e) =>
+                                  (e.currentTarget.style.color =
+                                    "var(--icon-base)")
+                                }
+                                onMouseLeave={(e) =>
+                                  (e.currentTarget.style.color =
+                                    "var(--icon-weak)")
+                                }
+                                title="Archive session"
+                              >
+                                <Archive class="w-4 h-4" />
+                              </button>
+                            </div>
+                          )}
+                        </For>
+                      </div>
+                    </div>
+                  )}
+                </For>
 
                 {/* Archived Sessions Toggle */}
                 <Show when={archivedSessions().length > 0}>
