@@ -120,6 +120,11 @@ export function Layout(props: ParentProps) {
     return sidebarExpanded();
   });
 
+  // Reset dragging state when sidebar hides (unmount mid-drag safety)
+  createEffect(() => {
+    if (!showSidebar()) setSidebarDragging(false);
+  });
+
   // Load state from storage
   onMount(() => {
     // Load projects

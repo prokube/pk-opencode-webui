@@ -15,9 +15,14 @@ export interface ResizeHandleProps {
 
 export function ResizeHandle(props: ResizeHandleProps) {
   let cleanup: (() => void) | null = null
+  let dragging = false
 
   onCleanup(() => {
     if (cleanup) cleanup()
+    if (dragging) {
+      dragging = false
+      props.onDragEnd?.()
+    }
   })
 
   const handleMouseDown = (e: MouseEvent) => {
@@ -27,6 +32,7 @@ export function ResizeHandle(props: ResizeHandleProps) {
     const startSize = props.size
     let current = startSize
 
+    dragging = true
     document.body.style.userSelect = "none"
     document.body.style.overflow = "hidden"
 
@@ -46,6 +52,7 @@ export function ResizeHandle(props: ResizeHandleProps) {
     }
 
     const onMouseUp = () => {
+      dragging = false
       document.body.style.userSelect = ""
       document.body.style.overflow = ""
       document.removeEventListener("mousemove", onMouseMove)
@@ -56,7 +63,7 @@ export function ResizeHandle(props: ResizeHandleProps) {
       if (props.onCollapse && threshold > 0 && current < threshold) {
         props.onCollapse()
       }
-      if (props.onDragEnd) props.onDragEnd()
+      props.onDragEnd?.()
     }
 
     cleanup = () => {
