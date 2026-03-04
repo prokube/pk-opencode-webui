@@ -52,16 +52,16 @@ export function SessionInfo(props: SessionInfoProps) {
       providerID?: string
     }
 
-    // Find last assistant message with input tokens (current context state)
-    // Input tokens represent context usage - how much of the window is filled
-    let lastAssistant: { inputTokens: number; modelID?: string; providerID?: string } | null = null
+    // Find last assistant message with context tokens (current context state)
+    // Context tokens represent context usage - how much of the window is filled
+    let lastAssistant: { contextTokens: number; modelID?: string; providerID?: string } | null = null
     for (let i = msgs.length - 1; i >= 0; i--) {
       const msg = msgs[i]
       if (msg.info?.role !== "assistant") continue
       const info = msg.info as AssistantInfo
-      const inputTokens = (info.tokens?.input || 0) + (info.tokens?.cache?.read || 0) + (info.tokens?.cache?.write || 0)
-      if (inputTokens > 0) {
-        lastAssistant = { inputTokens, modelID: info.modelID, providerID: info.providerID }
+      const contextTokens = (info.tokens?.input || 0) + (info.tokens?.cache?.read || 0) + (info.tokens?.cache?.write || 0)
+      if (contextTokens > 0) {
+        lastAssistant = { contextTokens, modelID: info.modelID, providerID: info.providerID }
         break
       }
     }
@@ -80,10 +80,10 @@ export function SessionInfo(props: SessionInfoProps) {
         "available:", Object.keys(provider.models))
     }
     const limit = model?.limit?.context
-    const usage = limit ? Math.round((lastAssistant.inputTokens / limit) * 100) : null
+    const usage = limit ? Math.round((lastAssistant.contextTokens / limit) * 100) : null
 
     return {
-      tokens: lastAssistant.inputTokens.toLocaleString(),
+      tokens: lastAssistant.contextTokens.toLocaleString(),
       usage,
       cost: new Intl.NumberFormat("en-US", {
         style: "currency",
