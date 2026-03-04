@@ -103,6 +103,7 @@ export function Layout(props: ParentProps) {
   const [showArchived, setShowArchived] = createSignal(false);
   const [projectDialogOpen, setProjectDialogOpen] = createSignal(false);
   const [renamingId, setRenamingId] = createSignal<string | null>(null);
+  const [editTitle, setEditTitle] = createSignal("");
   const [windowWidth, setWindowWidth] = createSignal(
     typeof window !== "undefined" ? window.innerWidth : 1200,
   );
@@ -737,14 +738,15 @@ export function Layout(props: ParentProps) {
                                   <input
                                     class="flex-1 min-w-0 text-sm bg-transparent outline-none"
                                     style={{ color: "var(--text-base)" }}
-                                    value={session.title || ""}
+                                    value={editTitle()}
                                     aria-label="Session title"
                                     autofocus
                                     ref={(el) => setTimeout(() => { el.focus(); el.select() }, 0)}
+                                    onInput={(e) => setEditTitle(e.currentTarget.value)}
                                     onKeyDown={(e) => {
                                       if (e.key === "Enter") {
                                         e.currentTarget.dataset.committed = "true";
-                                        renameSession(session, e.currentTarget.value);
+                                        renameSession(session, editTitle());
                                         setRenamingId(null);
                                       } else if (e.key === "Escape") {
                                         e.currentTarget.dataset.cancelRename = "true";
@@ -754,7 +756,7 @@ export function Layout(props: ParentProps) {
                                     onBlur={(e) => {
                                       if (e.currentTarget.dataset.cancelRename === "true") return;
                                       if (e.currentTarget.dataset.committed === "true") return;
-                                      renameSession(session, e.currentTarget.value);
+                                      renameSession(session, editTitle());
                                       setRenamingId(null);
                                     }}
                                   />
@@ -766,6 +768,7 @@ export function Layout(props: ParentProps) {
                                     onClick={(e) => {
                                       e.preventDefault();
                                       e.stopPropagation();
+                                      setEditTitle(session.title || "");
                                       setRenamingId(session.id);
                                     }}
                                     class="p-1 rounded transition-colors"
