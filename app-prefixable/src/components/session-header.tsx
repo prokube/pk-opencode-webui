@@ -18,8 +18,8 @@ interface SessionHeaderProps {
   processing: boolean
   onOpenMCPDialog: () => void
   onRename?: (sessionId: string, title: string) => void
-  onArchive?: () => void
-  onDelete?: () => void
+  onArchive?: (sessionId: string) => void
+  onDelete?: (sessionId: string) => void
 }
 
 export function SessionHeader(props: SessionHeaderProps) {
@@ -162,7 +162,7 @@ export function SessionHeader(props: SessionHeaderProps) {
     client.session.update({ sessionID: session.id, time: { archived: Date.now() } })
       .then(() => {
         if (props.onArchive) {
-          props.onArchive()
+          props.onArchive(session.id)
         } else {
           navigate(`/${dirSlug()}/session`)
         }
@@ -179,7 +179,7 @@ export function SessionHeader(props: SessionHeaderProps) {
       .then(() => {
         setConfirmDelete(false)
         if (props.onDelete) {
-          props.onDelete()
+          props.onDelete(session.id)
         } else {
           navigate(`/${dirSlug()}/session`)
         }

@@ -365,15 +365,22 @@ export function Session() {
   };
 
   // Navigate to next/previous session after archive or delete
-  function navigateAfterRemove() {
-    const id = params.id;
+  function navigateAfterRemove(id: string) {
+    const current = sync.sessions().find(s => s.id === id);
+
+    // If it's a child session, navigate to parent
+    if (current?.parentID) {
+      navigate(`/${dirSlug()}/session/${current.parentID}`);
+      return;
+    }
+
+    // Otherwise find next/prev root session
     const all = sync.sessions()
       .filter(s => s.directory === directory && !s.time?.archived && !s.parentID)
       .slice()
       .sort((a, b) => (b.time?.updated ?? 0) - (a.time?.updated ?? 0));
 
     if (!all.length) { navigate(`/${dirSlug()}/session`); return; }
-
     const idx = all.findIndex(s => s.id === id);
     const next = idx === -1 ? all[0] : (all[idx + 1] ?? all[idx - 1]);
     navigate(next ? `/${dirSlug()}/session/${next.id}` : `/${dirSlug()}/session`);
