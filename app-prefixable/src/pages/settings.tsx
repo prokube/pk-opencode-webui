@@ -1,4 +1,4 @@
-import { createSignal, For, Show, type JSX, createMemo, onMount, onCleanup } from "solid-js"
+import { createSignal, For, Show, type JSX, createMemo, onMount, onCleanup, createEffect } from "solid-js"
 import { Portal } from "solid-js/web"
 import { Spinner } from "../components/ui/spinner"
 import { useProviders } from "../context/providers"
@@ -1498,15 +1498,43 @@ function PromptDialog(props: {
   onSave: () => void
   onClose: () => void
 }) {
-  onMount(() => {
-    const handler = (e: KeyboardEvent) => {
+  const [container, setContainer] = createSignal<HTMLDivElement>()
+  let titleRef: HTMLInputElement | undefined
+
+  createEffect(() => {
+    const el = container()
+    if (!el) return
+
+    // Focus title input on open
+    titleRef?.focus()
+
+    function handleKey(e: KeyboardEvent) {
       if (e.key === "Escape") {
         e.preventDefault()
         props.onClose()
+        return
+      }
+      if (e.key !== "Tab") return
+
+      const focusable = el!.querySelectorAll<HTMLElement>(
+        'input, textarea, button:not([disabled]), [tabindex]:not([tabindex="-1"])',
+      )
+      if (focusable.length === 0) return
+
+      const first = focusable[0]
+      const last = focusable[focusable.length - 1]
+
+      if (e.shiftKey && document.activeElement === first) {
+        e.preventDefault()
+        last?.focus()
+      } else if (!e.shiftKey && document.activeElement === last) {
+        e.preventDefault()
+        first?.focus()
       }
     }
-    document.addEventListener("keydown", handler)
-    onCleanup(() => document.removeEventListener("keydown", handler))
+
+    document.addEventListener("keydown", handleKey)
+    onCleanup(() => document.removeEventListener("keydown", handleKey))
   })
 
   return (
@@ -1520,6 +1548,7 @@ function PromptDialog(props: {
         role="presentation"
       >
         <div
+          ref={setContainer}
           role="dialog"
           aria-modal="true"
           aria-labelledby="prompt-dialog-title"
@@ -1540,7 +1569,7 @@ function PromptDialog(props: {
                 Title
               </label>
               <input
-                ref={(el) => setTimeout(() => el.focus(), 0)}
+                ref={titleRef}
                 type="text"
                 value={props.title()}
                 onInput={(e) => props.setTitle(e.currentTarget.value)}

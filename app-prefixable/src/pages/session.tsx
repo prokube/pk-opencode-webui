@@ -893,35 +893,35 @@ export function Session() {
     }
   }
 
+  async function createSessionAndSendPrompt(text: string) {
+    if (!directory) return;
+    if (!providers.selectedModel) {
+      setError("Please select a model before sending messages. Click the model button in the header.");
+      return;
+    }
+    if (!providers.connected.includes(providers.selectedModel.providerID)) {
+      setError(`Provider "${providers.selectedModel.providerID}" is not connected. Please configure it in Settings.`);
+      return;
+    }
+    try {
+      const res = await client.session.create({});
+      if (!res.data) return;
+      const sid = res.data.id;
+      navigate(`/${dirSlug()}/session/${sid}`);
+      await client.session.promptAsync({
+        sessionID: sid,
+        parts: [{ type: "text", text }],
+        agent: providers.selectedAgent || "build",
+        model: providers.selectedModel,
+      });
+    } catch (err) {
+      setError(`Failed to send saved prompt: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
   // Welcome screen component for when no session is selected
   function WelcomeScreen() {
     const savedPrompts = useSavedPrompts();
-
-    async function sendSavedPrompt(text: string) {
-      if (!directory) return;
-      if (!providers.selectedModel) {
-        setError("Please select a model before sending messages. Click the model button in the header.");
-        return;
-      }
-      if (!providers.connected.includes(providers.selectedModel.providerID)) {
-        setError(`Provider "${providers.selectedModel.providerID}" is not connected. Please configure it in Settings.`);
-        return;
-      }
-      try {
-        const res = await client.session.create({});
-        if (!res.data) return;
-        const id = res.data.id;
-        navigate(`/${dirSlug()}/session/${id}`);
-        await client.session.promptAsync({
-          sessionID: id,
-          parts: [{ type: "text", text }],
-          agent: providers.selectedAgent || "build",
-          model: providers.selectedModel,
-        });
-      } catch (err) {
-        setError(`Failed to send saved prompt: ${err instanceof Error ? err.message : String(err)}`);
-      }
-    }
 
     return (
       <div
@@ -1112,7 +1112,7 @@ export function Session() {
                   {(prompt) => (
                     <button
                       type="button"
-                      onClick={() => sendSavedPrompt(prompt.text)}
+                      onClick={() => createSessionAndSendPrompt(prompt.text)}
                       class="p-3 rounded-lg text-left transition-colors"
                       style={{
                         background: "var(--background-base)",
@@ -1604,31 +1604,10 @@ export function Session() {
             emptyMessage="No saved prompts. Add them in Settings."
             initialFilter={promptPickerFilter()}
             items={promptPickerItems()}
-            onSelect={async (item) => {
+            onSelect={(item) => {
               const found = savedPrompts.prompts().find((p) => p.id === item.id);
               if (!found) return;
-              if (!providers.selectedModel) {
-                setError("Please select a model before sending messages. Click the model button in the header.");
-                return;
-              }
-              if (!providers.connected.includes(providers.selectedModel.providerID)) {
-                setError(`Provider "${providers.selectedModel.providerID}" is not connected. Please configure it in Settings.`);
-                return;
-              }
-              try {
-                const res = await client.session.create({});
-                if (!res.data) return;
-                const sid = res.data.id;
-                navigate(`/${dirSlug()}/session/${sid}`);
-                await client.session.promptAsync({
-                  sessionID: sid,
-                  parts: [{ type: "text", text: found.text }],
-                  agent: providers.selectedAgent || "build",
-                  model: providers.selectedModel,
-                });
-              } catch (err) {
-                setError(`Failed to send saved prompt: ${err instanceof Error ? err.message : String(err)}`);
-              }
+              createSessionAndSendPrompt(found.text);
             }}
             onClose={() => setShowPromptPicker(false)}
           />
