@@ -333,26 +333,21 @@ export function Session() {
   function handleInputChange(value: string) {
     setInput(value);
 
-    // Detect slash command pattern: /command or /command <search term>
-    const slashMatch = value.match(/^\/(\S*)(?:\s+(.*))?$/);
+    // Detect `/prompt <search>` — auto-open prompt picker with filter
+    const promptMatch = value.match(/^\/prompt\s+(.*)$/i);
+    if (promptMatch) {
+      setInput("");
+      setShowSlashPopover(false);
+      setSlashQuery("");
+      setPromptPickerFilter(promptMatch[1]);
+      setShowPromptPicker(true);
+      return;
+    }
+
+    // Detect slash command pattern: /command (no spaces — popover only for partial commands)
+    const slashMatch = value.match(/^\/(\S*)$/);
     if (slashMatch) {
-      const query = slashMatch[1];
-      const search = slashMatch[2];
-      // If there's a search term after the command, auto-execute matching command
-      if (search !== undefined) {
-        const cmd = baseSlashCommands.find(
-          (c) => c.slash?.toLowerCase() === query.toLowerCase(),
-        );
-        if (cmd?.slash === "prompt") {
-          setInput("");
-          setShowSlashPopover(false);
-          setSlashQuery("");
-          setPromptPickerFilter(search);
-          setShowPromptPicker(true);
-          return;
-        }
-      }
-      setSlashQuery(query);
+      setSlashQuery(slashMatch[1]);
       setShowSlashPopover(true);
       setSlashIndex(0);
     } else {
@@ -894,7 +889,6 @@ export function Session() {
   }
 
   async function createSessionAndSendPrompt(text: string) {
-    if (!directory) return;
     if (!providers.selectedModel) {
       setError("Please select a model before sending messages. Click the model button in the header.");
       return;
