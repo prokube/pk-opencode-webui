@@ -7,6 +7,7 @@ interface Props {
   message: string
   confirmLabel?: string
   cancelLabel?: string
+  confirmDisabled?: boolean
   variant?: "danger" | "warning" | "default"
   onConfirm: () => void
   onCancel: () => void
@@ -125,6 +126,7 @@ export function ConfirmDialog(props: Props) {
               <button
                 type="button"
                 onClick={props.onConfirm}
+                disabled={props.confirmDisabled}
                 class="px-4 py-2 text-sm font-medium rounded-md transition-colors"
                 style={confirmStyle()}
               >

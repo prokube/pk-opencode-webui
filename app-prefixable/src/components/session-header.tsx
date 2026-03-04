@@ -11,7 +11,7 @@ import { useProviders } from "../context/providers"
 import { ConfirmDialog } from "./confirm-dialog"
 import { PanelBottom, FileCode, ListTodo, Plug, ArrowLeft, Users, MoreHorizontal, Pencil, Archive, Trash2, Sparkles } from "lucide-solid"
 import { base64Encode } from "../utils/path"
-import type { Session } from "../sdk/client"
+import type { AssistantMessage, Session } from "../sdk/client"
 
 interface SessionHeaderProps {
   session: Session | null | undefined
@@ -47,16 +47,15 @@ export function SessionHeader(props: SessionHeaderProps) {
     navigate(`/${dirSlug()}/session/${id}`)
   }
 
-  // Comment 9: use .catch() instead of try/catch; setRenaming(false) after update
-  async function commitRename(value: string) {
+  function commitRename(value: string) {
     const trimmed = value.trim()
     const session = props.session
     if (!trimmed || trimmed === session?.title) { setRenaming(false); return }
     if (!session) { setRenaming(false); return }
-    await client.session.update({ sessionID: session.id, title: trimmed })
+    client.session.update({ sessionID: session.id, title: trimmed })
+      .then(() => props.onRename?.(session.id, trimmed))
       .catch(err => console.error("Failed to rename session", err))
-    props.onRename?.(session.id, trimmed)
-    setRenaming(false)
+      .finally(() => setRenaming(false))
   }
 
   async function renameWithAI() {
@@ -85,8 +84,8 @@ export function SessionHeader(props: SessionHeaderProps) {
     const lastAssistant = [...msgs].reverse().find((m) => m.info.role === "assistant")
     const model = lastAssistant
       ? {
-          providerID: (lastAssistant.info as { providerID?: string }).providerID ?? "",
-          modelID: (lastAssistant.info as { modelID?: string }).modelID ?? "",
+          providerID: (lastAssistant.info as AssistantMessage).providerID,
+          modelID: (lastAssistant.info as AssistantMessage).modelID,
         }
       : providers.selectedModel
 
@@ -110,7 +109,7 @@ export function SessionHeader(props: SessionHeaderProps) {
       .prompt({
         sessionID: childID,
         parts: [{ type: "text", text: promptText }],
-        agent: "build",
+        agent: providers.selectedAgent || "build",
         ...(model ? { model } : {}),
       })
       .catch((err: unknown) => {
@@ -148,18 +147,17 @@ export function SessionHeader(props: SessionHeaderProps) {
     return sync.messages(session.id).length > 0
   })
 
-  // Comment 9: add .catch() for error handling
-  async function archiveSession() {
+  function archiveSession() {
     setMenuOpen(false)
     const session = props.session
     if (!session) return
-    await client.session.update({ sessionID: session.id, time: { archived: Date.now() } })
+    client.session.update({ sessionID: session.id, time: { archived: Date.now() } })
+      .then(() => navigate(`/${dirSlug()}/session`))
       .catch(err => console.error("Failed to archive session", err))
-    navigate(`/${dirSlug()}/session`)
   }
 
-  // Comments 1 + 9: call onDelete callback if provided; use .then/.catch/.finally
   function confirmAndDelete() {
+    if (deleting()) return
     const session = props.session
     if (!session) return
     setDeleting(true)
@@ -176,7 +174,6 @@ export function SessionHeader(props: SessionHeaderProps) {
       .finally(() => setDeleting(false))
   }
 
-  // Comment 7: use instanceof Element guard instead of casting e.target as HTMLElement
   function handleDocClick(e: MouseEvent) {
     if (!menuOpen()) return
     const target = e.target
@@ -532,6 +529,7 @@ export function SessionHeader(props: SessionHeaderProps) {
         title="Delete session?"
         message={`This will permanently delete "${props.session?.title || "this session"}". This cannot be undone.`}
         confirmLabel={deleting() ? "Deleting..." : "Delete"}
+        confirmDisabled={deleting()}
         cancelLabel="Cancel"
         variant="danger"
         onConfirm={confirmAndDelete}
