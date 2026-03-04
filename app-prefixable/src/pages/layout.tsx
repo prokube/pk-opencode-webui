@@ -733,32 +733,41 @@ export function Layout(props: ParentProps) {
                                       <CircleHelp class="w-4 h-4" style={{ color: "var(--icon-warning-base)" }} />
                                     </Show>
                                   </span>
-                                  {/* dataset cancel flag for Escape; ref to select all text */}
-                                  <input
-                                    class="flex-1 min-w-0 text-sm bg-transparent outline-none"
-                                    style={{ color: "var(--text-base)" }}
-                                    value={session.title || ""}
-                                    autofocus
-                                    ref={(el) => setTimeout(() => { el.focus(); el.select() }, 0)}
-                                    onKeyDown={(e) => {
-                                      if (e.key === "Enter") {
-                                        renameSession(session, e.currentTarget.value);
-                                        setRenamingId(null);
-                                      } else if (e.key === "Escape") {
-                                        e.currentTarget.dataset.cancelRename = "true";
-                                        setRenamingId(null);
-                                      }
-                                    }}
-                                    onBlur={(e) => {
-                                      if (e.currentTarget.dataset.cancelRename === "true") return;
-                                      renameSession(session, e.currentTarget.value);
-                                      setRenamingId(null);
-                                    }}
-                                  />
+                                  {/* Local signal isolates edit state from reactive session.title updates */}
+                                  {(() => {
+                                    const [editTitle, setEditTitle] = createSignal(session.title || "");
+                                    return (
+                                      <input
+                                        class="flex-1 min-w-0 text-sm bg-transparent outline-none"
+                                        style={{ color: "var(--text-base)" }}
+                                        value={editTitle()}
+                                        aria-label="Session title"
+                                        autofocus
+                                        ref={(el) => setTimeout(() => { el.focus(); el.select() }, 0)}
+                                        onInput={(e) => setEditTitle(e.currentTarget.value)}
+                                        onKeyDown={(e) => {
+                                          if (e.key === "Enter") {
+                                            e.currentTarget.dataset.committed = "true";
+                                            renameSession(session, editTitle());
+                                            setRenamingId(null);
+                                          } else if (e.key === "Escape") {
+                                            e.currentTarget.dataset.cancelRename = "true";
+                                            setRenamingId(null);
+                                          }
+                                        }}
+                                        onBlur={(e) => {
+                                          if (e.currentTarget.dataset.cancelRename === "true") return;
+                                          if (e.currentTarget.dataset.committed === "true") return;
+                                          renameSession(session, editTitle());
+                                          setRenamingId(null);
+                                        }}
+                                      />
+                                    );
+                                  })()}
                                 </div>
                               </Show>
                               <Show when={renamingId() !== session.id}>
-                                <div class="absolute right-1.5 top-1/2 -translate-y-1/2 hidden group-hover:flex items-center gap-0.5">
+                                <div class="absolute right-1.5 top-1/2 -translate-y-1/2 flex items-center gap-0.5 opacity-0 pointer-events-none group-hover:opacity-100 group-focus-within:opacity-100 group-hover:pointer-events-auto group-focus-within:pointer-events-auto">
                                   <button
                                     onClick={(e) => {
                                       e.preventDefault();
@@ -883,7 +892,7 @@ export function Layout(props: ParentProps) {
                                 e.stopPropagation();
                                 restoreSession(session);
                               }}
-                              class="absolute right-1.5 top-1/2 -translate-y-1/2 p-1 rounded hidden group-hover:flex items-center justify-center transition-colors"
+                              class="absolute right-1.5 top-1/2 -translate-y-1/2 p-1 rounded flex items-center justify-center transition-colors opacity-0 pointer-events-none group-hover:opacity-100 group-focus-within:opacity-100 group-hover:pointer-events-auto group-focus-within:pointer-events-auto"
                               style={{ color: "var(--icon-weak)" }}
                               onMouseEnter={(e) =>
                                 (e.currentTarget.style.color =

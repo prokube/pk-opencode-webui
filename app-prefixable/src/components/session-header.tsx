@@ -1,4 +1,4 @@
-import { Show, createEffect, createMemo, createSignal, onCleanup } from "solid-js"
+import { Show, createEffect, createSignal, onCleanup } from "solid-js"
 import { useNavigate, useParams } from "@solidjs/router"
 import { Spinner } from "./ui/spinner"
 import { useLayout } from "../context/layout"
@@ -6,10 +6,8 @@ import { useMCP } from "../context/mcp"
 import { usePermission } from "../context/permission"
 import { useTerminal } from "../context/terminal"
 import { useSDK } from "../context/sdk"
-import { useSync } from "../context/sync"
-import { useProviders } from "../context/providers"
 import { ConfirmDialog } from "./confirm-dialog"
-import { PanelBottom, FileCode, ListTodo, Plug, ArrowLeft, Users, MoreHorizontal, Pencil, Archive, Trash2, Sparkles } from "lucide-solid"
+import { PanelBottom, FileCode, ListTodo, Plug, ArrowLeft, Users, MoreHorizontal, Pencil, Archive, Trash2 } from "lucide-solid"
 import { base64Encode } from "../utils/path"
 import { PrButton } from "./pr-button"
 import type { Session } from "../sdk/client"
@@ -29,19 +27,17 @@ export function SessionHeader(props: SessionHeaderProps) {
   const permission = usePermission()
   const terminal = useTerminal()
   const { client, directory } = useSDK()
-  const sync = useSync()
-  const providers = useProviders()
   const navigate = useNavigate()
   const params = useParams<{ dir: string }>()
 
-  const dirSlug = createMemo(() => (directory ? base64Encode(directory) : params.dir))
+  const dirSlug = () => (directory ? base64Encode(directory) : params.dir)
   const parentId = () => props.session?.parentID
   const [renaming, setRenaming] = createSignal(false)
   const [renameValue, setRenameValue] = createSignal("")
   const [menuOpen, setMenuOpen] = createSignal(false)
   const [confirmDelete, setConfirmDelete] = createSignal(false)
   const [deleting, setDeleting] = createSignal(false)
-  const [aiRenaming, setAiRenaming] = createSignal(false)
+  const [deleteError, setDeleteError] = createSignal<string | null>(null)
 
   function navigateToParent() {
     const id = parentId()
@@ -61,97 +57,6 @@ export function SessionHeader(props: SessionHeaderProps) {
       .finally(() => setRenaming(false))
   }
 
-  async function renameWithAI() {
-    setMenuOpen(false)
-    const session = props.session
-    if (!session) return
-
-    const msgs = sync.messages(session.id)
-    const userMsgs = msgs
-      .filter((m) => m.info.role === "user")
-      .slice(0, 10)
-      .map((m) => {
-        const text = m.parts
-          .filter((p) => p.type === "text")
-          .map((p) => (p as { text?: string }).text ?? "")
-          .join(" ")
-        return text.slice(0, 500)
-      })
-      .filter((t) => t.length > 0)
-
-    if (userMsgs.length === 0) return
-
-    const promptText = `Suggest a short title (5 words or fewer) for the following conversation. Reply with only the title, no punctuation, no quotes.\n\n${userMsgs.join("\n")}`
-
-    // Use last assistant message's model or fall back to selected model
-    const lastAssistant = [...msgs].reverse().find((m) => m.info.role === "assistant")
-    const model = lastAssistant
-      ? {
-          providerID: (lastAssistant.info as { providerID?: string }).providerID ?? "",
-          modelID: (lastAssistant.info as { modelID?: string }).modelID ?? "",
-        }
-      : providers.selectedModel
-
-    setAiRenaming(true)
-
-    const childRes = await client.session.create({ parentID: session.id }).catch((err: unknown) => {
-      console.error("[AI Rename] Failed to create child session:", err)
-      return null
-    })
-
-    const childID = childRes?.data?.id
-
-    if (!childID) {
-      setAiRenaming(false)
-      return
-    }
-
-    const cleanup = () =>
-      client.session.delete({ sessionID: childID })
-        .catch(err => console.warn("[AI Rename] Failed to delete child session:", childID, err))
-
-    const res = await client.session
-      .prompt({
-        sessionID: childID,
-        parts: [{ type: "text", text: promptText }],
-        agent: "build",
-        ...(model ? { model } : {}),
-      })
-      .catch((err: unknown) => {
-        console.error("[AI Rename] Prompt failed:", err)
-        return null
-      })
-
-    await cleanup()
-    setAiRenaming(false)
-
-    if (!res?.data) return
-
-    const title = res.data.parts
-      .filter((p) => p.type === "text")
-      .map((p) => (p as { text?: string }).text ?? "")
-      .join("")
-      .trim()
-      .replace(/^["']+|["']+$/g, "")
-      .trim()
-
-    if (!title) {
-      console.error("[AI Rename] Empty title returned")
-      return
-    }
-
-    // Pre-fill the rename input with the AI suggestion so user can confirm/edit
-    setRenameValue(title)
-    setRenaming(true)
-  }
-
-  // Whether the session has messages (for enabling AI rename)
-  const hasMessages = createMemo(() => {
-    const session = props.session
-    if (!session) return false
-    return sync.messages(session.id).length > 0
-  })
-
   // Navigate to session list only after a successful archive; do not navigate on failure
   function archiveSession() {
     setMenuOpen(false)
@@ -167,6 +72,7 @@ export function SessionHeader(props: SessionHeaderProps) {
     if (deleting()) return
     const session = props.session
     if (!session) return
+    setDeleteError(null)
     setDeleting(true)
     client.session.delete({ sessionID: session.id })
       .then(() => {
@@ -181,7 +87,7 @@ export function SessionHeader(props: SessionHeaderProps) {
       })
       .catch(err => {
         console.error("Failed to delete session", err)
-        alert("Failed to delete session. Please try again.")
+        setDeleteError("Failed to delete session. Please try again.")
       })
       .finally(() => setDeleting(false))
   }
@@ -244,24 +150,18 @@ export function SessionHeader(props: SessionHeaderProps) {
             <Show
               when={renaming()}
               fallback={
-                <>
-                  <h1
-                    class="text-sm font-medium truncate cursor-text"
-                    style={{ color: "var(--text-strong)" }}
-                    title="Double-click to rename"
-                    onDblClick={() => {
-                      if (!props.session) return
-                      setRenameValue(props.session.title ?? "")
-                      setRenaming(true)
-                    }}
-                  >
-                    {props.session?.title || "New Session"}
-                  </h1>
-                  {/* Spinner shown while AI rename is in progress */}
-                  <Show when={aiRenaming()}>
-                    <Spinner class="w-3.5 h-3.5 shrink-0" style={{ color: "var(--text-interactive-base)" }} />
-                  </Show>
-                </>
+                <h1
+                  class="text-sm font-medium truncate cursor-text"
+                  style={{ color: "var(--text-strong)" }}
+                  title="Double-click to rename"
+                  onDblClick={() => {
+                    if (!props.session) return
+                    setRenameValue(props.session.title ?? "")
+                    setRenaming(true)
+                  }}
+                >
+                  {props.session?.title || "New Session"}
+                </h1>
               }
             >
               {/* dataset cancel flag prevents Escape triggering onBlur commit */}
@@ -290,8 +190,8 @@ export function SessionHeader(props: SessionHeaderProps) {
               />
             </Show>
 
-            {/* ⋯ more-options dropdown — only show when session is loaded and not AI renaming */}
-            <Show when={props.session && !aiRenaming()}>
+            {/* ⋯ more-options dropdown — only show when session is loaded */}
+            <Show when={props.session}>
               <div class="relative" data-session-menu>
                 <button
                   onClick={(e) => {
@@ -335,31 +235,6 @@ export function SessionHeader(props: SessionHeaderProps) {
                       Rename
                     </button>
 
-                    {/* Rename with AI */}
-                    <button
-                      class="w-full flex items-center gap-2 px-3 py-1.5 text-sm text-left transition-colors"
-                      disabled={!hasMessages()}
-                      style={{
-                        color: hasMessages() ? "var(--text-base)" : "var(--text-weak)",
-                        opacity: hasMessages() ? 1 : 0.5,
-                        cursor: hasMessages() ? "pointer" : "not-allowed",
-                      }}
-                      onMouseEnter={(e) => {
-                        if (hasMessages()) e.currentTarget.style.background = "var(--surface-inset)"
-                      }}
-                      onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
-                      onClick={() => {
-                        if (hasMessages()) renameWithAI()
-                      }}
-                      title={hasMessages() ? "Suggest a title using AI" : "Send a message first to enable AI rename"}
-                    >
-                      <Sparkles
-                        class="w-3.5 h-3.5 shrink-0"
-                        style={{ color: hasMessages() ? "var(--text-interactive-base)" : "var(--icon-weak)" }}
-                      />
-                      Rename with AI
-                    </button>
-
                     {/* Archive */}
                     <button
                       class="w-full flex items-center gap-2 px-3 py-1.5 text-sm text-left transition-colors"
@@ -383,6 +258,7 @@ export function SessionHeader(props: SessionHeaderProps) {
                       onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
                       onClick={() => {
                         setMenuOpen(false)
+                        setDeleteError(null)
                         setConfirmDelete(true)
                       }}
                     >
@@ -547,10 +423,12 @@ export function SessionHeader(props: SessionHeaderProps) {
         title="Delete session?"
         message={`This will permanently delete "${props.session?.title || "this session"}". This cannot be undone.`}
         confirmLabel={deleting() ? "Deleting..." : "Delete"}
+        confirmDisabled={deleting()}
         cancelLabel="Cancel"
         variant="danger"
+        error={deleteError() ?? undefined}
         onConfirm={confirmAndDelete}
-        onCancel={() => setConfirmDelete(false)}
+        onCancel={() => { setDeleteError(null); setConfirmDelete(false) }}
       />
     </header>
   )
