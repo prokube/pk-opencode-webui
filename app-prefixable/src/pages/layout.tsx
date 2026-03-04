@@ -63,25 +63,28 @@ export function groupSessionsByDate(
   );
   const sevenDaysAgoMs = now.getTime() - 7 * 24 * 60 * 60 * 1000;
 
-  const bucket = (t: number): string => {
+  const order = ["Today", "Yesterday", "Last 7 days", "Older"] as const;
+  type BucketLabel = (typeof order)[number];
+
+  const bucket = (t: number): BucketLabel => {
     if (t >= todayStart) return "Today";
     if (t >= yesterdayStart) return "Yesterday";
     if (t >= sevenDaysAgoMs) return "Last 7 days";
     return "Older";
   };
 
-  const groups: Record<string, Session[]> = {};
-  const order = ["Today", "Yesterday", "Last 7 days", "Older"];
+  const groups: Partial<Record<BucketLabel, Session[]>> = {};
 
   for (const session of sessions) {
     const label = bucket(session.time?.updated ?? 0);
-    if (!groups[label]) groups[label] = [];
-    groups[label].push(session);
+    const existing = groups[label] ?? [];
+    existing.push(session);
+    groups[label] = existing;
   }
 
   return order
     .filter((label) => groups[label]?.length)
-    .map((label) => ({ label, sessions: groups[label] }));
+    .map((label) => ({ label, sessions: groups[label] ?? [] }));
 }
 
 export function Layout(props: ParentProps) {
@@ -240,14 +243,22 @@ export function Layout(props: ParentProps) {
   const [now, setNow] = createSignal(new Date());
 
   onMount(() => {
+    const disposed = { value: false };
     const timer = { id: 0 as ReturnType<typeof setTimeout> };
     const schedule = () => {
       const next = new Date();
       next.setHours(24, 0, 0, 0);
-      timer.id = setTimeout(() => { setNow(new Date()); schedule(); }, next.getTime() - Date.now());
+      timer.id = setTimeout(() => {
+        if (disposed.value) return;
+        setNow(new Date());
+        schedule();
+      }, next.getTime() - Date.now());
     };
     schedule();
-    onCleanup(() => clearTimeout(timer.id));
+    onCleanup(() => {
+      disposed.value = true;
+      clearTimeout(timer.id);
+    });
   });
 
   const groupedSessions = createMemo(() =>
