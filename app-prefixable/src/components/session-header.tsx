@@ -49,16 +49,16 @@ export function SessionHeader(props: SessionHeaderProps) {
     navigate(`/${dirSlug()}/session/${id}`)
   }
 
-  // Comment 9: use .catch() instead of try/catch; setRenaming(false) after update
-  async function commitRename(value: string) {
+  // Notify parent only after a successful API update; do not call onRename on failure
+  function commitRename(value: string) {
     const trimmed = value.trim()
     const session = props.session
     if (!trimmed || trimmed === session?.title) { setRenaming(false); return }
     if (!session) { setRenaming(false); return }
-    await client.session.update({ sessionID: session.id, title: trimmed })
+    client.session.update({ sessionID: session.id, title: trimmed })
+      .then(() => props.onRename?.(session.id, trimmed))
       .catch(err => console.error("Failed to rename session", err))
-    props.onRename?.(session.id, trimmed)
-    setRenaming(false)
+      .finally(() => setRenaming(false))
   }
 
   async function renameWithAI() {
@@ -106,7 +106,9 @@ export function SessionHeader(props: SessionHeaderProps) {
       return
     }
 
-    const cleanup = () => client.session.delete({ sessionID: childID }).catch(() => {})
+    const cleanup = () =>
+      client.session.delete({ sessionID: childID })
+        .catch(err => console.warn("[AI Rename] Failed to delete child session:", childID, err))
 
     const res = await client.session
       .prompt({
@@ -150,35 +152,40 @@ export function SessionHeader(props: SessionHeaderProps) {
     return sync.messages(session.id).length > 0
   })
 
-  // Comment 9: add .catch() for error handling
-  async function archiveSession() {
+  // Navigate to session list only after a successful archive; do not navigate on failure
+  function archiveSession() {
     setMenuOpen(false)
     const session = props.session
     if (!session) return
-    await client.session.update({ sessionID: session.id, time: { archived: Date.now() } })
+    client.session.update({ sessionID: session.id, time: { archived: Date.now() } })
+      .then(() => navigate(`/${dirSlug()}/session`))
       .catch(err => console.error("Failed to archive session", err))
-    navigate(`/${dirSlug()}/session`)
   }
 
-  // Comments 1 + 9: call onDelete callback if provided; use .then/.catch/.finally
   function confirmAndDelete() {
+    // Prevent double-trigger while a delete is in progress
+    if (deleting()) return
     const session = props.session
     if (!session) return
     setDeleting(true)
     client.session.delete({ sessionID: session.id })
       .then(() => {
         setConfirmDelete(false)
+        // Prefer the parent's onDelete handler (e.g. navigate to next session);
+        // fall back to navigating to the session list when no handler is provided
         if (props.onDelete) {
           props.onDelete()
         } else {
           navigate(`/${dirSlug()}/session`)
         }
       })
-      .catch(err => console.error("Failed to delete session", err))
+      .catch(err => {
+        console.error("Failed to delete session", err)
+        alert("Failed to delete session. Please try again.")
+      })
       .finally(() => setDeleting(false))
   }
 
-  // Comment 7: use instanceof Element guard instead of casting e.target as HTMLElement
   function handleDocClick(e: MouseEvent) {
     if (!menuOpen()) return
     const target = e.target

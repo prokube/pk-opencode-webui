@@ -398,8 +398,8 @@ export function Layout(props: ParentProps) {
     }
   }
 
-  // Comment 4: deleteSession removed - session-header handles deletion directly;
-  // sidebar updates reactively via SSE (session.deleted event triggers loadSessions)
+  // deleteSession is handled directly by SessionHeader; sidebar updates reactively
+  // via SSE (session.deleted event triggers loadSessions)
 
   function isActive(sessionId: string) {
     return location.pathname.includes(sessionId);
@@ -733,7 +733,7 @@ export function Layout(props: ParentProps) {
                                       <CircleHelp class="w-4 h-4" style={{ color: "var(--icon-warning-base)" }} />
                                     </Show>
                                   </span>
-                                  {/* Comments 2 + 3: dataset cancel flag for Escape; ref to select all text */}
+                                  {/* dataset cancel flag for Escape key; ref selects all text on mount */}
                                   <input
                                     class="flex-1 min-w-0 text-sm bg-transparent outline-none"
                                     style={{ color: "var(--text-base)" }}
@@ -797,6 +797,7 @@ export function Layout(props: ParentProps) {
                                         "var(--icon-weak)")
                                     }
                                     title="Archive session"
+                                    aria-label="Archive session"
                                   >
                                     <Archive class="w-3.5 h-3.5" />
                                   </button>
@@ -805,10 +806,6 @@ export function Layout(props: ParentProps) {
                             </div>
                           )}
                         </For>
-                      </div>
-                    </div>
-                  )}
-                </For>
 
                 {/* Archived Sessions Toggle */}
                 <Show when={archivedSessions().length > 0}>
