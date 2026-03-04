@@ -30,7 +30,9 @@ export function ConfirmDialog(props: Props) {
     function handleTab(e: KeyboardEvent) {
       if (e.key !== "Tab") return
 
-      const buttons = el!.querySelectorAll("button")
+      const buttons = Array.from(
+        el!.querySelectorAll<HTMLButtonElement>("button:not([disabled])")
+      )
       const first = buttons[0]
       const last = buttons[buttons.length - 1]
 

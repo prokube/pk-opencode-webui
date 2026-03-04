@@ -60,9 +60,11 @@ export function SessionHeader(props: SessionHeaderProps) {
   }
 
   async function renameWithAI() {
+    if (aiRenaming()) return
+    setAiRenaming(true)
     setMenuOpen(false)
     const session = props.session
-    if (!session) return
+    if (!session) { setAiRenaming(false); return }
 
     const msgs = sync.messages(session.id)
     const userMsgs = msgs
@@ -77,20 +79,23 @@ export function SessionHeader(props: SessionHeaderProps) {
       })
       .filter((t) => t.length > 0)
 
-    if (userMsgs.length === 0) return
+    if (userMsgs.length === 0) { setAiRenaming(false); return }
 
     const promptText = `Suggest a short title (5 words or fewer) for the following conversation. Reply with only the title, no punctuation, no quotes.\n\n${userMsgs.join("\n")}`
 
     // Use last assistant message's model or fall back to selected model
-    const lastAssistant = [...msgs].reverse().find((m) => m.info.role === "assistant")
+    const lastAssistant = (() => {
+      for (let i = msgs.length - 1; i >= 0; i--) {
+        if (msgs[i].info.role === "assistant") return msgs[i]
+      }
+      return undefined
+    })()
     const model = lastAssistant
       ? {
           providerID: (lastAssistant.info as AssistantMessage).providerID,
           modelID: (lastAssistant.info as AssistantMessage).modelID,
         }
       : providers.selectedModel
-
-    setAiRenaming(true)
 
     const childRes = await client.session.create({ parentID: session.id }).catch((err: unknown) => {
       console.error("[AI Rename] Failed to create child session:", err)

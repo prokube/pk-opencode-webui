@@ -367,14 +367,16 @@ export function Session() {
   // Navigate to next/previous session after archive or delete
   function navigateAfterRemove() {
     const id = params.id;
-    const all = sync.sessions().filter((s) => s.directory === directory && !s.time?.archived);
-    const idx = all.findIndex((s) => s.id === id);
-    const next = all[idx + 1] ?? all[idx - 1];
-    if (next) {
-      navigate(`/${dirSlug()}/session/${next.id}`);
-    } else {
-      navigate(`/${dirSlug()}/session`);
-    }
+    const all = sync.sessions()
+      .filter(s => s.directory === directory && !s.time?.archived && !s.parentID)
+      .slice()
+      .sort((a, b) => (b.time?.updated ?? 0) - (a.time?.updated ?? 0));
+
+    if (!all.length) { navigate(`/${dirSlug()}/session`); return; }
+
+    const idx = all.findIndex(s => s.id === id);
+    const next = idx === -1 ? all[0] : (all[idx + 1] ?? all[idx - 1]);
+    navigate(next ? `/${dirSlug()}/session/${next.id}` : `/${dirSlug()}/session`);
   }
 
   // Start processing state - SSE events will handle updates and completion
