@@ -476,10 +476,8 @@ export function Session() {
         }
       }
     });
-    onCleanup(() => {
-      state.stale = true;
-      unsub();
-    });
+    onCleanup(unsub);
+    onCleanup(() => { state.stale = true; });
 
     client.question.list({ directory })
       .then((res) => {
