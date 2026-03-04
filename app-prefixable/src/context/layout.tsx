@@ -12,6 +12,8 @@ const LAYOUT_STORAGE_KEY = "opencode.layout";
 const DEFAULT_REVIEW_WIDTH = 320;
 const DEFAULT_INFO_WIDTH = 256;
 const DEFAULT_SIDEBAR_WIDTH = 256;
+const SIDEBAR_MIN_WIDTH = 180;
+const SIDEBAR_MAX_WIDTH = 480;
 
 interface PanelState {
   opened: boolean;
@@ -54,6 +56,7 @@ interface LayoutContextValue {
   sidebar: {
     width: () => number;
     resize: (width: number) => void;
+    persist: () => void;
   };
   // File tabs
   tabs: {
@@ -135,9 +138,11 @@ export function LayoutProvider(props: ParentProps) {
     initial.info.width ?? DEFAULT_INFO_WIDTH,
   );
 
-  // Sidebar state
+  // Sidebar state (clamp loaded value to valid range)
   const [sidebarWidth, setSidebarWidth] = createSignal(
-    initial.sidebar?.width ?? DEFAULT_SIDEBAR_WIDTH,
+    Math.max(SIDEBAR_MIN_WIDTH, Math.min(SIDEBAR_MAX_WIDTH,
+      Number.isFinite(initial.sidebar?.width) ? initial.sidebar!.width! : DEFAULT_SIDEBAR_WIDTH,
+    )),
   );
 
   // File tabs state
@@ -201,9 +206,9 @@ export function LayoutProvider(props: ParentProps) {
     sidebar: {
       width: sidebarWidth,
       resize: (width: number) => {
-        setSidebarWidth(width);
-        persist();
+        setSidebarWidth(Math.max(SIDEBAR_MIN_WIDTH, Math.min(SIDEBAR_MAX_WIDTH, width)));
       },
+      persist,
     },
     tabs: {
       all: fileTabs,

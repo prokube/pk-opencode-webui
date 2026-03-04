@@ -904,7 +904,7 @@ export function Layout(props: ParentProps) {
                               >
                                 <Archive class="w-4 h-4" />
                               </span>
-                              <span class="truncate">
+                              <span class="min-w-0 flex-1 truncate">
                                 {session.title || "Untitled"}
                               </span>
                             </A>
@@ -996,7 +996,10 @@ export function Layout(props: ParentProps) {
             setSidebarDragging(true);
             layout.sidebar.resize(width);
           }}
-          onDragEnd={() => setSidebarDragging(false)}
+          onDragEnd={() => {
+            setSidebarDragging(false);
+            layout.sidebar.persist();
+          }}
           onCollapse={toggleSidebar}
           collapseThreshold={100}
         />
