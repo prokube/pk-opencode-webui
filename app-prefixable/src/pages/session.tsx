@@ -76,10 +76,20 @@ export function Session() {
   const permission = usePermission();
   const layout = useLayout();
   const branding = useBranding();
+  const savedPrompts = useSavedPrompts();
 
   // Helper to get the current directory slug
   const dirSlug = createMemo(() =>
     directory ? base64Encode(directory) : params.dir,
+  );
+
+  // Saved prompt picker items for /prompt command
+  const promptPickerItems = createMemo(() =>
+    savedPrompts.prompts().map((p) => ({
+      id: p.id,
+      title: p.title,
+      description: p.text.length > 80 ? p.text.slice(0, 80) + "..." : p.text,
+    })),
   );
 
   const [input, setInput] = createSignal("");
@@ -96,6 +106,7 @@ export function Session() {
   const [showMCPAddDialog, setShowMCPAddDialog] = createSignal(false);
   const [showModelPicker, setShowModelPicker] = createSignal(false);
   const [showAgentPicker, setShowAgentPicker] = createSignal(false);
+  const [showPromptPicker, setShowPromptPicker] = createSignal(false);
   const [showFilePicker, setShowFilePicker] = createSignal(false);
   const [fileContext, setFileContext] = createSignal<FileContext[]>([]);
   const [imageAttachments, setImageAttachments] = createSignal<
@@ -261,6 +272,15 @@ export function Session() {
       onSelect: () => {
         console.log("[Command] MCP dialog");
         setShowMCPDialog(true);
+      },
+    },
+    {
+      id: "prompt.pick",
+      title: "Send Saved Prompt",
+      description: "Send a saved prompt in a new session",
+      slash: "prompt",
+      onSelect: () => {
+        setShowPromptPicker(true);
       },
     },
   ];
@@ -1511,6 +1531,31 @@ export function Session() {
               providers.setSelectedAgent(item.id);
             }}
             onClose={() => setShowAgentPicker(false)}
+          />
+        </Show>
+
+        {/* Saved Prompt Picker Dialog */}
+        <Show when={showPromptPicker()}>
+          <PickerDialog
+            title="Send Saved Prompt"
+            placeholder="Filter prompts..."
+            emptyMessage="No saved prompts. Add them in Settings."
+            items={promptPickerItems()}
+            onSelect={async (item) => {
+              const found = savedPrompts.prompts().find((p) => p.id === item.id);
+              if (!found) return;
+              const res = await client.session.create({});
+              if (!res.data) return;
+              const sid = res.data.id;
+              navigate(`/${dirSlug()}/session/${sid}`);
+              await client.session.promptAsync({
+                sessionID: sid,
+                parts: [{ type: "text", text: found.text }],
+                agent: providers.selectedAgent || "build",
+                ...(providers.selectedModel ? { model: providers.selectedModel } : {}),
+              });
+            }}
+            onClose={() => setShowPromptPicker(false)}
           />
         </Show>
 
