@@ -19,6 +19,7 @@ import { useMCP } from "../context/mcp";
 import { usePermission } from "../context/permission";
 import { useLayout } from "../context/layout";
 import { useBranding } from "../context/branding";
+import { useSavedPrompts } from "../context/saved-prompts";
 import { MessageTimeline } from "../components/message-timeline";
 import { MCPDialog } from "../components/mcp-dialog";
 import { MCPAddDialog } from "../components/mcp-add-dialog";
@@ -32,7 +33,8 @@ import { SessionHeader } from "../components/session-header";
 import { ResizeHandle } from "../components/resize-handle";
 import { base64Encode, base64Decode } from "../utils/path";
 import type { Part, QuestionRequest } from "../sdk/client";
-import { Plus, Settings, Paperclip, Upload } from "lucide-solid";
+import { Plus, Settings, Paperclip, Upload, Bookmark } from "lucide-solid";
+import { Portal } from "solid-js/web";
 import { ContextItems, type FileContext } from "../components/context-items";
 import { FilePickerDialog } from "../components/file-picker-dialog";
 import {
@@ -75,10 +77,20 @@ export function Session() {
   const permission = usePermission();
   const layout = useLayout();
   const branding = useBranding();
+  const savedPrompts = useSavedPrompts();
 
   // Helper to get the current directory slug
   const dirSlug = createMemo(() =>
     directory ? base64Encode(directory) : params.dir,
+  );
+
+  // Saved prompt picker items for /prompt command
+  const promptPickerItems = createMemo(() =>
+    savedPrompts.prompts().map((p) => ({
+      id: p.id,
+      title: p.title,
+      description: p.text.length > 80 ? p.text.slice(0, 80) + "..." : p.text,
+    })),
   );
 
   const [input, setInput] = createSignal("");
@@ -95,7 +107,13 @@ export function Session() {
   const [showMCPAddDialog, setShowMCPAddDialog] = createSignal(false);
   const [showModelPicker, setShowModelPicker] = createSignal(false);
   const [showAgentPicker, setShowAgentPicker] = createSignal(false);
+  const [showPromptPicker, setShowPromptPicker] = createSignal(false);
+  const [promptPickerFilter, setPromptPickerFilter] = createSignal("");
   const [showFilePicker, setShowFilePicker] = createSignal(false);
+  const [showSavePrompt, setShowSavePrompt] = createSignal(false);
+  const [savePromptTitle, setSavePromptTitle] = createSignal("");
+  const [savePromptBody, setSavePromptBody] = createSignal("");
+  const [savePromptSuccess, setSavePromptSuccess] = createSignal(false);
   const [fileContext, setFileContext] = createSignal<FileContext[]>([]);
   const [imageAttachments, setImageAttachments] = createSignal<
     ImageAttachment[]
@@ -106,6 +124,8 @@ export function Session() {
   const [pendingUserMessageText, setPendingUserMessageText] = createSignal<
     string | null
   >(null);
+  const toastTimer = { id: 0 as ReturnType<typeof setTimeout> };
+  onCleanup(() => clearTimeout(toastTimer.id));
 
   // Keep sessionId in sync with URL params and sync session data
   createEffect(() => {
@@ -262,6 +282,16 @@ export function Session() {
         setShowMCPDialog(true);
       },
     },
+    {
+      id: "prompt.pick",
+      title: "Send Saved Prompt",
+      description: "Send a saved prompt in a new session",
+      slash: "prompt",
+      onSelect: () => {
+        setPromptPickerFilter("");
+        setShowPromptPicker(true);
+      },
+    },
   ];
 
   // Filtered slash commands based on query
@@ -304,11 +334,21 @@ export function Session() {
   function handleInputChange(value: string) {
     setInput(value);
 
-    // Detect slash command pattern: starts with / followed by command name (no spaces)
+    // Detect `/prompt <search>` — auto-open prompt picker with filter
+    const promptMatch = value.match(/^\/prompt\s+(.*)$/i);
+    if (promptMatch) {
+      setInput("");
+      setShowSlashPopover(false);
+      setSlashQuery("");
+      setPromptPickerFilter(promptMatch[1].trim());
+      setShowPromptPicker(true);
+      return;
+    }
+
+    // Detect slash command pattern: /command (no spaces — popover only for partial commands)
     const slashMatch = value.match(/^\/(\S*)$/);
     if (slashMatch) {
-      const query = slashMatch[1];
-      setSlashQuery(query);
+      setSlashQuery(slashMatch[1]);
       setShowSlashPopover(true);
       setSlashIndex(0);
     } else {
@@ -893,8 +933,37 @@ export function Session() {
     }
   }
 
+  async function createSessionAndSendPrompt(text: string) {
+    if (!providers.selectedModel) {
+      setError("Please select a model before sending messages. Click the model button in the header.");
+      return;
+    }
+    if (!providers.connected.includes(providers.selectedModel.providerID)) {
+      setError(`Provider "${providers.selectedModel.providerID}" is not connected. Please configure it in Settings.`);
+      return;
+    }
+    setError(null);
+    try {
+      const res = await client.session.create({});
+      if (!res.data) return;
+      const sid = res.data.id;
+      setSessionId(sid);
+      navigate(`/${dirSlug()}/session/${sid}`, { replace: true });
+      await client.session.promptAsync({
+        sessionID: sid,
+        parts: [{ type: "text", text }],
+        agent: providers.selectedAgent || "build",
+        model: providers.selectedModel,
+      });
+    } catch (err) {
+      setError(`Failed to send saved prompt: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
   // Welcome screen component for when no session is selected
   function WelcomeScreen() {
+    const savedPrompts = useSavedPrompts();
+
     return (
       <div
         class="flex flex-col h-full"
@@ -1069,6 +1138,56 @@ export function Session() {
               <span>Settings</span>
             </Button>
           </div>
+
+          {/* Saved Prompts */}
+          <Show when={savedPrompts.prompts().length > 0}>
+            <div class="mt-8 w-full max-w-2xl">
+              <h3
+                class="text-sm font-medium mb-3 text-left"
+                style={{ color: "var(--text-weak)" }}
+              >
+                Saved Prompts
+              </h3>
+              <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                <For each={savedPrompts.prompts()}>
+                  {(prompt) => (
+                    <button
+                      type="button"
+                      onClick={() => createSessionAndSendPrompt(prompt.text)}
+                      class="p-3 rounded-lg text-left transition-colors"
+                      style={{
+                        background: "var(--background-base)",
+                        border: "1px solid var(--border-base)",
+                      }}
+                      onMouseEnter={(e) => {
+                        e.currentTarget.style.borderColor = "var(--interactive-base)";
+                        e.currentTarget.style.background = "var(--surface-inset)";
+                      }}
+                      onMouseLeave={(e) => {
+                        e.currentTarget.style.borderColor = "var(--border-base)";
+                        e.currentTarget.style.background = "var(--background-base)";
+                      }}
+                    >
+                      <div
+                        class="text-sm font-medium truncate"
+                        style={{ color: "var(--text-strong)" }}
+                      >
+                        {prompt.title}
+                      </div>
+                      <div
+                        class="text-xs mt-1 line-clamp-2"
+                        style={{ color: "var(--text-weak)" }}
+                      >
+                        {prompt.text.length > 100
+                          ? prompt.text.slice(0, 100) + "..."
+                          : prompt.text}
+                      </div>
+                    </button>
+                  )}
+                </For>
+              </div>
+            </div>
+          </Show>
 
           <p
             class="mt-10 text-sm"
@@ -1374,6 +1493,34 @@ export function Session() {
                   />
                   {/* Attach buttons - inside input area */}
                   <div class="absolute right-2 top-2 flex items-center gap-1">
+                    {/* Save as prompt button */}
+                    <Show when={input().trim()}>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const text = input().trim();
+                          if (!text) return;
+                          setSavePromptTitle(text.slice(0, 30));
+                          setSavePromptBody(text);
+                          setShowSavePrompt(true);
+                        }}
+                        class="p-1.5 rounded transition-colors"
+                        style={{ color: "var(--text-weak)" }}
+                        onMouseEnter={(e) => {
+                          e.currentTarget.style.background =
+                            "var(--surface-inset)";
+                          e.currentTarget.style.color = "var(--text-strong)";
+                        }}
+                        onMouseLeave={(e) => {
+                          e.currentTarget.style.background = "transparent";
+                          e.currentTarget.style.color = "var(--text-weak)";
+                        }}
+                        title="Save as prompt"
+                        aria-label="Save as prompt"
+                      >
+                        <Bookmark class="w-4 h-4" />
+                      </button>
+                    </Show>
                     {/* Upload from device button */}
                     <button
                       type="button"
@@ -1495,6 +1642,23 @@ export function Session() {
           />
         </Show>
 
+        {/* Saved Prompt Picker Dialog */}
+        <Show when={showPromptPicker()}>
+          <PickerDialog
+            title="Send Saved Prompt"
+            placeholder="Filter prompts..."
+            emptyMessage="No saved prompts. Add them in Settings."
+            initialFilter={promptPickerFilter()}
+            items={promptPickerItems()}
+            onSelect={(item) => {
+              const found = savedPrompts.prompts().find((p) => p.id === item.id);
+              if (!found) return;
+              createSessionAndSendPrompt(found.text);
+            }}
+            onClose={() => setShowPromptPicker(false)}
+          />
+        </Show>
+
         {/* File Picker Dialog */}
         <Show when={showFilePicker()}>
           <FilePickerDialog
@@ -1503,6 +1667,38 @@ export function Session() {
             onSelect={addFileToContext}
             onClose={() => setShowFilePicker(false)}
           />
+        </Show>
+
+        {/* Save Prompt Dialog */}
+        <Show when={showSavePrompt()}>
+          <SavePromptDialog
+            title={savePromptTitle}
+            setTitle={setSavePromptTitle}
+            onSave={() => {
+              const title = savePromptTitle().trim();
+              const body = savePromptBody();
+              if (!title || !body) return;
+              savedPrompts.add(title, body);
+              setShowSavePrompt(false);
+              setSavePromptSuccess(true);
+              clearTimeout(toastTimer.id);
+              toastTimer.id = setTimeout(() => setSavePromptSuccess(false), 2000);
+            }}
+            onClose={() => setShowSavePrompt(false)}
+          />
+        </Show>
+
+        {/* Save Prompt Success Toast */}
+        <Show when={savePromptSuccess()}>
+          <div
+            class="fixed bottom-20 left-1/2 -translate-x-1/2 z-[100] px-4 py-2 rounded-lg shadow-lg text-sm font-medium"
+            style={{
+              background: "var(--interactive-base)",
+              color: "white",
+            }}
+          >
+            Prompt saved
+          </div>
         </Show>
       </div>
     );
@@ -1564,3 +1760,154 @@ export function Session() {
     </Show>
   );
 }
+
+function SavePromptDialog(props: {
+  title: () => string
+  setTitle: (v: string) => void
+  onSave: () => void
+  onClose: () => void
+}) {
+  const [container, setContainer] = createSignal<HTMLDivElement>();
+  let titleRef: HTMLInputElement | undefined;
+
+  createEffect(() => {
+    const el = container();
+    if (!el) return;
+
+    // Focus title input on open
+    titleRef?.focus();
+
+    function handleKey(e: KeyboardEvent) {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        props.onClose();
+        return;
+      }
+      if (e.key !== "Tab") return;
+
+      const focusable = el!.querySelectorAll<HTMLElement>(
+        'input, textarea, button:not([disabled]), [tabindex]:not([tabindex="-1"])',
+      );
+      if (focusable.length === 0) return;
+
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+
+      if (e.shiftKey && document.activeElement === first) {
+        e.preventDefault();
+        last?.focus();
+      } else if (!e.shiftKey && document.activeElement === last) {
+        e.preventDefault();
+        first?.focus();
+      }
+    }
+
+    document.addEventListener("keydown", handleKey);
+    onCleanup(() => document.removeEventListener("keydown", handleKey));
+  });
+
+  return (
+    <Portal>
+      <div
+        class="fixed inset-0 z-[100] flex items-center justify-center"
+        style={{ background: "rgba(0,0,0,0.5)" }}
+        onClick={(e) => {
+          if (e.target === e.currentTarget) props.onClose();
+        }}
+        role="presentation"
+      >
+        <div
+          ref={setContainer}
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="save-prompt-dialog-title"
+          class="w-full max-w-sm rounded-lg shadow-xl overflow-hidden"
+          style={{
+            background: "var(--background-base)",
+            border: "1px solid var(--border-base)",
+          }}
+        >
+          <div
+            class="px-4 py-3"
+            style={{
+              "border-bottom": "1px solid var(--border-base)",
+            }}
+          >
+            <h2
+              id="save-prompt-dialog-title"
+              class="text-base font-medium"
+              style={{ color: "var(--text-strong)" }}
+            >
+              Save as Prompt
+            </h2>
+          </div>
+          <div class="p-4 space-y-3">
+            <div>
+              <label
+                class="block text-sm font-medium mb-1"
+                style={{ color: "var(--text-base)" }}
+              >
+                Title
+              </label>
+              <input
+                ref={titleRef}
+                type="text"
+                value={props.title()}
+                onInput={(e) =>
+                  props.setTitle(e.currentTarget.value)
+                }
+                placeholder="Prompt title"
+                class="w-full px-3 py-2 rounded-md text-sm"
+                style={{
+                  background: "var(--background-base)",
+                  border: "1px solid var(--border-base)",
+                  color: "var(--text-base)",
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    e.preventDefault();
+                    props.onSave();
+                  }
+                }}
+              />
+            </div>
+            <p class="text-xs" style={{ color: "var(--text-weak)" }}>
+              The current input text will be saved as the prompt body.
+            </p>
+          </div>
+          <div
+            class="px-4 py-3 flex justify-end gap-2"
+            style={{
+              "border-top": "1px solid var(--border-base)",
+            }}
+          >
+            <button
+              type="button"
+              onClick={props.onClose}
+              class="px-4 py-2 text-sm font-medium rounded-md transition-colors"
+              style={{
+                background: "var(--surface-inset)",
+                color: "var(--text-base)",
+              }}
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              disabled={!props.title().trim()}
+              onClick={props.onSave}
+              class="px-4 py-2 text-sm font-medium rounded-md transition-colors disabled:opacity-50"
+              style={{
+                background: "var(--interactive-base)",
+                color: "white",
+              }}
+            >
+              Save
+            </button>
+          </div>
+        </div>
+      </div>
+    </Portal>
+  );
+}
+

@@ -3,6 +3,7 @@ import { BasePathProvider, useBasePath } from "./context/base-path"
 import { BrandingProvider } from "./context/branding"
 import { CommandProvider } from "./context/command"
 import { RecentProjectsProvider } from "./context/recent-projects"
+import { SavedPromptsProvider } from "./context/saved-prompts"
 import { DirectoryLayout } from "./pages/directory-layout"
 import { HomeLayout } from "./pages/home-layout"
 import { Session } from "./pages/session"
@@ -64,9 +65,11 @@ export function App() {
     <BasePathProvider>
       <BrandingProvider>
         <RecentProjectsProvider>
-          <CommandProvider>
-            <AppRoutes />
-          </CommandProvider>
+          <SavedPromptsProvider>
+            <CommandProvider>
+              <AppRoutes />
+            </CommandProvider>
+          </SavedPromptsProvider>
         </RecentProjectsProvider>
       </BrandingProvider>
     </BasePathProvider>

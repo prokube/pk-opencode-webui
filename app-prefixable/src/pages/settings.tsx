@@ -1,4 +1,5 @@
-import { createSignal, For, Show, type JSX, createMemo, onMount } from "solid-js"
+import { createSignal, For, Show, type JSX, createMemo, onMount, onCleanup, createEffect } from "solid-js"
+import { Portal } from "solid-js/web"
 import { Spinner } from "../components/ui/spinner"
 import { useProviders } from "../context/providers"
 import { useMCP } from "../context/mcp"
@@ -6,7 +7,8 @@ import { useSDK } from "../context/sdk"
 import { MCPAddDialog } from "../components/mcp-add-dialog"
 import { ConfirmDialog } from "../components/confirm-dialog"
 import { Button } from "../components/ui/button"
-import { Check, Copy, Plug, GitBranch, Server, ExternalLink, Key, Search, X, Plus, Trash2 } from "lucide-solid"
+import { Check, Copy, Plug, GitBranch, Server, ExternalLink, Key, Search, X, Plus, Trash2, BookmarkPlus, Pencil } from "lucide-solid"
+import { useSavedPrompts } from "../context/saved-prompts"
 
 export function Settings() {
   const providers = useProviders()
@@ -20,7 +22,7 @@ export function Settings() {
   // Initialize tab from URL hash, default to "providers"
   const getInitialTab = () => {
     const hash = window.location.hash.slice(1)
-    const validTabs = ["providers", "git", "mcp"]
+    const validTabs = ["providers", "git", "mcp", "prompts"]
     return validTabs.includes(hash) ? hash : "providers"
   }
   const [activeTab, setActiveTab] = createSignal(getInitialTab())
@@ -28,6 +30,14 @@ export function Settings() {
   const [mcpLoading, setMcpLoading] = createSignal<string | null>(null)
   const [mcpDeleting, setMcpDeleting] = createSignal<string | null>(null)
   const [mcpToDelete, setMcpToDelete] = createSignal<string | null>(null)
+
+  // Saved prompts
+  const savedPrompts = useSavedPrompts()
+  const [promptDialogOpen, setPromptDialogOpen] = createSignal(false)
+  const [editingPromptId, setEditingPromptId] = createSignal<string | null>(null)
+  const [promptTitle, setPromptTitle] = createSignal("")
+  const [promptText, setPromptText] = createSignal("")
+  const [promptToDelete, setPromptToDelete] = createSignal<string | null>(null)
 
   // Provider search
   const [providerSearch, setProviderSearch] = createSignal("")
@@ -428,11 +438,50 @@ export function Settings() {
     }
   }
 
+  function openAddPromptDialog() {
+    setEditingPromptId(null)
+    setPromptTitle("")
+    setPromptText("")
+    setPromptDialogOpen(true)
+  }
+
+  function openEditPromptDialog(id: string) {
+    const prompt = savedPrompts.prompts().find((p) => p.id === id)
+    if (!prompt) return
+    setEditingPromptId(id)
+    setPromptTitle(prompt.title)
+    setPromptText(prompt.text)
+    setPromptDialogOpen(true)
+  }
+
+  function savePromptDialog() {
+    const title = promptTitle().trim()
+    const text = promptText().trim()
+    if (!title || !text) return
+    const editing = editingPromptId()
+    if (editing) {
+      savedPrompts.update(editing, { title, text })
+    } else {
+      savedPrompts.add(title, text)
+    }
+    setPromptDialogOpen(false)
+    setEditingPromptId(null)
+    setPromptTitle("")
+    setPromptText("")
+  }
+
+  function confirmPromptDelete() {
+    const id = promptToDelete()
+    if (!id) return
+    savedPrompts.remove(id)
+    setPromptToDelete(null)
+  }
+
   const tabs: Array<{ id: string; label: string; icon: () => JSX.Element }> = [
     { id: "providers", label: "Providers", icon: () => <Plug class="w-4 h-4" /> },
     { id: "git", label: "Git", icon: () => <GitBranch class="w-4 h-4" /> },
     { id: "mcp", label: "MCP Servers", icon: () => <Server class="w-4 h-4" /> },
-    // Model/Agent selection happens via /model and /agent slash commands
+    { id: "prompts", label: "Prompts", icon: () => <BookmarkPlus class="w-4 h-4" /> },
   ]
 
   return (
@@ -1295,6 +1344,105 @@ export function Settings() {
               </section>
             </div>
           </Show>
+
+          {/* Prompts Tab */}
+          <Show when={activeTab() === "prompts"}>
+            <div class="space-y-6">
+              <header>
+                <h1 class="text-lg font-medium" style={{ color: "var(--text-strong)" }}>
+                  Saved Prompts
+                </h1>
+                <p class="text-sm mt-1" style={{ color: "var(--text-weak)" }}>
+                  Create reusable prompts for quick access from the welcome screen or /prompt command
+                </p>
+              </header>
+
+              <section
+                class="rounded-lg overflow-hidden"
+                style={{
+                  background: "var(--background-base)",
+                  border: "1px solid var(--border-base)",
+                }}
+              >
+                <div
+                  class="px-4 py-3 flex items-center justify-between"
+                  style={{ "border-bottom": "1px solid var(--border-base)" }}
+                >
+                  <h2 class="text-sm font-medium" style={{ color: "var(--text-strong)" }}>
+                    Prompts ({savedPrompts.prompts().length})
+                  </h2>
+                  <Button onClick={openAddPromptDialog} variant="primary" size="sm">
+                    + Add Prompt
+                  </Button>
+                </div>
+
+                <Show when={savedPrompts.prompts().length === 0}>
+                  <div class="p-6 text-center">
+                    <p class="text-sm" style={{ color: "var(--text-weak)" }}>
+                      No saved prompts yet.
+                    </p>
+                    <button
+                      onClick={openAddPromptDialog}
+                      class="mt-2 text-sm hover:underline"
+                      style={{ color: "var(--text-interactive-base)" }}
+                    >
+                      Create your first prompt
+                    </button>
+                  </div>
+                </Show>
+
+                <Show when={savedPrompts.prompts().length > 0}>
+                  <div class="divide-y" style={{ "border-color": "var(--border-base)" }}>
+                    <For each={savedPrompts.prompts()}>
+                      {(prompt) => (
+                        <div class="px-4 py-3 flex items-start justify-between gap-4">
+                          <div class="flex-1 min-w-0">
+                            <div class="font-medium text-sm" style={{ color: "var(--text-strong)" }}>
+                              {prompt.title}
+                            </div>
+                            <p
+                              class="text-xs mt-0.5 line-clamp-2"
+                              style={{ color: "var(--text-weak)" }}
+                            >
+                              {prompt.text.length > 120 ? prompt.text.slice(0, 120) + "..." : prompt.text}
+                            </p>
+                          </div>
+                          <div class="flex items-center gap-1 shrink-0">
+                            <button
+                              onClick={() => openEditPromptDialog(prompt.id)}
+                              class="p-1.5 rounded transition-colors"
+                              style={{ color: "var(--text-weak)" }}
+                              onMouseEnter={(e) => {
+                                e.currentTarget.style.background = "var(--surface-inset)"
+                                e.currentTarget.style.color = "var(--text-strong)"
+                              }}
+                              onMouseLeave={(e) => {
+                                e.currentTarget.style.background = "transparent"
+                                e.currentTarget.style.color = "var(--text-weak)"
+                              }}
+                              title="Edit prompt"
+                              aria-label="Edit prompt"
+                            >
+                              <Pencil class="w-4 h-4" />
+                            </button>
+                            <button
+                              onClick={() => setPromptToDelete(prompt.id)}
+                              class="p-1.5 rounded transition-colors opacity-50 hover:opacity-100"
+                              style={{ color: "var(--icon-critical-base)" }}
+                              title="Delete prompt"
+                              aria-label="Delete prompt"
+                            >
+                              <Trash2 class="w-4 h-4" />
+                            </button>
+                          </div>
+                        </div>
+                      )}
+                    </For>
+                  </div>
+                </Show>
+              </section>
+            </div>
+          </Show>
         </div>
       </div>
 
@@ -1313,6 +1461,176 @@ export function Settings() {
         onConfirm={confirmMcpDelete}
         onCancel={() => setMcpToDelete(null)}
       />
+
+      {/* Prompt Add/Edit Dialog */}
+      <Show when={promptDialogOpen()}>
+        <PromptDialog
+          editing={editingPromptId()}
+          title={promptTitle}
+          setTitle={setPromptTitle}
+          text={promptText}
+          setText={setPromptText}
+          onSave={savePromptDialog}
+          onClose={() => setPromptDialogOpen(false)}
+        />
+      </Show>
+
+      {/* Prompt Delete Confirmation */}
+      <ConfirmDialog
+        open={!!promptToDelete()}
+        title="Delete Prompt"
+        message="Are you sure you want to delete this saved prompt?"
+        confirmLabel="Delete"
+        variant="danger"
+        onConfirm={confirmPromptDelete}
+        onCancel={() => setPromptToDelete(null)}
+      />
     </div>
+  )
+}
+
+function PromptDialog(props: {
+  editing: string | null
+  title: () => string
+  setTitle: (v: string) => void
+  text: () => string
+  setText: (v: string) => void
+  onSave: () => void
+  onClose: () => void
+}) {
+  const [container, setContainer] = createSignal<HTMLDivElement>()
+  let titleRef: HTMLInputElement | undefined
+
+  createEffect(() => {
+    const el = container()
+    if (!el) return
+
+    // Focus title input on open
+    titleRef?.focus()
+
+    function handleKey(e: KeyboardEvent) {
+      if (e.key === "Escape") {
+        e.preventDefault()
+        props.onClose()
+        return
+      }
+      if (e.key !== "Tab") return
+
+      const focusable = el!.querySelectorAll<HTMLElement>(
+        'input, textarea, button:not([disabled]), [tabindex]:not([tabindex="-1"])',
+      )
+      if (focusable.length === 0) return
+
+      const first = focusable[0]
+      const last = focusable[focusable.length - 1]
+
+      if (e.shiftKey && document.activeElement === first) {
+        e.preventDefault()
+        last?.focus()
+      } else if (!e.shiftKey && document.activeElement === last) {
+        e.preventDefault()
+        first?.focus()
+      }
+    }
+
+    document.addEventListener("keydown", handleKey)
+    onCleanup(() => document.removeEventListener("keydown", handleKey))
+  })
+
+  return (
+    <Portal>
+      <div
+        class="fixed inset-0 z-[100] flex items-center justify-center"
+        style={{ background: "rgba(0,0,0,0.5)" }}
+        onClick={(e) => {
+          if (e.target === e.currentTarget) props.onClose()
+        }}
+        role="presentation"
+      >
+        <div
+          ref={setContainer}
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="prompt-dialog-title"
+          class="w-full max-w-md rounded-lg shadow-xl overflow-hidden"
+          style={{
+            background: "var(--background-base)",
+            border: "1px solid var(--border-base)",
+          }}
+        >
+          <div class="px-4 py-3" style={{ "border-bottom": "1px solid var(--border-base)" }}>
+            <h2 id="prompt-dialog-title" class="text-base font-medium" style={{ color: "var(--text-strong)" }}>
+              {props.editing ? "Edit Prompt" : "Add Prompt"}
+            </h2>
+          </div>
+          <div class="p-4 space-y-4">
+            <div>
+              <label class="block text-sm font-medium mb-1" style={{ color: "var(--text-base)" }}>
+                Title
+              </label>
+              <input
+                ref={titleRef}
+                type="text"
+                value={props.title()}
+                onInput={(e) => props.setTitle(e.currentTarget.value)}
+                placeholder="e.g. Code Review"
+                class="w-full px-3 py-2 rounded-md text-sm"
+                style={{
+                  background: "var(--background-base)",
+                  border: "1px solid var(--border-base)",
+                  color: "var(--text-base)",
+                }}
+              />
+            </div>
+            <div>
+              <label class="block text-sm font-medium mb-1" style={{ color: "var(--text-base)" }}>
+                Prompt Text
+              </label>
+              <textarea
+                value={props.text()}
+                onInput={(e) => props.setText(e.currentTarget.value)}
+                placeholder="Enter the prompt text..."
+                rows={6}
+                class="w-full px-3 py-2 rounded-md text-sm resize-y"
+                style={{
+                  background: "var(--background-base)",
+                  border: "1px solid var(--border-base)",
+                  color: "var(--text-base)",
+                  "min-height": "120px",
+                }}
+              />
+            </div>
+          </div>
+          <div
+            class="px-4 py-3 flex justify-end gap-2"
+            style={{ "border-top": "1px solid var(--border-base)" }}
+          >
+            <button
+              type="button"
+              onClick={props.onClose}
+              class="px-4 py-2 text-sm font-medium rounded-md transition-colors"
+              style={{
+                background: "var(--surface-inset)",
+                color: "var(--text-base)",
+              }}
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              onClick={props.onSave}
+              disabled={!props.title().trim() || !props.text().trim()}
+              class="px-4 py-2 text-sm font-medium rounded-md transition-colors disabled:opacity-50"
+              style={{
+                background: "var(--interactive-base)",
+                color: "white",
+              }}
+            >
+              {props.editing ? "Save Changes" : "Save"}
+            </button>
+          </div>
+        </div>
+      </div>
+    </Portal>
   )
 }
