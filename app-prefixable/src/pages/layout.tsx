@@ -62,32 +62,27 @@ function groupSessionsByDate(
     new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1),
   );
   const sevenDaysStart = startOfDay(
-    new Date(now.getFullYear(), now.getMonth(), now.getDate() - 6),
+    new Date(now.getFullYear(), now.getMonth(), now.getDate() - 7),
   );
 
-  const buckets: Record<string, Session[]> = {
-    Today: [],
-    Yesterday: [],
-    "Last 7 days": [],
-    Older: [],
+  const bucket = (t: number): string => {
+    if (t >= todayStart) return "Today";
+    if (t >= yesterdayStart) return "Yesterday";
+    if (t >= sevenDaysStart) return "Last 7 days";
+    return "Older";
   };
 
+  const groups: Record<string, Session[]> = {};
+  const order = ["Today", "Yesterday", "Last 7 days", "Older"];
+
   for (const session of sessions) {
-    const t = session.time?.updated || 0;
-    if (t >= todayStart) {
-      buckets["Today"].push(session);
-    } else if (t >= yesterdayStart) {
-      buckets["Yesterday"].push(session);
-    } else if (t >= sevenDaysStart) {
-      buckets["Last 7 days"].push(session);
-    } else {
-      buckets["Older"].push(session);
-    }
+    const label = bucket(session.time?.updated ?? 0);
+    groups[label] = [...(groups[label] ?? []), session];
   }
 
-  return (["Today", "Yesterday", "Last 7 days", "Older"] as const)
-    .filter((label) => buckets[label].length > 0)
-    .map((label) => ({ label, sessions: buckets[label] }));
+  return order
+    .filter((label) => groups[label]?.length)
+    .map((label) => ({ label, sessions: groups[label] }));
 }
 
 export function Layout(props: ParentProps) {
