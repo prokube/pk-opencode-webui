@@ -59,7 +59,7 @@ export function SessionInfo(props: SessionInfoProps) {
       const msg = msgs[i]
       if (msg.info?.role !== "assistant") continue
       const info = msg.info as AssistantInfo
-      const inputTokens = info.tokens?.input || 0
+      const inputTokens = (info.tokens?.input || 0) + (info.tokens?.cache?.read || 0) + (info.tokens?.cache?.write || 0)
       if (inputTokens > 0) {
         lastAssistant = { inputTokens, modelID: info.modelID, providerID: info.providerID }
         break

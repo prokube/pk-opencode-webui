@@ -88,10 +88,11 @@ export function SessionSidebar(props: SessionSidebarProps) {
       const msg = msgs[i]
       if (msg.info?.role !== "assistant") continue
       const tokens = msg.info.tokens
-      // Input tokens represent the context size - how much of the window is used
-      // This includes the conversation history sent to the model
-      if (tokens?.input && tokens.input > 0) {
-        inputTokens = tokens.input
+      // Context usage = input + cached tokens (read + write)
+      // With prompt caching, most input tokens are cached, so tokens.input alone is near-zero
+      const contextTokens = (tokens?.input || 0) + (tokens?.cache?.read || 0) + (tokens?.cache?.write || 0)
+      if (contextTokens > 0) {
+        inputTokens = contextTokens
         // Extract provider/model from the message that produced these tokens
         msgProviderID = msg.info.providerID
         msgModelID = msg.info.modelID
