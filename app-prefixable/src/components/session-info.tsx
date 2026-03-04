@@ -68,13 +68,13 @@ export function SessionInfo(props: SessionInfoProps) {
     if (!lastAssistant) return null
 
     // Get model context limit for usage percentage (use lastAssistant's model, not selectedModel)
-    const provider = providers.providers.find((p: { id: string }) => p.id === lastAssistant!.providerID)
-    if (!provider && providers.providers.length > 0 && import.meta.env.DEV) {
+    const provider = providers.providers.find((p) => p.id === lastAssistant!.providerID)
+    if (import.meta.env.DEV && lastAssistant!.providerID && !provider && providers.providers.length > 0) {
       console.warn("[session-info] provider not found:", lastAssistant!.providerID,
-        "available:", providers.providers.map(p => p.id))
+        "available:", providers.providers.map((p) => p.id))
     }
     const model = provider?.models[lastAssistant.modelID ?? ""]
-    if (provider && !model && import.meta.env.DEV) {
+    if (import.meta.env.DEV && lastAssistant.modelID && provider && !model) {
       console.warn("[session-info] model not found:", lastAssistant.modelID,
         "available:", Object.keys(provider.models))
     }

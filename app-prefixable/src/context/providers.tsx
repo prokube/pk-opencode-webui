@@ -10,16 +10,32 @@ const DEFAULT_PROVIDER = "opencode"
 const DEFAULT_MODEL = "big-pickle"
 const DEFAULT_AGENT = "build"
 
-// Define types locally to avoid SDK type mismatches
-interface Model {
+// SDK response shape — providerID is NOT present on the wire
+interface RawModel {
   id: string
   name: string
-  providerID?: string  // optional — injected during normalisation
   limit: {
     context: number
     input?: number
     output: number
   }
+}
+
+interface RawProvider {
+  id: string
+  name: string
+  models: Record<string, RawModel>
+}
+
+interface RawProviderListData {
+  all: RawProvider[]
+  connected: string[]
+  default: Record<string, string>
+}
+
+// Local types — providerID injected during normalisation
+interface Model extends RawModel {
+  providerID: string
 }
 
 interface Provider {
@@ -42,12 +58,6 @@ interface ProviderAuthMethod {
 interface ModelKey {
   providerID: string
   modelID: string
-}
-
-interface ProviderListData {
-  all: Provider[]
-  connected: string[]
-  default: Record<string, string>
 }
 
 interface OAuthAuthorization {
@@ -110,16 +120,17 @@ export function ProviderProvider(props: ParentProps) {
   const [providerData, { refetch: refetchProviders }] = createResource(async () => {
     try {
       const res = await client.provider.list()
-      const data = res.data as ProviderListData | undefined
-      if (!data) return undefined
-      // Inject providerID into each model since the SDK response doesn't include it
-      const all = data.all.map((provider) => ({
+      // Type as raw SDK shape first (providerID not present on models)
+      const raw = res.data as RawProviderListData | undefined
+      if (!raw) return undefined
+      // Inject providerID into each model from the containing provider
+      const all: Provider[] = raw.all.map((provider) => ({
         ...provider,
         models: Object.fromEntries(
           Object.entries(provider.models).map(([k, m]) => [k, { ...m, providerID: provider.id }])
         ),
       }))
-      return { ...data, all }
+      return { all, connected: raw.connected, default: raw.default }
     } catch (e) {
       console.error("Failed to fetch providers:", e)
       return undefined
