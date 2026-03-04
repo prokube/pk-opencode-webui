@@ -1,4 +1,4 @@
-import { Router, Route, Navigate } from "@solidjs/router"
+import { Router, Route, Navigate, useParams } from "@solidjs/router"
 import { BasePathProvider, useBasePath } from "./context/base-path"
 import { BrandingProvider } from "./context/branding"
 import { CommandProvider } from "./context/command"
@@ -8,6 +8,31 @@ import { HomeLayout } from "./pages/home-layout"
 import { Session } from "./pages/session"
 import { Settings } from "./pages/settings"
 import { ProjectPicker } from "./pages/project-picker"
+import { base64Decode } from "./utils/path"
+
+function getLastSessionHref(encodedDir: string): string {
+  try {
+    const dir = base64Decode(encodedDir)
+    const last = typeof window !== "undefined"
+      ? window.localStorage.getItem(`opencode.lastSession.${dir}`)
+      : null
+    if (!last || last.includes("..") || /[\/\\]/.test(last)) return "session"
+    return `session/${last}`
+  } catch {
+    return "session"
+  }
+}
+
+function DirectoryIndex() {
+  const params = useParams<{ dir: string }>()
+  return <Navigate href={getLastSessionHref(params.dir)} replace />
+}
+
+function SessionIndex() {
+  const params = useParams<{ dir: string }>()
+  const href = getLastSessionHref(params.dir)
+  return href === "session" ? <Session /> : <Navigate href={href} replace />
+}
 
 function AppRoutes() {
   const { basePath } = useBasePath()
@@ -23,8 +48,9 @@ function AppRoutes() {
 
       {/* Directory-scoped routes */}
       <Route path="/:dir" component={DirectoryLayout}>
-        <Route path="/" component={() => <Navigate href="session" />} />
-        <Route path="/session/:id?" component={Session} />
+        <Route path="/" component={DirectoryIndex} />
+        <Route path="/session" component={SessionIndex} />
+        <Route path="/session/:id" component={Session} />
         <Route path="/settings" component={Settings} />
       </Route>
     </Router>

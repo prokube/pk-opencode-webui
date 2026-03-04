@@ -30,7 +30,7 @@ import { SessionSidebar } from "../components/session-sidebar";
 import { ReviewPanel } from "../components/review-panel";
 import { SessionHeader } from "../components/session-header";
 import { ResizeHandle } from "../components/resize-handle";
-import { base64Encode } from "../utils/path";
+import { base64Encode, base64Decode } from "../utils/path";
 import type { Part, QuestionRequest } from "../sdk/client";
 import { Plus, Settings, Paperclip, Upload } from "lucide-solid";
 import { ContextItems, type FileContext } from "../components/context-items";
@@ -363,6 +363,65 @@ export function Session() {
     const id = params.id;
     if (id) await sync.session.sync(id);
   };
+
+  // Clear stale localStorage key when sessions are loaded and ID is not found
+  createEffect(() => {
+    const id = params.id;
+    if (!id) return;
+    // loadingHistory() stays true when sync.session.sync() rejects,
+    // so this effect only fires after a successful sync — not on transient failures.
+    if (loadingHistory()) return;
+    const found = sync.session.get(id);
+    // Non-archived session exists — keep it
+    if (found && !found.time?.archived) return;
+    // For archived sessions: only treat as stale when it matches the stored last-session
+    // (allows direct navigation to archived sessions from the sidebar)
+    if (found?.time?.archived) {
+      try {
+        const dir = directory || base64Decode(params.dir);
+        if (dir && typeof window !== "undefined") {
+          const key = `opencode.lastSession.${dir}`;
+          const stored = window.localStorage.getItem(key);
+          if (stored === id) {
+            window.localStorage.removeItem(key);
+            navigate(`/${dirSlug()}/session`, { replace: true });
+          }
+        }
+      } catch (err) {
+        console.warn("[Session] localStorage error:", err);
+      }
+      return;
+    }
+    // Session not found at all: clear and redirect
+    try {
+      const dir = directory || base64Decode(params.dir);
+      if (dir && typeof window !== "undefined") {
+        const key = `opencode.lastSession.${dir}`;
+        const stored = window.localStorage.getItem(key);
+        if (stored === id) window.localStorage.removeItem(key);
+      }
+    } catch (err) {
+      console.warn("[Session] localStorage error:", err);
+    }
+    navigate(`/${dirSlug()}/session`, { replace: true });
+  });
+
+  // Persist lastSession only after the session is confirmed to exist in sync
+  createEffect(() => {
+    const id = params.id;
+    if (!id) return;
+    if (loadingHistory()) return;
+    const found = sync.session.get(id);
+    if (!found || found.time?.archived) return;
+    try {
+      const dir = directory || base64Decode(params.dir);
+      if (dir && typeof window !== "undefined") {
+        window.localStorage.setItem(`opencode.lastSession.${dir}`, id);
+      }
+    } catch (err) {
+      console.warn("[Session] Failed to persist last session:", err);
+    }
+  });
 
   // Start processing state - SSE events will handle updates and completion
   function startProcessing() {
