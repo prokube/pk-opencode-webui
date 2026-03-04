@@ -424,11 +424,11 @@ export function Layout(props: ParentProps) {
         {/* OpenCode Logo - navigates to home */}
         <button
           onClick={navigateToHome}
-          class="w-full flex items-center justify-center py-3 transition-opacity hover:opacity-80"
+          class="w-full h-12 flex items-center justify-center transition-opacity hover:opacity-80"
           style={{ "border-bottom": "1px solid var(--border-base)" }}
           title="Home"
         >
-          <OpenCodeLogo class="w-8 h-10 rounded" />
+          <OpenCodeLogo class="w-7 h-8 rounded" />
         </button>
 
         {/* Project icons */}
@@ -544,7 +544,7 @@ export function Layout(props: ParentProps) {
         <div class="w-64 h-full flex flex-col">
           {/* Project Header with collapse toggle */}
           <div
-            class="p-3 flex items-start gap-2"
+            class="px-3 h-12 flex items-center gap-2"
             style={{ "border-bottom": "1px solid var(--border-base)" }}
           >
             <Show when={currentProject()}>
