@@ -253,12 +253,11 @@ export function QuestionPrompt(props: Props) {
         <Show when={!confirm()}>
           {/* Question text */}
           <div class="mb-4">
-            <div style={{ color: "var(--text-strong)" }}>
-              <Markdown
-                content={`${question()?.question ?? ""}${multi() ? " *(select all that apply)*" : ""}`}
-                class="text-sm font-medium"
-              />
-            </div>
+            <Markdown
+              content={`${question()?.question ?? ""}${multi() ? " *(select all that apply)*" : ""}`}
+              class="text-sm font-medium"
+              style={{ color: "var(--text-strong)" }}
+            />
           </div>
 
           {/* Options */}
