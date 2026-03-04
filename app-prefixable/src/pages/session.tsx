@@ -19,6 +19,7 @@ import { useMCP } from "../context/mcp";
 import { usePermission } from "../context/permission";
 import { useLayout } from "../context/layout";
 import { useBranding } from "../context/branding";
+import { useSavedPrompts } from "../context/saved-prompts";
 import { MessageTimeline } from "../components/message-timeline";
 import { MCPDialog } from "../components/mcp-dialog";
 import { MCPAddDialog } from "../components/mcp-add-dialog";
@@ -851,6 +852,22 @@ export function Session() {
 
   // Welcome screen component for when no session is selected
   function WelcomeScreen() {
+    const savedPrompts = useSavedPrompts();
+
+    async function sendSavedPrompt(text: string) {
+      if (!directory) return;
+      const res = await client.session.create({});
+      if (!res.data) return;
+      const id = res.data.id;
+      navigate(`/${dirSlug()}/session/${id}`);
+      await client.session.promptAsync({
+        sessionID: id,
+        parts: [{ type: "text", text }],
+        agent: providers.selectedAgent || "build",
+        ...(providers.selectedModel ? { model: providers.selectedModel } : {}),
+      });
+    }
+
     return (
       <div
         class="flex flex-col h-full"
@@ -1025,6 +1042,56 @@ export function Session() {
               <span>Settings</span>
             </Button>
           </div>
+
+          {/* Saved Prompts */}
+          <Show when={savedPrompts.prompts().length > 0}>
+            <div class="mt-8 w-full max-w-2xl">
+              <h3
+                class="text-sm font-medium mb-3 text-left"
+                style={{ color: "var(--text-weak)" }}
+              >
+                Saved Prompts
+              </h3>
+              <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                <For each={savedPrompts.prompts()}>
+                  {(prompt) => (
+                    <button
+                      type="button"
+                      onClick={() => sendSavedPrompt(prompt.text)}
+                      class="p-3 rounded-lg text-left transition-colors"
+                      style={{
+                        background: "var(--background-base)",
+                        border: "1px solid var(--border-base)",
+                      }}
+                      onMouseEnter={(e) => {
+                        e.currentTarget.style.borderColor = "var(--interactive-base)";
+                        e.currentTarget.style.background = "var(--surface-inset)";
+                      }}
+                      onMouseLeave={(e) => {
+                        e.currentTarget.style.borderColor = "var(--border-base)";
+                        e.currentTarget.style.background = "var(--background-base)";
+                      }}
+                    >
+                      <div
+                        class="text-sm font-medium truncate"
+                        style={{ color: "var(--text-strong)" }}
+                      >
+                        {prompt.title}
+                      </div>
+                      <div
+                        class="text-xs mt-1 line-clamp-2"
+                        style={{ color: "var(--text-weak)" }}
+                      >
+                        {prompt.text.length > 100
+                          ? prompt.text.slice(0, 100) + "..."
+                          : prompt.text}
+                      </div>
+                    </button>
+                  )}
+                </For>
+              </div>
+            </div>
+          </Show>
 
           <p
             class="mt-10 text-sm"
