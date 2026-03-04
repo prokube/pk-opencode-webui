@@ -16,10 +16,11 @@ interface Props {
   onClose: () => void
   emptyMessage?: string
   placeholder?: string
+  initialFilter?: string
 }
 
 export function PickerDialog(props: Props) {
-  const [filter, setFilter] = createSignal("")
+  const [filter, setFilter] = createSignal(props.initialFilter ?? "")
   const [activeIndex, setActiveIndex] = createSignal(0)
   let inputRef: HTMLInputElement | undefined
   let listRef: HTMLDivElement | undefined

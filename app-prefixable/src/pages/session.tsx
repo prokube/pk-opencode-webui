@@ -108,6 +108,7 @@ export function Session() {
   const [showModelPicker, setShowModelPicker] = createSignal(false);
   const [showAgentPicker, setShowAgentPicker] = createSignal(false);
   const [showPromptPicker, setShowPromptPicker] = createSignal(false);
+  const [promptPickerFilter, setPromptPickerFilter] = createSignal("");
   const [showFilePicker, setShowFilePicker] = createSignal(false);
   const [showSavePrompt, setShowSavePrompt] = createSignal(false);
   const [savePromptTitle, setSavePromptTitle] = createSignal("");
@@ -284,6 +285,7 @@ export function Session() {
       description: "Send a saved prompt in a new session",
       slash: "prompt",
       onSelect: () => {
+        setPromptPickerFilter("");
         setShowPromptPicker(true);
       },
     },
@@ -329,10 +331,25 @@ export function Session() {
   function handleInputChange(value: string) {
     setInput(value);
 
-    // Detect slash command pattern: starts with / followed by command name (no spaces)
-    const slashMatch = value.match(/^\/(\S*)$/);
+    // Detect slash command pattern: /command or /command <search term>
+    const slashMatch = value.match(/^\/(\S+)(?:\s+(.*))?$/);
     if (slashMatch) {
       const query = slashMatch[1];
+      const search = slashMatch[2];
+      // If there's a search term after the command, auto-execute matching command
+      if (search !== undefined) {
+        const cmd = baseSlashCommands.find(
+          (c) => c.slash?.toLowerCase() === query.toLowerCase(),
+        );
+        if (cmd?.slash === "prompt") {
+          setInput("");
+          setShowSlashPopover(false);
+          setSlashQuery("");
+          setPromptPickerFilter(search);
+          setShowPromptPicker(true);
+          return;
+        }
+      }
       setSlashQuery(query);
       setShowSlashPopover(true);
       setSlashIndex(0);
@@ -880,6 +897,10 @@ export function Session() {
 
     async function sendSavedPrompt(text: string) {
       if (!directory) return;
+      if (!providers.selectedModel) {
+        console.error("[WelcomeScreen] No model selected, cannot send saved prompt");
+        return;
+      }
       const res = await client.session.create({});
       if (!res.data) return;
       const id = res.data.id;
@@ -888,7 +909,7 @@ export function Session() {
         sessionID: id,
         parts: [{ type: "text", text }],
         agent: providers.selectedAgent || "build",
-        ...(providers.selectedModel ? { model: providers.selectedModel } : {}),
+        model: providers.selectedModel,
       });
     }
 
@@ -1571,10 +1592,15 @@ export function Session() {
             title="Send Saved Prompt"
             placeholder="Filter prompts..."
             emptyMessage="No saved prompts. Add them in Settings."
+            initialFilter={promptPickerFilter()}
             items={promptPickerItems()}
             onSelect={async (item) => {
               const found = savedPrompts.prompts().find((p) => p.id === item.id);
               if (!found) return;
+              if (!providers.selectedModel) {
+                console.error("[Session] No model selected, cannot send saved prompt");
+                return;
+              }
               const res = await client.session.create({});
               if (!res.data) return;
               const sid = res.data.id;
@@ -1583,7 +1609,7 @@ export function Session() {
                 sessionID: sid,
                 parts: [{ type: "text", text: found.text }],
                 agent: providers.selectedAgent || "build",
-                ...(providers.selectedModel ? { model: providers.selectedModel } : {}),
+                model: providers.selectedModel,
               });
             }}
             onClose={() => setShowPromptPicker(false)}
@@ -1609,9 +1635,14 @@ export function Session() {
               onClick={(e) => {
                 if (e.target === e.currentTarget) setShowSavePrompt(false);
               }}
+              onKeyDown={(e) => {
+                if (e.key === "Escape") setShowSavePrompt(false);
+              }}
               role="presentation"
             >
               <div
+                role="dialog"
+                aria-modal="true"
                 class="w-full max-w-sm rounded-lg shadow-xl overflow-hidden"
                 style={{
                   background: "var(--background-base)",
@@ -1640,6 +1671,7 @@ export function Session() {
                       Title
                     </label>
                     <input
+                      ref={(el) => setTimeout(() => el.focus(), 0)}
                       type="text"
                       value={savePromptTitle()}
                       onInput={(e) =>
@@ -1652,7 +1684,6 @@ export function Session() {
                         border: "1px solid var(--border-base)",
                         color: "var(--text-base)",
                       }}
-                      autofocus
                       onKeyDown={(e) => {
                         if (e.key === "Enter") {
                           e.preventDefault();

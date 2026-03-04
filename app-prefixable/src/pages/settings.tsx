@@ -1421,6 +1421,7 @@ export function Settings() {
                                 e.currentTarget.style.color = "var(--text-weak)"
                               }}
                               title="Edit prompt"
+                              aria-label="Edit prompt"
                             >
                               <Pencil class="w-4 h-4" />
                             </button>
@@ -1429,6 +1430,7 @@ export function Settings() {
                               class="p-1.5 rounded transition-colors opacity-50 hover:opacity-100"
                               style={{ color: "var(--icon-critical-base)" }}
                               title="Delete prompt"
+                              aria-label="Delete prompt"
                             >
                               <Trash2 class="w-4 h-4" />
                             </button>
@@ -1469,9 +1471,14 @@ export function Settings() {
             onClick={(e) => {
               if (e.target === e.currentTarget) setPromptDialogOpen(false)
             }}
+            onKeyDown={(e) => {
+              if (e.key === "Escape") setPromptDialogOpen(false)
+            }}
             role="presentation"
           >
             <div
+              role="dialog"
+              aria-modal="true"
               class="w-full max-w-md rounded-lg shadow-xl overflow-hidden"
               style={{
                 background: "var(--background-base)",
@@ -1489,6 +1496,7 @@ export function Settings() {
                     Title
                   </label>
                   <input
+                    ref={(el) => setTimeout(() => el.focus(), 0)}
                     type="text"
                     value={promptTitle()}
                     onInput={(e) => setPromptTitle(e.currentTarget.value)}
@@ -1499,7 +1507,6 @@ export function Settings() {
                       border: "1px solid var(--border-base)",
                       color: "var(--text-base)",
                     }}
-                    autofocus
                   />
                 </div>
                 <div>
