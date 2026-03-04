@@ -80,7 +80,9 @@ export function SessionInfo(props: SessionInfoProps) {
         "available:", Object.keys(provider.models))
     }
     const limit = model?.limit?.context
-    const usage = limit ? Math.round((lastAssistant.contextTokens / limit) * 100) : null
+    const usage = limit && Number.isFinite(limit) && limit > 0
+      ? Math.min(100, Math.max(0, Math.round((lastAssistant.contextTokens / limit) * 100)))
+      : null
 
     return {
       tokens: lastAssistant.contextTokens.toLocaleString(),
