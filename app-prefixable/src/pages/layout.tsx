@@ -32,6 +32,8 @@ import {
   Settings,
   SquareTerminal,
   MessageCircle,
+  Loader2,
+  CircleHelp,
   Archive,
   ArchiveRestore,
   X,
@@ -593,7 +595,22 @@ export function Layout(props: ParentProps) {
                             class="shrink-0"
                             style={{ color: "var(--icon-weak)" }}
                           >
-                            <MessageCircle class="w-4 h-4" />
+                            <Show
+                              when={!!events.pendingQuestions[session.id]}
+                              fallback={
+                                <Show
+                                  when={
+                                    events.status[session.id]?.type === "busy" ||
+                                    events.status[session.id]?.type === "retry"
+                                  }
+                                  fallback={<MessageCircle class="w-4 h-4" />}
+                                >
+                                  <Loader2 class="w-4 h-4 animate-spin" />
+                                </Show>
+                              }
+                            >
+                              <CircleHelp class="w-4 h-4" style={{ color: "var(--icon-warning-base)" }} />
+                            </Show>
                           </span>
                           <span class="truncate">
                             {session.title || "Untitled"}
