@@ -123,6 +123,8 @@ export function Session() {
   const [pendingUserMessageText, setPendingUserMessageText] = createSignal<
     string | null
   >(null);
+  const toastTimer = { id: 0 as ReturnType<typeof setTimeout> };
+  onCleanup(() => clearTimeout(toastTimer.id));
 
   // Keep sessionId in sync with URL params and sync session data
   createEffect(() => {
@@ -898,7 +900,11 @@ export function Session() {
     async function sendSavedPrompt(text: string) {
       if (!directory) return;
       if (!providers.selectedModel) {
-        console.error("[WelcomeScreen] No model selected, cannot send saved prompt");
+        setError("Please select a model before sending messages. Click the model button in the header.");
+        return;
+      }
+      if (!providers.connected.includes(providers.selectedModel.providerID)) {
+        setError(`Provider "${providers.selectedModel.providerID}" is not connected. Please configure it in Settings.`);
         return;
       }
       try {
@@ -913,7 +919,7 @@ export function Session() {
           model: providers.selectedModel,
         });
       } catch (err) {
-        console.error("[WelcomeScreen] Failed to send saved prompt:", err);
+        setError(`Failed to send saved prompt: ${err instanceof Error ? err.message : String(err)}`);
       }
     }
 
@@ -1602,7 +1608,11 @@ export function Session() {
               const found = savedPrompts.prompts().find((p) => p.id === item.id);
               if (!found) return;
               if (!providers.selectedModel) {
-                console.error("[Session] No model selected, cannot send saved prompt");
+                setError("Please select a model before sending messages. Click the model button in the header.");
+                return;
+              }
+              if (!providers.connected.includes(providers.selectedModel.providerID)) {
+                setError(`Provider "${providers.selectedModel.providerID}" is not connected. Please configure it in Settings.`);
                 return;
               }
               try {
@@ -1617,7 +1627,7 @@ export function Session() {
                   model: providers.selectedModel,
                 });
               } catch (err) {
-                console.error("[Session] Failed to send saved prompt:", err);
+                setError(`Failed to send saved prompt: ${err instanceof Error ? err.message : String(err)}`);
               }
             }}
             onClose={() => setShowPromptPicker(false)}
@@ -1645,7 +1655,8 @@ export function Session() {
               savedPrompts.add(title, input().trim());
               setShowSavePrompt(false);
               setSavePromptSuccess(true);
-              setTimeout(() => setSavePromptSuccess(false), 2000);
+              clearTimeout(toastTimer.id);
+              toastTimer.id = setTimeout(() => setSavePromptSuccess(false), 2000);
             }}
             onClose={() => setShowSavePrompt(false)}
           />
@@ -1754,6 +1765,7 @@ function SavePromptDialog(props: {
         <div
           role="dialog"
           aria-modal="true"
+          aria-labelledby="save-prompt-dialog-title"
           class="w-full max-w-sm rounded-lg shadow-xl overflow-hidden"
           style={{
             background: "var(--background-base)",
@@ -1767,6 +1779,7 @@ function SavePromptDialog(props: {
             }}
           >
             <h2
+              id="save-prompt-dialog-title"
               class="text-base font-medium"
               style={{ color: "var(--text-strong)" }}
             >

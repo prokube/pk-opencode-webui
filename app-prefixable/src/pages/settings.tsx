@@ -1522,6 +1522,7 @@ function PromptDialog(props: {
         <div
           role="dialog"
           aria-modal="true"
+          aria-labelledby="prompt-dialog-title"
           class="w-full max-w-md rounded-lg shadow-xl overflow-hidden"
           style={{
             background: "var(--background-base)",
@@ -1529,7 +1530,7 @@ function PromptDialog(props: {
           }}
         >
           <div class="px-4 py-3" style={{ "border-bottom": "1px solid var(--border-base)" }}>
-            <h2 class="text-base font-medium" style={{ color: "var(--text-strong)" }}>
+            <h2 id="prompt-dialog-title" class="text-base font-medium" style={{ color: "var(--text-strong)" }}>
               {props.editing ? "Edit Prompt" : "Add Prompt"}
             </h2>
           </div>
