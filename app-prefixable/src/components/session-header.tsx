@@ -11,15 +11,17 @@ import { useProviders } from "../context/providers"
 import { ConfirmDialog } from "./confirm-dialog"
 import { PanelBottom, FileCode, ListTodo, Plug, ArrowLeft, Users, MoreHorizontal, Pencil, Archive, Trash2, Sparkles } from "lucide-solid"
 import { base64Encode } from "../utils/path"
+import { PrButton } from "./pr-button"
 import type { AssistantMessage, Session } from "../sdk/client"
 
 interface SessionHeaderProps {
   session: Session | null | undefined
   processing: boolean
   onOpenMCPDialog: () => void
+  onSendPrompt?: (prompt: string) => void
   onRename?: (sessionId: string, title: string) => void
-  onArchive?: (sessionId: string) => void
-  onDelete?: (sessionId: string) => void
+  onArchive?: (session: Session) => void | Promise<void>
+  onDelete?: (session: Session) => void | Promise<void>
 }
 
 export function SessionHeader(props: SessionHeaderProps) {
@@ -39,7 +41,6 @@ export function SessionHeader(props: SessionHeaderProps) {
   const [renameValue, setRenameValue] = createSignal("")
   const [menuOpen, setMenuOpen] = createSignal(false)
   const [confirmDelete, setConfirmDelete] = createSignal(false)
-  const [deleting, setDeleting] = createSignal(false)
   const [aiRenaming, setAiRenaming] = createSignal(false)
 
   function navigateToParent() {
@@ -81,7 +82,7 @@ export function SessionHeader(props: SessionHeaderProps) {
 
     if (userMsgs.length === 0) { setAiRenaming(false); return }
 
-    const promptText = `Suggest a short title (5 words or fewer) for the following conversation. Reply with only the title, no punctuation, no quotes.\n\n${userMsgs.join("\n")}`
+    const promptText = `Suggest a short title (8 words or fewer) for the following conversation. Reply with only the title, no punctuation, no quotes.\n\n${userMsgs.join("\n")}`
 
     // Use last assistant message's model or fall back to selected model
     const lastAssistant = (() => {
@@ -159,33 +160,14 @@ export function SessionHeader(props: SessionHeaderProps) {
     setMenuOpen(false)
     const session = props.session
     if (!session) return
-    client.session.update({ sessionID: session.id, time: { archived: Date.now() } })
-      .then(() => {
-        if (props.onArchive) {
-          props.onArchive(session.id)
-        } else {
-          navigate(`/${dirSlug()}/session`)
-        }
-      })
-      .catch(err => console.error("Failed to archive session", err))
+    props.onArchive?.(session)
   }
 
   function confirmAndDelete() {
-    if (deleting()) return
     const session = props.session
     if (!session) return
-    setDeleting(true)
-    client.session.delete({ sessionID: session.id })
-      .then(() => {
-        setConfirmDelete(false)
-        if (props.onDelete) {
-          props.onDelete(session.id)
-        } else {
-          navigate(`/${dirSlug()}/session`)
-        }
-      })
-      .catch(err => console.error("Failed to delete session", err))
-      .finally(() => setDeleting(false))
+    setConfirmDelete(false)
+    props.onDelete?.(session)
   }
 
   function handleDocClick(e: MouseEvent) {
@@ -448,8 +430,16 @@ export function SessionHeader(props: SessionHeaderProps) {
         </Show>
       </div>
 
-      {/* Right side: Panel toggle buttons */}
+      {/* Right side: PR button + panel toggles in one container */}
       <div class="flex items-center gap-1">
+        {/* PR button */}
+        <Show when={props.onSendPrompt}>
+          {(sendPrompt) => <PrButton onSendPrompt={sendPrompt()} />}
+        </Show>
+
+        {/* Divider */}
+        <div class="w-px h-4 mx-1" style={{ background: "var(--border-base)" }} />
+
         {/* MCP toggle */}
         <button
           onClick={props.onOpenMCPDialog}
@@ -542,8 +532,7 @@ export function SessionHeader(props: SessionHeaderProps) {
         open={confirmDelete()}
         title="Delete session?"
         message={`This will permanently delete "${props.session?.title || "this session"}". This cannot be undone.`}
-        confirmLabel={deleting() ? "Deleting..." : "Delete"}
-        confirmDisabled={deleting()}
+        confirmLabel="Delete"
         cancelLabel="Cancel"
         variant="danger"
         onConfirm={confirmAndDelete}

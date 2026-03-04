@@ -31,7 +31,7 @@ import { ReviewPanel } from "../components/review-panel";
 import { SessionHeader } from "../components/session-header";
 import { ResizeHandle } from "../components/resize-handle";
 import { base64Encode } from "../utils/path";
-import type { Part, QuestionRequest } from "../sdk/client";
+import type { Part, QuestionRequest, Session } from "../sdk/client";
 import { Plus, Settings, Paperclip, Upload } from "lucide-solid";
 import { ContextItems, type FileContext } from "../components/context-items";
 import { FilePickerDialog } from "../components/file-picker-dialog";
@@ -364,26 +364,36 @@ export function Session() {
     if (id) await sync.session.sync(id);
   };
 
-  // Navigate to next/previous session after archive or delete
-  function navigateAfterRemove(id: string) {
+  // Navigate to next/previous session after archive or delete.
+  // Must be called BEFORE the session is removed so it still appears in sync.sessions().
+  const navigateAfterRemove = (id: string) => {
     const current = sync.sessions().find(s => s.id === id);
-
-    // If it's a child session, navigate to parent
     if (current?.parentID) {
       navigate(`/${dirSlug()}/session/${current.parentID}`);
       return;
     }
-
-    // Otherwise find next/prev root session
+    // compute neighbor NOW, before the session disappears
     const all = sync.sessions()
       .filter(s => s.directory === directory && !s.time?.archived && !s.parentID)
       .slice()
       .sort((a, b) => (b.time?.updated ?? 0) - (a.time?.updated ?? 0));
-
-    if (!all.length) { navigate(`/${dirSlug()}/session`); return; }
     const idx = all.findIndex(s => s.id === id);
     const next = idx === -1 ? all[0] : (all[idx + 1] ?? all[idx - 1]);
     navigate(next ? `/${dirSlug()}/session/${next.id}` : `/${dirSlug()}/session`);
+  };
+
+  // Archive a session: compute neighbor first, then call API
+  async function handleArchive(session: Session) {
+    navigateAfterRemove(session.id);
+    await client.session.update({ sessionID: session.id, time: { archived: Date.now() } })
+      .catch(err => console.error("Failed to archive session", err));
+  }
+
+  // Delete a session: compute neighbor first, then call API
+  async function handleDelete(session: Session) {
+    navigateAfterRemove(session.id);
+    await client.session.delete({ sessionID: session.id })
+      .catch(err => console.error("Failed to delete session", err));
   }
 
   // Start processing state - SSE events will handle updates and completion
@@ -991,8 +1001,9 @@ export function Session() {
           session={session()}
           processing={processing()}
           onOpenMCPDialog={() => setShowMCPDialog(true)}
-          onArchive={navigateAfterRemove}
-          onDelete={navigateAfterRemove}
+          onSendPrompt={(prompt) => setInput(prompt)}
+          onArchive={handleArchive}
+          onDelete={handleDelete}
         />
 
         {/* Messages - using rich message timeline with lazy rendering */}
