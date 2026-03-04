@@ -10,39 +10,26 @@ import { Settings } from "./pages/settings"
 import { ProjectPicker } from "./pages/project-picker"
 import { base64Decode } from "./utils/path"
 
+function getLastSessionHref(encodedDir: string): string {
+  try {
+    const dir = base64Decode(encodedDir)
+    const last = typeof window !== "undefined"
+      ? window.localStorage.getItem(`opencode.lastSession.${dir}`)
+      : null
+    return last ? `session/${last}` : "session"
+  } catch {
+    return "session"
+  }
+}
+
 function DirectoryIndex() {
   const params = useParams<{ dir: string }>()
-
-  const target = (() => {
-    if (typeof window === "undefined") return "session"
-    try {
-      const dir = base64Decode(params.dir)
-      const last = window.localStorage.getItem(`opencode.lastSession.${dir}`)
-      return last ? `session/${last}` : "session"
-    } catch {
-      return "session"
-    }
-  })()
-
-  return <Navigate href={target} />
+  return <Navigate href={getLastSessionHref(params.dir)} />
 }
 
 function SessionIndex() {
   const params = useParams<{ dir: string }>()
-
-  const target = (() => {
-    if (typeof window === "undefined") return null
-    try {
-      const dir = base64Decode(params.dir)
-      const last = window.localStorage.getItem(`opencode.lastSession.${dir}`)
-      return last ? last : null
-    } catch {
-      return null
-    }
-  })()
-
-  if (!target) return <Session />
-  return <Navigate href={target} />
+  return <Navigate href={getLastSessionHref(params.dir)} />
 }
 
 function AppRoutes() {
