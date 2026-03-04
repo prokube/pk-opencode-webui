@@ -15,6 +15,11 @@ interface Model {
   id: string
   name: string
   providerID: string
+  limit: {
+    context: number
+    input?: number
+    output: number
+  }
 }
 
 interface Provider {
@@ -86,7 +91,6 @@ export function ProviderProvider(props: ParentProps) {
       if (stored) {
         const parsed = JSON.parse(stored)
         setStore("modelsByAgent", parsed)
-        console.log("[Providers] Loaded models from storage:", parsed)
       }
     } catch (e) {
       console.error("Failed to load models from storage:", e)
@@ -124,12 +128,6 @@ export function ProviderProvider(props: ParentProps) {
       if (provider && provider.models[DEFAULT_MODEL]) {
         // Only set default model for DEFAULT_AGENT if not already set
         if (!store.modelsByAgent[DEFAULT_AGENT]) {
-          console.log(
-            "[Providers] Auto-selecting default model for agent:",
-            DEFAULT_AGENT,
-            DEFAULT_PROVIDER,
-            DEFAULT_MODEL,
-          )
           setStore("modelsByAgent", DEFAULT_AGENT, { providerID: DEFAULT_PROVIDER, modelID: DEFAULT_MODEL })
         }
       }
@@ -151,9 +149,6 @@ export function ProviderProvider(props: ParentProps) {
   const [agentsData, { refetch: refetchAgents }] = createResource(async () => {
     try {
       const res = await client.app.agents()
-      console.log("[Providers] Agents response:", res)
-      console.log("[Providers] Agents data:", res.data)
-
       // The API returns an array directly, SDK wraps it in { data: [...] }
       const agents = res.data
       if (!Array.isArray(agents)) {
@@ -216,7 +211,6 @@ export function ProviderProvider(props: ParentProps) {
       // Dispose instance to reload provider state, then refresh
       await client.instance.dispose()
       await refetchProviders()
-      console.log("[Providers] Refetched after OAuth, connected:", providerData()?.connected)
       return true
     } catch (e) {
       console.error("Failed to complete OAuth:", e)

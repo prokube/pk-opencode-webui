@@ -70,7 +70,7 @@ export function SessionInfo(props: SessionInfoProps) {
     // Get model context limit for usage percentage (use lastAssistant's model, not selectedModel)
     const provider = providers.providers.find((p: { id: string }) => p.id === lastAssistant!.providerID)
     const model = provider?.models[lastAssistant.modelID ?? ""]
-    const limit = (model as { limit?: { context?: number } })?.limit?.context
+    const limit = model?.limit?.context
     const usage = limit ? Math.round((lastAssistant.inputTokens / limit) * 100) : null
 
     return {
