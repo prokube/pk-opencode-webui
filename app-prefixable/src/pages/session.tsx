@@ -439,7 +439,9 @@ export function Session() {
       return;
     }
 
-    // Initial load
+    // Load initial questions then subscribe to real-time events so that a
+    // replayed "question.replied" / "question.rejected" SSE event cannot race
+    // ahead and clear pendingQuestion before the HTTP response arrives.
     const loadQuestions = async () => {
       try {
         const res = await client.question.list({ directory });
@@ -456,29 +458,31 @@ export function Session() {
         console.error("[Session] Failed to load questions:", e);
       }
     };
-    loadQuestions();
 
-    // Subscribe to question events for real-time updates
-    const unsub = events.subscribe((event) => {
-      const type = event.type as string;
-      if (type === "question.asked") {
-        const props = event.properties as QuestionRequest;
-        if (props.sessionID === id) {
-          console.log("[Session] Question event received:", props);
-          setPendingQuestion(props);
+    loadQuestions().then(() => {
+      // Subscribe to question events for real-time updates only after the
+      // initial HTTP load has settled, preventing the reload race condition.
+      const unsub = events.subscribe((event) => {
+        const type = event.type as string;
+        if (type === "question.asked") {
+          const props = event.properties as QuestionRequest;
+          if (props.sessionID === id) {
+            console.log("[Session] Question event received:", props);
+            setPendingQuestion(props);
+          }
         }
-      }
-      // Clear question when answered or rejected
-      if (type === "question.replied" || type === "question.rejected") {
-        const props = event.properties as { sessionID?: string };
-        if (props.sessionID === id) {
-          console.log("[Session] Question cleared:", type);
-          setPendingQuestion(null);
+        // Clear question when answered or rejected
+        if (type === "question.replied" || type === "question.rejected") {
+          const props = event.properties as { sessionID?: string };
+          if (props.sessionID === id) {
+            console.log("[Session] Question cleared:", type);
+            setPendingQuestion(null);
+          }
         }
-      }
+      });
+
+      onCleanup(unsub);
     });
-
-    onCleanup(unsub);
   });
 
   async function handleQuestionReply(answers: string[][]) {
