@@ -733,15 +733,17 @@ export function Layout(props: ParentProps) {
                                       <CircleHelp class="w-4 h-4" style={{ color: "var(--icon-warning-base)" }} />
                                     </Show>
                                   </span>
-                                  {/* dataset cancel flag for Escape key; ref selects all text on mount */}
+                                  {/* dataset cancel flag for Escape key; committed flag for Enter to prevent double-call on blur; ref selects all text on mount */}
                                   <input
                                     class="flex-1 min-w-0 text-sm bg-transparent outline-none"
                                     style={{ color: "var(--text-base)" }}
                                     value={session.title || ""}
+                                    aria-label="Session title"
                                     autofocus
                                     ref={(el) => setTimeout(() => { el.focus(); el.select() }, 0)}
                                     onKeyDown={(e) => {
                                       if (e.key === "Enter") {
+                                        e.currentTarget.dataset.committed = "true";
                                         renameSession(session, e.currentTarget.value);
                                         setRenamingId(null);
                                       } else if (e.key === "Escape") {
@@ -751,6 +753,7 @@ export function Layout(props: ParentProps) {
                                     }}
                                     onBlur={(e) => {
                                       if (e.currentTarget.dataset.cancelRename === "true") return;
+                                      if (e.currentTarget.dataset.committed === "true") return;
                                       renameSession(session, e.currentTarget.value);
                                       setRenamingId(null);
                                     }}

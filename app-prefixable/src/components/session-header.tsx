@@ -41,6 +41,7 @@ export function SessionHeader(props: SessionHeaderProps) {
   const [menuOpen, setMenuOpen] = createSignal(false)
   const [confirmDelete, setConfirmDelete] = createSignal(false)
   const [deleting, setDeleting] = createSignal(false)
+  const [deleteError, setDeleteError] = createSignal<string | null>(null)
   const [aiRenaming, setAiRenaming] = createSignal(false)
 
   function navigateToParent() {
@@ -83,14 +84,16 @@ export function SessionHeader(props: SessionHeaderProps) {
 
     const promptText = `Suggest a short title (5 words or fewer) for the following conversation. Reply with only the title, no punctuation, no quotes.\n\n${userMsgs.join("\n")}`
 
-    // Use last assistant message's model or fall back to selected model
+    // Use last assistant message's model only when both IDs are non-empty; otherwise fall back to selected model
     const lastAssistant = [...msgs].reverse().find((m) => m.info.role === "assistant")
-    const model = lastAssistant
-      ? {
-          providerID: (lastAssistant.info as { providerID?: string }).providerID ?? "",
-          modelID: (lastAssistant.info as { modelID?: string }).modelID ?? "",
-        }
-      : providers.selectedModel
+    const model = (() => {
+      if (lastAssistant) {
+        const providerID = (lastAssistant.info as { providerID?: string }).providerID?.trim() ?? ""
+        const modelID = (lastAssistant.info as { modelID?: string }).modelID?.trim() ?? ""
+        if (providerID && modelID) return { providerID, modelID }
+      }
+      return providers.selectedModel ?? undefined
+    })()
 
     setAiRenaming(true)
 
@@ -106,6 +109,9 @@ export function SessionHeader(props: SessionHeaderProps) {
       return
     }
 
+    // NOTE: Creating/deleting a child session emits session.created/deleted events
+    // which trigger sidebar reloads. This is a known limitation — tracked for future
+    // improvement (e.g., suppress reloads for child sessions).
     const cleanup = () =>
       client.session.delete({ sessionID: childID })
         .catch(err => console.warn("[AI Rename] Failed to delete child session:", childID, err))
@@ -167,6 +173,7 @@ export function SessionHeader(props: SessionHeaderProps) {
     if (deleting()) return
     const session = props.session
     if (!session) return
+    setDeleteError(null)
     setDeleting(true)
     client.session.delete({ sessionID: session.id })
       .then(() => {
@@ -181,7 +188,7 @@ export function SessionHeader(props: SessionHeaderProps) {
       })
       .catch(err => {
         console.error("Failed to delete session", err)
-        alert("Failed to delete session. Please try again.")
+        setDeleteError("Failed to delete session. Please try again.")
       })
       .finally(() => setDeleting(false))
   }
@@ -549,8 +556,9 @@ export function SessionHeader(props: SessionHeaderProps) {
         confirmLabel={deleting() ? "Deleting..." : "Delete"}
         cancelLabel="Cancel"
         variant="danger"
+        error={deleteError()}
         onConfirm={confirmAndDelete}
-        onCancel={() => setConfirmDelete(false)}
+        onCancel={() => { setDeleteError(null); setConfirmDelete(false) }}
       />
     </header>
   )
