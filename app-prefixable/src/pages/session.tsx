@@ -33,7 +33,8 @@ import { SessionHeader } from "../components/session-header";
 import { ResizeHandle } from "../components/resize-handle";
 import { base64Encode, base64Decode } from "../utils/path";
 import type { Part, QuestionRequest } from "../sdk/client";
-import { Plus, Settings, Paperclip, Upload } from "lucide-solid";
+import { Plus, Settings, Paperclip, Upload, Bookmark } from "lucide-solid";
+import { Portal } from "solid-js/web";
 import { ContextItems, type FileContext } from "../components/context-items";
 import { FilePickerDialog } from "../components/file-picker-dialog";
 import {
@@ -108,6 +109,9 @@ export function Session() {
   const [showAgentPicker, setShowAgentPicker] = createSignal(false);
   const [showPromptPicker, setShowPromptPicker] = createSignal(false);
   const [showFilePicker, setShowFilePicker] = createSignal(false);
+  const [showSavePrompt, setShowSavePrompt] = createSignal(false);
+  const [savePromptTitle, setSavePromptTitle] = createSignal("");
+  const [savePromptSuccess, setSavePromptSuccess] = createSignal(false);
   const [fileContext, setFileContext] = createSignal<FileContext[]>([]);
   const [imageAttachments, setImageAttachments] = createSignal<
     ImageAttachment[]
@@ -1414,6 +1418,33 @@ export function Session() {
                   />
                   {/* Attach buttons - inside input area */}
                   <div class="absolute right-2 top-2 flex items-center gap-1">
+                    {/* Save as prompt button */}
+                    <Show when={input().trim()}>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const text = input().trim();
+                          if (!text) return;
+                          setSavePromptTitle(text.slice(0, 30));
+                          setShowSavePrompt(true);
+                        }}
+                        class="p-1.5 rounded transition-colors"
+                        style={{ color: "var(--text-weak)" }}
+                        onMouseEnter={(e) => {
+                          e.currentTarget.style.background =
+                            "var(--surface-inset)";
+                          e.currentTarget.style.color = "var(--text-strong)";
+                        }}
+                        onMouseLeave={(e) => {
+                          e.currentTarget.style.background = "transparent";
+                          e.currentTarget.style.color = "var(--text-weak)";
+                        }}
+                        title="Save as prompt"
+                        aria-label="Save as prompt"
+                      >
+                        <Bookmark class="w-4 h-4" />
+                      </button>
+                    </Show>
                     {/* Upload from device button */}
                     <button
                       type="button"
@@ -1567,6 +1598,134 @@ export function Session() {
             onSelect={addFileToContext}
             onClose={() => setShowFilePicker(false)}
           />
+        </Show>
+
+        {/* Save Prompt Dialog */}
+        <Show when={showSavePrompt()}>
+          <Portal>
+            <div
+              class="fixed inset-0 z-[100] flex items-center justify-center"
+              style={{ background: "rgba(0,0,0,0.5)" }}
+              onClick={(e) => {
+                if (e.target === e.currentTarget) setShowSavePrompt(false);
+              }}
+              role="presentation"
+            >
+              <div
+                class="w-full max-w-sm rounded-lg shadow-xl overflow-hidden"
+                style={{
+                  background: "var(--background-base)",
+                  border: "1px solid var(--border-base)",
+                }}
+              >
+                <div
+                  class="px-4 py-3"
+                  style={{
+                    "border-bottom": "1px solid var(--border-base)",
+                  }}
+                >
+                  <h2
+                    class="text-base font-medium"
+                    style={{ color: "var(--text-strong)" }}
+                  >
+                    Save as Prompt
+                  </h2>
+                </div>
+                <div class="p-4 space-y-3">
+                  <div>
+                    <label
+                      class="block text-sm font-medium mb-1"
+                      style={{ color: "var(--text-base)" }}
+                    >
+                      Title
+                    </label>
+                    <input
+                      type="text"
+                      value={savePromptTitle()}
+                      onInput={(e) =>
+                        setSavePromptTitle(e.currentTarget.value)
+                      }
+                      placeholder="Prompt title"
+                      class="w-full px-3 py-2 rounded-md text-sm"
+                      style={{
+                        background: "var(--background-base)",
+                        border: "1px solid var(--border-base)",
+                        color: "var(--text-base)",
+                      }}
+                      autofocus
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") {
+                          e.preventDefault();
+                          const title = savePromptTitle().trim();
+                          if (!title) return;
+                          savedPrompts.add(title, input().trim());
+                          setShowSavePrompt(false);
+                          setSavePromptSuccess(true);
+                          setTimeout(
+                            () => setSavePromptSuccess(false),
+                            2000,
+                          );
+                        }
+                      }}
+                    />
+                  </div>
+                  <p class="text-xs" style={{ color: "var(--text-weak)" }}>
+                    The current input text will be saved as the prompt body.
+                  </p>
+                </div>
+                <div
+                  class="px-4 py-3 flex justify-end gap-2"
+                  style={{
+                    "border-top": "1px solid var(--border-base)",
+                  }}
+                >
+                  <button
+                    type="button"
+                    onClick={() => setShowSavePrompt(false)}
+                    class="px-4 py-2 text-sm font-medium rounded-md transition-colors"
+                    style={{
+                      background: "var(--surface-inset)",
+                      color: "var(--text-base)",
+                    }}
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    disabled={!savePromptTitle().trim()}
+                    onClick={() => {
+                      const title = savePromptTitle().trim();
+                      if (!title) return;
+                      savedPrompts.add(title, input().trim());
+                      setShowSavePrompt(false);
+                      setSavePromptSuccess(true);
+                      setTimeout(() => setSavePromptSuccess(false), 2000);
+                    }}
+                    class="px-4 py-2 text-sm font-medium rounded-md transition-colors disabled:opacity-50"
+                    style={{
+                      background: "var(--interactive-base)",
+                      color: "white",
+                    }}
+                  >
+                    Save
+                  </button>
+                </div>
+              </div>
+            </div>
+          </Portal>
+        </Show>
+
+        {/* Save Prompt Success Toast */}
+        <Show when={savePromptSuccess()}>
+          <div
+            class="fixed bottom-20 left-1/2 -translate-x-1/2 z-[100] px-4 py-2 rounded-lg shadow-lg text-sm font-medium"
+            style={{
+              background: "var(--interactive-base)",
+              color: "white",
+            }}
+          >
+            Prompt saved
+          </div>
         </Show>
       </div>
     );
