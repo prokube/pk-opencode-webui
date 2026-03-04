@@ -2,25 +2,8 @@ name: Build pk-opencode
 
 on:
   push:
-    branches:
-      - main
-    paths:
-      - "app-prefixable/**"
-      - "docker/**"
-      - "shared/**"
-      - ".github/workflows/pk-opencode.yml"
     tags:
       - "v*"
-    # Note: For tags, paths filter is ignored by GitHub Actions
-    # Tags matching v* will always trigger, regardless of paths
-  pull_request:
-    branches:
-      - main
-    paths:
-      - "app-prefixable/**"
-      - "docker/**"
-      - "shared/**"
-      - ".github/workflows/pk-opencode.yml"
   workflow_dispatch:
 
 env:
