@@ -31,7 +31,9 @@ function DirectoryIndex() {
 function SessionIndex() {
   const params = useParams<{ dir: string }>()
   const href = getLastSessionHref(params.dir)
-  return href === "session" ? <Session /> : <Navigate href={href} replace />
+  if (href === "session") return <Session />
+  const id = href.replace(/^session\//, "")
+  return <Navigate href={id} replace />
 }
 
 function AppRoutes() {
