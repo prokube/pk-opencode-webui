@@ -116,14 +116,6 @@ export function Session() {
     setFileContext([]); // Clear file context on session change
     setImageAttachments([]); // Clear image attachments on session change
     if (id) {
-      try {
-        const dir = directory || base64Decode(params.dir);
-        if (dir && typeof window !== "undefined") {
-          window.localStorage.setItem(`opencode.lastSession.${dir}`, id);
-        }
-      } catch (err) {
-        console.warn("[Session] Failed to persist last session:", err);
-      }
       // Use sync context to load session data - no local state needed
       setLoadingHistory(true);
       setProcessing(false); // Reset processing state for new session
@@ -393,6 +385,23 @@ export function Session() {
       console.error("[Session] Failed to remove stale session key:", err);
     }
     navigate(`/${dirSlug()}/session`, { replace: true });
+  });
+
+  // Persist lastSession only after the session is confirmed to exist in sync
+  createEffect(() => {
+    const id = params.id;
+    if (!id) return;
+    if (!sync.ready) return;
+    const found = sync.session.get(id);
+    if (!found || found.time?.archived) return;
+    try {
+      const dir = directory || base64Decode(params.dir);
+      if (dir && typeof window !== "undefined") {
+        window.localStorage.setItem(`opencode.lastSession.${dir}`, id);
+      }
+    } catch (err) {
+      console.warn("[Session] Failed to persist last session:", err);
+    }
   });
 
   // Start processing state - SSE events will handle updates and completion
