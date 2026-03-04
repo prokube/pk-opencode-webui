@@ -439,49 +439,44 @@ export function Session() {
       return;
     }
 
-    // Load initial questions then subscribe to real-time events so that a
-    // replayed "question.replied" / "question.rejected" SSE event cannot race
-    // ahead and clear pendingQuestion before the HTTP response arrives.
-    const loadQuestions = async () => {
-      try {
-        const res = await client.question.list({ directory });
-        console.log("[Session] Question list response:", res);
-        const questions = Array.isArray(res.data) ? res.data : [];
-        const q = questions.find((q) => q.sessionID === id);
-        if (q) {
-          console.log("[Session] Found pending question:", q);
-          setPendingQuestion(q);
-          return;
+    // Subscribe immediately so we don't miss question.asked events during HTTP
+    // flight. Clearing events (question.replied / question.rejected) are
+    // ignored until the initial HTTP seed completes via the loaded flag.
+    const state = { loaded: false };
+    const unsub = { fn: undefined as (() => void) | undefined };
+    onCleanup(() => unsub.fn?.());
+
+    unsub.fn = events.subscribe((event) => {
+      const type = event.type as string;
+      if (type === "question.asked") {
+        const props = event.properties as QuestionRequest;
+        if (props.sessionID === id) {
+          console.log("[Session] Question event received:", props);
+          setPendingQuestion(props);
         }
-        setPendingQuestion(null);
-      } catch (e) {
-        console.error("[Session] Failed to load questions:", e);
       }
-    };
-
-    loadQuestions().then(() => {
-      // Subscribe to question events for real-time updates only after the
-      // initial HTTP load has settled, preventing the reload race condition.
-      const unsub = events.subscribe((event) => {
-        const type = event.type as string;
-        if (type === "question.asked") {
-          const props = event.properties as QuestionRequest;
-          if (props.sessionID === id) {
-            console.log("[Session] Question event received:", props);
-            setPendingQuestion(props);
-          }
+      if (!state.loaded) return;
+      // Clear question when answered or rejected
+      if (type === "question.replied" || type === "question.rejected") {
+        const props = event.properties as { sessionID?: string };
+        if (props.sessionID === id) {
+          console.log("[Session] Question cleared:", type);
+          setPendingQuestion(null);
         }
-        // Clear question when answered or rejected
-        if (type === "question.replied" || type === "question.rejected") {
-          const props = event.properties as { sessionID?: string };
-          if (props.sessionID === id) {
-            console.log("[Session] Question cleared:", type);
-            setPendingQuestion(null);
-          }
-        }
-      });
+      }
+    });
 
-      onCleanup(unsub);
+    client.question.list({ directory }).then((res) => {
+      console.log("[Session] Question list response:", res);
+      const questions = Array.isArray(res.data) ? res.data : [];
+      const q = questions.find((q) => q.sessionID === id);
+      if (q) {
+        console.log("[Session] Found pending question:", q);
+        setPendingQuestion(q);
+      } else {
+        setPendingQuestion(null);
+      }
+      state.loaded = true;
     });
   });
 
