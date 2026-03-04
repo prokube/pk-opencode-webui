@@ -440,8 +440,10 @@ export function Session() {
     }
 
     // Subscribe immediately so we don't miss question.asked events during HTTP
-    // flight. Clearing events (question.replied / question.rejected) are
-    // ignored until the initial HTTP seed completes via the loaded flag.
+    // flight. Clearing events (question.replied / question.rejected) are only
+    // skipped when they could be historical replays (loaded=false AND no live
+    // SSE question has arrived). If a live question was received via SSE,
+    // clearing events are always processed even before the HTTP result lands.
     // receivedViaSse guards against the HTTP result overwriting a live question
     // that arrived via SSE during the HTTP flight.
     const state = { loaded: false, receivedViaSse: false };
@@ -454,12 +456,16 @@ export function Session() {
           state.receivedViaSse = true;
           setPendingQuestion(props);
         }
+        return;
       }
-      if (!state.loaded) return;
-      // Clear question when answered or rejected
+      // Clear question when answered or rejected.
+      // Guard: skip if this could be a historical replay (not yet loaded AND no live
+      // SSE question arrived this session). If receivedViaSse is true the question
+      // is live — always process the clearing event regardless of loaded state.
       if (type === "question.replied" || type === "question.rejected") {
         const props = event.properties as { sessionID?: string };
         if (props.sessionID === id) {
+          if (!state.loaded && !state.receivedViaSse) return;
           console.log("[Session] Question cleared:", type);
           state.receivedViaSse = false;
           setPendingQuestion(null);
