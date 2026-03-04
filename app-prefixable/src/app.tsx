@@ -27,6 +27,24 @@ function DirectoryIndex() {
   return <Navigate href={target} />
 }
 
+function SessionIndex() {
+  const params = useParams<{ dir: string }>()
+
+  const target = (() => {
+    if (typeof window === "undefined") return null
+    try {
+      const dir = base64Decode(params.dir)
+      const last = window.localStorage.getItem(`opencode.lastSession.${dir}`)
+      return last ? last : null
+    } catch {
+      return null
+    }
+  })()
+
+  if (!target) return <Session />
+  return <Navigate href={target} />
+}
+
 function AppRoutes() {
   const { basePath } = useBasePath()
   const base = basePath.endsWith("/") ? basePath.slice(0, -1) : basePath
@@ -42,7 +60,8 @@ function AppRoutes() {
       {/* Directory-scoped routes */}
       <Route path="/:dir" component={DirectoryLayout}>
         <Route path="/" component={DirectoryIndex} />
-        <Route path="/session/:id?" component={Session} />
+        <Route path="/session" component={SessionIndex} />
+        <Route path="/session/:id" component={Session} />
         <Route path="/settings" component={Settings} />
       </Route>
     </Router>

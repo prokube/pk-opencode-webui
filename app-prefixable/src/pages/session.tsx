@@ -378,12 +378,16 @@ export function Session() {
     if (!id || !sync.ready) return;
     if (loadingHistory()) return; // wait for sync to finish
     const found = sync.session.get(id);
-    if (found && !found.time?.archived) return; // valid, non-archived — keep it
-    // stale or archived: clear and redirect
+    if (found) return; // valid session (including archived) — keep it
+    // stale: clear and redirect
     try {
       const dir = directory || base64Decode(params.dir);
       if (dir && typeof window !== "undefined") {
-        window.localStorage.removeItem(`opencode.lastSession.${dir}`);
+        const key = `opencode.lastSession.${dir}`;
+        const storedId = window.localStorage.getItem(key);
+        if (storedId === id) {
+          window.localStorage.removeItem(key);
+        }
       }
     } catch (err) {
       console.error("[Session] Failed to remove stale session key:", err);
