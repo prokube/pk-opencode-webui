@@ -330,7 +330,8 @@
      ============================================ */
 
   .markdown-content {
-    @apply text-gray-800 leading-relaxed;
+    color: var(--text-base);
+    @apply leading-relaxed;
   }
 
   .markdown-content p {

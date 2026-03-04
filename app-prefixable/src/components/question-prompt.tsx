@@ -364,9 +364,11 @@ export function QuestionPrompt(props: Props) {
                       onKeyDown={(e) => {
                         if (e.key === "Enter") {
                           e.preventDefault()
+                          e.stopImmediatePropagation()
                           handleCustomSubmit()
                         } else if (e.key === "Escape") {
                           e.preventDefault()
+                          e.stopImmediatePropagation()
                           setEditing(false)
                         }
                       }}
