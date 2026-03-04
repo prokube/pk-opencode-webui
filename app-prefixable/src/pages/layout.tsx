@@ -14,7 +14,7 @@ import { useSDK } from "../context/sdk";
 import { useEvents } from "../context/events";
 import { useProviders } from "../context/providers";
 import { useTerminal } from "../context/terminal";
-import { useLayout } from "../context/layout";
+import { useLayout, SIDEBAR_MIN_WIDTH, SIDEBAR_MAX_WIDTH } from "../context/layout";
 import { base64Encode } from "../utils/path";
 import { Spinner } from "../components/ui/spinner";
 import { Button } from "../components/ui/button";
@@ -990,8 +990,8 @@ export function Layout(props: ParentProps) {
           direction="horizontal"
           edge="end"
           size={layout.sidebar.width()}
-          min={180}
-          max={480}
+          min={SIDEBAR_MIN_WIDTH}
+          max={SIDEBAR_MAX_WIDTH}
           onResize={(width) => {
             setSidebarDragging(true);
             layout.sidebar.resize(width);

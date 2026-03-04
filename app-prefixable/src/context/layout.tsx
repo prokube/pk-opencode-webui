@@ -12,8 +12,8 @@ const LAYOUT_STORAGE_KEY = "opencode.layout";
 const DEFAULT_REVIEW_WIDTH = 320;
 const DEFAULT_INFO_WIDTH = 256;
 const DEFAULT_SIDEBAR_WIDTH = 256;
-const SIDEBAR_MIN_WIDTH = 180;
-const SIDEBAR_MAX_WIDTH = 480;
+export const SIDEBAR_MIN_WIDTH = 180;
+export const SIDEBAR_MAX_WIDTH = 480;
 
 interface PanelState {
   opened: boolean;
