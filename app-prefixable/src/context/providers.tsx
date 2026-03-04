@@ -14,7 +14,12 @@ const DEFAULT_AGENT = "build"
 interface Model {
   id: string
   name: string
-  providerID: string
+  providerID?: string  // optional — injected during normalisation
+  limit: {
+    context: number
+    input?: number
+    output: number
+  }
 }
 
 interface Provider {
@@ -86,7 +91,6 @@ export function ProviderProvider(props: ParentProps) {
       if (stored) {
         const parsed = JSON.parse(stored)
         setStore("modelsByAgent", parsed)
-        console.log("[Providers] Loaded models from storage:", parsed)
       }
     } catch (e) {
       console.error("Failed to load models from storage:", e)
@@ -106,7 +110,16 @@ export function ProviderProvider(props: ParentProps) {
   const [providerData, { refetch: refetchProviders }] = createResource(async () => {
     try {
       const res = await client.provider.list()
-      return res.data as ProviderListData | undefined
+      const data = res.data as ProviderListData | undefined
+      if (!data) return undefined
+      // Inject providerID into each model since the SDK response doesn't include it
+      const all = data.all.map((provider) => ({
+        ...provider,
+        models: Object.fromEntries(
+          Object.entries(provider.models).map(([k, m]) => [k, { ...m, providerID: provider.id }])
+        ),
+      }))
+      return { ...data, all }
     } catch (e) {
       console.error("Failed to fetch providers:", e)
       return undefined
@@ -124,12 +137,6 @@ export function ProviderProvider(props: ParentProps) {
       if (provider && provider.models[DEFAULT_MODEL]) {
         // Only set default model for DEFAULT_AGENT if not already set
         if (!store.modelsByAgent[DEFAULT_AGENT]) {
-          console.log(
-            "[Providers] Auto-selecting default model for agent:",
-            DEFAULT_AGENT,
-            DEFAULT_PROVIDER,
-            DEFAULT_MODEL,
-          )
           setStore("modelsByAgent", DEFAULT_AGENT, { providerID: DEFAULT_PROVIDER, modelID: DEFAULT_MODEL })
         }
       }
@@ -151,9 +158,6 @@ export function ProviderProvider(props: ParentProps) {
   const [agentsData, { refetch: refetchAgents }] = createResource(async () => {
     try {
       const res = await client.app.agents()
-      console.log("[Providers] Agents response:", res)
-      console.log("[Providers] Agents data:", res.data)
-
       // The API returns an array directly, SDK wraps it in { data: [...] }
       const agents = res.data
       if (!Array.isArray(agents)) {
@@ -216,7 +220,6 @@ export function ProviderProvider(props: ParentProps) {
       // Dispose instance to reload provider state, then refresh
       await client.instance.dispose()
       await refetchProviders()
-      console.log("[Providers] Refetched after OAuth, connected:", providerData()?.connected)
       return true
     } catch (e) {
       console.error("Failed to complete OAuth:", e)

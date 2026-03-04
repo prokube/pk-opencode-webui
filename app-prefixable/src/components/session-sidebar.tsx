@@ -27,9 +27,7 @@ export function SessionSidebar(props: SessionSidebarProps) {
   // Load git branch
   async function loadBranch() {
     try {
-      console.log("[SessionSidebar] Loading branch, directory:", directory)
       const res = await client.vcs.get({ directory })
-      console.log("[SessionSidebar] Branch response:", res)
       if (res.data?.branch) {
         setBranch(res.data.branch)
       }
@@ -108,7 +106,7 @@ export function SessionSidebar(props: SessionSidebarProps) {
     const modelID = msgModelID ?? providers.selectedModel?.modelID
     const provider = providers.providers.find((p) => p.id === providerID)
     const model = provider?.models[modelID ?? ""]
-    const limit = (model as any)?.limit?.context as number | undefined
+    const limit = model?.limit?.context
 
     if (!limit) return { tokens: inputTokens, limit: null, percentage: null, remaining: null }
 

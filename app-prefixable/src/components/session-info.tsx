@@ -69,8 +69,16 @@ export function SessionInfo(props: SessionInfoProps) {
 
     // Get model context limit for usage percentage (use lastAssistant's model, not selectedModel)
     const provider = providers.providers.find((p: { id: string }) => p.id === lastAssistant!.providerID)
+    if (!provider && providers.providers.length > 0 && import.meta.env.DEV) {
+      console.warn("[session-info] provider not found:", lastAssistant!.providerID,
+        "available:", providers.providers.map(p => p.id))
+    }
     const model = provider?.models[lastAssistant.modelID ?? ""]
-    const limit = (model as { limit?: { context?: number } })?.limit?.context
+    if (provider && !model && import.meta.env.DEV) {
+      console.warn("[session-info] model not found:", lastAssistant.modelID,
+        "available:", Object.keys(provider.models))
+    }
+    const limit = model?.limit?.context
     const usage = limit ? Math.round((lastAssistant.inputTokens / limit) * 100) : null
 
     return {
