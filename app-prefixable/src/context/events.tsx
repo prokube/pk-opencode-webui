@@ -1,6 +1,6 @@
-import { createContext, useContext, onCleanup, type ParentProps } from "solid-js"
-import { createStore } from "solid-js/store"
-import type { Event, SessionStatus } from "../sdk/client"
+import { createContext, useContext, onCleanup, onMount, type ParentProps } from "solid-js"
+import { createStore, produce } from "solid-js/store"
+import type { Event, SessionStatus, QuestionRequest } from "../sdk/client"
 import { useBasePath } from "./base-path"
 import { useSDK } from "./sdk"
 
@@ -9,15 +9,17 @@ type EventHandler = (event: Event) => void
 interface EventContextValue {
   subscribe: (handler: EventHandler) => () => void
   status: Record<string, SessionStatus>
+  pendingQuestions: Record<string, QuestionRequest>
 }
 
 const EventContext = createContext<EventContextValue>()
 
 export function EventProvider(props: ParentProps) {
   const { prefix } = useBasePath()
-  const { directory } = useSDK()
+  const { client, directory } = useSDK()
   const handlers = new Set<EventHandler>()
   const [status, setStatus] = createStore<Record<string, SessionStatus>>({})
+  const [pendingQuestions, setPendingQuestions] = createStore<Record<string, QuestionRequest>>({})
 
   // Connect to SSE endpoint
   let eventSource: EventSource | null = null
@@ -55,6 +57,20 @@ export function EventProvider(props: ParentProps) {
           }
         }
 
+        // Track pending questions
+        if (event.type === "question.asked") {
+          const q = event.properties as QuestionRequest
+          if (q?.sessionID) {
+            setPendingQuestions(q.sessionID, q)
+          }
+        }
+        if (event.type === "question.replied" || event.type === "question.rejected") {
+          const q = event.properties as { sessionID?: string }
+          if (q?.sessionID) {
+            setPendingQuestions(produce((map) => { delete map[q.sessionID!] }))
+          }
+        }
+
         // Notify all handlers
         for (const handler of handlers) {
           handler(event)
@@ -79,8 +95,18 @@ export function EventProvider(props: ParentProps) {
     }
   }
 
-  // Start connection
-  connect()
+  // Seed pending questions then connect to SSE (seed first to avoid race
+  // where a question.replied event arrives before the list resolves)
+  onMount(() => {
+    if (!directory) { connect(); return }
+    client.question.list({ directory })
+      .then((res) => {
+        const questions = Array.isArray(res.data) ? res.data : []
+        for (const q of questions) setPendingQuestions(q.sessionID, q)
+      })
+      .catch((err) => console.error("[Events] Failed to load questions:", err))
+      .finally(() => connect())
+  })
 
   onCleanup(() => {
     eventSource?.close()
@@ -92,7 +118,7 @@ export function EventProvider(props: ParentProps) {
     return () => handlers.delete(handler)
   }
 
-  return <EventContext.Provider value={{ subscribe, status }}>{props.children}</EventContext.Provider>
+  return <EventContext.Provider value={{ subscribe, status, pendingQuestions }}>{props.children}</EventContext.Provider>
 }
 
 export function useEvents() {
