@@ -24,22 +24,13 @@ function getLastSessionHref(encodedDir: string): string {
 
 function DirectoryIndex() {
   const params = useParams<{ dir: string }>()
-  return <Navigate href={getLastSessionHref(params.dir)} />
+  return <Navigate href={getLastSessionHref(params.dir)} replace />
 }
 
 function SessionIndex() {
   const params = useParams<{ dir: string }>()
-  const last = (() => {
-    try {
-      const dir = base64Decode(params.dir)
-      return typeof window !== "undefined"
-        ? window.localStorage.getItem(`opencode.lastSession.${dir}`)
-        : null
-    } catch {
-      return null
-    }
-  })()
-  return last ? <Navigate href={`session/${last}`} /> : <Session />
+  const href = getLastSessionHref(params.dir)
+  return href === "session" ? <Session /> : <Navigate href={href} replace />
 }
 
 function AppRoutes() {
