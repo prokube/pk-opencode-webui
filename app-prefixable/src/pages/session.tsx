@@ -965,12 +965,11 @@ export function Session() {
     return (
       <div class="flex flex-col h-full">
         {/* Header with panel toggle buttons */}
-        <SessionHeader
-          session={session()}
-          processing={processing()}
-          onOpenMCPDialog={() => setShowMCPDialog(true)}
-          onSendPrompt={(prompt) => setInput(prompt)}
-        />
+         <SessionHeader
+           session={session()}
+           processing={processing()}
+           onOpenMCPDialog={() => setShowMCPDialog(true)}
+         />
 
         {/* Messages - using rich message timeline with lazy rendering */}
         <div class="flex-1 flex flex-col overflow-hidden">
