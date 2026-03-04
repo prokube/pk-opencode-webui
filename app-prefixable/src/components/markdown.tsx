@@ -1,4 +1,5 @@
 import { createMemo } from "solid-js"
+import type { JSX } from "solid-js"
 import { marked } from "marked"
 import DOMPurify from "dompurify"
 
@@ -25,6 +26,7 @@ function sanitize(html: string) {
 interface MarkdownProps {
   content: string
   class?: string
+  style?: JSX.CSSProperties
 }
 
 export function Markdown(props: MarkdownProps) {
@@ -34,5 +36,5 @@ export function Markdown(props: MarkdownProps) {
     return sanitize(raw)
   })
 
-  return <div class={`markdown-content ${props.class || ""}`} innerHTML={html()} />
+  return <div class={`markdown-content ${props.class || ""}`} style={props.style} innerHTML={html()} />
 }

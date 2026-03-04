@@ -969,6 +969,7 @@ export function Session() {
           session={session()}
           processing={processing()}
           onOpenMCPDialog={() => setShowMCPDialog(true)}
+          onSendPrompt={(prompt) => setInput(prompt)}
         />
 
         {/* Messages - using rich message timeline with lazy rendering */}
