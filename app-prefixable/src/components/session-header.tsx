@@ -9,12 +9,14 @@ import { useTerminal } from "../context/terminal"
 import { useSDK } from "../context/sdk"
 import { PanelBottom, FileCode, ListTodo, Plug, ArrowLeft, Users } from "lucide-solid"
 import { base64Encode } from "../utils/path"
+import { PrButton } from "./pr-button"
 import type { Session } from "../sdk/client"
 
 interface SessionHeaderProps {
   session: Session | null | undefined
   processing: boolean
   onOpenMCPDialog: () => void
+  onSendPrompt: (prompt: string) => void
 }
 
 export function SessionHeader(props: SessionHeaderProps) {
@@ -127,7 +129,11 @@ export function SessionHeader(props: SessionHeaderProps) {
         </Show>
       </div>
 
-      {/* Right side: Panel toggle buttons */}
+      {/* Right side: PR button + panel toggles */}
+      <div class="flex items-center gap-2">
+        <PrButton onSendPrompt={props.onSendPrompt} />
+      </div>
+
       <div class="flex items-center gap-1">
         {/* MCP toggle */}
         <button
