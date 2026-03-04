@@ -18,7 +18,7 @@ interface SessionHeaderProps {
   onOpenMCPDialog: () => void
   onSendPrompt: (prompt: string) => void
   onRename?: (sessionId: string, title: string) => void
-  onDelete?: () => void
+  onDelete?: (sessionId: string) => void
 }
 
 export function SessionHeader(props: SessionHeaderProps) {
@@ -38,6 +38,13 @@ export function SessionHeader(props: SessionHeaderProps) {
   const [confirmDelete, setConfirmDelete] = createSignal(false)
   const [deleting, setDeleting] = createSignal(false)
   const [deleteError, setDeleteError] = createSignal<string | null>(null)
+  const [optimisticTitle, setOptimisticTitle] = createSignal<string | null>(null)
+
+  // Reset optimistic title when SSE delivers the real title
+  createEffect(() => {
+    const title = props.session?.title
+    if (title) setOptimisticTitle(null)
+  })
 
   function navigateToParent() {
     const id = parentId()
@@ -52,7 +59,10 @@ export function SessionHeader(props: SessionHeaderProps) {
     if (!trimmed || trimmed === session?.title) { setRenaming(false); return }
     if (!session) { setRenaming(false); return }
     client.session.update({ sessionID: session.id, title: trimmed })
-      .then(() => props.onRename?.(session.id, trimmed))
+      .then(() => {
+        setOptimisticTitle(trimmed)
+        props.onRename?.(session.id, trimmed)
+      })
       .catch(err => console.error("Failed to rename session", err))
       .finally(() => setRenaming(false))
   }
@@ -80,7 +90,7 @@ export function SessionHeader(props: SessionHeaderProps) {
         // Prefer the parent's onDelete handler (e.g. navigate to next session);
         // fall back to navigating to the session list when no handler is provided
         if (props.onDelete) {
-          props.onDelete()
+          props.onDelete(session.id)
         } else {
           navigate(`/${dirSlug()}/session`)
         }
@@ -160,7 +170,7 @@ export function SessionHeader(props: SessionHeaderProps) {
                     setRenaming(true)
                   }}
                 >
-                  {props.session?.title || "New Session"}
+                  {optimisticTitle() ?? (props.session?.title || "New Session")}
                 </h1>
               }
             >
@@ -424,11 +434,16 @@ export function SessionHeader(props: SessionHeaderProps) {
         message={`This will permanently delete "${props.session?.title || "this session"}". This cannot be undone.`}
         confirmLabel={deleting() ? "Deleting..." : "Delete"}
         confirmDisabled={deleting()}
+        cancelDisabled={deleting()}
         cancelLabel="Cancel"
         variant="danger"
         error={deleteError() ?? undefined}
         onConfirm={confirmAndDelete}
-        onCancel={() => { setDeleteError(null); setConfirmDelete(false) }}
+        onCancel={() => {
+          if (deleting()) return
+          setDeleteError(null)
+          setConfirmDelete(false)
+        }}
       />
     </header>
   )

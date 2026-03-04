@@ -364,6 +364,25 @@ export function Session() {
     if (id) await sync.session.sync(id);
   };
 
+  // Navigate to next/previous session after a successful delete.
+  // Must be called BEFORE the session is removed so it still appears in sync.sessions().
+  function navigateAfterRemove(id: string) {
+    const current = sync.sessions().find(s => s.id === id);
+    if (current?.parentID) {
+      navigate(`/${dirSlug()}/session/${current.parentID}`);
+      return;
+    }
+    // compute neighbor NOW, before the session disappears
+    const all = sync.sessions()
+      .filter(s => s.directory === directory && !s.time?.archived && !s.parentID)
+      .slice()
+      .sort((a, b) => (b.time?.updated ?? 0) - (a.time?.updated ?? 0));
+    const idx = all.findIndex(s => s.id === id);
+    const next = idx === -1 ? all[0] : (all[idx + 1] ?? all[idx - 1]);
+    navigate(next ? `/${dirSlug()}/session/${next.id}` : `/${dirSlug()}/session`);
+  }
+
+
   // Start processing state - SSE events will handle updates and completion
   function startProcessing() {
     console.log("[Session] Starting processing, relying on SSE events");
@@ -970,6 +989,7 @@ export function Session() {
           processing={processing()}
           onOpenMCPDialog={() => setShowMCPDialog(true)}
           onSendPrompt={(prompt) => setInput(prompt)}
+          onDelete={navigateAfterRemove}
         />
 
         {/* Messages - using rich message timeline with lazy rendering */}

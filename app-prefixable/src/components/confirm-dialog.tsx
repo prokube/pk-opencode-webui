@@ -8,6 +8,7 @@ interface Props {
   confirmLabel?: string
   cancelLabel?: string
   confirmDisabled?: boolean
+  cancelDisabled?: boolean
   variant?: "danger" | "warning" | "default"
   error?: string | null
   onConfirm: () => void
@@ -31,7 +32,9 @@ export function ConfirmDialog(props: Props) {
     function handleTab(e: KeyboardEvent) {
       if (e.key !== "Tab") return
 
-      const buttons = el!.querySelectorAll("button")
+      const buttons = Array.from(
+        el!.querySelectorAll<HTMLButtonElement>("button:not([disabled])")
+      )
       const first = buttons[0]
       const last = buttons[buttons.length - 1]
 
@@ -47,7 +50,7 @@ export function ConfirmDialog(props: Props) {
     function handleKey(e: KeyboardEvent) {
       if (e.key === "Escape") {
         e.preventDefault()
-        props.onCancel()
+        if (!props.cancelDisabled) props.onCancel()
       } else if (e.key === "Enter" && document.activeElement?.tagName === "BUTTON") {
         // Let the button handle its own click
       }
@@ -87,7 +90,7 @@ export function ConfirmDialog(props: Props) {
           class="fixed inset-0 z-[100] flex items-center justify-center"
           style={{ background: "rgba(0,0,0,0.5)" }}
           onClick={(e) => {
-            if (e.target === e.currentTarget) props.onCancel()
+            if (e.target === e.currentTarget && !props.cancelDisabled) props.onCancel()
           }}
           role="presentation"
         >
@@ -120,10 +123,12 @@ export function ConfirmDialog(props: Props) {
                 <button
                   type="button"
                   onClick={props.onCancel}
+                  disabled={props.cancelDisabled}
                   class="px-4 py-2 text-sm font-medium rounded-md transition-colors"
                   style={{
                     background: "var(--surface-inset)",
                     color: "var(--text-base)",
+                    ...(props.cancelDisabled ? { opacity: "0.6", cursor: "not-allowed" } : {}),
                   }}
                 >
                   {props.cancelLabel ?? "Cancel"}
