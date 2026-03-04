@@ -46,7 +46,8 @@ function saveToStorage(prompts: SavedPrompt[]) {
 }
 
 export function SavedPromptsProvider(props: ParentProps) {
-  const initial = loadFromStorage().sort((a, b) => b.createdAt - a.createdAt)
+  const stored = loadFromStorage()
+  const initial = stored.length > 0 ? stored : []
   const [prompts, setPrompts] = createSignal<SavedPrompt[]>(initial)
 
   function add(title: string, text: string) {

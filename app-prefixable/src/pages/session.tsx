@@ -332,7 +332,7 @@ export function Session() {
     setInput(value);
 
     // Detect slash command pattern: /command or /command <search term>
-    const slashMatch = value.match(/^\/(\S+)(?:\s+(.*))?$/);
+    const slashMatch = value.match(/^\/(\S*)(?:\s+(.*))?$/);
     if (slashMatch) {
       const query = slashMatch[1];
       const search = slashMatch[2];
@@ -901,16 +901,20 @@ export function Session() {
         console.error("[WelcomeScreen] No model selected, cannot send saved prompt");
         return;
       }
-      const res = await client.session.create({});
-      if (!res.data) return;
-      const id = res.data.id;
-      navigate(`/${dirSlug()}/session/${id}`);
-      await client.session.promptAsync({
-        sessionID: id,
-        parts: [{ type: "text", text }],
-        agent: providers.selectedAgent || "build",
-        model: providers.selectedModel,
-      });
+      try {
+        const res = await client.session.create({});
+        if (!res.data) return;
+        const id = res.data.id;
+        navigate(`/${dirSlug()}/session/${id}`);
+        await client.session.promptAsync({
+          sessionID: id,
+          parts: [{ type: "text", text }],
+          agent: providers.selectedAgent || "build",
+          model: providers.selectedModel,
+        });
+      } catch (err) {
+        console.error("[WelcomeScreen] Failed to send saved prompt:", err);
+      }
     }
 
     return (
@@ -1601,16 +1605,20 @@ export function Session() {
                 console.error("[Session] No model selected, cannot send saved prompt");
                 return;
               }
-              const res = await client.session.create({});
-              if (!res.data) return;
-              const sid = res.data.id;
-              navigate(`/${dirSlug()}/session/${sid}`);
-              await client.session.promptAsync({
-                sessionID: sid,
-                parts: [{ type: "text", text: found.text }],
-                agent: providers.selectedAgent || "build",
-                model: providers.selectedModel,
-              });
+              try {
+                const res = await client.session.create({});
+                if (!res.data) return;
+                const sid = res.data.id;
+                navigate(`/${dirSlug()}/session/${sid}`);
+                await client.session.promptAsync({
+                  sessionID: sid,
+                  parts: [{ type: "text", text: found.text }],
+                  agent: providers.selectedAgent || "build",
+                  model: providers.selectedModel,
+                });
+              } catch (err) {
+                console.error("[Session] Failed to send saved prompt:", err);
+              }
             }}
             onClose={() => setShowPromptPicker(false)}
           />
