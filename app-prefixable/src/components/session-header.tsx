@@ -40,10 +40,18 @@ export function SessionHeader(props: SessionHeaderProps) {
   const [deleteError, setDeleteError] = createSignal<string | null>(null)
   const [optimisticTitle, setOptimisticTitle] = createSignal<string | null>(null)
 
-  // Reset optimistic title when SSE delivers the real title
+  // Clear optimistic title when SSE confirms the rename (server title matches)
   createEffect(() => {
     const title = props.session?.title
-    if (title) setOptimisticTitle(null)
+    const optimistic = optimisticTitle()
+    if (optimistic === null) return
+    if (title === optimistic) setOptimisticTitle(null)
+  })
+
+  // Clear when switching sessions (different ID)
+  createEffect(() => {
+    props.session?.id
+    setOptimisticTitle(null)
   })
 
   function navigateToParent() {

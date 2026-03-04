@@ -372,7 +372,8 @@ export function Session() {
       navigate(`/${dirSlug()}/session/${parentID}`);
       return;
     }
-    // compute neighbor NOW, before the session disappears
+    // Navigate to neighbor session after delete. Note: sync.sessions() may already
+    // have removed the deleted session via SSE, so idx may be -1 (fallback to all[0]).
     const all = sync.sessions()
       .filter(s => s.directory === directory && !s.time?.archived && !s.parentID)
       .slice()
@@ -984,6 +985,9 @@ export function Session() {
     return (
       <div class="flex flex-col h-full">
         {/* Header with panel toggle buttons */}
+        {/* onRename is intentionally not wired: SessionHeader already uses
+            optimisticTitle for immediate display, and SSE sync propagates the
+            server-confirmed title to the sidebar automatically. */}
         <SessionHeader
           session={session()}
           processing={processing()}
