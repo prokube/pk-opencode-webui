@@ -45,6 +45,13 @@ export function SessionHeader(props: SessionHeaderProps) {
   const [deleteError, setDeleteError] = createSignal<string | null>(null)
   const [optimisticTitle, setOptimisticTitle] = createSignal<string | null>(null)
   const [aiRenaming, setAiRenaming] = createSignal(false)
+  const [renameError, setRenameError] = createSignal<string | null>(null)
+
+  const hasMessages = () => {
+    const session = props.session
+    if (!session) return false
+    return sync.messages(session.id).length > 0
+  }
 
   // Clear optimistic title when SSE confirms the rename (server title matches)
   createEffect(() => {
@@ -195,9 +202,16 @@ export function SessionHeader(props: SessionHeaderProps) {
         if (suggestion) {
           setRenameValue(suggestion)
           setRenaming(true)
+        } else {
+          setRenameError("AI returned an empty suggestion. Try again.")
+          setTimeout(() => setRenameError(null), 4000)
         }
       })
-      .catch((err: unknown) => console.error("AI rename failed", err))
+      .catch((err: unknown) => {
+        console.error("AI rename failed", err)
+        setRenameError("AI rename failed. Please try again.")
+        setTimeout(() => setRenameError(null), 4000)
+      })
       .finally(() => {
         setAiRenaming(false)
         // Clean up child session
@@ -287,6 +301,7 @@ export function SessionHeader(props: SessionHeaderProps) {
                   "border-color": "var(--border-interactive)",
                   width: "16rem",
                 }}
+                aria-label="Session title"
                 value={renameValue()}
                 ref={(el) => queueMicrotask(() => { if (!el?.isConnected) return; el.focus(); el.select() })}
                 onInput={(e) => setRenameValue(e.currentTarget.value)}
@@ -352,12 +367,18 @@ export function SessionHeader(props: SessionHeaderProps) {
                     {/* Rename with AI */}
                     <button
                       class="w-full flex items-center gap-2 px-3 py-1.5 text-sm text-left transition-colors"
-                      style={{ color: "var(--text-base)", ...(aiRenaming() ? { opacity: "0.6" } : {}) }}
-                      onMouseEnter={(e) => (e.currentTarget.style.background = "var(--surface-inset)")}
+                      disabled={!hasMessages() || aiRenaming()}
+                      style={{
+                        color: hasMessages() ? "var(--text-base)" : "var(--text-weak)",
+                        opacity: hasMessages() && !aiRenaming() ? 1 : 0.6,
+                        cursor: hasMessages() && !aiRenaming() ? "pointer" : "not-allowed",
+                      }}
+                      onMouseEnter={(e) => { if (hasMessages() && !aiRenaming()) e.currentTarget.style.background = "var(--surface-inset)" }}
                       onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
                       onClick={renameWithAI}
+                      title={hasMessages() ? "Suggest a title using AI" : "Send a message first to enable AI rename"}
                     >
-                      <Show when={aiRenaming()} fallback={<Sparkles class="w-3.5 h-3.5 shrink-0" style={{ color: "var(--icon-weak)" }} />}>
+                      <Show when={aiRenaming()} fallback={<Sparkles class="w-3.5 h-3.5 shrink-0" style={{ color: hasMessages() ? "var(--icon-weak)" : "var(--text-weak)" }} />}>
                         <Spinner class="w-3.5 h-3.5 shrink-0" />
                       </Show>
                       {aiRenaming() ? "Suggesting..." : "Rename with AI"}
@@ -402,6 +423,9 @@ export function SessionHeader(props: SessionHeaderProps) {
             <p class="text-[11px] truncate" style={{ color: "var(--text-weak)" }}>
               {parentId() ? "Sub-agent session" : props.session?.id}
             </p>
+          </Show>
+          <Show when={renameError()}>
+            <p class="text-xs mt-0.5" style={{ color: "var(--text-critical-base)" }}>{renameError()}</p>
           </Show>
         </div>
       </div>

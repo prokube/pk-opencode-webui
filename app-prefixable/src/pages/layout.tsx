@@ -381,26 +381,28 @@ export function Layout(props: ParentProps) {
     const index = current.findIndex((s) => s.id === session.id);
     const neighbor = current[index + 1] ?? current[index - 1];
 
-    // Optimistic remove from local list
+    // Optimistic remove from sidebar list
     setSessions((prev) => prev.filter((s) => s.id !== session.id));
-
-    // Navigate before API call for snappy UX
-    if (isActive(session.id)) {
-      navigate(neighbor ? `/${dirSlug()}/session/${neighbor.id}` : `/${dirSlug()}/session`);
-    }
 
     client.session.update({
       sessionID: session.id,
       time: { archived: Date.now() },
-    }).catch((err: unknown) => {
-      console.error("Failed to archive session:", err);
-      // Revert — add session back at original index
-      setSessions((prev) => {
-        const copy = [...prev];
-        copy.splice(index < 0 ? 0 : index, 0, session);
-        return copy;
+    })
+      .then(() => {
+        // Navigate only after successful archive
+        if (isActive(session.id)) {
+          navigate(neighbor ? `/${dirSlug()}/session/${neighbor.id}` : `/${dirSlug()}/session`);
+        }
+      })
+      .catch((err: unknown) => {
+        console.error("Failed to archive session:", err);
+        // Revert — add session back at original index
+        setSessions((prev) => {
+          const copy = [...prev];
+          copy.splice(index < 0 ? 0 : index, 0, session);
+          return copy;
+        });
       });
-    });
   }
 
   function isActive(sessionId: string) {
