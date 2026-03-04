@@ -2,6 +2,7 @@ import { createSignal, createEffect, createMemo, For, Show, onCleanup } from "so
 import { useSDK } from "../context/sdk"
 import { useEvents } from "../context/events"
 import { useProviders } from "../context/providers"
+import { getContextTokens } from "../utils/tokens"
 import { GitBranch, Check, Circle, Loader2, Zap } from "lucide-solid"
 
 interface Todo {
@@ -75,23 +76,23 @@ export function SessionSidebar(props: SessionSidebarProps) {
   })
 
   // Calculate context usage from last assistant message
-  // Context usage = input tokens, which represents how much of the context window is used
+  // Context usage = context tokens (input + cached), representing how much of the context window is used
   const contextUsage = createMemo(() => {
     const msgs = messages()
     if (!msgs.length) return null
 
     // Find last assistant message with tokens and extract model info
-    let inputTokens = 0
+    let contextTokens = 0
     let msgProviderID: string | undefined
     let msgModelID: string | undefined
     for (let i = msgs.length - 1; i >= 0; i--) {
       const msg = msgs[i]
       if (msg.info?.role !== "assistant") continue
-      const tokens = msg.info.tokens
-      // Input tokens represent the context size - how much of the window is used
-      // This includes the conversation history sent to the model
-      if (tokens?.input && tokens.input > 0) {
-        inputTokens = tokens.input
+      // Context usage = input + cached tokens (read + write)
+      // With prompt caching, most input tokens are cached, so tokens.input alone is near-zero
+      const computed = getContextTokens(msg.info.tokens)
+      if (computed > 0) {
+        contextTokens = computed
         // Extract provider/model from the message that produced these tokens
         msgProviderID = msg.info.providerID
         msgModelID = msg.info.modelID
@@ -99,7 +100,7 @@ export function SessionSidebar(props: SessionSidebarProps) {
       }
     }
 
-    if (inputTokens === 0) return null
+    if (contextTokens === 0) return null
 
     // Get model context limit from the message's model, not the currently selected one
     const providerID = msgProviderID ?? providers.selectedModel?.providerID
@@ -108,12 +109,12 @@ export function SessionSidebar(props: SessionSidebarProps) {
     const model = provider?.models[modelID ?? ""]
     const limit = model?.limit?.context
 
-    if (!limit) return { tokens: inputTokens, limit: null, percentage: null, remaining: null }
+    if (!limit) return { tokens: contextTokens, limit: null, percentage: null, remaining: null }
 
-    const percentage = Math.max(0, Math.min(100, Math.round((inputTokens / limit) * 100)))
-    const remaining = Math.max(0, limit - inputTokens)
+    const percentage = Math.max(0, Math.min(100, Math.round((contextTokens / limit) * 100)))
+    const remaining = Math.max(0, limit - contextTokens)
 
-    return { tokens: inputTokens, limit, percentage, remaining }
+    return { tokens: contextTokens, limit, percentage, remaining }
   })
 
   // Subscribe to todo and message updates
