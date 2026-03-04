@@ -112,6 +112,7 @@ export function Session() {
   const [showFilePicker, setShowFilePicker] = createSignal(false);
   const [showSavePrompt, setShowSavePrompt] = createSignal(false);
   const [savePromptTitle, setSavePromptTitle] = createSignal("");
+  const [savePromptBody, setSavePromptBody] = createSignal("");
   const [savePromptSuccess, setSavePromptSuccess] = createSignal(false);
   const [fileContext, setFileContext] = createSignal<FileContext[]>([]);
   const [imageAttachments, setImageAttachments] = createSignal<
@@ -339,7 +340,7 @@ export function Session() {
       setInput("");
       setShowSlashPopover(false);
       setSlashQuery("");
-      setPromptPickerFilter(promptMatch[1]);
+      setPromptPickerFilter(promptMatch[1].trim());
       setShowPromptPicker(true);
       return;
     }
@@ -1451,6 +1452,7 @@ export function Session() {
                           const text = input().trim();
                           if (!text) return;
                           setSavePromptTitle(text.slice(0, 30));
+                          setSavePromptBody(text);
                           setShowSavePrompt(true);
                         }}
                         class="p-1.5 rounded transition-colors"
@@ -1624,8 +1626,9 @@ export function Session() {
             setTitle={setSavePromptTitle}
             onSave={() => {
               const title = savePromptTitle().trim();
-              if (!title) return;
-              savedPrompts.add(title, input().trim());
+              const body = savePromptBody();
+              if (!title || !body) return;
+              savedPrompts.add(title, body);
               setShowSavePrompt(false);
               setSavePromptSuccess(true);
               clearTimeout(toastTimer.id);
