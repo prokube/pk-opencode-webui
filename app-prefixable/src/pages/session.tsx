@@ -367,7 +367,7 @@ export function Session() {
   // Clear stale localStorage key when sessions are loaded and ID is not found
   createEffect(() => {
     const id = params.id;
-    if (!id || !sync.ready) return;
+    if (!id) return;
     if (loadingHistory()) return; // wait for sync to finish
     const found = sync.session.get(id);
     if (found) return; // valid session (including archived) — keep it
@@ -391,7 +391,7 @@ export function Session() {
   createEffect(() => {
     const id = params.id;
     if (!id) return;
-    if (!sync.ready) return;
+    if (loadingHistory()) return;
     const found = sync.session.get(id);
     if (!found || found.time?.archived) return;
     try {
