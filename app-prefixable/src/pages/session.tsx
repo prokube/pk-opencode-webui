@@ -439,46 +439,64 @@ export function Session() {
       return;
     }
 
-    // Initial load
-    const loadQuestions = async () => {
-      try {
-        const res = await client.question.list({ directory });
-        console.log("[Session] Question list response:", res);
-        const questions = Array.isArray(res.data) ? res.data : [];
-        const q = questions.find((q) => q.sessionID === id);
-        if (q) {
-          console.log("[Session] Found pending question:", q);
-          setPendingQuestion(q);
-          return;
-        }
-        setPendingQuestion(null);
-      } catch (e) {
-        console.error("[Session] Failed to load questions:", e);
-      }
-    };
-    loadQuestions();
-
-    // Subscribe to question events for real-time updates
+    // Subscribe immediately so we don't miss question.asked events during HTTP
+    // flight. Clearing events (question.replied / question.rejected) are only
+    // skipped when they could be historical replays (loaded=false AND no live
+    // SSE question has arrived). If a live question was received via SSE,
+    // clearing events are always processed even before the HTTP result lands.
+    // receivedViaSse guards against the HTTP result overwriting a live question
+    // that arrived via SSE during the HTTP flight.
+    // clearedViaSse guards against the HTTP result restoring an already-answered
+    // question when the reply SSE arrives before the HTTP response.
+    const state = { loaded: false, receivedViaSse: false, clearedViaSse: false, stale: false };
     const unsub = events.subscribe((event) => {
       const type = event.type as string;
       if (type === "question.asked") {
         const props = event.properties as QuestionRequest;
         if (props.sessionID === id) {
           console.log("[Session] Question event received:", props);
+          state.receivedViaSse = true;
+          state.clearedViaSse = false;
           setPendingQuestion(props);
         }
+        return;
       }
-      // Clear question when answered or rejected
+      // Clear question when answered or rejected.
+      // Guard: skip if this could be a historical replay (not yet loaded AND no live
+      // SSE question arrived this session). If receivedViaSse is true the question
+      // is live — always process the clearing event regardless of loaded state.
       if (type === "question.replied" || type === "question.rejected") {
         const props = event.properties as { sessionID?: string };
         if (props.sessionID === id) {
+          if (!state.loaded && !state.receivedViaSse) return;
           console.log("[Session] Question cleared:", type);
+          state.receivedViaSse = false;
+          state.clearedViaSse = true;
           setPendingQuestion(null);
         }
       }
     });
-
     onCleanup(unsub);
+    onCleanup(() => { state.stale = true; });
+
+    client.question.list({ directory })
+      .then((res) => {
+        if (state.stale) return;
+        console.log("[Session] Question list response:", res);
+        const questions = Array.isArray(res.data) ? res.data : [];
+        const q = questions.find((q) => q.sessionID === id);
+        if (!state.receivedViaSse && !state.clearedViaSse) {
+          // Only apply HTTP result if no live SSE question arrived during flight
+          // and no clearing event was already processed (question already answered)
+          setPendingQuestion(q ?? null);
+        }
+        state.loaded = true;
+      })
+      .catch((e) => {
+        if (state.stale) return;
+        console.error("[Session] Failed to load question list:", e);
+        state.loaded = true;
+      });
   });
 
   async function handleQuestionReply(answers: string[][]) {
