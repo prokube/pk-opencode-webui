@@ -775,17 +775,17 @@ export function Layout(props: ParentProps) {
                                   class="absolute right-0 top-0 bottom-0 hidden group-hover:flex group-focus-within:flex items-center rounded-r-md"
                                   style={{ "pointer-events": "none" }}
                                 >
-                                  <div
+                                   <div
                                     class="w-6 h-full"
                                     style={{
-                                      background: `linear-gradient(to right, transparent, var(--surface-inset))`,
+                                      background: `linear-gradient(to right, transparent, var(${isActive(session.id) ? "--surface-inset" : "--background-stronger"}))`,
                                     }}
                                   />
                                   <div
                                     class="flex items-center gap-0.5 pr-1.5"
                                     style={{
                                       "pointer-events": "auto",
-                                      background: "var(--surface-inset)",
+                                      background: isActive(session.id) ? "var(--surface-inset)" : "var(--background-stronger)",
                                     }}
                                   >
                                     <button
@@ -909,20 +909,20 @@ export function Layout(props: ParentProps) {
                               </span>
                             </A>
                             <div
-                              class="absolute right-0 top-0 bottom-0 hidden group-hover:flex items-center rounded-r-md"
+                              class="absolute right-0 top-0 bottom-0 hidden group-hover:flex group-focus-within:flex items-center rounded-r-md"
                               style={{ "pointer-events": "none" }}
                             >
                               <div
                                 class="w-6 h-full"
                                 style={{
-                                  background: `linear-gradient(to right, transparent, var(--surface-inset))`,
+                                  background: `linear-gradient(to right, transparent, var(${isActive(session.id) ? "--surface-inset" : "--background-stronger"}))`,
                                 }}
                               />
                               <div
                                 class="flex items-center pr-1.5"
                                 style={{
                                   "pointer-events": "auto",
-                                  background: "var(--surface-inset)",
+                                  background: isActive(session.id) ? "var(--surface-inset)" : "var(--background-stronger)",
                                 }}
                               >
                                 <button

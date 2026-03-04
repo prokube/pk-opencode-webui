@@ -28,7 +28,7 @@ export type FileTab = {
 interface LayoutState {
   review: PanelState;
   info: PanelState;
-  sidebar?: { width?: number };
+  sidebar: { width?: number };
   tabs?: FileTab[];
   activeTab?: string | null; // null = Review tab, string = file path
 }
@@ -141,7 +141,7 @@ export function LayoutProvider(props: ParentProps) {
   // Sidebar state (clamp loaded value to valid range)
   const [sidebarWidth, setSidebarWidth] = createSignal(
     Math.max(SIDEBAR_MIN_WIDTH, Math.min(SIDEBAR_MAX_WIDTH,
-      Number.isFinite(initial.sidebar?.width) ? initial.sidebar!.width! : DEFAULT_SIDEBAR_WIDTH,
+      initial.sidebar.width ?? DEFAULT_SIDEBAR_WIDTH,
     )),
   );
 
