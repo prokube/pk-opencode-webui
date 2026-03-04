@@ -2,6 +2,7 @@ import { createMemo, createEffect, Show } from "solid-js"
 import { useParams } from "@solidjs/router"
 import { useSync } from "../context/sync"
 import { useProviders } from "../context/providers"
+import { getContextTokens } from "../utils/tokens"
 import { Zap, CornerDownLeft, Square } from "lucide-solid"
 
 interface SessionInfoProps {
@@ -59,7 +60,7 @@ export function SessionInfo(props: SessionInfoProps) {
       const msg = msgs[i]
       if (msg.info?.role !== "assistant") continue
       const info = msg.info as AssistantInfo
-      const contextTokens = (info.tokens?.input || 0) + (info.tokens?.cache?.read || 0) + (info.tokens?.cache?.write || 0)
+      const contextTokens = getContextTokens(info.tokens)
       if (contextTokens > 0) {
         lastAssistant = { contextTokens, modelID: info.modelID, providerID: info.providerID }
         break

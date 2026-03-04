@@ -2,6 +2,7 @@ import { createSignal, createEffect, createMemo, For, Show, onCleanup } from "so
 import { useSDK } from "../context/sdk"
 import { useEvents } from "../context/events"
 import { useProviders } from "../context/providers"
+import { getContextTokens } from "../utils/tokens"
 import { GitBranch, Check, Circle, Loader2, Zap } from "lucide-solid"
 
 interface Todo {
@@ -87,10 +88,9 @@ export function SessionSidebar(props: SessionSidebarProps) {
     for (let i = msgs.length - 1; i >= 0; i--) {
       const msg = msgs[i]
       if (msg.info?.role !== "assistant") continue
-      const tokens = msg.info.tokens
       // Context usage = input + cached tokens (read + write)
       // With prompt caching, most input tokens are cached, so tokens.input alone is near-zero
-      const computed = (tokens?.input || 0) + (tokens?.cache?.read || 0) + (tokens?.cache?.write || 0)
+      const computed = getContextTokens(msg.info.tokens)
       if (computed > 0) {
         contextTokens = computed
         // Extract provider/model from the message that produced these tokens
