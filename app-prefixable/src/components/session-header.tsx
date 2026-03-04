@@ -18,7 +18,7 @@ interface SessionHeaderProps {
   onOpenMCPDialog: () => void
   onSendPrompt: (prompt: string) => void
   onRename?: (sessionId: string, title: string) => void
-  onDelete?: (sessionId: string) => void
+  onDelete?: (sessionId: string, parentID?: string) => void
 }
 
 export function SessionHeader(props: SessionHeaderProps) {
@@ -52,19 +52,21 @@ export function SessionHeader(props: SessionHeaderProps) {
     navigate(`/${dirSlug()}/session/${id}`)
   }
 
-  // Notify parent only after a successful API update; do not call onRename on failure
+  // TODO: rename mutation is duplicated in session-header (here) and layout.tsx sidebar.
+  // Consider lifting to a shared callback prop in a future refactor.
   function commitRename(value: string) {
     const trimmed = value.trim()
     const session = props.session
     if (!trimmed || trimmed === session?.title) { setRenaming(false); return }
     if (!session) { setRenaming(false); return }
+    setOptimisticTitle(trimmed) // set immediately (optimistic)
+    setRenaming(false)
     client.session.update({ sessionID: session.id, title: trimmed })
-      .then(() => {
-        setOptimisticTitle(trimmed)
-        props.onRename?.(session.id, trimmed)
+      .then(() => props.onRename?.(session.id, trimmed))
+      .catch(err => {
+        console.error("Failed to rename session", err)
+        setOptimisticTitle(null) // revert on failure
       })
-      .catch(err => console.error("Failed to rename session", err))
-      .finally(() => setRenaming(false))
   }
 
   // Navigate to session list only after a successful archive; do not navigate on failure
@@ -88,9 +90,10 @@ export function SessionHeader(props: SessionHeaderProps) {
       .then(() => {
         setConfirmDelete(false)
         // Prefer the parent's onDelete handler (e.g. navigate to next session);
-        // fall back to navigating to the session list when no handler is provided
+        // pass parentID directly so the caller need not look it up after SSE removal.
+        // Fall back to navigating to the session list when no handler is provided.
         if (props.onDelete) {
-          props.onDelete(session.id)
+          props.onDelete(session.id, session.parentID)
         } else {
           navigate(`/${dirSlug()}/session`)
         }
@@ -183,8 +186,7 @@ export function SessionHeader(props: SessionHeaderProps) {
                   width: "16rem",
                 }}
                 value={renameValue()}
-                autofocus
-                ref={(el) => setTimeout(() => { el.focus(); el.select() }, 0)}
+                ref={(el) => queueMicrotask(() => { if (!el?.isConnected) return; el.focus(); el.select() })}
                 onInput={(e) => setRenameValue(e.currentTarget.value)}
                 onKeyDown={(e) => {
                   if (e.key === "Enter") commitRename(e.currentTarget.value)

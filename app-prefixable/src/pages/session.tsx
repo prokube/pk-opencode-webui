@@ -365,11 +365,11 @@ export function Session() {
   };
 
   // Navigate to next/previous session after a successful delete.
-  // Must be called BEFORE the session is removed so it still appears in sync.sessions().
-  function navigateAfterRemove(id: string) {
-    const current = sync.sessions().find(s => s.id === id);
-    if (current?.parentID) {
-      navigate(`/${dirSlug()}/session/${current.parentID}`);
+  // parentID is passed directly from SessionHeader to avoid a race where the
+  // session.deleted SSE has already removed the entry from sync.sessions().
+  function navigateAfterRemove(id: string, parentID?: string) {
+    if (parentID) {
+      navigate(`/${dirSlug()}/session/${parentID}`);
       return;
     }
     // compute neighbor NOW, before the session disappears

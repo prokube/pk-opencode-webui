@@ -24,17 +24,18 @@ export function ConfirmDialog(props: Props) {
     const el = container()
     if (!el) return
 
-    // Focus first button on open
-    const button = el.querySelector("button")
-    button?.focus()
+    // Focus first enabled button on open
+    const firstEnabled = el.querySelector<HTMLButtonElement>("button:not([disabled])")
+    firstEnabled?.focus()
 
-    // Trap focus
+    // Trap focus within enabled buttons only
     function handleTab(e: KeyboardEvent) {
       if (e.key !== "Tab") return
 
       const buttons = Array.from(
         el!.querySelectorAll<HTMLButtonElement>("button:not([disabled])")
       )
+      if (!buttons.length) return // nothing to trap focus within
       const first = buttons[0]
       const last = buttons[buttons.length - 1]
 

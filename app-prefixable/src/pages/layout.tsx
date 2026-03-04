@@ -740,8 +740,7 @@ export function Layout(props: ParentProps) {
                                     style={{ color: "var(--text-base)" }}
                                     value={editTitle()}
                                     aria-label="Session title"
-                                    autofocus
-                                    ref={(el) => setTimeout(() => { el.focus(); el.select() }, 0)}
+                                    ref={(el) => queueMicrotask(() => { if (!el?.isConnected) return; el.focus(); el.select() })}
                                     onInput={(e) => setEditTitle(e.currentTarget.value)}
                                     onKeyDown={(e) => {
                                       if (e.key === "Enter") {
