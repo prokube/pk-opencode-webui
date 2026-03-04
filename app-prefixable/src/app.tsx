@@ -1,3 +1,4 @@
+import { createSignal, onMount } from "solid-js"
 import { Router, Route, Navigate, useParams } from "@solidjs/router"
 import { BasePathProvider, useBasePath } from "./context/base-path"
 import { BrandingProvider } from "./context/branding"
@@ -12,9 +13,19 @@ import { base64Decode } from "./utils/path"
 
 function DirectoryIndex() {
   const params = useParams<{ dir: string }>()
-  const dir = base64Decode(params.dir)
-  const last = localStorage.getItem(`opencode.lastSession.${dir}`)
-  return <Navigate href={last ? `session/${last}` : "session"} />
+  const [target, setTarget] = createSignal("session")
+
+  onMount(() => {
+    try {
+      const dir = base64Decode(params.dir)
+      const last = localStorage.getItem(`opencode.lastSession.${dir}`)
+      setTarget(last ? `session/${last}` : "session")
+    } catch {
+      setTarget("session")
+    }
+  })
+
+  return <Navigate href={target()} />
 }
 
 function AppRoutes() {

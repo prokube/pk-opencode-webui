@@ -117,7 +117,11 @@ export function Session() {
     setImageAttachments([]); // Clear image attachments on session change
     if (id) {
       const dir = directory || base64Decode(params.dir);
-      localStorage.setItem(`opencode.lastSession.${dir}`, id);
+      try {
+        localStorage.setItem(`opencode.lastSession.${dir}`, id);
+      } catch (err) {
+        console.warn("[Session] Failed to persist last session to localStorage:", err);
+      }
       // Use sync context to load session data - no local state needed
       setLoadingHistory(true);
       setProcessing(false); // Reset processing state for new session
@@ -373,7 +377,11 @@ export function Session() {
     const found = sync.session.get(id);
     if (found) return;
     const dir = directory || base64Decode(params.dir);
-    localStorage.removeItem(`opencode.lastSession.${dir}`);
+    try {
+      localStorage.removeItem(`opencode.lastSession.${dir}`);
+    } catch (err) {
+      console.error("[Session] Failed to remove stale session from localStorage:", err);
+    }
     navigate(`/${dirSlug()}/session`, { replace: true });
   });
 
