@@ -46,10 +46,19 @@ export function SessionHeader(props: SessionHeaderProps) {
   const [optimisticTitle, setOptimisticTitle] = createSignal<string | null>(null)
   const [aiRenaming, setAiRenaming] = createSignal(false)
 
-  // Reset optimistic title when SSE delivers the real title
+  // Clear optimistic title when SSE confirms the rename (server title matches)
   createEffect(() => {
-    const title = props.session?.title
-    if (title) setOptimisticTitle(null)
+    const session = props.session
+    const serverTitle = session?.title
+    const optimistic = optimisticTitle()
+    if (optimistic === null) return
+    if (serverTitle === optimistic) setOptimisticTitle(null)
+  })
+
+  // Clear when switching sessions (different ID)
+  createEffect(() => {
+    props.session?.id
+    setOptimisticTitle(null)
   })
 
   function navigateToParent() {
@@ -61,15 +70,15 @@ export function SessionHeader(props: SessionHeaderProps) {
   function commitRename(value: string) {
     const trimmed = value.trim()
     const session = props.session
-    if (!trimmed || trimmed === session?.title) { setRenaming(false); return }
-    if (!session) { setRenaming(false); return }
+    if (!session || !trimmed || trimmed === session.title) { setRenaming(false); return }
+    setOptimisticTitle(trimmed)
+    setRenaming(false)
     client.session.update({ sessionID: session.id, title: trimmed })
-      .then(() => {
-        setOptimisticTitle(trimmed)
-        props.onRename?.(session.id, trimmed)
+      .then(() => props.onRename?.(session.id, trimmed))
+      .catch(err => {
+        console.error("Failed to rename session", err)
+        setOptimisticTitle(null)
       })
-      .catch(err => console.error("Failed to rename session", err))
-      .finally(() => setRenaming(false))
   }
 
   async function renameWithAI() {
