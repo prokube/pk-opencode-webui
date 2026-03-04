@@ -423,22 +423,29 @@ export function Session() {
     }
   });
 
-  // Navigate to next/previous session after a successful delete.
-  // Receives the full Session object from SessionHeader.
-  function navigateAfterRemove(session: { id: string; parentID?: string }) {
-    if (session.parentID) {
-      navigate(`/${dirSlug()}/session/${session.parentID}`);
-      return;
-    }
-    // Navigate to neighbor session after delete. Note: sync.sessions() may already
-    // have removed the deleted session via SSE, so idx may be -1 (fallback to all[0]).
-    const all = sync.sessions()
-      .filter(s => s.directory === directory && !s.time?.archived && !s.parentID)
-      .slice()
-      .sort((a, b) => (b.time?.updated ?? 0) - (a.time?.updated ?? 0));
-    const idx = all.findIndex(s => s.id === session.id);
-    const next = idx === -1 ? all[0] : (all[idx + 1] ?? all[idx - 1]);
-    navigate(next ? `/${dirSlug()}/session/${next.id}` : `/${dirSlug()}/session`);
+  // Delete session and navigate to neighbor.
+  // Computes the neighbor BEFORE the delete API call so SSE removal doesn't
+  // race with neighbor lookup.
+  function handleDelete(session: { id: string; parentID?: string }) {
+    // Compute neighbor while the session is still in the list
+    const neighbor = (() => {
+      if (session.parentID) return undefined
+      const all = sync.sessions()
+        .filter(s => s.directory === directory && !s.time?.archived && !s.parentID)
+        .slice()
+        .sort((a, b) => (b.time?.updated ?? 0) - (a.time?.updated ?? 0));
+      const idx = all.findIndex(s => s.id === session.id);
+      return idx === -1 ? all[0] : (all[idx + 1] ?? all[idx - 1]);
+    })();
+
+    return client.session.delete({ sessionID: session.id })
+      .then(() => {
+        if (session.parentID) {
+          navigate(`/${dirSlug()}/session/${session.parentID}`);
+          return;
+        }
+        navigate(neighbor ? `/${dirSlug()}/session/${neighbor.id}` : `/${dirSlug()}/session`);
+      });
   }
 
   // Archive from the header: compute neighbor first, then API call, navigate on success.
@@ -1086,7 +1093,7 @@ export function Session() {
           onSendPrompt={(prompt) => setInput(prompt)}
           onRename={(id) => sync.session.sync(id)}
           onArchive={handleArchive}
-          onDelete={navigateAfterRemove}
+          onDelete={handleDelete}
         />
 
         {/* Messages - using rich message timeline with lazy rendering */}

@@ -1,4 +1,4 @@
-import { Show, createEffect, createMemo, createSignal, onCleanup } from "solid-js"
+import { Show, createEffect, createMemo, createSignal, on, onCleanup } from "solid-js"
 import { useNavigate, useParams } from "@solidjs/router"
 import { Spinner } from "./ui/spinner"
 import { useLayout } from "../context/layout"
@@ -21,7 +21,7 @@ interface SessionHeaderProps {
   onSendPrompt?: (prompt: string) => void
   onRename?: (sessionId: string, title: string) => void
   onArchive: (session: Session) => void
-  onDelete: (session: Session) => void
+  onDelete: (session: Session) => void | Promise<void>
 }
 
 export function SessionHeader(props: SessionHeaderProps) {
@@ -70,9 +70,9 @@ export function SessionHeader(props: SessionHeaderProps) {
     if (title === optimistic) setOptimisticTitle(null)
   })
 
-  // Reset all session-scoped UI state when switching sessions
-  createEffect(() => {
-    props.session?.id
+  // Reset all session-scoped UI state strictly on session ID changes
+  // (using on() to avoid re-running on other session prop updates like title)
+  createEffect(on(() => props.session?.id, () => {
     setOptimisticTitle(null)
     setRenaming(false)
     setRenameValue("")
@@ -83,7 +83,7 @@ export function SessionHeader(props: SessionHeaderProps) {
     setAiRenaming(false)
     setRenameError(null)
     if (errorTimer.id !== undefined) { clearTimeout(errorTimer.id); errorTimer.id = undefined }
-  })
+  }))
 
   function navigateToParent() {
     const id = parentId()
@@ -119,11 +119,10 @@ export function SessionHeader(props: SessionHeaderProps) {
     if (!session) return
     setDeleteError(null)
     setDeleting(true)
-    client.session.delete({ sessionID: session.id })
-      .then(() => {
-        setConfirmDelete(false)
-        props.onDelete(session)
-      })
+    // Delegate the actual delete to the parent handler which owns
+    // navigation and session list state
+    Promise.resolve(props.onDelete(session))
+      .then(() => setConfirmDelete(false))
       .catch((err: unknown) => {
         console.error("Failed to delete session", err)
         setDeleteError("Failed to delete session. Please try again.")
