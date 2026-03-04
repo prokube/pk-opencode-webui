@@ -318,12 +318,15 @@ export async function handleExtendedEndpoint(
   // Returns current branch + PR metadata (null when no PR exists)
   if (path === "/api/ext/pr/info" && method === "GET") {
     const dir = resolveDir(url)
+    if (!validatePath(dir, getAllowedRoot())) {
+      return Response.json({ error: "Forbidden" }, { status: 403 })
+    }
     try {
       // Get current branch from git
       const branchResult = await $`git rev-parse --abbrev-ref HEAD`.cwd(dir).quiet().nothrow()
       const branch = branchResult.stdout.toString().trim()
       if (!branch || branchResult.exitCode !== 0) {
-        return Response.json({ branch: null, pr: null })
+        return Response.json({ branch: null, dirty: 0, pr: null })
       }
 
       // Check for uncommitted changes (dirty count)
@@ -354,6 +357,9 @@ export async function handleExtendedEndpoint(
   if (path === "/api/ext/pr/create" && method === "POST") {
     const body = await req.json() as Record<string, unknown>
     const dir = (body.directory as string) || process.cwd()
+    if (!validatePath(dir, getAllowedRoot())) {
+      return Response.json({ error: "Forbidden" }, { status: 403 })
+    }
     const title = body.title as string | undefined
     const prBody = body.body as string | undefined
     const base = body.base as string | undefined
@@ -394,6 +400,9 @@ export async function handleExtendedEndpoint(
   if (path === "/api/ext/pr/commit" && method === "POST") {
     const body = await req.json() as Record<string, unknown>
     const dir = (body.directory as string) || process.cwd()
+    if (!validatePath(dir, getAllowedRoot())) {
+      return Response.json({ error: "Forbidden" }, { status: 403 })
+    }
     const message = body.message as string | undefined
 
     if (!message || !message.trim()) {
@@ -416,6 +425,9 @@ export async function handleExtendedEndpoint(
   if (path === "/api/ext/pr/push" && method === "POST") {
     const body = await req.json() as Record<string, unknown>
     const dir = (body.directory as string) || process.cwd()
+    if (!validatePath(dir, getAllowedRoot())) {
+      return Response.json({ error: "Forbidden" }, { status: 403 })
+    }
 
     try {
       const branchResult = await $`git rev-parse --abbrev-ref HEAD`.cwd(dir).quiet().nothrow()
@@ -436,6 +448,9 @@ export async function handleExtendedEndpoint(
   if (path === "/api/ext/pr/merge" && method === "POST") {
     const body = await req.json() as Record<string, unknown>
     const dir = (body.directory as string) || process.cwd()
+    if (!validatePath(dir, getAllowedRoot())) {
+      return Response.json({ error: "Forbidden" }, { status: 403 })
+    }
     const strategy = body.strategy as string | undefined
     const deleteBranch = body.deleteBranch === true
 
@@ -445,7 +460,7 @@ export async function handleExtendedEndpoint(
     }
 
     try {
-      const args = ["pr", "merge", "--auto"]
+      const args = ["pr", "merge", "--auto", "--yes"]
       if (!strategy || strategy === "merge") args.push("--merge")
       else if (strategy === "squash") args.push("--squash")
       else args.push("--rebase")
@@ -464,6 +479,9 @@ export async function handleExtendedEndpoint(
   if (path === "/api/ext/pr/ready" && method === "POST") {
     const body = await req.json() as Record<string, unknown>
     const dir = (body.directory as string) || process.cwd()
+    if (!validatePath(dir, getAllowedRoot())) {
+      return Response.json({ error: "Forbidden" }, { status: 403 })
+    }
 
     try {
       await gh(["pr", "ready"], dir)
@@ -478,6 +496,9 @@ export async function handleExtendedEndpoint(
   // Returns unresolved review threads via gh GraphQL
   if (path === "/api/ext/pr/comments" && method === "GET") {
     const dir = resolveDir(url)
+    if (!validatePath(dir, getAllowedRoot())) {
+      return Response.json({ error: "Forbidden" }, { status: 403 })
+    }
     try {
       // Get PR number first
       const prJson = await gh(["pr", "view", "--json", "number,url"], dir)
