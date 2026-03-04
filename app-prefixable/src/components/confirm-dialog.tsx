@@ -8,7 +8,9 @@ interface Props {
   confirmLabel?: string
   cancelLabel?: string
   confirmDisabled?: boolean
+  cancelDisabled?: boolean
   variant?: "danger" | "warning" | "default"
+  error?: string | null
   onConfirm: () => void
   onCancel: () => void
 }
@@ -48,7 +50,7 @@ export function ConfirmDialog(props: Props) {
     function handleKey(e: KeyboardEvent) {
       if (e.key === "Escape") {
         e.preventDefault()
-        props.onCancel()
+        if (!props.cancelDisabled) props.onCancel()
       } else if (e.key === "Enter" && document.activeElement?.tagName === "BUTTON") {
         // Let the button handle its own click
       }
@@ -88,7 +90,7 @@ export function ConfirmDialog(props: Props) {
           class="fixed inset-0 z-[100] flex items-center justify-center"
           style={{ background: "rgba(0,0,0,0.5)" }}
           onClick={(e) => {
-            if (e.target === e.currentTarget) props.onCancel()
+            if (e.target === e.currentTarget && !props.cancelDisabled) props.onCancel()
           }}
           role="presentation"
         >
@@ -113,30 +115,37 @@ export function ConfirmDialog(props: Props) {
               </p>
             </div>
 
-            <div class="px-4 py-3 flex justify-end gap-2" style={{ "border-top": "1px solid var(--border-base)" }}>
-              <button
-                type="button"
-                onClick={props.onCancel}
-                class="px-4 py-2 text-sm font-medium rounded-md transition-colors"
-                style={{
-                  background: "var(--surface-inset)",
-                  color: "var(--text-base)",
-                }}
-              >
-                {props.cancelLabel ?? "Cancel"}
-              </button>
-              <button
-                type="button"
-                onClick={props.onConfirm}
-                disabled={props.confirmDisabled}
-                class="px-4 py-2 text-sm font-medium rounded-md transition-colors"
-                style={{
-                  ...confirmStyle(),
-                  ...(props.confirmDisabled ? { opacity: "0.6", cursor: "not-allowed" } : {}),
-                }}
-              >
-                {props.confirmLabel ?? "Confirm"}
-              </button>
+            <div class="px-4 py-3 flex flex-col gap-2" style={{ "border-top": "1px solid var(--border-base)" }}>
+              <Show when={props.error}>
+                <p class="text-xs" style={{ color: "var(--text-critical-base)" }}>{props.error}</p>
+              </Show>
+              <div class="flex justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={props.onCancel}
+                  disabled={props.cancelDisabled}
+                  class="px-4 py-2 text-sm font-medium rounded-md transition-colors"
+                  style={{
+                    background: "var(--surface-inset)",
+                    color: "var(--text-base)",
+                    ...(props.cancelDisabled ? { opacity: "0.6", cursor: "not-allowed" } : {}),
+                  }}
+                >
+                  {props.cancelLabel ?? "Cancel"}
+                </button>
+                <button
+                  type="button"
+                  onClick={props.onConfirm}
+                  disabled={props.confirmDisabled}
+                  class="px-4 py-2 text-sm font-medium rounded-md transition-colors"
+                  style={{
+                    ...confirmStyle(),
+                    ...(props.confirmDisabled ? { opacity: "0.6", cursor: "not-allowed" } : {}),
+                  }}
+                >
+                  {props.confirmLabel ?? "Confirm"}
+                </button>
+              </div>
             </div>
           </div>
         </div>

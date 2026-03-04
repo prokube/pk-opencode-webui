@@ -41,7 +41,16 @@ export function SessionHeader(props: SessionHeaderProps) {
   const [renameValue, setRenameValue] = createSignal("")
   const [menuOpen, setMenuOpen] = createSignal(false)
   const [confirmDelete, setConfirmDelete] = createSignal(false)
+  const [deleting, setDeleting] = createSignal(false)
+  const [deleteError, setDeleteError] = createSignal<string | null>(null)
+  const [optimisticTitle, setOptimisticTitle] = createSignal<string | null>(null)
   const [aiRenaming, setAiRenaming] = createSignal(false)
+
+  // Reset optimistic title when SSE delivers the real title
+  createEffect(() => {
+    const title = props.session?.title
+    if (title) setOptimisticTitle(null)
+  })
 
   function navigateToParent() {
     const id = parentId()
@@ -55,7 +64,10 @@ export function SessionHeader(props: SessionHeaderProps) {
     if (!trimmed || trimmed === session?.title) { setRenaming(false); return }
     if (!session) { setRenaming(false); return }
     client.session.update({ sessionID: session.id, title: trimmed })
-      .then(() => props.onRename?.(session.id, trimmed))
+      .then(() => {
+        setOptimisticTitle(trimmed)
+        props.onRename?.(session.id, trimmed)
+      })
       .catch(err => console.error("Failed to rename session", err))
       .finally(() => setRenaming(false))
   }
@@ -164,10 +176,25 @@ export function SessionHeader(props: SessionHeaderProps) {
   }
 
   function confirmAndDelete() {
+    if (deleting()) return
     const session = props.session
     if (!session) return
-    setConfirmDelete(false)
-    props.onDelete?.(session)
+    setDeleteError(null)
+    setDeleting(true)
+    client.session.delete({ sessionID: session.id })
+      .then(() => {
+        setConfirmDelete(false)
+        if (props.onDelete) {
+          props.onDelete(session)
+        } else {
+          navigate(`/${dirSlug()}/session`)
+        }
+      })
+      .catch(err => {
+        console.error("Failed to delete session", err)
+        setDeleteError("Failed to delete session. Please try again.")
+      })
+      .finally(() => setDeleting(false))
   }
 
   function handleDocClick(e: MouseEvent) {
@@ -239,7 +266,7 @@ export function SessionHeader(props: SessionHeaderProps) {
                       setRenaming(true)
                     }}
                   >
-                    {props.session?.title || "New Session"}
+                    {optimisticTitle() ?? (props.session?.title || "New Session")}
                   </h1>
                   {/* Spinner shown while AI rename is in progress */}
                   <Show when={aiRenaming()}>
@@ -532,11 +559,18 @@ export function SessionHeader(props: SessionHeaderProps) {
         open={confirmDelete()}
         title="Delete session?"
         message={`This will permanently delete "${props.session?.title || "this session"}". This cannot be undone.`}
-        confirmLabel="Delete"
+        confirmLabel={deleting() ? "Deleting..." : "Delete"}
+        confirmDisabled={deleting()}
+        cancelDisabled={deleting()}
         cancelLabel="Cancel"
         variant="danger"
+        error={deleteError() ?? undefined}
         onConfirm={confirmAndDelete}
-        onCancel={() => setConfirmDelete(false)}
+        onCancel={() => {
+          if (deleting()) return
+          setDeleteError(null)
+          setConfirmDelete(false)
+        }}
       />
     </header>
   )

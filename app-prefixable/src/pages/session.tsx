@@ -389,11 +389,9 @@ export function Session() {
       .catch(err => console.error("Failed to archive session", err));
   }
 
-  // Delete a session: compute neighbor first, then call API
-  async function handleDelete(session: Session) {
+  // Navigate after a successful delete (API call handled by SessionHeader)
+  function handleDelete(session: Session) {
     navigateAfterRemove(session.id);
-    await client.session.delete({ sessionID: session.id })
-      .catch(err => console.error("Failed to delete session", err));
   }
 
   // Start processing state - SSE events will handle updates and completion
