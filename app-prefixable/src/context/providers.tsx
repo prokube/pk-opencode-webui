@@ -110,7 +110,16 @@ export function ProviderProvider(props: ParentProps) {
   const [providerData, { refetch: refetchProviders }] = createResource(async () => {
     try {
       const res = await client.provider.list()
-      return res.data as ProviderListData | undefined
+      const data = res.data as ProviderListData | undefined
+      if (!data) return undefined
+      // Inject providerID into each model since the SDK response doesn't include it
+      const all = data.all.map((provider) => ({
+        ...provider,
+        models: Object.fromEntries(
+          Object.entries(provider.models).map(([k, m]) => [k, { ...m, providerID: provider.id }])
+        ),
+      }))
+      return { ...data, all }
     } catch (e) {
       console.error("Failed to fetch providers:", e)
       return undefined
