@@ -196,7 +196,8 @@ export function SyncProvider(props: ParentProps) {
     }
 
     if (event.type === "session.deleted") {
-      const sessionID = props.sessionID as string | undefined
+      const session = props as unknown as Session
+      const sessionID = session?.id ?? (props.sessionID as string | undefined)
       if (!sessionID) return
       // Remove from both lists
       setStore(
