@@ -898,11 +898,13 @@ export function Session() {
       setError(`Provider "${providers.selectedModel.providerID}" is not connected. Please configure it in Settings.`);
       return;
     }
+    setError(null);
     try {
       const res = await client.session.create({});
       if (!res.data) return;
       const sid = res.data.id;
-      navigate(`/${dirSlug()}/session/${sid}`);
+      setSessionId(sid);
+      navigate(`/${dirSlug()}/session/${sid}`, { replace: true });
       await client.session.promptAsync({
         sessionID: sid,
         parts: [{ type: "text", text }],
@@ -1717,15 +1719,43 @@ function SavePromptDialog(props: {
   onSave: () => void
   onClose: () => void
 }) {
-  onMount(() => {
-    const handler = (e: KeyboardEvent) => {
+  const [container, setContainer] = createSignal<HTMLDivElement>();
+  let titleRef: HTMLInputElement | undefined;
+
+  createEffect(() => {
+    const el = container();
+    if (!el) return;
+
+    // Focus title input on open
+    titleRef?.focus();
+
+    function handleKey(e: KeyboardEvent) {
       if (e.key === "Escape") {
         e.preventDefault();
         props.onClose();
+        return;
       }
-    };
-    document.addEventListener("keydown", handler);
-    onCleanup(() => document.removeEventListener("keydown", handler));
+      if (e.key !== "Tab") return;
+
+      const focusable = el!.querySelectorAll<HTMLElement>(
+        'input, textarea, button:not([disabled]), [tabindex]:not([tabindex="-1"])',
+      );
+      if (focusable.length === 0) return;
+
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+
+      if (e.shiftKey && document.activeElement === first) {
+        e.preventDefault();
+        last?.focus();
+      } else if (!e.shiftKey && document.activeElement === last) {
+        e.preventDefault();
+        first?.focus();
+      }
+    }
+
+    document.addEventListener("keydown", handleKey);
+    onCleanup(() => document.removeEventListener("keydown", handleKey));
   });
 
   return (
@@ -1739,6 +1769,7 @@ function SavePromptDialog(props: {
         role="presentation"
       >
         <div
+          ref={setContainer}
           role="dialog"
           aria-modal="true"
           aria-labelledby="save-prompt-dialog-title"
@@ -1771,7 +1802,7 @@ function SavePromptDialog(props: {
                 Title
               </label>
               <input
-                ref={(el) => setTimeout(() => el.focus(), 0)}
+                ref={titleRef}
                 type="text"
                 value={props.title()}
                 onInput={(e) =>
