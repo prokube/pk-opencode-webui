@@ -288,7 +288,7 @@ export function Layout(props: ParentProps) {
         event.type === "session.deleted"
       ) {
         // Guard against child sessions — sidebar only shows root sessions
-        const info = (event.properties as { info?: { parentID?: string } }).info ?? event.properties as { parentID?: string };
+        const info = (event.properties as { info: { parentID?: string } }).info;
         if (info?.parentID) return;
         loadSessions();
       }
@@ -342,31 +342,6 @@ export function Layout(props: ParentProps) {
       }
     } catch (e) {
       console.error("Failed to create session:", e);
-    }
-  }
-
-  async function archiveSession(session: Session) {
-    const currentSessions = projectSessions();
-    const index = currentSessions.findIndex((s) => s.id === session.id);
-    const nextSession =
-      currentSessions[index + 1] ?? currentSessions[index - 1];
-
-    try {
-      await client.session.update({
-        sessionID: session.id,
-        time: { archived: Date.now() },
-      });
-      setSessions((prev) => prev.filter((s) => s.id !== session.id));
-
-      if (isActive(session.id)) {
-        if (nextSession) {
-          navigate(`/${dirSlug()}/session/${nextSession.id}`);
-        } else {
-          navigate(`/${dirSlug()}/session`);
-        }
-      }
-    } catch (e) {
-      console.error("Failed to archive session:", e);
     }
   }
 

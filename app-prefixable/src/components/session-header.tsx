@@ -12,7 +12,7 @@ import { ConfirmDialog } from "./confirm-dialog"
 import { PanelBottom, FileCode, ListTodo, Plug, ArrowLeft, Users, MoreHorizontal, Pencil, Archive, Trash2, Sparkles } from "lucide-solid"
 import { base64Encode } from "../utils/path"
 import { PrButton } from "./pr-button"
-import type { Session } from "../sdk/client"
+import type { AssistantMessage, Session } from "../sdk/client"
 
 interface SessionHeaderProps {
   session: Session | null | undefined
@@ -111,20 +111,32 @@ export function SessionHeader(props: SessionHeaderProps) {
     const session = props.session
     if (!session) return
 
-    // Find the last assistant message via reverse scan (no .reverse().find())
     const msgs = sync.messages(session.id)
+    if (!msgs.length) return
+
+    // Find last assistant message for model extraction and summary
     const ref = { msg: undefined as typeof msgs[number] | undefined }
     for (const m of msgs) {
       if (m.info.role === "assistant") ref.msg = m
     }
-    if (!ref.msg) return
 
-    // Build summary from text parts
-    const summary = ref.msg.parts
-      .filter(p => p.type === "text")
-      .map(p => (p as { text?: string }).text ?? "")
-      .join("\n")
-      .slice(0, 500)
+    // Build summary: prefer assistant text, fall back to user messages
+    const summary = ref.msg
+      ? ref.msg.parts
+          .filter(p => p.type === "text")
+          .map(p => (p as { text?: string }).text ?? "")
+          .join("\n")
+          .slice(0, 500)
+      : msgs
+          .filter(m => m.info.role === "user")
+          .slice(0, 10)
+          .map(m => m.parts
+            .filter(p => p.type === "text")
+            .map(p => (p as { text?: string }).text ?? "")
+            .join(" ")
+            .slice(0, 500))
+          .filter(t => t.length > 0)
+          .join("\n")
 
     if (!summary.trim()) return
 
@@ -132,16 +144,22 @@ export function SessionHeader(props: SessionHeaderProps) {
     setMenuOpen(false)
 
     const model = (() => {
-      const sel = providers.selectedModel
-      if (!sel) return undefined
-      if (typeof sel.providerID === "string" && sel.providerID && typeof sel.modelID === "string" && sel.modelID) {
-        return { providerID: sel.providerID, modelID: sel.modelID }
+      // Prefer the model from the last assistant message
+      if (ref.msg?.info.role === "assistant") {
+        const info = ref.msg.info as AssistantMessage
+        if (info.providerID && info.modelID) {
+          return { providerID: info.providerID, modelID: info.modelID }
+        }
       }
-      return undefined
+      // Fall back to currently selected model
+      const sel = providers.selectedModel
+      if (!sel?.providerID || !sel?.modelID) return undefined
+      return { providerID: sel.providerID, modelID: sel.modelID }
     })()
 
     const agent = providers.selectedAgent || "build"
-    const prompt = `Suggest a concise session title (8 words or fewer) for this conversation based on the following assistant reply. Reply with ONLY the title text, nothing else.\n\n${summary}`
+    const context = ref.msg ? "assistant reply" : "user messages"
+    const prompt = `Suggest a concise session title (8 words or fewer) for this conversation based on the following ${context}. Reply with ONLY the title text, nothing else.\n\n${summary}`
 
     // Create a child session for the rename suggestion
     const ref2 = { childId: "" }

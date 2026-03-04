@@ -1079,14 +1079,12 @@ export function Session() {
     return (
       <div class="flex flex-col h-full">
         {/* Header with panel toggle buttons */}
-        {/* onRename is intentionally not wired: SessionHeader already uses
-            optimisticTitle for immediate display, and SSE sync propagates the
-            server-confirmed title to the sidebar automatically. */}
         <SessionHeader
           session={session()}
           processing={processing()}
           onOpenMCPDialog={() => setShowMCPDialog(true)}
           onSendPrompt={(prompt) => setInput(prompt)}
+          onRename={(id) => sync.session.sync(id)}
           onArchive={handleArchive}
           onDelete={navigateAfterRemove}
         />
