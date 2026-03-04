@@ -41,6 +41,7 @@ import {
   ChevronRight,
   ChevronDown,
   AlertTriangle,
+  Pencil,
 } from "lucide-solid";
 import { useSync } from "../context/sync";
 
@@ -101,6 +102,8 @@ export function Layout(props: ParentProps) {
   const [sidebarExpanded, setSidebarExpanded] = createSignal(true);
   const [showArchived, setShowArchived] = createSignal(false);
   const [projectDialogOpen, setProjectDialogOpen] = createSignal(false);
+  const [renamingId, setRenamingId] = createSignal<string | null>(null);
+  const [editTitle, setEditTitle] = createSignal("");
   const [windowWidth, setWindowWidth] = createSignal(
     typeof window !== "undefined" ? window.innerWidth : 1200,
   );
@@ -284,6 +287,9 @@ export function Layout(props: ParentProps) {
         event.type === "session.updated" ||
         event.type === "session.deleted"
       ) {
+        // Guard against child sessions — sidebar only shows root sessions
+        const info = (event.properties as { info: { parentID?: string } }).info;
+        if (info?.parentID) return;
         loadSessions();
       }
     });
@@ -339,31 +345,6 @@ export function Layout(props: ParentProps) {
     }
   }
 
-  async function archiveSession(session: Session) {
-    const currentSessions = projectSessions();
-    const index = currentSessions.findIndex((s) => s.id === session.id);
-    const nextSession =
-      currentSessions[index + 1] ?? currentSessions[index - 1];
-
-    try {
-      await client.session.update({
-        sessionID: session.id,
-        time: { archived: Date.now() },
-      });
-      setSessions((prev) => prev.filter((s) => s.id !== session.id));
-
-      if (isActive(session.id)) {
-        if (nextSession) {
-          navigate(`/${dirSlug()}/session/${nextSession.id}`);
-        } else {
-          navigate(`/${dirSlug()}/session`);
-        }
-      }
-    } catch (e) {
-      console.error("Failed to archive session:", e);
-    }
-  }
-
   async function restoreSession(session: Session) {
     try {
       await client.session.update({
@@ -374,6 +355,54 @@ export function Layout(props: ParentProps) {
     } catch (e) {
       console.error("Failed to restore session:", e);
     }
+  }
+
+  function renameSession(session: Session, title: string) {
+    const trimmed = title.trim();
+    if (!trimmed || trimmed === session.title) return;
+    // Optimistic local update
+    setSessions((prev) =>
+      prev.map((s) => (s.id === session.id ? { ...s, title: trimmed } : s)),
+    );
+    client.session.update({ sessionID: session.id, title: trimmed })
+      .catch((err: unknown) => {
+        console.error("Failed to rename session:", err);
+        // Revert on failure
+        setSessions((prev) =>
+          prev.map((s) =>
+            s.id === session.id ? { ...s, title: session.title } : s,
+          ),
+        );
+      });
+  }
+
+  function archiveAndNavigate(session: Session) {
+    const current = projectSessions();
+    const index = current.findIndex((s) => s.id === session.id);
+    const neighbor = current[index + 1] ?? current[index - 1];
+
+    // Optimistic remove from sidebar list
+    setSessions((prev) => prev.filter((s) => s.id !== session.id));
+
+    client.session.update({
+      sessionID: session.id,
+      time: { archived: Date.now() },
+    })
+      .then(() => {
+        // Navigate only after successful archive
+        if (isActive(session.id)) {
+          navigate(neighbor ? `/${dirSlug()}/session/${neighbor.id}` : `/${dirSlug()}/session`);
+        }
+      })
+      .catch((err: unknown) => {
+        console.error("Failed to archive session:", err);
+        // Revert — add session back at original index
+        setSessions((prev) => {
+          const copy = [...prev];
+          copy.splice(index < 0 ? 0 : index, 0, session);
+          return copy;
+        });
+      });
   }
 
   function isActive(sessionId: string) {
@@ -631,73 +660,156 @@ export function Layout(props: ParentProps) {
                         <For each={group.sessions}>
                           {(session) => (
                             <div class="group relative">
-                              <A
-                                href={`/${dirSlug()}/session/${session.id}`}
-                                class="flex items-center gap-2 px-2.5 py-2 pr-8 rounded-md text-sm transition-colors"
-                                style={{
-                                  color: isActive(session.id)
-                                    ? "var(--text-interactive-base)"
-                                    : "var(--text-base)",
-                                  background: isActive(session.id)
-                                    ? "var(--surface-inset)"
-                                    : "transparent",
-                                }}
-                                onMouseEnter={(e) => {
-                                  if (!isActive(session.id))
-                                    e.currentTarget.style.background =
-                                      "var(--surface-inset)";
-                                }}
-                                onMouseLeave={(e) => {
-                                  if (!isActive(session.id))
-                                    e.currentTarget.style.background =
-                                      "transparent";
-                                }}
-                              >
-                                <span
-                                  class="shrink-0"
-                                  style={{ color: "var(--icon-weak)" }}
-                                >
-                                  <Show
-                                    when={!!events.pendingQuestions[session.id]}
-                                    fallback={
-                                      <Show
-                                        when={
-                                          events.status[session.id]?.type === "busy" ||
-                                          events.status[session.id]?.type === "retry"
-                                        }
-                                        fallback={<MessageCircle class="w-4 h-4" />}
-                                      >
-                                        <Loader2 class="w-4 h-4 animate-spin" />
-                                      </Show>
-                                    }
+                              <Show
+                                when={renamingId() === session.id}
+                                fallback={
+                                  <A
+                                    href={`/${dirSlug()}/session/${session.id}`}
+                                    class="flex items-center gap-2 px-2.5 py-2 pr-16 rounded-md text-sm transition-colors"
+                                    style={{
+                                      color: isActive(session.id)
+                                        ? "var(--text-interactive-base)"
+                                        : "var(--text-base)",
+                                      background: isActive(session.id)
+                                        ? "var(--surface-inset)"
+                                        : "transparent",
+                                    }}
+                                    onMouseEnter={(e) => {
+                                      if (!isActive(session.id))
+                                        e.currentTarget.style.background =
+                                          "var(--surface-inset)";
+                                    }}
+                                    onMouseLeave={(e) => {
+                                      if (!isActive(session.id))
+                                        e.currentTarget.style.background =
+                                          "transparent";
+                                    }}
                                   >
-                                    <CircleHelp class="w-4 h-4" style={{ color: "var(--icon-warning-base)" }} />
-                                  </Show>
-                                </span>
-                                <span class="truncate">
-                                  {session.title || "Untitled"}
-                                </span>
-                              </A>
-                              <button
-                                onClick={(e) => {
-                                  e.preventDefault();
-                                  e.stopPropagation();
-                                  archiveSession(session);
-                                }}
-                                class="absolute right-1.5 top-1/2 -translate-y-1/2 p-1 rounded hidden group-hover:flex items-center justify-center transition-colors"
-                                style={{ color: "var(--icon-weak)" }}
-                                onMouseEnter={(e) =>
-                                  (e.currentTarget.style.color =
-                                    "var(--icon-base)")
+                                    <span
+                                      class="shrink-0"
+                                      style={{ color: "var(--icon-weak)" }}
+                                    >
+                                      <Show
+                                        when={!!events.pendingQuestions[session.id]}
+                                        fallback={
+                                          <Show
+                                            when={
+                                              events.status[session.id]?.type === "busy" ||
+                                              events.status[session.id]?.type === "retry"
+                                            }
+                                            fallback={<MessageCircle class="w-4 h-4" />}
+                                          >
+                                            <Loader2 class="w-4 h-4 animate-spin" />
+                                          </Show>
+                                        }
+                                      >
+                                        <CircleHelp class="w-4 h-4" style={{ color: "var(--icon-warning-base)" }} />
+                                      </Show>
+                                    </span>
+                                    <span class="truncate">
+                                      {session.title || "Untitled"}
+                                    </span>
+                                  </A>
                                 }
-                                onMouseLeave={(e) =>
-                                  (e.currentTarget.style.color =
-                                    "var(--icon-weak)")
-                                }
-                                title="Archive session"
                               >
-                                <Archive class="w-4 h-4" />
-                              </button>
+                                <div
+                                  class="flex items-center gap-2 px-2.5 py-1.5 rounded-md"
+                                  style={{ background: "var(--surface-inset)" }}
+                                >
+                                  <span
+                                    class="shrink-0"
+                                    style={{ color: "var(--icon-weak)" }}
+                                  >
+                                    <Show
+                                      when={!!events.pendingQuestions[session.id]}
+                                      fallback={
+                                        <Show
+                                          when={
+                                            events.status[session.id]?.type === "busy" ||
+                                            events.status[session.id]?.type === "retry"
+                                          }
+                                          fallback={<MessageCircle class="w-4 h-4" />}
+                                        >
+                                          <Loader2 class="w-4 h-4 animate-spin" />
+                                        </Show>
+                                      }
+                                    >
+                                      <CircleHelp class="w-4 h-4" style={{ color: "var(--icon-warning-base)" }} />
+                                    </Show>
+                                  </span>
+                                  <input
+                                    class="flex-1 min-w-0 text-sm bg-transparent outline-none"
+                                    style={{ color: "var(--text-base)" }}
+                                    value={editTitle()}
+                                    aria-label="Session title"
+                                    ref={(el) => queueMicrotask(() => { if (!el?.isConnected) return; el.focus(); el.select() })}
+                                    onInput={(e) => setEditTitle(e.currentTarget.value)}
+                                    onKeyDown={(e) => {
+                                      if (e.key === "Enter") {
+                                        e.currentTarget.dataset.committed = "true";
+                                        renameSession(session, editTitle());
+                                        setRenamingId(null);
+                                      } else if (e.key === "Escape") {
+                                        e.currentTarget.dataset.cancelRename = "true";
+                                        setRenamingId(null);
+                                      }
+                                    }}
+                                    onBlur={(e) => {
+                                      if (e.currentTarget.dataset.cancelRename === "true") return;
+                                      if (e.currentTarget.dataset.committed === "true") return;
+                                      renameSession(session, editTitle());
+                                      setRenamingId(null);
+                                    }}
+                                  />
+                                </div>
+                              </Show>
+                              <Show when={renamingId() !== session.id}>
+                                <div class="absolute right-1.5 top-1/2 -translate-y-1/2 hidden group-hover:flex group-focus-within:flex items-center gap-0.5">
+                                  <button
+                                    onClick={(e) => {
+                                      e.preventDefault();
+                                      e.stopPropagation();
+                                      setEditTitle(session.title || "");
+                                      setRenamingId(session.id);
+                                    }}
+                                    class="p-1 rounded transition-colors"
+                                    style={{ color: "var(--icon-weak)" }}
+                                    onMouseEnter={(e) =>
+                                      (e.currentTarget.style.color =
+                                        "var(--icon-base)")
+                                    }
+                                    onMouseLeave={(e) =>
+                                      (e.currentTarget.style.color =
+                                        "var(--icon-weak)")
+                                    }
+                                    title="Rename session"
+                                    aria-label="Rename session"
+                                  >
+                                    <Pencil class="w-3.5 h-3.5" />
+                                  </button>
+                                  <button
+                                    onClick={(e) => {
+                                      e.preventDefault();
+                                      e.stopPropagation();
+                                      archiveAndNavigate(session);
+                                    }}
+                                    class="p-1 rounded transition-colors"
+                                    style={{ color: "var(--icon-weak)" }}
+                                    onMouseEnter={(e) =>
+                                      (e.currentTarget.style.color =
+                                        "var(--icon-base)")
+                                    }
+                                    onMouseLeave={(e) =>
+                                      (e.currentTarget.style.color =
+                                        "var(--icon-weak)")
+                                    }
+                                    title="Archive session"
+                                    aria-label="Archive session"
+                                  >
+                                    <Archive class="w-3.5 h-3.5" />
+                                  </button>
+                                </div>
+                              </Show>
                             </div>
                           )}
                         </For>

@@ -95,17 +95,24 @@ export function EventProvider(props: ParentProps) {
     }
   }
 
-  // Seed pending questions then connect to SSE (seed first to avoid race
-  // where a question.replied event arrives before the list resolves)
+  // Seed initial state (questions + statuses) then connect to SSE.
+  // Seed first to avoid race where replied/status events arrive before the list resolves.
   onMount(() => {
     if (!directory) { connect(); return }
-    client.question.list({ directory })
-      .then((res) => {
-        const questions = Array.isArray(res.data) ? res.data : []
-        for (const q of questions) setPendingQuestions(q.sessionID, q)
-      })
-      .catch((err) => console.error("[Events] Failed to load questions:", err))
-      .finally(() => connect())
+    Promise.all([
+      client.question.list({ directory })
+        .then((res) => {
+          const questions = Array.isArray(res.data) ? res.data : []
+          for (const q of questions) setPendingQuestions(q.sessionID, q)
+        })
+        .catch((err) => console.error("[Events] Failed to load questions:", err)),
+      client.session.status({ directory })
+        .then((res) => {
+          const statuses = (res.data ?? {}) as Record<string, SessionStatus>
+          for (const [sessionID, s] of Object.entries(statuses)) setStatus(sessionID, s)
+        })
+        .catch((err) => console.error("[Events] Failed to load statuses:", err)),
+    ]).finally(() => connect())
   })
 
   onCleanup(() => {
