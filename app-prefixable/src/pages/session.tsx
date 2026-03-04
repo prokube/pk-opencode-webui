@@ -368,7 +368,9 @@ export function Session() {
   createEffect(() => {
     const id = params.id;
     if (!id) return;
-    if (loadingHistory()) return; // wait for sync to finish
+    // loadingHistory() stays true when sync.session.sync() rejects,
+    // so this effect only fires after a successful sync — not on transient failures.
+    if (loadingHistory()) return;
     const found = sync.session.get(id);
     // Non-archived session exists — keep it
     if (found && !found.time?.archived) return;
@@ -385,7 +387,9 @@ export function Session() {
             navigate(`/${dirSlug()}/session`, { replace: true });
           }
         }
-      } catch {}
+      } catch (err) {
+        console.warn("[Session] localStorage error:", err);
+      }
       return;
     }
     // Session not found at all: clear and redirect
@@ -396,7 +400,9 @@ export function Session() {
         const stored = window.localStorage.getItem(key);
         if (stored === id) window.localStorage.removeItem(key);
       }
-    } catch {}
+    } catch (err) {
+      console.warn("[Session] localStorage error:", err);
+    }
     navigate(`/${dirSlug()}/session`, { replace: true });
   });
 
