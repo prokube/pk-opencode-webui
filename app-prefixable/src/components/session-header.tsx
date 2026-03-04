@@ -40,7 +40,7 @@ export function SessionHeader(props: SessionHeaderProps) {
 
   return (
     <header
-      class="flex items-center justify-between px-4 py-2"
+      class="flex items-center justify-between px-4 h-12"
       style={{
         background: "var(--background-base)",
         "border-bottom": "1px solid var(--border-base)",
