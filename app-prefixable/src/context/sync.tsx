@@ -197,24 +197,23 @@ export function SyncProvider(props: ParentProps) {
 
     if (event.type === "session.deleted") {
       const session = props as unknown as Session
-      const sessionID = session?.id ?? (props.sessionID as string | undefined)
-      if (!sessionID) return
+      if (!session?.id) return
       // Remove from both lists
       setStore(
         "session",
         produce((draft: Session[]) => {
-          const match = binarySearch(draft, sessionID, (s) => s.id)
+          const match = binarySearch(draft, session.id, (s) => s.id)
           if (match.found) draft.splice(match.index, 1)
         }),
       )
       setStore(
         "archivedSession",
         produce((draft: Session[]) => {
-          const match = binarySearch(draft, sessionID, (s) => s.id)
+          const match = binarySearch(draft, session.id, (s) => s.id)
           if (match.found) draft.splice(match.index, 1)
         }),
       )
-      setStore("message", sessionID, reconcile([]))
+      setStore("message", session.id, reconcile([]))
     }
 
     // Message part events - the main real-time update mechanism
