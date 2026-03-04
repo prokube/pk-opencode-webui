@@ -61,14 +61,12 @@ function groupSessionsByDate(
   const yesterdayStart = startOfDay(
     new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1),
   );
-  const sevenDaysStart = startOfDay(
-    new Date(now.getFullYear(), now.getMonth(), now.getDate() - 7),
-  );
+  const sevenDaysAgoMs = now.getTime() - 7 * 24 * 60 * 60 * 1000;
 
   const bucket = (t: number): string => {
     if (t >= todayStart) return "Today";
     if (t >= yesterdayStart) return "Yesterday";
-    if (t >= sevenDaysStart) return "Last 7 days";
+    if (t >= sevenDaysAgoMs) return "Last 7 days";
     return "Older";
   };
 
@@ -77,7 +75,8 @@ function groupSessionsByDate(
 
   for (const session of sessions) {
     const label = bucket(session.time?.updated ?? 0);
-    groups[label] = [...(groups[label] ?? []), session];
+    if (!groups[label]) groups[label] = [];
+    groups[label].push(session);
   }
 
   return order
