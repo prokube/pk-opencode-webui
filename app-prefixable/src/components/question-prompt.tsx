@@ -1,5 +1,6 @@
 import { createSignal, createMemo, For, Show, onMount, onCleanup } from "solid-js"
 import { Button } from "./ui/button"
+import { Markdown } from "./markdown"
 import type { QuestionRequest } from "../sdk/client"
 
 interface Props {
@@ -252,10 +253,12 @@ export function QuestionPrompt(props: Props) {
         <Show when={!confirm()}>
           {/* Question text */}
           <div class="mb-4">
-            <p class="text-sm font-medium" style={{ color: "var(--text-strong)" }}>
-              {question()?.question}
-              {multi() ? " (select all that apply)" : ""}
-            </p>
+            <div style={{ color: "var(--text-strong)" }}>
+              <Markdown
+                content={`${question()?.question ?? ""}${multi() ? " *(select all that apply)*" : ""}`}
+                class="text-sm font-medium"
+              />
+            </div>
           </div>
 
           {/* Options */}
