@@ -448,7 +448,7 @@ export function Session() {
     // that arrived via SSE during the HTTP flight.
     // clearedViaSse guards against the HTTP result restoring an already-answered
     // question when the reply SSE arrives before the HTTP response.
-    const state = { loaded: false, receivedViaSse: false, clearedViaSse: false };
+    const state = { loaded: false, receivedViaSse: false, clearedViaSse: false, stale: false };
     const unsub = events.subscribe((event) => {
       const type = event.type as string;
       if (type === "question.asked") {
@@ -476,10 +476,14 @@ export function Session() {
         }
       }
     });
-    onCleanup(unsub);
+    onCleanup(() => {
+      state.stale = true;
+      unsub();
+    });
 
     client.question.list({ directory })
       .then((res) => {
+        if (state.stale) return;
         console.log("[Session] Question list response:", res);
         const questions = Array.isArray(res.data) ? res.data : [];
         const q = questions.find((q) => q.sessionID === id);
@@ -491,6 +495,7 @@ export function Session() {
         state.loaded = true;
       })
       .catch((e) => {
+        if (state.stale) return;
         console.error("[Session] Failed to load question list:", e);
         state.loaded = true;
       });
