@@ -116,11 +116,13 @@ export function Session() {
     setFileContext([]); // Clear file context on session change
     setImageAttachments([]); // Clear image attachments on session change
     if (id) {
-      const dir = directory || base64Decode(params.dir);
       try {
-        localStorage.setItem(`opencode.lastSession.${dir}`, id);
+        const dir = directory || base64Decode(params.dir);
+        if (dir && typeof window !== "undefined") {
+          window.localStorage.setItem(`opencode.lastSession.${dir}`, id);
+        }
       } catch (err) {
-        console.warn("[Session] Failed to persist last session to localStorage:", err);
+        console.warn("[Session] Failed to persist last session:", err);
       }
       // Use sync context to load session data - no local state needed
       setLoadingHistory(true);
@@ -376,12 +378,15 @@ export function Session() {
     if (!id || !sync.ready) return;
     if (loadingHistory()) return; // wait for sync to finish
     const found = sync.session.get(id);
-    if (found) return;
-    const dir = directory || base64Decode(params.dir);
+    if (found && !found.time?.archived) return; // valid, non-archived — keep it
+    // stale or archived: clear and redirect
     try {
-      localStorage.removeItem(`opencode.lastSession.${dir}`);
+      const dir = directory || base64Decode(params.dir);
+      if (dir && typeof window !== "undefined") {
+        window.localStorage.removeItem(`opencode.lastSession.${dir}`);
+      }
     } catch (err) {
-      console.error("[Session] Failed to remove stale session from localStorage:", err);
+      console.error("[Session] Failed to remove stale session key:", err);
     }
     navigate(`/${dirSlug()}/session`, { replace: true });
   });
