@@ -14,7 +14,7 @@ const DEFAULT_AGENT = "build"
 interface Model {
   id: string
   name: string
-  providerID: string
+  providerID?: string  // optional — injected during normalisation
   limit: {
     context: number
     input?: number
