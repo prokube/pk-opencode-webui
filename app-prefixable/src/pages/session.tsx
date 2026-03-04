@@ -30,7 +30,7 @@ import { SessionSidebar } from "../components/session-sidebar";
 import { ReviewPanel } from "../components/review-panel";
 import { SessionHeader } from "../components/session-header";
 import { ResizeHandle } from "../components/resize-handle";
-import { base64Encode } from "../utils/path";
+import { base64Encode, base64Decode } from "../utils/path";
 import type { Part, QuestionRequest } from "../sdk/client";
 import { Plus, Settings, Paperclip, Upload } from "lucide-solid";
 import { ContextItems, type FileContext } from "../components/context-items";
@@ -116,6 +116,8 @@ export function Session() {
     setFileContext([]); // Clear file context on session change
     setImageAttachments([]); // Clear image attachments on session change
     if (id) {
+      const dir = directory || base64Decode(params.dir);
+      localStorage.setItem(`opencode.lastSession.${dir}`, id);
       // Use sync context to load session data - no local state needed
       setLoadingHistory(true);
       setProcessing(false); // Reset processing state for new session
@@ -363,6 +365,17 @@ export function Session() {
     const id = params.id;
     if (id) await sync.session.sync(id);
   };
+
+  // Clear stale localStorage key when sessions are loaded and ID is not found
+  createEffect(() => {
+    const id = params.id;
+    if (!id || !sync.ready) return;
+    const found = sync.session.get(id);
+    if (found) return;
+    const dir = directory || base64Decode(params.dir);
+    localStorage.removeItem(`opencode.lastSession.${dir}`);
+    navigate(`/${dirSlug()}/session`, { replace: true });
+  });
 
   // Start processing state - SSE events will handle updates and completion
   function startProcessing() {

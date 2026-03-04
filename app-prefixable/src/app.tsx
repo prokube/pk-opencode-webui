@@ -1,4 +1,4 @@
-import { Router, Route, Navigate } from "@solidjs/router"
+import { Router, Route, Navigate, useParams } from "@solidjs/router"
 import { BasePathProvider, useBasePath } from "./context/base-path"
 import { BrandingProvider } from "./context/branding"
 import { CommandProvider } from "./context/command"
@@ -8,6 +8,14 @@ import { HomeLayout } from "./pages/home-layout"
 import { Session } from "./pages/session"
 import { Settings } from "./pages/settings"
 import { ProjectPicker } from "./pages/project-picker"
+import { base64Decode } from "./utils/path"
+
+function DirectoryIndex() {
+  const params = useParams<{ dir: string }>()
+  const dir = base64Decode(params.dir)
+  const last = localStorage.getItem(`opencode.lastSession.${dir}`)
+  return <Navigate href={last ? `session/${last}` : "session"} />
+}
 
 function AppRoutes() {
   const { basePath } = useBasePath()
@@ -23,7 +31,7 @@ function AppRoutes() {
 
       {/* Directory-scoped routes */}
       <Route path="/:dir" component={DirectoryLayout}>
-        <Route path="/" component={() => <Navigate href="session" />} />
+        <Route path="/" component={DirectoryIndex} />
         <Route path="/session/:id?" component={Session} />
         <Route path="/settings" component={Settings} />
       </Route>
