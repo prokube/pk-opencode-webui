@@ -11,6 +11,7 @@ const LAYOUT_STORAGE_KEY = "opencode.layout";
 // Default values
 const DEFAULT_REVIEW_WIDTH = 320;
 const DEFAULT_INFO_WIDTH = 256;
+const DEFAULT_SIDEBAR_WIDTH = 256;
 
 interface PanelState {
   opened: boolean;
@@ -25,6 +26,7 @@ export type FileTab = {
 interface LayoutState {
   review: PanelState;
   info: PanelState;
+  sidebar?: { width?: number };
   tabs?: FileTab[];
   activeTab?: string | null; // null = Review tab, string = file path
 }
@@ -46,6 +48,11 @@ interface LayoutContextValue {
     toggle: () => void;
     open: () => void;
     close: () => void;
+    resize: (width: number) => void;
+  };
+  // Sidebar panel (sessions list)
+  sidebar: {
+    width: () => number;
     resize: (width: number) => void;
   };
   // File tabs
@@ -86,6 +93,9 @@ function loadState(): LayoutState {
           opened: parsed.info?.opened ?? false,
           width: parsed.info?.width ?? DEFAULT_INFO_WIDTH,
         },
+        sidebar: {
+          width: parsed.sidebar?.width ?? DEFAULT_SIDEBAR_WIDTH,
+        },
         tabs,
         activeTab,
       };
@@ -96,6 +106,7 @@ function loadState(): LayoutState {
   return {
     review: { opened: false, width: DEFAULT_REVIEW_WIDTH },
     info: { opened: false, width: DEFAULT_INFO_WIDTH },
+    sidebar: { width: DEFAULT_SIDEBAR_WIDTH },
     tabs: [],
     activeTab: null,
   };
@@ -124,6 +135,11 @@ export function LayoutProvider(props: ParentProps) {
     initial.info.width ?? DEFAULT_INFO_WIDTH,
   );
 
+  // Sidebar state
+  const [sidebarWidth, setSidebarWidth] = createSignal(
+    initial.sidebar?.width ?? DEFAULT_SIDEBAR_WIDTH,
+  );
+
   // File tabs state
   const [fileTabs, setFileTabs] = createSignal<FileTab[]>(initial.tabs ?? []);
   const [activeTab, setActiveTab] = createSignal<string | null>(
@@ -135,6 +151,7 @@ export function LayoutProvider(props: ParentProps) {
     saveState({
       review: { opened: reviewOpened(), width: reviewWidth() },
       info: { opened: infoOpened(), width: infoWidth() },
+      sidebar: { width: sidebarWidth() },
       tabs: fileTabs(),
       activeTab: activeTab(),
     });
@@ -178,6 +195,13 @@ export function LayoutProvider(props: ParentProps) {
       },
       resize: (width: number) => {
         setInfoWidth(width);
+        persist();
+      },
+    },
+    sidebar: {
+      width: sidebarWidth,
+      resize: (width: number) => {
+        setSidebarWidth(width);
         persist();
       },
     },

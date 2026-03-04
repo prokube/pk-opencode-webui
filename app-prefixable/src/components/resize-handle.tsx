@@ -8,6 +8,7 @@ export interface ResizeHandleProps {
   max: number
   onResize: (size: number) => void
   onCollapse?: () => void
+  onDragEnd?: () => void
   collapseThreshold?: number
   class?: string
 }
@@ -55,6 +56,7 @@ export function ResizeHandle(props: ResizeHandleProps) {
       if (props.onCollapse && threshold > 0 && current < threshold) {
         props.onCollapse()
       }
+      if (props.onDragEnd) props.onDragEnd()
     }
 
     cleanup = () => {
