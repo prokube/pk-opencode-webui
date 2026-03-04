@@ -254,10 +254,15 @@ export function QuestionPrompt(props: Props) {
           {/* Question text */}
           <div class="mb-4">
             <Markdown
-              content={`${question()?.question ?? ""}${multi() ? " *(select all that apply)*" : ""}`}
+              content={question()?.question ?? ""}
               class="text-sm font-medium"
               style={{ color: "var(--text-strong)" }}
             />
+            <Show when={multi()}>
+              <div class="text-xs italic" style={{ color: "var(--text-weak)" }}>
+                (select all that apply)
+              </div>
+            </Show>
           </div>
 
           {/* Options */}
