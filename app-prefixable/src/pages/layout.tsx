@@ -398,8 +398,8 @@ export function Layout(props: ParentProps) {
     }
   }
 
-  // Comment 4: deleteSession removed - session-header handles deletion directly;
-  // sidebar updates reactively via SSE (session.deleted event triggers loadSessions)
+  // deleteSession is handled directly by SessionHeader; sidebar updates reactively
+  // via SSE (session.deleted event triggers loadSessions)
 
   function isActive(sessionId: string) {
     return location.pathname.includes(sessionId);
@@ -797,6 +797,7 @@ export function Layout(props: ParentProps) {
                                         "var(--icon-weak)")
                                     }
                                     title="Archive session"
+                                    aria-label="Archive session"
                                   >
                                     <Archive class="w-3.5 h-3.5" />
                                   </button>
