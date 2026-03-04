@@ -8,7 +8,7 @@ import {
   onCleanup,
   createMemo,
 } from "solid-js";
-import { useParams, useNavigate } from "@solidjs/router";
+import { useParams, useNavigate, useSearchParams } from "@solidjs/router";
 import { Button } from "../components/ui/button";
 import { Spinner } from "../components/ui/spinner";
 import { useSDK } from "../context/sdk";
@@ -84,6 +84,7 @@ interface DisplayMessage {
 
 export function Session() {
   const params = useParams<{ dir: string; id?: string }>();
+  const [searchParams, setSearchParams] = useSearchParams<{ prompt?: string }>();
   const navigate = useNavigate();
   const { client, directory } = useSDK();
   const events = useEvents();
@@ -313,6 +314,15 @@ export function Session() {
       setLoadingHistory(false);
       setProcessing(false);
     }
+  });
+
+  // Auto-send saved prompt from ?prompt= search param
+  createEffect(() => {
+    const text = searchParams.prompt;
+    if (!text) return;
+    // Clear the param immediately so it doesn't re-fire
+    setSearchParams({ prompt: undefined }, { replace: true });
+    createSessionAndSendPrompt(text);
   });
 
   // Get messages from sync context - reactive, automatically updated via SSE

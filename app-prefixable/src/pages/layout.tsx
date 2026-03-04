@@ -49,6 +49,7 @@ import {
 } from "lucide-solid";
 import { useSync } from "../context/sync";
 import { usePermission } from "../context/permission";
+import { useSavedPrompts } from "../context/saved-prompts";
 import { ResizeHandle } from "../components/resize-handle";
 import { ConfirmDialog } from "../components/confirm-dialog";
 import { suggestSessionTitle } from "../utils/ai-rename";
@@ -110,6 +111,91 @@ export function groupSessionsByDate(
     .map((label) => ({ label, sessions: groups[label] }));
 }
 
+function PromptDropdown(props: {
+  prompts: { id: string; title: string; text: string }[];
+  activeIndex: number;
+  onSelect: (text: string) => void;
+  onClose: () => void;
+  onIndexChange: (index: number) => void;
+}) {
+  let ref: HTMLDivElement | undefined;
+
+  function handleKeyDown(e: KeyboardEvent) {
+    if (e.key === "Escape") {
+      e.preventDefault();
+      props.onClose();
+      return;
+    }
+    if (e.key === "ArrowDown") {
+      e.preventDefault();
+      props.onIndexChange(Math.min(props.activeIndex + 1, props.prompts.length - 1));
+      return;
+    }
+    if (e.key === "ArrowUp") {
+      e.preventDefault();
+      props.onIndexChange(Math.max(props.activeIndex - 1, 0));
+      return;
+    }
+    if (e.key === "Enter") {
+      e.preventDefault();
+      const selected = props.prompts[props.activeIndex];
+      if (selected) props.onSelect(selected.text);
+    }
+  }
+
+  function handleClickOutside(e: MouseEvent) {
+    if (ref && !ref.contains(e.target as Node)) {
+      props.onClose();
+    }
+  }
+
+  onMount(() => {
+    document.addEventListener("mousedown", handleClickOutside);
+    document.addEventListener("keydown", handleKeyDown);
+    ref?.focus();
+  });
+
+  onCleanup(() => {
+    document.removeEventListener("mousedown", handleClickOutside);
+    document.removeEventListener("keydown", handleKeyDown);
+  });
+
+  return (
+    <div
+      ref={ref}
+      tabIndex={-1}
+      class="absolute left-0 right-0 mx-3 mt-1 z-50 rounded-lg border shadow-lg overflow-hidden"
+      style={{
+        background: "var(--background-stronger)",
+        "border-color": "var(--border-base)",
+      }}
+      role="listbox"
+    >
+      <div class="max-h-48 overflow-y-auto py-1">
+        <For each={props.prompts}>
+          {(prompt, i) => (
+            <button
+              class="w-full text-left px-3 py-2 text-sm transition-colors truncate"
+              classList={{
+                "bg-brand-50 text-brand-600": i() === props.activeIndex,
+              }}
+              style={{
+                color: i() === props.activeIndex ? undefined : "var(--text-base)",
+              }}
+              role="option"
+              aria-selected={i() === props.activeIndex}
+              onMouseEnter={() => props.onIndexChange(i())}
+              onClick={() => props.onSelect(prompt.text)}
+            >
+              {prompt.title}
+            </button>
+          )}
+        </For>
+      </div>
+    </div>
+  );
+}
+
 export function Layout(props: ParentProps) {
   const { client, directory } = useSDK();
   const { basePath } = useBasePath();
@@ -119,6 +205,7 @@ export function Layout(props: ParentProps) {
   const layout = useLayout();
   const sync = useSync();
   const permission = usePermission();
+  const savedPrompts = useSavedPrompts();
   const location = useLocation();
   const navigate = useNavigate();
 
@@ -141,6 +228,8 @@ export function Layout(props: ParentProps) {
   const [confirmDeleteSession, setConfirmDeleteSession] = createSignal<Session | null>(null);
   const [deleting, setDeleting] = createSignal(false);
   const [deleteError, setDeleteError] = createSignal<string | null>(null);
+  const [promptDropdownOpen, setPromptDropdownOpen] = createSignal(false);
+  const [promptDropdownIndex, setPromptDropdownIndex] = createSignal(0);
 
   // Responsive breakpoint - collapse sidebar below 900px
   const COLLAPSE_BREAKPOINT = 900;
@@ -382,6 +471,12 @@ export function Layout(props: ParentProps) {
     } catch (e) {
       console.error("Failed to create session:", e);
     }
+  }
+
+  function createSessionWithPrompt(text: string) {
+    if (!directory) return;
+    setPromptDropdownOpen(false);
+    navigate(`/${dirSlug()}/session?prompt=${encodeURIComponent(text)}`);
   }
 
   async function restoreSession(session: Session) {
@@ -735,17 +830,42 @@ export function Layout(props: ParentProps) {
             </button>
           </div>
 
-          {/* New Session Button */}
-          <div class="px-3 py-2">
-            <Button
-              onClick={createNewSession}
-              variant="ghost"
-              class="w-full justify-start"
-              size="sm"
-            >
-              <Plus class="w-4 h-4" />
-              <span>New Session</span>
-            </Button>
+          {/* New Session Button (split button with saved prompts dropdown) */}
+          <div class="px-3 py-2 relative">
+            <div class="flex w-full">
+              <Button
+                onClick={createNewSession}
+                variant="ghost"
+                class={`flex-1 justify-start ${savedPrompts.prompts().length > 0 ? "rounded-r-none" : ""}`}
+                size="sm"
+              >
+                <Plus class="w-4 h-4" />
+                <span>New Session</span>
+              </Button>
+              <Show when={savedPrompts.prompts().length > 0}>
+                <button
+                  onClick={() => {
+                    setPromptDropdownIndex(0);
+                    setPromptDropdownOpen(!promptDropdownOpen());
+                  }}
+                  class="inline-flex items-center px-1.5 rounded-r-xl border-2 border-l-0 border-transparent bg-transparent text-gray-700 hover:bg-brand-50 hover:text-brand-600 transition-all"
+                  title="New session from saved prompt"
+                  aria-haspopup="listbox"
+                  aria-expanded={promptDropdownOpen()}
+                >
+                  <ChevronDown class="w-3.5 h-3.5" />
+                </button>
+              </Show>
+            </div>
+            <Show when={promptDropdownOpen()}>
+              <PromptDropdown
+                prompts={savedPrompts.prompts()}
+                activeIndex={promptDropdownIndex()}
+                onSelect={(text) => createSessionWithPrompt(text)}
+                onClose={() => setPromptDropdownOpen(false)}
+                onIndexChange={(i) => setPromptDropdownIndex(i)}
+              />
+            </Show>
           </div>
 
           {/* Sessions List */}
