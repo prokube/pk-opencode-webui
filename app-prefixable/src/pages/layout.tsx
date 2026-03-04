@@ -50,7 +50,7 @@ const SIDEBAR_EXPANDED_KEY = "opencode.sidebarExpanded";
 const SHOW_ARCHIVED_KEY = "opencode.showArchived";
 
 // Group sessions by date bucket
-function groupSessionsByDate(
+export function groupSessionsByDate(
   sessions: Session[],
   now: Date,
 ): { label: string; sessions: Session[] }[] {
@@ -622,12 +622,8 @@ export function Layout(props: ParentProps) {
                   {(group) => (
                     <div class="pb-2">
                       <h3
-                        class="px-2.5 pt-2 pb-1 text-xs font-semibold uppercase tracking-wide"
-                        style={{
-                          color: "var(--text-weak)",
-                          "letter-spacing": "0.06em",
-                          "font-size": "0.65rem",
-                        }}
+                        class="px-2.5 pt-2 pb-1 font-semibold uppercase text-[0.65rem] tracking-[0.06em]"
+                        style={{ color: "var(--text-weak)" }}
                       >
                         {group.label}
                       </h3>
