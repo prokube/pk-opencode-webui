@@ -316,13 +316,36 @@ export function Session() {
     }
   });
 
-  // Auto-send saved prompt from ?prompt= search param
+  // Auto-send saved prompt from ?prompt= search param.
+  // The session was already created by layout's createSessionWithPrompt —
+  // we just need to send the prompt to the current session, not create another.
   createEffect(() => {
     const text = searchParams.prompt;
     if (!text) return;
     // Clear the param immediately so it doesn't re-fire
     setSearchParams({ prompt: undefined }, { replace: true });
-    createSessionAndSendPrompt(text);
+
+    const id = params.id;
+    if (!id) return;
+    if (!providers.selectedModel) {
+      setError("Please select a model before sending messages. Click the model button in the header.");
+      return;
+    }
+    if (!providers.connected.includes(providers.selectedModel.providerID)) {
+      setError(`Provider "${providers.selectedModel.providerID}" is not connected. Please configure it in Settings.`);
+      return;
+    }
+    setError(null);
+    startProcessing();
+    client.session.promptAsync({
+      sessionID: id,
+      parts: [{ type: "text", text }],
+      agent: providers.selectedAgent || "build",
+      model: providers.selectedModel,
+    }).catch((err: unknown) => {
+      setError(`Failed to send saved prompt: ${err instanceof Error ? err.message : String(err)}`);
+      setProcessing(false);
+    });
   });
 
   // Get messages from sync context - reactive, automatically updated via SSE

@@ -170,6 +170,7 @@ function PromptDropdown(props: {
         "border-color": "var(--border-base)",
       }}
       role="listbox"
+      aria-label="Saved prompts"
     >
       <div class="max-h-48 overflow-y-auto py-1">
         <For each={props.prompts}>
@@ -852,7 +853,8 @@ export function Layout(props: ParentProps) {
               </Button>
               <Show when={savedPrompts.prompts().length > 0}>
                 <button
-                  onClick={() => {
+                  onClick={(e) => {
+                    e.stopPropagation();
                     setPromptDropdownIndex(0);
                     setPromptDropdownOpen(!promptDropdownOpen());
                   }}
