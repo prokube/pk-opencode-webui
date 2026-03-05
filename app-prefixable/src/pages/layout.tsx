@@ -143,12 +143,6 @@ function PromptDropdown(props: {
     }
   }
 
-  function handleClickOutside(e: MouseEvent) {
-    if (ref && !ref.contains(e.target as Node)) {
-      props.onClose();
-    }
-  }
-
   // Scroll the active option into view when navigating with keyboard
   createEffect(() => {
     const _index = props.activeIndex;
@@ -157,12 +151,14 @@ function PromptDropdown(props: {
   });
 
   onMount(() => {
-    document.addEventListener("click", handleClickOutside);
+    function handleClickOutside(e: MouseEvent) {
+      if (ref && !ref.contains(e.target as Node)) {
+        props.onClose();
+      }
+    }
+    document.addEventListener("mousedown", handleClickOutside);
+    onCleanup(() => document.removeEventListener("mousedown", handleClickOutside));
     ref?.focus();
-  });
-
-  onCleanup(() => {
-    document.removeEventListener("click", handleClickOutside);
   });
 
   return (
@@ -487,7 +483,10 @@ export function Layout(props: ParentProps) {
       const res = await client.session.create({});
       if (res.data) {
         setSessions((prev) => [res.data as Session, ...prev]);
-        sessionStorage.setItem(`opencode.pendingPrompt.${res.data.id}`, text);
+        sessionStorage.setItem(
+          `opencode.pendingPrompt.${res.data.id}`,
+          JSON.stringify({ text, ts: Date.now() }),
+        );
         navigate(`/${dirSlug()}/session/${res.data.id}`);
       }
     } catch (e) {
@@ -860,10 +859,14 @@ export function Layout(props: ParentProps) {
               </Button>
               <Show when={savedPrompts.prompts().length > 0}>
                 <button
-                  on:click={(e) => {
-                    e.stopPropagation();
-                    setPromptDropdownIndex(0);
-                    setPromptDropdownOpen(!promptDropdownOpen());
+                  ref={(el) => {
+                    function handleChevronClick(e: Event) {
+                      e.stopPropagation();
+                      setPromptDropdownIndex(0);
+                      setPromptDropdownOpen(!promptDropdownOpen());
+                    }
+                    el.addEventListener("click", handleChevronClick);
+                    onCleanup(() => el.removeEventListener("click", handleChevronClick));
                   }}
                   class="inline-flex items-center px-1.5 rounded-r-xl border-2 border-l-0 border-transparent bg-transparent text-gray-700 hover:bg-brand-50 hover:text-brand-600 transition-all"
                   title="New session from saved prompt"

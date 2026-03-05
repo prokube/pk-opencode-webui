@@ -317,12 +317,24 @@ export function Session() {
 
   // Auto-send saved prompt stored in sessionStorage by layout's createSessionWithPrompt.
   // We read from sessionStorage instead of URL params to avoid browser URL length limits.
+  // The stored value is JSON: { text: string, ts: number }.
   createEffect(() => {
     const id = params.id;
     if (!id) return;
     const key = `opencode.pendingPrompt.${id}`;
-    const text = sessionStorage.getItem(key);
-    if (!text) return;
+    const raw = sessionStorage.getItem(key);
+    if (!raw) return;
+    const EXPIRY_MS = 60_000; // 60 seconds
+    const parsed = (() => {
+      try { return JSON.parse(raw) as { text: string; ts: number }; }
+      catch { return null; }
+    })();
+    // Remove malformed or expired entries immediately
+    if (!parsed || !parsed.text || Date.now() - parsed.ts > EXPIRY_MS) {
+      sessionStorage.removeItem(key);
+      return;
+    }
+    const text = parsed.text;
     // Provider data may not be available yet — the resource fetch is async and
     // selectedModel is populated from localStorage in an onMount callback that
     // runs after createEffect. Skip without removing the sessionStorage item so
@@ -338,7 +350,7 @@ export function Session() {
       setError(`Provider "${providers.selectedModel.providerID}" is not connected. Please configure it in Settings.`);
       return;
     }
-    // All validation passed — clear the pending prompt and send
+    // All validation passed — clear the pending prompt and send to the already-created session
     sessionStorage.removeItem(key);
     setError(null);
     startProcessing();
