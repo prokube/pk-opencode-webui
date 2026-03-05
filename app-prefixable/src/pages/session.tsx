@@ -1359,7 +1359,6 @@ export function Session() {
           session={session()}
           processing={processing()}
           onOpenMCPDialog={() => setShowMCPDialog(true)}
-          onSendPrompt={(prompt) => setInput(prompt)}
           notifyEnabled={notifyEnabled()}
           notifyDenied={notifyDenied()}
           onToggleNotify={toggleNotify}
