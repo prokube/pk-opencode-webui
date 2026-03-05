@@ -136,6 +136,8 @@ export function Layout(props: ParentProps) {
   const [sidebarDragging, setSidebarDragging] = createSignal(false);
   const [menuOpenId, setMenuOpenId] = createSignal<string | null>(null);
   const [aiRenamingId, setAiRenamingId] = createSignal<string | null>(null);
+  const [emptySessionIds, setEmptySessionIds] = createSignal(new Set<string>());
+  const [renameErrorId, setRenameErrorId] = createSignal<string | null>(null);
   const [confirmDeleteSession, setConfirmDeleteSession] = createSignal<Session | null>(null);
   const [deleting, setDeleting] = createSignal(false);
   const [deleteError, setDeleteError] = createSignal<string | null>(null);
@@ -476,8 +478,13 @@ export function Layout(props: ParentProps) {
       .finally(() => setDeleting(false));
   }
 
+  function showRenameError(sessionId: string) {
+    setRenameErrorId(sessionId);
+    setTimeout(() => setRenameErrorId((prev) => prev === sessionId ? null : prev), 3000);
+  }
+
   function handleAiRename(session: Session) {
-    if (aiRenamingId()) return;
+    if (aiRenamingId() || emptySessionIds().has(session.id)) return;
     setMenuOpenId(null);
     setAiRenamingId(session.id);
 
@@ -490,14 +497,20 @@ export function Layout(props: ParentProps) {
 
     pending
       .then((msgs) => {
-        if (!msgs.length) return Promise.reject(new Error("No messages to summarize"));
+        if (!msgs.length) {
+          setEmptySessionIds((prev) => new Set([...prev, session.id]));
+          return Promise.reject(new Error("No messages to summarize"));
+        }
         return suggestSessionTitle(client, session.id, msgs, providers.selectedModel, providers.selectedAgent);
       })
       .then((suggestion) => {
         setEditTitle(suggestion);
         setRenamingId(session.id);
       })
-      .catch((err: unknown) => console.error("AI rename failed:", err))
+      .catch((err: unknown) => {
+        console.error("AI rename failed:", err);
+        showRenameError(session.id);
+      })
       .finally(() => setAiRenamingId(null));
   }
 
@@ -836,8 +849,15 @@ export function Layout(props: ParentProps) {
                                         <Spinner class="w-4 h-4" style={{ color: "var(--text-interactive-base)" }} />
                                       </Show>
                                     </span>
-                                    <span class="min-w-0 flex-1 truncate">
-                                      {session.title || "Untitled"}
+                                    <span class="min-w-0 flex-1">
+                                      <span class="block truncate">
+                                        {session.title || "Untitled"}
+                                      </span>
+                                      <Show when={renameErrorId() === session.id}>
+                                        <span class="block text-xs truncate" style={{ color: "var(--text-critical-base)" }}>
+                                          Rename failed
+                                        </span>
+                                      </Show>
                                     </span>
                                   </A>
                                 }
@@ -978,23 +998,23 @@ export function Layout(props: ParentProps) {
                                           Rename
                                         </button>
 
-                                        {/* Rename with AI — always enabled; messages fetched on demand */}
+                                        {/* Rename with AI — disabled for empty sessions or when already renaming */}
                                         <button
                                           class="w-full flex items-center gap-2 px-3 py-1.5 text-sm text-left transition-colors"
-                                          disabled={!!aiRenamingId()}
+                                          disabled={!!aiRenamingId() || emptySessionIds().has(session.id)}
                                           style={{
                                             color: "var(--text-base)",
-                                            opacity: aiRenamingId() ? 0.6 : 1,
-                                            cursor: aiRenamingId() ? "not-allowed" : "pointer",
+                                            opacity: aiRenamingId() || emptySessionIds().has(session.id) ? 0.6 : 1,
+                                            cursor: aiRenamingId() || emptySessionIds().has(session.id) ? "not-allowed" : "pointer",
                                           }}
-                                          onMouseEnter={(e) => { if (!aiRenamingId()) e.currentTarget.style.background = "var(--surface-inset)" }}
+                                          onMouseEnter={(e) => { if (!aiRenamingId() && !emptySessionIds().has(session.id)) e.currentTarget.style.background = "var(--surface-inset)" }}
                                           onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
                                           onClick={(e) => {
                                             e.preventDefault();
                                             e.stopPropagation();
                                             handleAiRename(session);
                                           }}
-                                          title="Suggest a title using AI"
+                                          title={emptySessionIds().has(session.id) ? "No messages to rename from" : "Suggest a title using AI"}
                                         >
                                           <Sparkles class="w-3.5 h-3.5 shrink-0" style={{ color: "var(--icon-weak)" }} />
                                           Rename with AI

@@ -93,10 +93,10 @@ export function suggestSessionTitle(
     })
     .then((res) => {
       // Extract the suggestion text from response parts
-      const parts = res.data?.parts ?? []
+      const parts: Part[] = res.data?.parts ?? []
       const suggestion = parts
-        .filter((p: { type: string }) => p.type === "text")
-        .map((p: { type: string; text?: string }) => p.text ?? "")
+        .map(textOf)
+        .filter(Boolean)
         .join("")
         .trim()
         // Strip surrounding quotes
