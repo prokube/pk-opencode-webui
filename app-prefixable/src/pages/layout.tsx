@@ -136,7 +136,7 @@ export function Layout(props: ParentProps) {
   const [sidebarDragging, setSidebarDragging] = createSignal(false);
   const [menuOpenId, setMenuOpenId] = createSignal<string | null>(null);
   const [aiRenamingId, setAiRenamingId] = createSignal<string | null>(null);
-  const [renameErrorId, setRenameErrorId] = createSignal<string | null>(null);
+  const [renameError, setRenameError] = createSignal<{ id: string; msg: string } | null>(null);
   const renameErrorTimer = { id: undefined as ReturnType<typeof setTimeout> | undefined };
   const [confirmDeleteSession, setConfirmDeleteSession] = createSignal<Session | null>(null);
   const [deleting, setDeleting] = createSignal(false);
@@ -478,11 +478,11 @@ export function Layout(props: ParentProps) {
       .finally(() => setDeleting(false));
   }
 
-  function showRenameError(sessionId: string) {
+  function showRenameError(sessionId: string, message = "Rename failed") {
     if (renameErrorTimer.id !== undefined) clearTimeout(renameErrorTimer.id);
-    setRenameErrorId(sessionId);
+    setRenameError({ id: sessionId, msg: message });
     renameErrorTimer.id = setTimeout(() => {
-      setRenameErrorId((prev) => prev === sessionId ? null : prev);
+      setRenameError((prev) => prev?.id === sessionId ? null : prev);
       renameErrorTimer.id = undefined;
     }, 3000);
   }
@@ -502,6 +502,7 @@ export function Layout(props: ParentProps) {
     pending
       .then((msgs) => {
         if (!msgs.length) {
+          showRenameError(session.id, "No messages to rename");
           setAiRenamingId(null);
           return;
         }
@@ -859,9 +860,9 @@ export function Layout(props: ParentProps) {
                                       <span class="block truncate">
                                         {session.title || "Untitled"}
                                       </span>
-                                      <Show when={renameErrorId() === session.id}>
+                                      <Show when={renameError()?.id === session.id}>
                                         <span class="block text-xs truncate" style={{ color: "var(--text-critical-base)" }}>
-                                          Rename failed
+                                          {renameError()?.msg}
                                         </span>
                                       </Show>
                                     </span>
