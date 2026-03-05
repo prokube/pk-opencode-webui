@@ -9,7 +9,6 @@ import { TerminalProvider } from "../context/terminal"
 import { PermissionProvider } from "../context/permission"
 import { FileProvider } from "../context/file"
 import { LayoutProvider } from "../context/layout"
-import { PrProvider } from "../context/pr"
 import { useRecentProjects } from "../context/recent-projects"
 import { base64Decode } from "../utils/path"
 import { Layout } from "./layout"
@@ -57,25 +56,23 @@ export function DirectoryLayout(props: ParentProps) {
     <For each={directories()} fallback={<Navigate href="/" />}>
       {(dir: string) => (
         <SDKProvider directory={dir}>
-          <PrProvider>
-            <EventProvider>
-              <SyncProvider>
-                <FileProvider>
-                  <PermissionProvider>
-                    <ProviderProvider>
-                      <MCPProvider>
-                        <TerminalProvider>
-                          <LayoutProvider>
-                            <Layout>{props.children}</Layout>
-                          </LayoutProvider>
-                        </TerminalProvider>
-                      </MCPProvider>
-                    </ProviderProvider>
-                  </PermissionProvider>
-                </FileProvider>
-              </SyncProvider>
-            </EventProvider>
-          </PrProvider>
+          <EventProvider>
+            <SyncProvider>
+              <FileProvider>
+                <PermissionProvider>
+                  <ProviderProvider>
+                    <MCPProvider>
+                      <TerminalProvider>
+                        <LayoutProvider>
+                          <Layout>{props.children}</Layout>
+                        </LayoutProvider>
+                      </TerminalProvider>
+                    </MCPProvider>
+                  </ProviderProvider>
+                </PermissionProvider>
+              </FileProvider>
+            </SyncProvider>
+          </EventProvider>
         </SDKProvider>
       )}
     </For>

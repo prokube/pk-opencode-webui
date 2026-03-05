@@ -8,14 +8,12 @@ import { useTerminal } from "../context/terminal"
 import { useSDK } from "../context/sdk"
 import { PanelBottom, FileCode, ListTodo, Plug, ArrowLeft, Users, Bell, BellRing } from "lucide-solid"
 import { base64Encode } from "../utils/path"
-import { PrButton } from "./pr-button"
 import type { Session } from "../sdk/client"
 
 interface SessionHeaderProps {
   session: Session | null | undefined
   processing: boolean
   onOpenMCPDialog: () => void
-  onSendPrompt?: (prompt: string) => void
   notifyEnabled: boolean
   notifyDenied: boolean
   onToggleNotify: () => void
@@ -40,7 +38,6 @@ export function SessionHeader(props: SessionHeaderProps) {
     if (!id) return
     navigate(`/${dirSlug()}/session/${id}`)
   }
-
 
   return (
     <header
@@ -136,16 +133,8 @@ export function SessionHeader(props: SessionHeaderProps) {
         </Show>
       </div>
 
-      {/* Right side: PR button + panel toggles in one container */}
+      {/* Right side: panel toggles */}
       <div class="flex items-center gap-1">
-        {/* PR button — only render when onSendPrompt is provided */}
-        <Show when={props.onSendPrompt}>{(sendPrompt) =>
-          <PrButton onSendPrompt={sendPrompt()} />
-        }</Show>
-
-        {/* Divider */}
-        <div class="w-px h-4 mx-1" style={{ background: "var(--border-base)" }} />
-
         {/* MCP toggle */}
         <button
           onClick={props.onOpenMCPDialog}
