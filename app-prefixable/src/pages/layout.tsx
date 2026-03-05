@@ -467,6 +467,7 @@ export function Layout(props: ParentProps) {
     client.session.delete({ sessionID: session.id })
       .then(() => {
         setConfirmDeleteSession(null);
+        cleanupNotifyState(session.id);
         if (isActive(session.id)) {
           navigate(neighbor ? `/${dirSlug()}/session/${neighbor.id}` : `/${dirSlug()}/session`);
         }
