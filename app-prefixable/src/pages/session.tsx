@@ -323,6 +323,11 @@ export function Session() {
     const key = `opencode.pendingPrompt.${id}`;
     const text = sessionStorage.getItem(key);
     if (!text) return;
+    // Provider data may not be available yet — the resource fetch is async and
+    // selectedModel is populated from localStorage in an onMount callback that
+    // runs after createEffect. Skip without removing the sessionStorage item so
+    // the effect re-runs once providers finish loading.
+    if (providers.loading || providers.providers.length === 0) return;
     if (!providers.selectedModel) {
       sessionStorage.removeItem(key);
       setError("Please select a model before sending messages. Click the model button in the header.");
