@@ -279,6 +279,7 @@ export function Session() {
     setPendingUserMessageText(null); // Clear pending text on session change
     setFileContext([]); // Clear file context on session change
     setImageAttachments([]); // Clear image attachments on session change
+    setPromptSent(false); // Reset so pending prompts fire in the new session
     wasProcessing.value = false; // Reset to avoid false notifications
     if (id) {
       // Use sync context to load session data - no local state needed
@@ -313,6 +314,61 @@ export function Session() {
       setLoadingHistory(false);
       setProcessing(false);
     }
+  });
+
+  // Auto-send saved prompt stored in sessionStorage by layout's createSessionWithPrompt.
+  // We read from sessionStorage instead of URL params to avoid browser URL length limits.
+  // The stored value is JSON: { text: string, ts: number }.
+  // Guard: the effect may re-run when reactive deps (e.g. providers.connected) update
+  // after the prompt has already been sent. A local signal prevents double sends.
+  const [promptSent, setPromptSent] = createSignal(false);
+  createEffect(() => {
+    if (promptSent()) return;
+    const id = params.id;
+    if (!id) return;
+    const key = `opencode.pendingPrompt.${id}`;
+    const raw = sessionStorage.getItem(key);
+    if (!raw) return;
+    const EXPIRY_MS = 60_000; // 60 seconds
+    const parsed = (() => {
+      try { return JSON.parse(raw) as { text: string; ts: number }; }
+      catch { return null; }
+    })();
+    // Remove malformed or expired entries immediately
+    if (!parsed || !parsed.text || Date.now() - parsed.ts > EXPIRY_MS) {
+      sessionStorage.removeItem(key);
+      return;
+    }
+    const text = parsed.text;
+    // Provider data may not be available yet — the resource fetch is async and
+    // selectedModel is populated from localStorage in an onMount callback that
+    // runs after createEffect. Skip without removing the sessionStorage item so
+    // the effect re-runs once providers finish loading.
+    if (providers.loading || providers.providers.length === 0) return;
+    if (!providers.selectedModel) {
+      sessionStorage.removeItem(key);
+      setError("Please select a model before sending messages. Click the model button in the header.");
+      return;
+    }
+    if (!providers.connected.includes(providers.selectedModel.providerID)) {
+      sessionStorage.removeItem(key);
+      setError(`Provider "${providers.selectedModel.providerID}" is not connected. Please configure it in Settings.`);
+      return;
+    }
+    // All validation passed — mark as sent, clear storage, and send
+    setPromptSent(true);
+    sessionStorage.removeItem(key);
+    setError(null);
+    startProcessing();
+    client.session.promptAsync({
+      sessionID: id,
+      parts: [{ type: "text", text }],
+      agent: providers.selectedAgent || "build",
+      model: providers.selectedModel,
+    }).catch((err: unknown) => {
+      setError(`Failed to send saved prompt: ${err instanceof Error ? err.message : String(err)}`);
+      setProcessing(false);
+    });
   });
 
   // Get messages from sync context - reactive, automatically updated via SSE
