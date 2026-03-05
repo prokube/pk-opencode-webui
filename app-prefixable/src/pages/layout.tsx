@@ -859,14 +859,10 @@ export function Layout(props: ParentProps) {
               </Button>
               <Show when={savedPrompts.prompts().length > 0}>
                 <button
-                  ref={(el) => {
-                    function handleChevronClick(e: Event) {
-                      e.stopPropagation();
-                      setPromptDropdownIndex(0);
-                      setPromptDropdownOpen(!promptDropdownOpen());
-                    }
-                    el.addEventListener("click", handleChevronClick);
-                    onCleanup(() => el.removeEventListener("click", handleChevronClick));
+                  on:click={(e) => {
+                    e.stopPropagation();
+                    setPromptDropdownIndex(0);
+                    setPromptDropdownOpen(!promptDropdownOpen());
                   }}
                   class="inline-flex items-center px-1.5 rounded-r-xl border-2 border-l-0 border-transparent bg-transparent text-gray-700 hover:bg-brand-50 hover:text-brand-600 transition-all"
                   title="New session from saved prompt"
