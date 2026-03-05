@@ -178,6 +178,9 @@ export function ProviderProvider(props: ParentProps) {
   }
 
   function setSelectedAgent(agent: string) {
+    if (!store.modelsByAgent[agent] && store.modelsByAgent[store.selectedAgent]) {
+      setStore("modelsByAgent", agent, store.modelsByAgent[store.selectedAgent])
+    }
     setStore("selectedAgent", agent)
   }
 
