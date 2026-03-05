@@ -135,6 +135,7 @@ export function Session() {
     ImageAttachment[]
   >([]);
   const [error, setError] = createSignal<string | null>(null);
+  const [promptSent, setPromptSent] = createSignal(false);
   const [pendingQuestion, setPendingQuestion] =
     createSignal<QuestionRequest | null>(null);
   const [pendingUserMessageText, setPendingUserMessageText] = createSignal<
@@ -321,7 +322,6 @@ export function Session() {
   // The stored value is JSON: { text: string, ts: number }.
   // Guard: the effect may re-run when reactive deps (e.g. providers.connected) update
   // after the prompt has already been sent. A local signal prevents double sends.
-  const [promptSent, setPromptSent] = createSignal(false);
   createEffect(() => {
     if (promptSent()) return;
     const id = params.id;
