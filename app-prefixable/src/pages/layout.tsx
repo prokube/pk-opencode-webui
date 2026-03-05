@@ -149,6 +149,13 @@ function PromptDropdown(props: {
     }
   }
 
+  // Scroll the active option into view when navigating with keyboard
+  createEffect(() => {
+    const _index = props.activeIndex;
+    const active = ref?.querySelector('[aria-selected="true"]') as HTMLElement | null;
+    if (active) active.scrollIntoView({ block: "nearest" });
+  });
+
   onMount(() => {
     document.addEventListener("click", handleClickOutside);
     document.addEventListener("keydown", handleKeyDown);
@@ -481,7 +488,8 @@ export function Layout(props: ParentProps) {
       const res = await client.session.create({});
       if (res.data) {
         setSessions((prev) => [res.data as Session, ...prev]);
-        navigate(`/${dirSlug()}/session/${res.data.id}?prompt=${encodeURIComponent(text)}`);
+        sessionStorage.setItem(`opencode.pendingPrompt.${res.data.id}`, text);
+        navigate(`/${dirSlug()}/session/${res.data.id}`);
       }
     } catch (e) {
       console.error("Failed to create session for prompt:", e);
@@ -853,10 +861,12 @@ export function Layout(props: ParentProps) {
               </Button>
               <Show when={savedPrompts.prompts().length > 0}>
                 <button
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    setPromptDropdownIndex(0);
-                    setPromptDropdownOpen(!promptDropdownOpen());
+                  ref={(el) => {
+                    el.addEventListener("click", (e) => {
+                      e.stopPropagation();
+                      setPromptDropdownIndex(0);
+                      setPromptDropdownOpen(!promptDropdownOpen());
+                    });
                   }}
                   class="inline-flex items-center px-1.5 rounded-r-xl border-2 border-l-0 border-transparent bg-transparent text-gray-700 hover:bg-brand-50 hover:text-brand-600 transition-all"
                   title="New session from saved prompt"

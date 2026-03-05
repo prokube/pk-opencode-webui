@@ -8,7 +8,7 @@ import {
   onCleanup,
   createMemo,
 } from "solid-js";
-import { useParams, useNavigate, useSearchParams } from "@solidjs/router";
+import { useParams, useNavigate } from "@solidjs/router";
 import { Button } from "../components/ui/button";
 import { Spinner } from "../components/ui/spinner";
 import { useSDK } from "../context/sdk";
@@ -84,7 +84,6 @@ interface DisplayMessage {
 
 export function Session() {
   const params = useParams<{ dir: string; id?: string }>();
-  const [searchParams, setSearchParams] = useSearchParams<{ prompt?: string }>();
   const navigate = useNavigate();
   const { client, directory } = useSDK();
   const events = useEvents();
@@ -316,17 +315,14 @@ export function Session() {
     }
   });
 
-  // Auto-send saved prompt from ?prompt= search param.
-  // The session was already created by layout's createSessionWithPrompt —
-  // we just need to send the prompt to the current session, not create another.
+  // Auto-send saved prompt stored in sessionStorage by layout's createSessionWithPrompt.
+  // We read from sessionStorage instead of URL params to avoid browser URL length limits.
   createEffect(() => {
-    const text = searchParams.prompt;
-    if (!text) return;
-    // Clear the param immediately so it doesn't re-fire
-    setSearchParams({ prompt: undefined }, { replace: true });
-
     const id = params.id;
     if (!id) return;
+    const key = `opencode.pendingPrompt.${id}`;
+    const text = sessionStorage.getItem(key);
+    if (!text) return;
     if (!providers.selectedModel) {
       setError("Please select a model before sending messages. Click the model button in the header.");
       return;
@@ -335,6 +331,8 @@ export function Session() {
       setError(`Provider "${providers.selectedModel.providerID}" is not connected. Please configure it in Settings.`);
       return;
     }
+    // All validation passed — clear the pending prompt and send
+    sessionStorage.removeItem(key);
     setError(null);
     startProcessing();
     client.session.promptAsync({
