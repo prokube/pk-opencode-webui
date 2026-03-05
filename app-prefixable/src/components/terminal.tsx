@@ -211,13 +211,14 @@ export function Terminal(props: TerminalProps) {
 
   return (
     <div
-      ref={container}
       class="size-full"
       style={{
         background: "#ffffff",
         padding: "8px",
         "min-height": "100px",
       }}
-    />
+    >
+      <div ref={container} class="size-full" />
+    </div>
   )
 }
