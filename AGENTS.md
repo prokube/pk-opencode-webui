@@ -253,10 +253,19 @@ gh pr create --title "docs: Documentation improvements" --body "Closes #79, clos
 │     - Run `gh api repos/:owner/:repo/issues/<n>` to     │
 │       read full issue details                           │
 ├─────────────────────────────────────────────────────────┤
-│  3. CREATE BRANCH                                       │
-│     - Create a feature branch: git checkout -b issue-<n>│
+│  3. CREATE WORKTREE                                     │
+│     - Fetch latest main:                                │
+│       git fetch origin main                             │
+│     - Create an isolated worktree from origin/main:     │
+│       git worktree add worktrees/issue-<n> \            │
+│         -b issue-<n> origin/main                        │
+│     - Change to that directory:                         │
+│       cd worktrees/issue-<n>                            │
+│     - ALL subsequent work happens in this worktree      │
+│     - NEVER modify files in the main worktree           │
 ├─────────────────────────────────────────────────────────┤
 │  4. WORK ON TASK                                        │
+│     - Verify you're in worktree: pwd shows worktrees/   │
 │     - Implement the solution                            │
 │     - Test your changes                                 │
 │     - Follow code style guidelines                      │
