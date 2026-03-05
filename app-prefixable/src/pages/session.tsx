@@ -324,10 +324,12 @@ export function Session() {
     const text = sessionStorage.getItem(key);
     if (!text) return;
     if (!providers.selectedModel) {
+      sessionStorage.removeItem(key);
       setError("Please select a model before sending messages. Click the model button in the header.");
       return;
     }
     if (!providers.connected.includes(providers.selectedModel.providerID)) {
+      sessionStorage.removeItem(key);
       setError(`Provider "${providers.selectedModel.providerID}" is not connected. Please configure it in Settings.`);
       return;
     }
