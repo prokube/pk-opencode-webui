@@ -80,7 +80,7 @@ export function SessionHeader(props: SessionHeaderProps) {
     setConfirmDelete(false)
     setDeleting(false)
     setDeleteError(null)
-    setAiRenaming(false)
+    // Don't reset aiRenaming here — it has its own lifecycle via the Promise chain
     setRenameError(null)
     if (errorTimer.id !== undefined) { clearTimeout(errorTimer.id); errorTimer.id = undefined }
   }))
