@@ -43,10 +43,15 @@ import {
   AlertTriangle,
   Pencil,
   ShieldAlert,
+  MoreHorizontal,
+  Trash2,
+  Sparkles,
 } from "lucide-solid";
 import { useSync } from "../context/sync";
 import { usePermission } from "../context/permission";
 import { ResizeHandle } from "../components/resize-handle";
+import { ConfirmDialog } from "../components/confirm-dialog";
+import { suggestSessionTitle } from "../utils/ai-rename";
 
 // Storage keys
 const PROJECTS_STORAGE_KEY = "opencode.projects";
@@ -129,6 +134,13 @@ export function Layout(props: ParentProps) {
     typeof window !== "undefined" ? window.innerWidth : 1200,
   );
   const [sidebarDragging, setSidebarDragging] = createSignal(false);
+  const [menuOpenId, setMenuOpenId] = createSignal<string | null>(null);
+  const [aiRenamingId, setAiRenamingId] = createSignal<string | null>(null);
+  const [renameError, setRenameError] = createSignal<{ id: string; msg: string } | null>(null);
+  const renameErrorTimer = { id: undefined as ReturnType<typeof setTimeout> | undefined };
+  const [confirmDeleteSession, setConfirmDeleteSession] = createSignal<Session | null>(null);
+  const [deleting, setDeleting] = createSignal(false);
+  const [deleteError, setDeleteError] = createSignal<string | null>(null);
 
   // Responsive breakpoint - collapse sidebar below 900px
   const COLLAPSE_BREAKPOINT = 900;
@@ -435,6 +447,96 @@ export function Layout(props: ParentProps) {
       });
   }
 
+  function deleteAndNavigate(session: Session) {
+    if (deleting()) return;
+    setDeleteError(null);
+    setDeleting(true);
+
+    // Compute neighbor before delete.
+    // Archived sessions live in archivedSessions(), not projectSessions(),
+    // so guard against findIndex returning -1.
+    const isArchived = !!session.time?.archived;
+    const neighbor = (() => {
+      if (isArchived) return undefined;
+      const all = projectSessions();
+      const idx = all.findIndex((s) => s.id === session.id);
+      if (idx === -1) return all[0];
+      return all[idx + 1] ?? all[idx - 1];
+    })();
+
+    client.session.delete({ sessionID: session.id })
+      .then(() => {
+        setConfirmDeleteSession(null);
+        cleanupNotifyState(session.id);
+        if (isActive(session.id)) {
+          navigate(neighbor ? `/${dirSlug()}/session/${neighbor.id}` : `/${dirSlug()}/session`);
+        }
+      })
+      .catch((err: unknown) => {
+        console.error("Failed to delete session:", err);
+        setDeleteError("Failed to delete session. Please try again.");
+      })
+      .finally(() => setDeleting(false));
+  }
+
+  function showRenameError(sessionId: string, message = "Rename failed") {
+    if (renameErrorTimer.id !== undefined) clearTimeout(renameErrorTimer.id);
+    setRenameError({ id: sessionId, msg: message });
+    renameErrorTimer.id = setTimeout(() => {
+      setRenameError((prev) => prev?.id === sessionId ? null : prev);
+      renameErrorTimer.id = undefined;
+    }, 3000);
+  }
+
+  function handleAiRename(session: Session) {
+    if (aiRenamingId()) return;
+    setMenuOpenId(null);
+    setAiRenamingId(session.id);
+
+    // Sidebar sessions that aren't currently open may not have messages synced.
+    // Fetch from the API when the local cache is empty.
+    const cached = sync.messages(session.id);
+    const pending = cached.length > 0
+      ? Promise.resolve(cached)
+      : client.session.messages({ sessionID: session.id }).then((res) => res.data ?? []);
+
+    pending
+      .then((msgs) => {
+        if (!msgs.length) {
+          showRenameError(session.id, "No messages to rename");
+          setAiRenamingId(null);
+          return;
+        }
+        return suggestSessionTitle(client, session.id, msgs, providers.selectedModel, providers.selectedAgent);
+      })
+      .then((suggestion) => {
+        if (!suggestion) return;
+        setEditTitle(suggestion);
+        setRenamingId(session.id);
+      })
+      .catch((err: unknown) => {
+        console.error("AI rename failed:", err);
+        showRenameError(session.id);
+      })
+      .finally(() => setAiRenamingId(null));
+  }
+
+  // Outside-click handler for session menus
+  createEffect(() => {
+    if (!menuOpenId()) return;
+    const handler = (e: MouseEvent) => {
+      const target = e.target;
+      if (!(target instanceof Element)) return;
+      if (!target.closest("[data-sidebar-menu]")) setMenuOpenId(null);
+    };
+    document.addEventListener("click", handler, { capture: true });
+    onCleanup(() => document.removeEventListener("click", handler, { capture: true }));
+  });
+
+  onCleanup(() => {
+    if (renameErrorTimer.id !== undefined) clearTimeout(renameErrorTimer.id);
+  });
+
   function isActive(sessionId: string) {
     return location.pathname.includes(sessionId);
   }
@@ -720,31 +822,45 @@ export function Layout(props: ParentProps) {
                                       style={{ color: "var(--icon-weak)" }}
                                     >
                                       <Show
-                                        when={permission.pendingForSession(session.id).length > 0}
+                                        when={aiRenamingId() === session.id}
                                         fallback={
                                           <Show
-                                            when={!!events.pendingQuestions[session.id]}
+                                            when={permission.pendingForSession(session.id).length > 0}
                                             fallback={
                                               <Show
-                                                when={
-                                                  events.status[session.id]?.type === "busy" ||
-                                                  events.status[session.id]?.type === "retry"
+                                                when={!!events.pendingQuestions[session.id]}
+                                                fallback={
+                                                  <Show
+                                                    when={
+                                                      events.status[session.id]?.type === "busy" ||
+                                                      events.status[session.id]?.type === "retry"
+                                                    }
+                                                    fallback={<MessageCircle class="w-4 h-4" />}
+                                                  >
+                                                    <Loader2 class="w-4 h-4 animate-spin" />
+                                                  </Show>
                                                 }
-                                                fallback={<MessageCircle class="w-4 h-4" />}
                                               >
-                                                <Loader2 class="w-4 h-4 animate-spin" />
+                                                <CircleHelp class="w-4 h-4" style={{ color: "var(--icon-warning-base)" }} />
                                               </Show>
                                             }
                                           >
-                                            <CircleHelp class="w-4 h-4" style={{ color: "var(--icon-warning-base)" }} />
+                                            <ShieldAlert class="w-4 h-4" style={{ color: "var(--interactive-base)" }} />
                                           </Show>
                                         }
                                       >
-                                        <ShieldAlert class="w-4 h-4" style={{ color: "var(--interactive-base)" }} />
+                                        <Spinner class="w-4 h-4" style={{ color: "var(--text-interactive-base)" }} />
                                       </Show>
                                     </span>
-                                    <span class="min-w-0 flex-1 truncate">
-                                      {session.title || "Untitled"}
+                                    <span class="min-w-0 flex-1">
+                                      <span class="block truncate">
+                                        {session.title || "Untitled"}
+                                      </span>
+                                      <Show when={renameError()?.id === session.id}>
+                                        <span class="block text-xs truncate" style={{ color: "var(--text-critical-base)" }}>
+                                          {renameError()?.msg}
+                                        </span>
+                                      </Show>
                                     </span>
                                   </A>
                                 }
@@ -758,27 +874,34 @@ export function Layout(props: ParentProps) {
                                     style={{ color: "var(--icon-weak)" }}
                                   >
                                     <Show
-                                      when={permission.pendingForSession(session.id).length > 0}
+                                      when={aiRenamingId() === session.id}
                                       fallback={
                                         <Show
-                                          when={!!events.pendingQuestions[session.id]}
+                                          when={permission.pendingForSession(session.id).length > 0}
                                           fallback={
                                             <Show
-                                              when={
-                                                events.status[session.id]?.type === "busy" ||
-                                                events.status[session.id]?.type === "retry"
+                                              when={!!events.pendingQuestions[session.id]}
+                                              fallback={
+                                                <Show
+                                                  when={
+                                                    events.status[session.id]?.type === "busy" ||
+                                                    events.status[session.id]?.type === "retry"
+                                                  }
+                                                  fallback={<MessageCircle class="w-4 h-4" />}
+                                                >
+                                                  <Loader2 class="w-4 h-4 animate-spin" />
+                                                </Show>
                                               }
-                                              fallback={<MessageCircle class="w-4 h-4" />}
                                             >
-                                              <Loader2 class="w-4 h-4 animate-spin" />
+                                              <CircleHelp class="w-4 h-4" style={{ color: "var(--icon-warning-base)" }} />
                                             </Show>
                                           }
                                         >
-                                          <CircleHelp class="w-4 h-4" style={{ color: "var(--icon-warning-base)" }} />
+                                          <ShieldAlert class="w-4 h-4" style={{ color: "var(--interactive-base)" }} />
                                         </Show>
                                       }
                                     >
-                                      <ShieldAlert class="w-4 h-4" style={{ color: "var(--interactive-base)" }} />
+                                      <Spinner class="w-4 h-4" style={{ color: "var(--text-interactive-base)" }} />
                                     </Show>
                                   </span>
                                   <input
@@ -809,7 +932,7 @@ export function Layout(props: ParentProps) {
                               </Show>
                               <Show when={renamingId() !== session.id}>
                                 <div
-                                  class="absolute right-0 top-0 bottom-0 hidden group-hover:flex group-focus-within:flex items-center rounded-r-md"
+                                  class={`absolute right-0 top-0 bottom-0 items-center rounded-r-md ${menuOpenId() === session.id ? "flex" : "hidden group-hover:flex group-focus-within:flex"}`}
                                   style={{ "pointer-events": "none" }}
                                 >
                                    <div
@@ -819,18 +942,18 @@ export function Layout(props: ParentProps) {
                                     }}
                                   />
                                   <div
-                                    class="flex items-center gap-0.5 pr-1.5"
+                                    class="flex items-center pr-1.5 relative"
                                     style={{
                                       "pointer-events": "auto",
                                       background: isActive(session.id) ? "var(--surface-inset)" : "var(--background-stronger)",
                                     }}
+                                    data-sidebar-menu
                                   >
                                     <button
                                       onClick={(e) => {
                                         e.preventDefault();
                                         e.stopPropagation();
-                                        setEditTitle(session.title || "");
-                                        setRenamingId(session.id);
+                                        setMenuOpenId(menuOpenId() === session.id ? null : session.id);
                                       }}
                                       class="p-1 rounded transition-colors"
                                       style={{ color: "var(--icon-weak)" }}
@@ -842,32 +965,103 @@ export function Layout(props: ParentProps) {
                                         (e.currentTarget.style.color =
                                           "var(--icon-weak)")
                                       }
-                                      title="Rename session"
-                                      aria-label="Rename session"
+                                      title="More options"
+                                      aria-label="More session options"
+                                      aria-haspopup="true"
+                                      aria-expanded={menuOpenId() === session.id}
                                     >
-                                      <Pencil class="w-3.5 h-3.5" />
+                                      <MoreHorizontal class="w-3.5 h-3.5" />
                                     </button>
-                                    <button
-                                      onClick={(e) => {
-                                        e.preventDefault();
-                                        e.stopPropagation();
-                                        archiveAndNavigate(session);
-                                      }}
-                                      class="p-1 rounded transition-colors"
-                                      style={{ color: "var(--icon-weak)" }}
-                                      onMouseEnter={(e) =>
-                                        (e.currentTarget.style.color =
-                                          "var(--icon-base)")
-                                      }
-                                      onMouseLeave={(e) =>
-                                        (e.currentTarget.style.color =
-                                          "var(--icon-weak)")
-                                      }
-                                      title="Archive session"
-                                      aria-label="Archive session"
-                                    >
-                                      <Archive class="w-3.5 h-3.5" />
-                                    </button>
+
+                                    {/* Dropdown menu */}
+                                    <Show when={menuOpenId() === session.id}>
+                                      <div
+                                        class="absolute right-0 top-full mt-1 w-44 rounded-md shadow-lg z-30 py-1"
+                                        style={{
+                                          background: "var(--background-base)",
+                                          border: "1px solid var(--border-base)",
+                                        }}
+                                        data-sidebar-menu
+                                      >
+                                        {/* Rename */}
+                                        <button
+                                          class="w-full flex items-center gap-2 px-3 py-1.5 text-sm text-left transition-colors"
+                                          style={{ color: "var(--text-base)" }}
+                                          onMouseEnter={(e) => (e.currentTarget.style.background = "var(--surface-inset)")}
+                                          onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
+                                          onClick={(e) => {
+                                            e.preventDefault();
+                                            e.stopPropagation();
+                                            setMenuOpenId(null);
+                                            setEditTitle(session.title || "");
+                                            setRenamingId(session.id);
+                                          }}
+                                        >
+                                          <Pencil class="w-3.5 h-3.5 shrink-0" style={{ color: "var(--icon-weak)" }} />
+                                          Rename
+                                        </button>
+
+                                        {/* Rename with AI — disabled when already renaming */}
+                                        <button
+                                          class="w-full flex items-center gap-2 px-3 py-1.5 text-sm text-left transition-colors"
+                                          disabled={!!aiRenamingId()}
+                                          style={{
+                                            color: "var(--text-base)",
+                                            opacity: aiRenamingId() ? 0.6 : 1,
+                                            cursor: aiRenamingId() ? "not-allowed" : "pointer",
+                                          }}
+                                          onMouseEnter={(e) => { if (!aiRenamingId()) e.currentTarget.style.background = "var(--surface-inset)" }}
+                                          onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
+                                          onClick={(e) => {
+                                            e.preventDefault();
+                                            e.stopPropagation();
+                                            handleAiRename(session);
+                                          }}
+                                          title={aiRenamingId() ? "AI rename in progress" : "Suggests a title based on conversation"}
+                                        >
+                                          <Sparkles class="w-3.5 h-3.5 shrink-0" style={{ color: "var(--icon-weak)" }} />
+                                          Rename with AI
+                                        </button>
+
+                                        {/* Archive */}
+                                        <button
+                                          class="w-full flex items-center gap-2 px-3 py-1.5 text-sm text-left transition-colors"
+                                          style={{ color: "var(--text-base)" }}
+                                          onMouseEnter={(e) => (e.currentTarget.style.background = "var(--surface-inset)")}
+                                          onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
+                                          onClick={(e) => {
+                                            e.preventDefault();
+                                            e.stopPropagation();
+                                            setMenuOpenId(null);
+                                            archiveAndNavigate(session);
+                                          }}
+                                        >
+                                          <Archive class="w-3.5 h-3.5 shrink-0" style={{ color: "var(--icon-weak)" }} />
+                                          Archive
+                                        </button>
+
+                                        {/* Separator */}
+                                        <div class="my-1" style={{ "border-top": "1px solid var(--border-base)" }} />
+
+                                        {/* Delete */}
+                                        <button
+                                          class="w-full flex items-center gap-2 px-3 py-1.5 text-sm text-left transition-colors"
+                                          style={{ color: "var(--text-critical-base)" }}
+                                          onMouseEnter={(e) => (e.currentTarget.style.background = "var(--surface-inset)")}
+                                          onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
+                                          onClick={(e) => {
+                                            e.preventDefault();
+                                            e.stopPropagation();
+                                            setMenuOpenId(null);
+                                            setDeleteError(null);
+                                            setConfirmDeleteSession(session);
+                                          }}
+                                        >
+                                          <Trash2 class="w-3.5 h-3.5 shrink-0" />
+                                          Delete
+                                        </button>
+                                      </div>
+                                    </Show>
                                   </div>
                                 </div>
                               </Show>
@@ -946,7 +1140,7 @@ export function Layout(props: ParentProps) {
                               </span>
                             </A>
                             <div
-                              class="absolute right-0 top-0 bottom-0 hidden group-hover:flex group-focus-within:flex items-center rounded-r-md"
+                              class={`absolute right-0 top-0 bottom-0 items-center rounded-r-md ${menuOpenId() === session.id ? "flex" : "hidden group-hover:flex group-focus-within:flex"}`}
                               style={{ "pointer-events": "none" }}
                             >
                               <div
@@ -956,17 +1150,18 @@ export function Layout(props: ParentProps) {
                                 }}
                               />
                               <div
-                                class="flex items-center pr-1.5"
+                                class="flex items-center pr-1.5 relative"
                                 style={{
                                   "pointer-events": "auto",
                                   background: isActive(session.id) ? "var(--surface-inset)" : "var(--background-stronger)",
                                 }}
+                                data-sidebar-menu
                               >
                                 <button
                                   onClick={(e) => {
                                     e.preventDefault();
                                     e.stopPropagation();
-                                    restoreSession(session);
+                                    setMenuOpenId(menuOpenId() === session.id ? null : session.id);
                                   }}
                                   class="p-1 rounded transition-colors"
                                   style={{ color: "var(--icon-weak)" }}
@@ -978,11 +1173,63 @@ export function Layout(props: ParentProps) {
                                     (e.currentTarget.style.color =
                                       "var(--icon-weak)")
                                   }
-                                  title="Restore session"
-                                  aria-label="Restore session"
+                                  title="More options"
+                                  aria-label="More session options"
+                                  aria-haspopup="true"
+                                  aria-expanded={menuOpenId() === session.id}
                                 >
-                                  <ArchiveRestore class="w-4 h-4" />
+                                  <MoreHorizontal class="w-3.5 h-3.5" />
                                 </button>
+
+                                {/* Dropdown menu for archived sessions */}
+                                <Show when={menuOpenId() === session.id}>
+                                  <div
+                                    class="absolute right-0 top-full mt-1 w-44 rounded-md shadow-lg z-30 py-1"
+                                    style={{
+                                      background: "var(--background-base)",
+                                      border: "1px solid var(--border-base)",
+                                    }}
+                                    data-sidebar-menu
+                                  >
+                                    {/* Restore */}
+                                    <button
+                                      class="w-full flex items-center gap-2 px-3 py-1.5 text-sm text-left transition-colors"
+                                      style={{ color: "var(--text-base)" }}
+                                      onMouseEnter={(e) => (e.currentTarget.style.background = "var(--surface-inset)")}
+                                      onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
+                                      onClick={(e) => {
+                                        e.preventDefault();
+                                        e.stopPropagation();
+                                        setMenuOpenId(null);
+                                        restoreSession(session);
+                                      }}
+                                    >
+                                      <ArchiveRestore class="w-3.5 h-3.5 shrink-0" style={{ color: "var(--icon-weak)" }} />
+                                      Restore
+                                    </button>
+
+                                    {/* Separator */}
+                                    <div class="my-1" style={{ "border-top": "1px solid var(--border-base)" }} />
+
+                                    {/* Delete */}
+                                    <button
+                                      class="w-full flex items-center gap-2 px-3 py-1.5 text-sm text-left transition-colors"
+                                      style={{ color: "var(--text-critical-base)" }}
+                                      onMouseEnter={(e) => (e.currentTarget.style.background = "var(--surface-inset)")}
+                                      onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
+                                      onClick={(e) => {
+                                        e.preventDefault();
+                                        e.stopPropagation();
+                                        setMenuOpenId(null);
+                                        setDeleteError(null);
+                                        setConfirmDeleteSession(session);
+                                      }}
+                                    >
+                                      <Trash2 class="w-3.5 h-3.5 shrink-0" />
+                                      Delete
+                                    </button>
+                                  </div>
+                                </Show>
                               </div>
                             </div>
                           </div>
@@ -1255,6 +1502,28 @@ export function Layout(props: ParentProps) {
           </div>
         </Show>
       </div>
+
+      {/* Delete confirmation dialog for sidebar sessions */}
+      <ConfirmDialog
+        open={!!confirmDeleteSession()}
+        title="Delete session?"
+        message={`This will permanently delete "${confirmDeleteSession()?.title || "this session"}". This cannot be undone.`}
+        confirmLabel={deleting() ? "Deleting..." : "Delete"}
+        confirmDisabled={deleting()}
+        cancelDisabled={deleting()}
+        cancelLabel="Cancel"
+        variant="danger"
+        error={deleteError() ?? undefined}
+        onConfirm={() => {
+          const session = confirmDeleteSession();
+          if (session) deleteAndNavigate(session);
+        }}
+        onCancel={() => {
+          if (deleting()) return;
+          setDeleteError(null);
+          setConfirmDeleteSession(null);
+        }}
+      />
     </div>
   );
 }
