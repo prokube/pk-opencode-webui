@@ -719,7 +719,12 @@ export function Session() {
                   const line = text.split("\n")[0];
                   return line.length > 120 ? line.slice(0, 120) + "..." : line;
                 })();
-                const n = new Notification(title, { body });
+                const n = new Notification(title, {
+                  body,
+                  requireInteraction: true,
+                  tag: `session-complete-${sid}`,
+                  icon: "/favicon.ico",
+                });
                 n.onclick = () => {
                   window.focus();
                   n.close();
