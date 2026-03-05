@@ -151,8 +151,19 @@ export function PermissionProvider(props: ParentProps) {
 
   const pending = createMemo(() => Object.values(permissions))
 
+  // Group pending permissions by session for efficient lookups
+  const pendingBySession = createMemo(() => {
+    const map = new Map<string, PermissionRequest[]>()
+    for (const p of pending()) {
+      const list = map.get(p.sessionID) ?? []
+      list.push(p)
+      map.set(p.sessionID, list)
+    }
+    return map
+  })
+
   function pendingForSession(sessionID: string) {
-    return Object.values(permissions).filter((p) => p.sessionID === sessionID)
+    return pendingBySession().get(sessionID) ?? []
   }
 
   function toggleAutoAccept() {
