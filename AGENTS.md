@@ -278,6 +278,171 @@ gh pr create --title "docs: Documentation improvements" --body "Closes #79, clos
 
 ---
 
+# Supervisor Agent
+
+The supervisor manages the overall workflow and coordinates worker agents.
+
+## Supervisor Loop
+
+```
+┌─────────────────────────────────────────────────────────┐
+│  1. INITIALIZE                                          │
+│     - Read this file for workflow and conventions       │
+│     - Run `gh issue list` to assess available work      │
+│     - Decide how many workers to spawn (2-4 typical)    │
+├─────────────────────────────────────────────────────────┤
+│  2. ASSIGN AND SPAWN WORKERS                            │
+│     - Find available issues:                            │
+│       gh issue list --label ready --search "no:assignee"│
+│     - For each issue to work on, label it immediately:  │
+│       gh issue edit <n> --add-label in-progress         │
+│         --remove-label ready                            │
+│     - Spawn workers with explicit issue numbers         │
+│     - Track which issue each worker is handling         │
+├─────────────────────────────────────────────────────────┤
+│  3. MONITOR LOOP (repeat until done)                    │
+│                                                         │
+│  a) Check worker status                                 │
+│     - Identify completed or stuck workers               │
+│                                                         │
+│  b) Handle escalations                                  │
+│     - Run `gh issue list --label needs-supervisor`      │
+│     - Review questions in issue comments                │
+│     - Provide guidance or re-scope blocked tasks        │
+│     - Remove `needs-supervisor`, re-add `ready`         │
+│                                                         │
+│  c) Spawn replacement workers                           │
+│     - Workers exit after one task, spawn replacements   │
+│     - Always assign explicit issue numbers              │
+│     - Always label new issues as `in-progress`          │
+├─────────────────────────────────────────────────────────┤
+│  4. WRAP UP                                             │
+│     - Wait for all workers to complete                  │
+│     - Remove `in-progress` from completed issues        │
+│     - Summarize progress to user                        │
+└─────────────────────────────────────────────────────────┘
+```
+
+## Quick Reference
+
+```bash
+# Find work to assign
+gh issue list --label ready --search "no:assignee"
+
+# Label issue before delegating (ALWAYS do this first!)
+gh issue edit <n> --add-label in-progress --remove-label ready
+
+# See what workers are doing
+gh issue list --label in-progress
+
+# Find escalations
+gh issue list --label needs-supervisor
+
+# Answer escalation
+gh issue comment <n> -b "SUPERVISOR: ..."
+gh issue edit <n> --remove-label needs-supervisor --add-label ready
+```
+
+---
+
+# Triage Agent
+
+The triage agent captures feature requests, bug reports, and user feedback, converting them into well-scoped, self-contained GitHub issues that workers can execute independently.
+
+## Purpose
+
+- Convert raw user input into actionable issues
+- Ensure issues are self-contained (worker can start cold)
+- Break down large work into manageable tasks
+- Set appropriate priority and labels
+- Do NOT implement - only document and organize
+
+## Triage Workflow
+
+```
+┌─────────────────────────────────────────────────────────┐
+│  1. GATHER CONTEXT                                      │
+│     - Understand the user's request fully               │
+│     - Ask clarifying questions if ambiguous             │
+│     - Search codebase to understand current state       │
+│     - Identify affected files/components                │
+├─────────────────────────────────────────────────────────┤
+│  2. ASSESS SCOPE                                        │
+│                                                         │
+│  Small (single issue):                                  │
+│     - Can be done in one agent session                  │
+│     - Create one issue                                  │
+│                                                         │
+│  Large (needs breakdown):                               │
+│     - Would take multiple sessions                      │
+│     - Multiple independent pieces                       │
+│     - Create epic issue + task issues                   │
+├─────────────────────────────────────────────────────────┤
+│  3. WRITE SELF-CONTAINED ISSUES                         │
+│     - Title: Clear, actionable (imperative verb)        │
+│     - Body: Full context for cold start                 │
+│     - Include: files to modify, acceptance criteria     │
+│     - Set: labels (priority, type, ready)               │
+├─────────────────────────────────────────────────────────┤
+│  4. VERIFY & CONFIRM                                    │
+│     - Review created issues with user                   │
+│     - Adjust priority/scope based on feedback           │
+└─────────────────────────────────────────────────────────┘
+```
+
+## Writing Self-Contained Issues
+
+A worker picking up an issue should have everything needed to start immediately:
+
+```markdown
+**Title**: [Imperative verb] + [what] + [where/context]
+Example: "Add dark mode toggle to settings page"
+
+**Body** must include:
+1. **Context**: Why this matters, current behavior
+2. **Goal**: What the end state should be
+3. **Files**: Known files to modify (if identifiable)
+4. **Acceptance Criteria**: How to verify it's done
+```
+
+## Breaking Down Large Work
+
+| Size   | Action                                    |
+| ------ | ----------------------------------------- |
+| Small  | Single issue, brief description           |
+| Medium | Single issue, detailed description        |
+| Large  | Break into 2-3 issues                     |
+| Epic   | Epic issue with multiple task issues      |
+
+## Quick Reference
+
+```bash
+# Create a ready issue
+gh issue create --title "Add feature X" --label "ready,priority:medium" --body "..."
+
+# Create an epic with tasks
+gh issue create --title "Epic: Feature X" --label "priority:high" --body "## Tasks
+- [ ] #101 Subtask A
+- [ ] #102 Subtask B"
+
+# Add context to existing issue
+gh issue comment <n> -b "Additional context..."
+gh issue edit <n> --add-label ready
+```
+
+## Triage Checklist
+
+- [ ] Each issue has clear, actionable title
+- [ ] Body provides full context for cold start
+- [ ] Files to modify identified (where possible)
+- [ ] Acceptance criteria defined
+- [ ] Priority label set appropriately
+- [ ] `ready` label added for well-scoped issues
+- [ ] Large work broken into manageable chunks
+- [ ] User has confirmed understanding/priority
+
+---
+
 # Local Development
 
 ## Starting the Dev Environment
