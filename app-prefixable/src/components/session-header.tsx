@@ -45,6 +45,7 @@ export function SessionHeader(props: SessionHeaderProps) {
   const [deleteError, setDeleteError] = createSignal<string | null>(null)
   const [optimisticTitle, setOptimisticTitle] = createSignal<string | null>(null)
   const [aiRenaming, setAiRenaming] = createSignal(false)
+  const [aiRenameSessionId, setAiRenameSessionId] = createSignal<string | null>(null)
   const [renameError, setRenameError] = createSignal<string | null>(null)
   const errorTimer = { id: undefined as ReturnType<typeof setTimeout> | undefined }
 
@@ -72,7 +73,7 @@ export function SessionHeader(props: SessionHeaderProps) {
 
   // Reset all session-scoped UI state strictly on session ID changes
   // (using on() to avoid re-running on other session prop updates like title)
-  createEffect(on(() => props.session?.id, () => {
+  createEffect(on(() => props.session?.id, (id) => {
     setOptimisticTitle(null)
     setRenaming(false)
     setRenameValue("")
@@ -80,7 +81,12 @@ export function SessionHeader(props: SessionHeaderProps) {
     setConfirmDelete(false)
     setDeleting(false)
     setDeleteError(null)
-    // Don't reset aiRenaming here — it has its own lifecycle via the Promise chain
+    // Only reset aiRenaming if we navigated to a DIFFERENT session
+    // (same ID re-triggering via store proxy should not cancel the spinner)
+    if (aiRenameSessionId() && aiRenameSessionId() !== id) {
+      setAiRenaming(false)
+      setAiRenameSessionId(null)
+    }
     setRenameError(null)
     if (errorTimer.id !== undefined) { clearTimeout(errorTimer.id); errorTimer.id = undefined }
   }))
@@ -165,6 +171,7 @@ export function SessionHeader(props: SessionHeaderProps) {
     if (!summary.trim()) return
 
     setAiRenaming(true)
+    setAiRenameSessionId(session.id)
     setMenuOpen(false)
 
     const model = (() => {
