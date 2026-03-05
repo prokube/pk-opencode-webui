@@ -609,56 +609,6 @@ export function Session() {
     }
   });
 
-  // Delete session and navigate to neighbor.
-  // Computes the neighbor BEFORE the delete API call so SSE removal doesn't
-  // race with neighbor lookup.
-  function handleDelete(session: { id: string; parentID?: string }) {
-    // Clean up notification toggle state
-    cleanupNotifyState(session.id);
-
-    // Compute neighbor while the session is still in the list
-    const neighbor = (() => {
-      if (session.parentID) return undefined
-      const all = sync.sessions()
-        .filter(s => s.directory === directory && !s.time?.archived && !s.parentID)
-        .slice()
-        .sort((a, b) => (b.time?.updated ?? 0) - (a.time?.updated ?? 0));
-      const idx = all.findIndex(s => s.id === session.id);
-      return idx === -1 ? all[0] : (all[idx + 1] ?? all[idx - 1]);
-    })();
-
-    return client.session.delete({ sessionID: session.id })
-      .then(() => {
-        if (session.parentID) {
-          navigate(`/${dirSlug()}/session/${session.parentID}`);
-          return;
-        }
-        navigate(neighbor ? `/${dirSlug()}/session/${neighbor.id}` : `/${dirSlug()}/session`);
-      });
-  }
-
-  // Archive from the header: compute neighbor first, then API call, navigate on success.
-  function handleArchive(session: { id: string; directory?: string; time?: { updated?: number; archived?: number } }) {
-    // Clean up notification toggle state
-    cleanupNotifyState(session.id);
-
-    const all = sync.sessions()
-      .filter(s => s.directory === directory && !s.time?.archived && !s.parentID)
-      .slice()
-      .sort((a, b) => (b.time?.updated ?? 0) - (a.time?.updated ?? 0));
-    const idx = all.findIndex(s => s.id === session.id);
-    const neighbor = all[idx + 1] ?? all[idx - 1];
-
-    client.session.update({
-      sessionID: session.id,
-      time: { archived: Date.now() },
-    })
-      .then(() => {
-        navigate(neighbor ? `/${dirSlug()}/session/${neighbor.id}` : `/${dirSlug()}/session`);
-      })
-      .catch((err: unknown) => console.error("Failed to archive session", err));
-  }
-
   // Start processing state - SSE events will handle updates and completion
   function startProcessing() {
     console.log("[Session] Starting processing, relying on SSE events");

@@ -41,7 +41,6 @@ export function SessionHeader(props: SessionHeaderProps) {
     navigate(`/${dirSlug()}/session/${id}`)
   }
 
-
   return (
     <header
       class="flex items-center justify-between px-4 h-12"
