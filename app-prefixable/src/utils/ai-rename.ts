@@ -1,13 +1,18 @@
-import type { OpencodeClient, AssistantMessage } from "../sdk/client"
+import type { OpencodeClient, Message, Part } from "../sdk/client"
 
 interface MessageWithParts {
-  info: { id: string; role: string; sessionID: string; providerID?: string; modelID?: string }
-  parts: { type: string; text?: string; id: string }[]
+  info: Message
+  parts: Part[]
 }
 
 interface ModelKey {
   providerID: string
   modelID: string
+}
+
+function textOf(p: Part): string {
+  if (p.type !== "text") return ""
+  return p.text
 }
 
 /**
@@ -35,16 +40,16 @@ export function suggestSessionTitle(
   // Build summary: prefer assistant text, fall back to user messages
   const summary = ref.msg
     ? ref.msg.parts
-        .filter(p => p.type === "text")
-        .map(p => p.text ?? "")
+        .map(textOf)
+        .filter(Boolean)
         .join("\n")
         .slice(0, 500)
     : messages
         .filter(m => m.info.role === "user")
         .slice(0, 10)
         .map(m => m.parts
-          .filter(p => p.type === "text")
-          .map(p => p.text ?? "")
+          .map(textOf)
+          .filter(Boolean)
           .join(" ")
           .slice(0, 500))
         .filter(t => t.length > 0)
@@ -53,12 +58,10 @@ export function suggestSessionTitle(
   if (!summary.trim()) return Promise.reject(new Error("Empty conversation summary"))
 
   const model = (() => {
-    // Prefer the model from the last assistant message
-    if (ref.msg?.info.role === "assistant") {
-      const info = ref.msg.info as unknown as AssistantMessage
-      if (info.providerID && info.modelID) {
-        return { providerID: info.providerID, modelID: info.modelID }
-      }
+    // Prefer the model from the last assistant message (narrowed via role check)
+    const info = ref.msg?.info
+    if (info?.role === "assistant" && info.providerID && info.modelID) {
+      return { providerID: info.providerID, modelID: info.modelID }
     }
     // Fall back to currently selected model
     if (!selectedModel?.providerID || !selectedModel?.modelID) return undefined

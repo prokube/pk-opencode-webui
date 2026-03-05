@@ -450,10 +450,17 @@ export function Layout(props: ParentProps) {
     setDeleteError(null);
     setDeleting(true);
 
-    // Compute neighbor before delete
-    const all = projectSessions();
-    const idx = all.findIndex((s) => s.id === session.id);
-    const neighbor = all[idx + 1] ?? all[idx - 1];
+    // Compute neighbor before delete.
+    // Archived sessions live in archivedSessions(), not projectSessions(),
+    // so guard against findIndex returning -1.
+    const isArchived = !!session.time?.archived;
+    const neighbor = (() => {
+      if (isArchived) return undefined;
+      const all = projectSessions();
+      const idx = all.findIndex((s) => s.id === session.id);
+      if (idx === -1) return all[0];
+      return all[idx + 1] ?? all[idx - 1];
+    })();
 
     client.session.delete({ sessionID: session.id })
       .then(() => {
@@ -474,29 +481,24 @@ export function Layout(props: ParentProps) {
     setMenuOpenId(null);
     setAiRenamingId(session.id);
 
-    const msgs = sync.messages(session.id);
-    if (!msgs.length) {
-      setAiRenamingId(null);
-      return;
-    }
+    // Sidebar sessions that aren't currently open may not have messages synced.
+    // Fetch from the API when the local cache is empty.
+    const cached = sync.messages(session.id);
+    const pending = cached.length > 0
+      ? Promise.resolve(cached)
+      : client.session.messages({ sessionID: session.id }).then((res) => res.data ?? []);
 
-    suggestSessionTitle(
-      client,
-      session.id,
-      msgs,
-      providers.selectedModel,
-      providers.selectedAgent,
-    )
+    pending
+      .then((msgs) => {
+        if (!msgs.length) return Promise.reject(new Error("No messages to summarize"));
+        return suggestSessionTitle(client, session.id, msgs, providers.selectedModel, providers.selectedAgent);
+      })
       .then((suggestion) => {
         setEditTitle(suggestion);
         setRenamingId(session.id);
       })
       .catch((err: unknown) => console.error("AI rename failed:", err))
       .finally(() => setAiRenamingId(null));
-  }
-
-  function hasMessages(sessionId: string) {
-    return sync.messages(sessionId).length > 0;
   }
 
   // Outside-click handler for session menus
@@ -976,25 +978,25 @@ export function Layout(props: ParentProps) {
                                           Rename
                                         </button>
 
-                                        {/* Rename with AI */}
+                                        {/* Rename with AI — always enabled; messages fetched on demand */}
                                         <button
                                           class="w-full flex items-center gap-2 px-3 py-1.5 text-sm text-left transition-colors"
-                                          disabled={!hasMessages(session.id) || !!aiRenamingId()}
+                                          disabled={!!aiRenamingId()}
                                           style={{
-                                            color: hasMessages(session.id) ? "var(--text-base)" : "var(--text-weak)",
-                                            opacity: hasMessages(session.id) && !aiRenamingId() ? 1 : 0.6,
-                                            cursor: hasMessages(session.id) && !aiRenamingId() ? "pointer" : "not-allowed",
+                                            color: "var(--text-base)",
+                                            opacity: aiRenamingId() ? 0.6 : 1,
+                                            cursor: aiRenamingId() ? "not-allowed" : "pointer",
                                           }}
-                                          onMouseEnter={(e) => { if (hasMessages(session.id) && !aiRenamingId()) e.currentTarget.style.background = "var(--surface-inset)" }}
+                                          onMouseEnter={(e) => { if (!aiRenamingId()) e.currentTarget.style.background = "var(--surface-inset)" }}
                                           onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
                                           onClick={(e) => {
                                             e.preventDefault();
                                             e.stopPropagation();
                                             handleAiRename(session);
                                           }}
-                                          title={hasMessages(session.id) ? "Suggest a title using AI" : "Send a message first to enable AI rename"}
+                                          title="Suggest a title using AI"
                                         >
-                                          <Sparkles class="w-3.5 h-3.5 shrink-0" style={{ color: hasMessages(session.id) ? "var(--icon-weak)" : "var(--text-weak)" }} />
+                                          <Sparkles class="w-3.5 h-3.5 shrink-0" style={{ color: "var(--icon-weak)" }} />
                                           Rename with AI
                                         </button>
 
