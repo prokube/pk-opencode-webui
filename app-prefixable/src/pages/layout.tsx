@@ -42,8 +42,10 @@ import {
   ChevronDown,
   AlertTriangle,
   Pencil,
+  ShieldAlert,
 } from "lucide-solid";
 import { useSync } from "../context/sync";
+import { usePermission } from "../context/permission";
 import { ResizeHandle } from "../components/resize-handle";
 
 // Storage keys
@@ -111,6 +113,7 @@ export function Layout(props: ParentProps) {
   const terminal = useTerminal();
   const layout = useLayout();
   const sync = useSync();
+  const permission = usePermission();
   const location = useLocation();
   const navigate = useNavigate();
 
@@ -717,20 +720,27 @@ export function Layout(props: ParentProps) {
                                       style={{ color: "var(--icon-weak)" }}
                                     >
                                       <Show
-                                        when={!!events.pendingQuestions[session.id]}
+                                        when={permission.pendingForSession(session.id).length > 0}
                                         fallback={
                                           <Show
-                                            when={
-                                              events.status[session.id]?.type === "busy" ||
-                                              events.status[session.id]?.type === "retry"
+                                            when={!!events.pendingQuestions[session.id]}
+                                            fallback={
+                                              <Show
+                                                when={
+                                                  events.status[session.id]?.type === "busy" ||
+                                                  events.status[session.id]?.type === "retry"
+                                                }
+                                                fallback={<MessageCircle class="w-4 h-4" />}
+                                              >
+                                                <Loader2 class="w-4 h-4 animate-spin" />
+                                              </Show>
                                             }
-                                            fallback={<MessageCircle class="w-4 h-4" />}
                                           >
-                                            <Loader2 class="w-4 h-4 animate-spin" />
+                                            <CircleHelp class="w-4 h-4" style={{ color: "var(--icon-warning-base)" }} />
                                           </Show>
                                         }
                                       >
-                                        <CircleHelp class="w-4 h-4" style={{ color: "var(--icon-warning-base)" }} />
+                                        <ShieldAlert class="w-4 h-4" style={{ color: "var(--interactive-base)" }} />
                                       </Show>
                                     </span>
                                     <span class="min-w-0 flex-1 truncate">
@@ -748,20 +758,27 @@ export function Layout(props: ParentProps) {
                                     style={{ color: "var(--icon-weak)" }}
                                   >
                                     <Show
-                                      when={!!events.pendingQuestions[session.id]}
+                                      when={permission.pendingForSession(session.id).length > 0}
                                       fallback={
                                         <Show
-                                          when={
-                                            events.status[session.id]?.type === "busy" ||
-                                            events.status[session.id]?.type === "retry"
+                                          when={!!events.pendingQuestions[session.id]}
+                                          fallback={
+                                            <Show
+                                              when={
+                                                events.status[session.id]?.type === "busy" ||
+                                                events.status[session.id]?.type === "retry"
+                                              }
+                                              fallback={<MessageCircle class="w-4 h-4" />}
+                                            >
+                                              <Loader2 class="w-4 h-4 animate-spin" />
+                                            </Show>
                                           }
-                                          fallback={<MessageCircle class="w-4 h-4" />}
                                         >
-                                          <Loader2 class="w-4 h-4 animate-spin" />
+                                          <CircleHelp class="w-4 h-4" style={{ color: "var(--icon-warning-base)" }} />
                                         </Show>
                                       }
                                     >
-                                      <CircleHelp class="w-4 h-4" style={{ color: "var(--icon-warning-base)" }} />
+                                      <ShieldAlert class="w-4 h-4" style={{ color: "var(--interactive-base)" }} />
                                     </Show>
                                   </span>
                                   <input

@@ -58,6 +58,8 @@ export function SessionHeader(props: SessionHeaderProps) {
     return sync.messages(session.id).length > 0
   })
 
+  const pendingPermissions = createMemo(() => permission.pendingForSession(props.session?.id ?? ""))
+
   function showRenameError(msg: string) {
     if (errorTimer.id !== undefined) clearTimeout(errorTimer.id)
     setRenameError(msg)
@@ -477,7 +479,7 @@ export function SessionHeader(props: SessionHeaderProps) {
         </Show>
 
         {/* Pending Permissions Indicator */}
-        <Show when={!permission.autoAcceptEnabled() && permission.pending().length > 0}>
+        <Show when={!permission.autoAcceptEnabled() && pendingPermissions().length > 0}>
           <div
             class="flex items-center gap-1.5 px-2 py-1 text-xs rounded-md"
             style={{
@@ -487,7 +489,7 @@ export function SessionHeader(props: SessionHeaderProps) {
             }}
           >
             <div class="w-1.5 h-1.5 rounded-full animate-pulse" style={{ background: "var(--interactive-base)" }} />
-            <span>{permission.pending().length} pending</span>
+            <span>{pendingPermissions().length} pending</span>
           </div>
         </Show>
 

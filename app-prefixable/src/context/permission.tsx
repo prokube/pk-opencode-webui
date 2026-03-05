@@ -6,6 +6,7 @@ import { useEvents } from "./events"
 
 interface PermissionContextValue {
   pending: () => PermissionRequest[]
+  pendingForSession: (sessionID: string) => PermissionRequest[]
   respond: (id: string, response: "once" | "always" | "reject") => void
   autoAcceptEnabled: () => boolean
   toggleAutoAccept: () => void
@@ -150,6 +151,21 @@ export function PermissionProvider(props: ParentProps) {
 
   const pending = createMemo(() => Object.values(permissions))
 
+  // Group pending permissions by session for efficient lookups
+  const pendingBySession = createMemo(() => {
+    const map = new Map<string, PermissionRequest[]>()
+    for (const p of pending()) {
+      const list = map.get(p.sessionID) ?? []
+      list.push(p)
+      map.set(p.sessionID, list)
+    }
+    return map
+  })
+
+  function pendingForSession(sessionID: string) {
+    return pendingBySession().get(sessionID) ?? []
+  }
+
   function toggleAutoAccept() {
     const next = !autoAccept()
     setAutoAccept(next)
@@ -183,6 +199,7 @@ export function PermissionProvider(props: ParentProps) {
     <PermissionContext.Provider
       value={{
         pending,
+        pendingForSession,
         respond,
         autoAcceptEnabled: autoAccept,
         toggleAutoAccept,

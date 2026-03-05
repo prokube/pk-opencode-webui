@@ -1400,6 +1400,8 @@ export function Session() {
 
   // Chat view component
   function ChatView() {
+    const pendingPermissions = createMemo(() => permission.pendingForSession(sessionId() ?? ""))
+
     return (
       <div class="flex flex-col h-full">
         {/* Header with panel toggle buttons */}
@@ -1423,7 +1425,7 @@ export function Session() {
             processing={
               processing() &&
               !pendingQuestion() &&
-              permission.pending().length === 0
+              pendingPermissions().length === 0
             }
             loadingHistory={loadingHistory()}
           />
@@ -1445,13 +1447,13 @@ export function Session() {
           </Show>
 
           {/* Permission Prompt - rendered outside timeline for proper focus */}
-          <Show when={permission.pending().length > 0}>
+          <Show when={pendingPermissions().length > 0}>
             <div
               class="px-6 pb-4"
               style={{ background: "var(--background-stronger)" }}
             >
               <PermissionPrompt
-                requests={permission.pending()}
+                requests={pendingPermissions()}
                 onRespond={permission.respond}
                 onAutoAccept={permission.enableAutoAccept}
                 autoAcceptEnabled={permission.autoAcceptEnabled()}
