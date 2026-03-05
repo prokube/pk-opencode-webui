@@ -279,6 +279,7 @@ export function Session() {
     setPendingUserMessageText(null); // Clear pending text on session change
     setFileContext([]); // Clear file context on session change
     setImageAttachments([]); // Clear image attachments on session change
+    setPromptSent(false); // Reset so pending prompts fire in the new session
     wasProcessing.value = false; // Reset to avoid false notifications
     if (id) {
       // Use sync context to load session data - no local state needed
