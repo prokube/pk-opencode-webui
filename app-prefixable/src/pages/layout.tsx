@@ -522,23 +522,18 @@ export function Layout(props: ParentProps) {
   }
 
   // Outside-click handler for session menus
-  function handleMenuDocClick(e: MouseEvent) {
-    if (!menuOpenId()) return;
-    const target = e.target;
-    if (!(target instanceof Element)) return;
-    if (!target.closest("[data-sidebar-menu]")) setMenuOpenId(null);
-  }
-
   createEffect(() => {
-    if (menuOpenId()) {
-      document.addEventListener("click", handleMenuDocClick, { capture: true });
-    } else {
-      document.removeEventListener("click", handleMenuDocClick, { capture: true });
-    }
+    if (!menuOpenId()) return;
+    const handler = (e: MouseEvent) => {
+      const target = e.target;
+      if (!(target instanceof Element)) return;
+      if (!target.closest("[data-sidebar-menu]")) setMenuOpenId(null);
+    };
+    document.addEventListener("click", handler, { capture: true });
+    onCleanup(() => document.removeEventListener("click", handler, { capture: true }));
   });
 
   onCleanup(() => {
-    document.removeEventListener("click", handleMenuDocClick, { capture: true });
     if (renameErrorTimer.id !== undefined) clearTimeout(renameErrorTimer.id);
   });
 
@@ -1022,7 +1017,7 @@ export function Layout(props: ParentProps) {
                                             e.stopPropagation();
                                             handleAiRename(session);
                                           }}
-                                          title="Suggest a title using AI"
+                                          title={aiRenamingId() ? "AI rename in progress" : "Suggests a title based on conversation"}
                                         >
                                           <Sparkles class="w-3.5 h-3.5 shrink-0" style={{ color: "var(--icon-weak)" }} />
                                           Rename with AI
