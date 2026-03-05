@@ -50,6 +50,17 @@ import { ResizeHandle } from "../components/resize-handle";
 const PROJECTS_STORAGE_KEY = "opencode.projects";
 const SIDEBAR_EXPANDED_KEY = "opencode.sidebarExpanded";
 const SHOW_ARCHIVED_KEY = "opencode.showArchived";
+const NOTIFY_STORAGE_KEY = "opencode.sessionNotify";
+
+/** Remove a session's entry from the notification toggle localStorage map */
+function cleanupNotifyState(id: string) {
+  const raw = window.localStorage.getItem(NOTIFY_STORAGE_KEY);
+  if (!raw) return;
+  const map = JSON.parse(raw) as Record<string, boolean>;
+  if (!(id in map)) return;
+  delete map[id];
+  window.localStorage.setItem(NOTIFY_STORAGE_KEY, JSON.stringify(map));
+}
 
 // Group sessions by date bucket
 export function groupSessionsByDate(
@@ -390,6 +401,9 @@ export function Layout(props: ParentProps) {
 
     // Optimistic remove from sidebar list
     setSessions((prev) => prev.filter((s) => s.id !== session.id));
+
+    // Clean up notification toggle state
+    cleanupNotifyState(session.id);
 
     client.session.update({
       sessionID: session.id,

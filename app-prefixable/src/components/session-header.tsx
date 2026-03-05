@@ -9,7 +9,7 @@ import { useSDK } from "../context/sdk"
 import { useProviders } from "../context/providers"
 import { useSync } from "../context/sync"
 import { ConfirmDialog } from "./confirm-dialog"
-import { PanelBottom, FileCode, ListTodo, Plug, ArrowLeft, Users, MoreHorizontal, Pencil, Archive, Trash2, Sparkles } from "lucide-solid"
+import { PanelBottom, FileCode, ListTodo, Plug, ArrowLeft, Users, MoreHorizontal, Pencil, Archive, Trash2, Sparkles, Bell, BellRing } from "lucide-solid"
 import { base64Encode } from "../utils/path"
 import { PrButton } from "./pr-button"
 import type { AssistantMessage, Session } from "../sdk/client"
@@ -22,6 +22,9 @@ interface SessionHeaderProps {
   onRename?: (sessionId: string, title: string) => void
   onArchive: (session: Session) => void
   onDelete: (session: Session) => void | Promise<void>
+  notifyEnabled: boolean
+  notifyDenied: boolean
+  onToggleNotify: () => void
 }
 
 export function SessionHeader(props: SessionHeaderProps) {
@@ -592,6 +595,44 @@ export function SessionHeader(props: SessionHeaderProps) {
         >
           <PanelBottom class="w-4 h-4" />
         </button>
+
+        {/* Notification toggle — hidden when Notification API is unsupported */}
+        <Show when={typeof window !== "undefined" && "Notification" in window}>
+          <div class="relative">
+            <button
+              onClick={props.onToggleNotify}
+              class="p-1.5 rounded-md transition-colors"
+              style={{
+                color: props.notifyEnabled ? "var(--text-interactive-base)" : "var(--icon-weak)",
+                background: props.notifyEnabled ? "var(--surface-inset)" : "transparent",
+              }}
+              onMouseEnter={(e) => {
+                if (!props.notifyEnabled) (e.currentTarget as HTMLElement).style.background = "var(--surface-inset)"
+              }}
+              onMouseLeave={(e) => {
+                if (!props.notifyEnabled) (e.currentTarget as HTMLElement).style.background = "transparent"
+              }}
+              title={props.notifyEnabled ? "Disable completion notifications" : "Enable completion notifications"}
+              aria-label="Toggle completion notifications"
+            >
+              <Show when={props.notifyEnabled} fallback={<Bell class="w-4 h-4" />}>
+                <BellRing class="w-4 h-4" />
+              </Show>
+            </button>
+            <Show when={props.notifyDenied}>
+              <div
+                class="absolute right-0 top-full mt-1 whitespace-nowrap text-xs px-2 py-1 rounded shadow-lg z-30"
+                style={{
+                  background: "var(--background-base)",
+                  border: "1px solid var(--border-base)",
+                  color: "var(--text-weak)",
+                }}
+              >
+                Notifications blocked — enable in browser settings
+              </div>
+            </Show>
+          </div>
+        </Show>
       </div>
 
       {/* Delete confirmation dialog */}

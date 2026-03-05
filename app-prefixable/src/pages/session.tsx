@@ -51,6 +51,16 @@ const ACCEPTED_TYPES = [
 ];
 const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB limit
 
+/** Remove a session's entry from the notification toggle localStorage map */
+function cleanupNotifyState(id: string) {
+  const raw = window.localStorage.getItem("opencode.sessionNotify");
+  if (!raw) return;
+  const map = JSON.parse(raw) as Record<string, boolean>;
+  if (!(id in map)) return;
+  delete map[id];
+  window.localStorage.setItem("opencode.sessionNotify", JSON.stringify(map));
+}
+
 interface Command {
   id: string;
   title: string;
@@ -127,6 +137,115 @@ export function Session() {
   const toastTimer = { id: 0 as ReturnType<typeof setTimeout> };
   onCleanup(() => clearTimeout(toastTimer.id));
 
+  // --- Notification toggle (per-session, persisted in localStorage) ---
+  const NOTIFY_KEY = "opencode.sessionNotify";
+
+  function readNotifyMap(): Record<string, boolean> {
+    const raw = window.localStorage.getItem(NOTIFY_KEY);
+    if (!raw) return {};
+    return JSON.parse(raw) as Record<string, boolean>;
+  }
+
+  function writeNotifyMap(map: Record<string, boolean>) {
+    window.localStorage.setItem(NOTIFY_KEY, JSON.stringify(map));
+  }
+
+  const [notifyEnabled, setNotifyEnabled] = createSignal(
+    (() => {
+      const id = params.id;
+      if (!id) return false;
+      return readNotifyMap()[id] === true;
+    })(),
+  );
+  const [notifyDenied, setNotifyDenied] = createSignal(false);
+  const deniedTimer = { id: null as ReturnType<typeof setTimeout> | null };
+  onCleanup(() => { if (deniedTimer.id !== null) clearTimeout(deniedTimer.id) });
+
+  // Re-read notification state when session changes
+  createEffect(() => {
+    const id = params.id;
+    setNotifyEnabled(id ? readNotifyMap()[id] === true : false);
+    setNotifyDenied(false);
+  });
+
+  function toggleNotify() {
+    const id = sessionId();
+    if (!id) return;
+
+    // Turning off
+    if (notifyEnabled()) {
+      const map = readNotifyMap();
+      delete map[id];
+      writeNotifyMap(map);
+      setNotifyEnabled(false);
+      setNotifyDenied(false);
+      return;
+    }
+
+    // Turning on — check permission
+    const perm = Notification.permission;
+    if (perm === "granted") {
+      const map = readNotifyMap();
+      map[id] = true;
+      writeNotifyMap(map);
+      setNotifyEnabled(true);
+      return;
+    }
+    if (perm === "denied") {
+      setNotifyDenied(true);
+      if (deniedTimer.id !== null) clearTimeout(deniedTimer.id);
+      deniedTimer.id = setTimeout(() => setNotifyDenied(false), 4000);
+      return;
+    }
+    // permission === "default" — request
+    Notification.requestPermission().then((result) => {
+      if (result === "granted") {
+        const map = readNotifyMap();
+        map[id] = true;
+        writeNotifyMap(map);
+        setNotifyEnabled(true);
+        return;
+      }
+      if (result === "denied") {
+        setNotifyDenied(true);
+        if (deniedTimer.id !== null) clearTimeout(deniedTimer.id);
+        deniedTimer.id = setTimeout(() => setNotifyDenied(false), 4000);
+      }
+    });
+  }
+
+  // Track whether the agent was genuinely processing (not initial load)
+  const wasProcessing = { value: false };
+
+  // --- Tab title flash when agent finishes in background ---
+  const originalTitle = { value: document.title };
+  const titleFlashing = { value: false };
+
+  function flashTitle() {
+    if (titleFlashing.value) return;
+    originalTitle.value = document.title;
+    titleFlashing.value = true;
+    document.title = `* ${originalTitle.value}`;
+  }
+
+  function restoreTitle() {
+    if (!titleFlashing.value) return;
+    document.title = originalTitle.value;
+    titleFlashing.value = false;
+  }
+
+  function handleVisibilityChange() {
+    if (!document.hidden) restoreTitle();
+  }
+
+  onMount(() => {
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+  });
+  onCleanup(() => {
+    document.removeEventListener("visibilitychange", handleVisibilityChange);
+    restoreTitle();
+  });
+
   // Keep sessionId in sync with URL params and sync session data
   createEffect(() => {
     const id = params.id;
@@ -135,6 +254,7 @@ export function Session() {
     setPendingUserMessageText(null); // Clear pending text on session change
     setFileContext([]); // Clear file context on session change
     setImageAttachments([]); // Clear image attachments on session change
+    wasProcessing.value = false; // Reset to avoid false notifications
     if (id) {
       // Use sync context to load session data - no local state needed
       setLoadingHistory(true);
@@ -160,6 +280,7 @@ export function Session() {
               "isBusy:",
               isBusy,
             );
+            if (isBusy) wasProcessing.value = true;
             setProcessing(isBusy);
           }
         });
@@ -467,6 +588,9 @@ export function Session() {
   // Computes the neighbor BEFORE the delete API call so SSE removal doesn't
   // race with neighbor lookup.
   function handleDelete(session: { id: string; parentID?: string }) {
+    // Clean up notification toggle state
+    cleanupNotifyState(session.id);
+
     // Compute neighbor while the session is still in the list
     const neighbor = (() => {
       if (session.parentID) return undefined
@@ -490,6 +614,9 @@ export function Session() {
 
   // Archive from the header: compute neighbor first, then API call, navigate on success.
   function handleArchive(session: { id: string; directory?: string; time?: { updated?: number; archived?: number } }) {
+    // Clean up notification toggle state
+    cleanupNotifyState(session.id);
+
     const all = sync.sessions()
       .filter(s => s.directory === directory && !s.time?.archived && !s.parentID)
       .slice()
@@ -510,6 +637,7 @@ export function Session() {
   // Start processing state - SSE events will handle updates and completion
   function startProcessing() {
     console.log("[Session] Starting processing, relying on SSE events");
+    wasProcessing.value = true;
     setProcessing(true);
   }
 
@@ -558,8 +686,43 @@ export function Session() {
               setOptimisticMessage(null);
             }
             setPendingUserMessageText(null);
+
+            // Fire notification / flash title on genuine busy→idle transition
+            if (wasProcessing.value) {
+              wasProcessing.value = false;
+
+              // Tab title flash (regardless of toggle)
+              if (document.hidden) flashTitle();
+
+              // Browser notification (when toggle is on)
+              if (notifyEnabled() && Notification.permission === "granted") {
+                const sid = sessionId();
+                const sess = sid ? sync.session.get(sid) : null;
+                const title = sess?.title || "Task complete";
+                const msgs = sid ? sync.messages(sid) : [];
+                const last = [...msgs].reverse().find((m) => m.info.role === "assistant");
+                const body = (() => {
+                  if (!last) return "The agent has finished processing.";
+                  const text = last.parts
+                    .filter((p) => p.type === "text")
+                    .map((p) => (p as { text?: string }).text ?? "")
+                    .join("")
+                    .trim();
+                  if (!text) return "The agent has finished processing.";
+                  const line = text.split("\n")[0];
+                  return line.length > 120 ? line.slice(0, 120) + "..." : line;
+                })();
+                const n = new Notification(title, { body });
+                n.onclick = () => {
+                  window.focus();
+                  n.close();
+                };
+              }
+            }
+
             setProcessing(false);
           } else if (props.sessionID === id) {
+            wasProcessing.value = true;
             setProcessing(true);
           }
         }
@@ -1213,6 +1376,9 @@ export function Session() {
           onRename={(id) => sync.session.sync(id)}
           onArchive={handleArchive}
           onDelete={handleDelete}
+          notifyEnabled={notifyEnabled()}
+          notifyDenied={notifyDenied()}
+          onToggleNotify={toggleNotify}
         />
 
         {/* Messages - using rich message timeline with lazy rendering */}
