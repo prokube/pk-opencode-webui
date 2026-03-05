@@ -158,19 +158,18 @@ function PromptDropdown(props: {
 
   onMount(() => {
     document.addEventListener("click", handleClickOutside);
-    document.addEventListener("keydown", handleKeyDown);
     ref?.focus();
   });
 
   onCleanup(() => {
     document.removeEventListener("click", handleClickOutside);
-    document.removeEventListener("keydown", handleKeyDown);
   });
 
   return (
     <div
       ref={ref}
       tabIndex={-1}
+      onKeyDown={handleKeyDown}
       class="absolute left-0 right-0 mx-3 mt-1 z-50 rounded-lg border shadow-lg overflow-hidden"
       style={{
         background: "var(--background-stronger)",
