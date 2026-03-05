@@ -156,8 +156,8 @@ function PromptDropdown(props: {
         props.onClose();
       }
     }
-    document.addEventListener("mousedown", handleClickOutside);
-    onCleanup(() => document.removeEventListener("mousedown", handleClickOutside));
+    document.addEventListener("click", handleClickOutside);
+    onCleanup(() => document.removeEventListener("click", handleClickOutside));
     ref?.focus();
   });
 

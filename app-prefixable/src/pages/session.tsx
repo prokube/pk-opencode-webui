@@ -318,7 +318,11 @@ export function Session() {
   // Auto-send saved prompt stored in sessionStorage by layout's createSessionWithPrompt.
   // We read from sessionStorage instead of URL params to avoid browser URL length limits.
   // The stored value is JSON: { text: string, ts: number }.
+  // Guard: the effect may re-run when reactive deps (e.g. providers.connected) update
+  // after the prompt has already been sent. A local signal prevents double sends.
+  const [promptSent, setPromptSent] = createSignal(false);
   createEffect(() => {
+    if (promptSent()) return;
     const id = params.id;
     if (!id) return;
     const key = `opencode.pendingPrompt.${id}`;
@@ -350,7 +354,8 @@ export function Session() {
       setError(`Provider "${providers.selectedModel.providerID}" is not connected. Please configure it in Settings.`);
       return;
     }
-    // All validation passed — clear the pending prompt and send to the already-created session
+    // All validation passed — mark as sent, clear storage, and send
+    setPromptSent(true);
     sessionStorage.removeItem(key);
     setError(null);
     startProcessing();
