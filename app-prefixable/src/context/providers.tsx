@@ -178,8 +178,16 @@ export function ProviderProvider(props: ParentProps) {
   }
 
   function setSelectedAgent(agent: string) {
-    if (!store.modelsByAgent[agent] && store.modelsByAgent[store.selectedAgent]) {
-      setStore("modelsByAgent", agent, store.modelsByAgent[store.selectedAgent])
+    if (!store.modelsByAgent[agent]) {
+      const source = store.modelsByAgent[store.selectedAgent]
+        ? store.selectedAgent
+        : store.modelsByAgent[DEFAULT_AGENT]
+          ? DEFAULT_AGENT
+          : null
+
+      if (source) {
+        setStore("modelsByAgent", agent, store.modelsByAgent[source])
+      }
     }
     setStore("selectedAgent", agent)
   }
