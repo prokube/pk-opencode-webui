@@ -183,6 +183,8 @@ export function Session() {
     }
 
     // Turning on — check permission
+    if (typeof window === "undefined" || !("Notification" in window)) return;
+
     const perm = Notification.permission;
     if (perm === "granted") {
       const map = readNotifyMap();
@@ -695,7 +697,12 @@ export function Session() {
               if (document.hidden) flashTitle();
 
               // Browser notification (when toggle is on)
-              if (notifyEnabled() && Notification.permission === "granted") {
+              if (
+                notifyEnabled() &&
+                typeof window !== "undefined" &&
+                "Notification" in window &&
+                Notification.permission === "granted"
+              ) {
                 const sid = sessionId();
                 const sess = sid ? sync.session.get(sid) : null;
                 const title = sess?.title || "Task complete";
