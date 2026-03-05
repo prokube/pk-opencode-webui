@@ -1410,9 +1410,6 @@ export function Session() {
           processing={processing()}
           onOpenMCPDialog={() => setShowMCPDialog(true)}
           onSendPrompt={(prompt) => setInput(prompt)}
-          onRename={(id) => sync.session.sync(id)}
-          onArchive={handleArchive}
-          onDelete={handleDelete}
           notifyEnabled={notifyEnabled()}
           notifyDenied={notifyDenied()}
           onToggleNotify={toggleNotify}
