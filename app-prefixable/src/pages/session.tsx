@@ -148,17 +148,25 @@ export function Session() {
 
   function readNotifyMap(): Record<string, boolean> {
     if (typeof window === "undefined") return {};
-    const raw = window.localStorage.getItem(NOTIFY_KEY);
-    if (!raw) return {};
     try {
-      return JSON.parse(raw) as Record<string, boolean>;
+      const raw = window.localStorage.getItem(NOTIFY_KEY);
+      if (!raw) return {};
+      try {
+        return JSON.parse(raw) as Record<string, boolean>;
+      } catch {
+        try { window.localStorage.removeItem(NOTIFY_KEY) } catch {}
+        return {};
+      }
     } catch {
       return {};
     }
   }
 
   function writeNotifyMap(map: Record<string, boolean>) {
-    window.localStorage.setItem(NOTIFY_KEY, JSON.stringify(map));
+    if (typeof window === "undefined") return;
+    try {
+      window.localStorage.setItem(NOTIFY_KEY, JSON.stringify(map));
+    } catch {}
   }
 
   const [notifyEnabled, setNotifyEnabled] = createSignal(
