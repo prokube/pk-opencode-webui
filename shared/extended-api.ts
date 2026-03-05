@@ -9,6 +9,12 @@
 import * as fs from "node:fs"
 import * as nodePath from "node:path"
 import * as os from "node:os"
+
+/** Resolve the working directory from a query param, falling back to cwd */
+function resolveDir(url: URL): string {
+  return url.searchParams.get("directory") || process.cwd()
+}
+
 /**
  * Validate that a path is safe (within allowed root, no traversal attacks).
  * Returns the normalized absolute path if valid, or null if invalid.
