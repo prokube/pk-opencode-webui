@@ -236,6 +236,7 @@ export function SessionHeader(props: SessionHeaderProps) {
       })
       .finally(() => {
         setAiRenaming(false)
+        setAiRenameSessionId(null)
         // Clean up child session
         if (ref2.childId) {
           client.session.delete({ sessionID: ref2.childId })
