@@ -56,7 +56,13 @@ const NOTIFY_STORAGE_KEY = "opencode.sessionNotify";
 function cleanupNotifyState(id: string) {
   const raw = window.localStorage.getItem(NOTIFY_STORAGE_KEY);
   if (!raw) return;
-  const map = JSON.parse(raw) as Record<string, boolean>;
+  let map: Record<string, boolean>;
+  try {
+    map = JSON.parse(raw) as Record<string, boolean>;
+  } catch {
+    window.localStorage.removeItem(NOTIFY_STORAGE_KEY);
+    return;
+  }
   if (!(id in map)) return;
   delete map[id];
   window.localStorage.setItem(NOTIFY_STORAGE_KEY, JSON.stringify(map));

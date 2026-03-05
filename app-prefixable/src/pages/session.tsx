@@ -55,7 +55,13 @@ const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB limit
 function cleanupNotifyState(id: string) {
   const raw = window.localStorage.getItem("opencode.sessionNotify");
   if (!raw) return;
-  const map = JSON.parse(raw) as Record<string, boolean>;
+  let map: Record<string, boolean>;
+  try {
+    map = JSON.parse(raw) as Record<string, boolean>;
+  } catch {
+    window.localStorage.removeItem("opencode.sessionNotify");
+    return;
+  }
   if (!(id in map)) return;
   delete map[id];
   window.localStorage.setItem("opencode.sessionNotify", JSON.stringify(map));
@@ -141,9 +147,14 @@ export function Session() {
   const NOTIFY_KEY = "opencode.sessionNotify";
 
   function readNotifyMap(): Record<string, boolean> {
+    if (typeof window === "undefined") return {};
     const raw = window.localStorage.getItem(NOTIFY_KEY);
     if (!raw) return {};
-    return JSON.parse(raw) as Record<string, boolean>;
+    try {
+      return JSON.parse(raw) as Record<string, boolean>;
+    } catch {
+      return {};
+    }
   }
 
   function writeNotifyMap(map: Record<string, boolean>) {
@@ -220,10 +231,11 @@ export function Session() {
   const wasProcessing = { value: false };
 
   // --- Tab title flash when agent finishes in background ---
-  const originalTitle = { value: document.title };
+  const originalTitle = { value: "" };
   const titleFlashing = { value: false };
 
   function flashTitle() {
+    if (typeof document === "undefined") return;
     if (titleFlashing.value) return;
     originalTitle.value = document.title;
     titleFlashing.value = true;
@@ -231,16 +243,19 @@ export function Session() {
   }
 
   function restoreTitle() {
+    if (typeof document === "undefined") return;
     if (!titleFlashing.value) return;
     document.title = originalTitle.value;
     titleFlashing.value = false;
   }
 
   function handleVisibilityChange() {
+    if (typeof document === "undefined") return;
     if (!document.hidden) restoreTitle();
   }
 
   onMount(() => {
+    originalTitle.value = document.title;
     document.addEventListener("visibilitychange", handleVisibilityChange);
   });
   onCleanup(() => {
