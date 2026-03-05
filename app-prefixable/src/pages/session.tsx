@@ -1423,7 +1423,7 @@ export function Session() {
             processing={
               processing() &&
               !pendingQuestion() &&
-              permission.pending().length === 0
+              permission.pendingForSession(sessionId() ?? "").length === 0
             }
             loadingHistory={loadingHistory()}
           />
@@ -1445,13 +1445,13 @@ export function Session() {
           </Show>
 
           {/* Permission Prompt - rendered outside timeline for proper focus */}
-          <Show when={permission.pending().length > 0}>
+          <Show when={permission.pendingForSession(sessionId() ?? "").length > 0}>
             <div
               class="px-6 pb-4"
               style={{ background: "var(--background-stronger)" }}
             >
               <PermissionPrompt
-                requests={permission.pending()}
+                requests={permission.pendingForSession(sessionId() ?? "")}
                 onRespond={permission.respond}
                 onAutoAccept={permission.enableAutoAccept}
                 autoAcceptEnabled={permission.autoAcceptEnabled()}
