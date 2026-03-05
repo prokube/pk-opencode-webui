@@ -136,8 +136,8 @@ export function Layout(props: ParentProps) {
   const [sidebarDragging, setSidebarDragging] = createSignal(false);
   const [menuOpenId, setMenuOpenId] = createSignal<string | null>(null);
   const [aiRenamingId, setAiRenamingId] = createSignal<string | null>(null);
-  const [emptySessionIds, setEmptySessionIds] = createSignal(new Set<string>());
   const [renameErrorId, setRenameErrorId] = createSignal<string | null>(null);
+  const renameErrorTimer = { id: undefined as ReturnType<typeof setTimeout> | undefined };
   const [confirmDeleteSession, setConfirmDeleteSession] = createSignal<Session | null>(null);
   const [deleting, setDeleting] = createSignal(false);
   const [deleteError, setDeleteError] = createSignal<string | null>(null);
@@ -479,12 +479,16 @@ export function Layout(props: ParentProps) {
   }
 
   function showRenameError(sessionId: string) {
+    if (renameErrorTimer.id !== undefined) clearTimeout(renameErrorTimer.id);
     setRenameErrorId(sessionId);
-    setTimeout(() => setRenameErrorId((prev) => prev === sessionId ? null : prev), 3000);
+    renameErrorTimer.id = setTimeout(() => {
+      setRenameErrorId((prev) => prev === sessionId ? null : prev);
+      renameErrorTimer.id = undefined;
+    }, 3000);
   }
 
   function handleAiRename(session: Session) {
-    if (aiRenamingId() || emptySessionIds().has(session.id)) return;
+    if (aiRenamingId()) return;
     setMenuOpenId(null);
     setAiRenamingId(session.id);
 
@@ -498,12 +502,13 @@ export function Layout(props: ParentProps) {
     pending
       .then((msgs) => {
         if (!msgs.length) {
-          setEmptySessionIds((prev) => new Set([...prev, session.id]));
-          return Promise.reject(new Error("No messages to summarize"));
+          setAiRenamingId(null);
+          return;
         }
         return suggestSessionTitle(client, session.id, msgs, providers.selectedModel, providers.selectedAgent);
       })
       .then((suggestion) => {
+        if (!suggestion) return;
         setEditTitle(suggestion);
         setRenamingId(session.id);
       })
@@ -532,6 +537,7 @@ export function Layout(props: ParentProps) {
 
   onCleanup(() => {
     document.removeEventListener("click", handleMenuDocClick, { capture: true });
+    if (renameErrorTimer.id !== undefined) clearTimeout(renameErrorTimer.id);
   });
 
   function isActive(sessionId: string) {
@@ -998,23 +1004,23 @@ export function Layout(props: ParentProps) {
                                           Rename
                                         </button>
 
-                                        {/* Rename with AI — disabled for empty sessions or when already renaming */}
+                                        {/* Rename with AI — disabled when already renaming */}
                                         <button
                                           class="w-full flex items-center gap-2 px-3 py-1.5 text-sm text-left transition-colors"
-                                          disabled={!!aiRenamingId() || emptySessionIds().has(session.id)}
+                                          disabled={!!aiRenamingId()}
                                           style={{
                                             color: "var(--text-base)",
-                                            opacity: aiRenamingId() || emptySessionIds().has(session.id) ? 0.6 : 1,
-                                            cursor: aiRenamingId() || emptySessionIds().has(session.id) ? "not-allowed" : "pointer",
+                                            opacity: aiRenamingId() ? 0.6 : 1,
+                                            cursor: aiRenamingId() ? "not-allowed" : "pointer",
                                           }}
-                                          onMouseEnter={(e) => { if (!aiRenamingId() && !emptySessionIds().has(session.id)) e.currentTarget.style.background = "var(--surface-inset)" }}
+                                          onMouseEnter={(e) => { if (!aiRenamingId()) e.currentTarget.style.background = "var(--surface-inset)" }}
                                           onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
                                           onClick={(e) => {
                                             e.preventDefault();
                                             e.stopPropagation();
                                             handleAiRename(session);
                                           }}
-                                          title={emptySessionIds().has(session.id) ? "No messages to rename from" : "Suggest a title using AI"}
+                                          title="Suggest a title using AI"
                                         >
                                           <Sparkles class="w-3.5 h-3.5 shrink-0" style={{ color: "var(--icon-weak)" }} />
                                           Rename with AI
