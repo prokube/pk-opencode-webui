@@ -1864,7 +1864,7 @@ export function Session() {
               edge="start"
               size={layout.review.width()}
               min={200}
-              max={Math.round(window.innerWidth * 0.8)}
+              max={typeof window !== "undefined" ? Math.round(window.innerWidth * 0.8) : 800}
               onResize={layout.review.resize}
               onCollapse={layout.review.close}
               collapseThreshold={100}

@@ -63,11 +63,18 @@ const NOTIFY_STORAGE_KEY = "opencode.sessionNotify";
 /** Read the per-session notification toggle map from localStorage */
 function readNotifyMap(): Record<string, boolean> {
   if (typeof window === "undefined") return {};
-  const raw = window.localStorage.getItem(NOTIFY_STORAGE_KEY);
-  if (!raw) return {};
-  const parsed = (() => { try { return JSON.parse(raw) as Record<string, boolean> } catch { return null } })();
-  if (!parsed) { window.localStorage.removeItem(NOTIFY_STORAGE_KEY); return {}; }
-  return parsed;
+  try {
+    const raw = window.localStorage.getItem(NOTIFY_STORAGE_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw) as Record<string, boolean>;
+    if (!parsed || typeof parsed !== "object") {
+      window.localStorage.removeItem(NOTIFY_STORAGE_KEY);
+      return {};
+    }
+    return parsed;
+  } catch {
+    return {};
+  }
 }
 
 /** Remove a session's entry from the notification toggle localStorage map */
@@ -524,8 +531,10 @@ export function Layout(props: ParentProps) {
     n.onclick = () => {
       window.focus();
       n.close();
-      // Navigate to the alarming session
-      navigate(`/${dirSlug()}/session/${sessionID}`);
+      // Navigate to the alarming session using its actual directory
+      const sess = sync.session.get(sessionID);
+      const slug = sess ? base64Encode(sess.directory) : dirSlug();
+      navigate(`/${slug}/session/${sessionID}`);
     };
   }
 
@@ -545,12 +554,19 @@ export function Layout(props: ParentProps) {
 
   // Subscribe to session status events for all sessions
   onMount(() => {
+    // Seed busyTracker from already-known statuses so sessions that were busy
+    // before we mounted still trigger notifications when they go idle.
+    for (const [sid, s] of Object.entries(events.status)) {
+      if (s.type === "busy" || s.type === "retry") busyTracker[sid] = true;
+    }
+
     const alarmUnsub = events.subscribe((event) => {
       // Track busy→idle transitions for all sessions
       if (event.type === "session.status") {
-        const props = event.properties as { sessionID: string; status: { type: string } };
-        const sid = props.sessionID;
-        const type = props.status.type;
+        const props = event.properties as { sessionID?: string; status?: { type?: string } } | undefined;
+        const sid = props?.sessionID;
+        const type = props?.status?.type;
+        if (!sid || !type) return;
 
         if (type === "busy" || type === "retry") {
           busyTracker[sid] = true;
