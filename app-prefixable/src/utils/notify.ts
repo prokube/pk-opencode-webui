@@ -15,6 +15,7 @@ export function readNotifyMap(): Record<string, boolean> {
     }
     return parsed;
   } catch {
+    try { window.localStorage.removeItem(NOTIFY_STORAGE_KEY); } catch {}
     return {};
   }
 }

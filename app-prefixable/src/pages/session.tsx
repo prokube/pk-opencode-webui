@@ -51,7 +51,7 @@ const ACCEPTED_TYPES = [
 ];
 const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB limit
 
-import { readNotifyMap, writeNotifyMap, cleanupNotifyState } from "../utils/notify";
+import { readNotifyMap, writeNotifyMap } from "../utils/notify";
 
 interface Command {
   id: string;
