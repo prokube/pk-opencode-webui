@@ -128,6 +128,12 @@ export function Session() {
   const toastTimer = { id: 0 as ReturnType<typeof setTimeout> };
   onCleanup(() => clearTimeout(toastTimer.id));
 
+  // Double-Escape to abort: track last Escape press timestamp
+  const lastEsc = { ts: 0 };
+  const [escHint, setEscHint] = createSignal(false);
+  const escHintTimer = { id: 0 as ReturnType<typeof setTimeout> };
+  onCleanup(() => clearTimeout(escHintTimer.id));
+
   // --- Notification toggle (per-session, persisted in localStorage) ---
   const [notifyEnabled, setNotifyEnabled] = createSignal(
     (() => {
@@ -518,6 +524,45 @@ export function Session() {
 
   onCleanup(() => {
     document.removeEventListener("click", handleClickOutside);
+  });
+
+  // Global keydown listener for double-Escape to abort
+  function handleGlobalKeyDown(e: KeyboardEvent) {
+    if (e.key !== "Escape") return;
+    // Let dialogs/popovers handle their own Escape
+    if (
+      showSlashPopover() ||
+      showMCPDialog() ||
+      showMCPAddDialog() ||
+      showModelPicker() ||
+      showAgentPicker() ||
+      showPromptPicker() ||
+      showFilePicker() ||
+      showSavePrompt()
+    ) return;
+    if (!processing()) return;
+
+    const now = Date.now();
+    if (now - lastEsc.ts < 500) {
+      e.preventDefault();
+      lastEsc.ts = 0;
+      setEscHint(false);
+      clearTimeout(escHintTimer.id);
+      handleAbort();
+      return;
+    }
+    lastEsc.ts = now;
+    setEscHint(true);
+    clearTimeout(escHintTimer.id);
+    escHintTimer.id = setTimeout(() => setEscHint(false), 1500);
+  }
+
+  onMount(() => {
+    document.addEventListener("keydown", handleGlobalKeyDown);
+  });
+
+  onCleanup(() => {
+    document.removeEventListener("keydown", handleGlobalKeyDown);
   });
 
   // Get session from sync context - reactive, automatically updated via SSE
@@ -1801,6 +1846,20 @@ export function Session() {
             }}
           >
             Prompt saved
+          </div>
+        </Show>
+
+        {/* Double-Escape hint toast */}
+        <Show when={escHint()}>
+          <div
+            class="fixed bottom-20 left-1/2 -translate-x-1/2 z-[100] px-4 py-2 rounded-lg shadow-lg text-sm font-medium"
+            style={{
+              background: "var(--surface-inset)",
+              color: "var(--text-strong)",
+              border: "1px solid var(--border-base)",
+            }}
+          >
+            Press Esc again to stop
           </div>
         </Show>
       </div>
