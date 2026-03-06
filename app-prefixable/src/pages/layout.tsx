@@ -54,6 +54,7 @@ import { useCommand, isDialogOpen } from "../context/command";
 import { ResizeHandle } from "../components/resize-handle";
 import { ConfirmDialog } from "../components/confirm-dialog";
 import { ShortcutReference } from "../components/shortcut-reference";
+import { CommandPalette } from "../components/command-palette";
 import { suggestSessionTitle } from "../utils/ai-rename";
 
 import { readNotifyMap, cleanupNotifyState, NOTIFY_STORAGE_KEY } from "../utils/notify";
@@ -420,6 +421,26 @@ export function Layout(props: ParentProps) {
   onMount(() => {
     command.register([
       {
+        id: "palette.open",
+        title: "Command Palette",
+        description: "Open the command palette",
+        keybind: "mod+k",
+        onSelect: () => command.setPaletteOpen(!command.paletteOpen()),
+      },
+      {
+        id: "session.new",
+        title: "New Session",
+        description: "Create a new chat session",
+        keybind: "mod+n",
+        onSelect: createNewSession,
+      },
+      {
+        id: "settings.open",
+        title: "Open Settings",
+        description: "Navigate to settings page",
+        onSelect: () => navigate(`/${dirSlug()}/settings`),
+      },
+      {
         id: "terminal.toggle",
         title: "Toggle Terminal",
         keybind: "ctrl+`",
@@ -492,6 +513,8 @@ export function Layout(props: ParentProps) {
           if (isDialogOpen()) return;
           // Don't steal Escape from the shortcut reference overlay
           if (command.shortcutRefOpen()) return;
+          // Don't steal Escape from the command palette
+          if (command.paletteOpen()) return;
           // Don't steal Escape from handlers that already consumed it
           if (e?.defaultPrevented) return;
           // Don't steal Escape from the terminal (Escape is heavily used there)
@@ -505,6 +528,9 @@ export function Layout(props: ParentProps) {
 
     onCleanup(() => {
       command.unregister([
+        "palette.open",
+        "session.new",
+        "settings.open",
         "terminal.toggle",
         "sidebar.toggle",
         "review.toggle",
@@ -1921,6 +1947,9 @@ export function Layout(props: ParentProps) {
 
       {/* Keyboard shortcut reference overlay */}
       <ShortcutReference />
+
+      {/* Command palette overlay */}
+      <CommandPalette />
     </div>
   );
 }

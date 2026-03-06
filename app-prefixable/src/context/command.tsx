@@ -24,6 +24,8 @@ interface CommandContextValue {
   getKeyboardShortcuts: () => Command[]
   shortcutRefOpen: () => boolean
   setShortcutRefOpen: (open: boolean) => void
+  paletteOpen: () => boolean
+  setPaletteOpen: (open: boolean) => void
 }
 
 const CommandContext = createContext<CommandContextValue>()
@@ -84,6 +86,7 @@ export function isDialogOpen(): boolean {
 export function CommandProvider(props: ParentProps) {
   const [commands, setCommands] = createSignal<Command[]>([])
   const [shortcutRefOpen, setShortcutRefOpen] = createSignal(false)
+  const [paletteOpen, setPaletteOpen] = createSignal(false)
 
   function register(newCommands: Command[]) {
     setCommands((prev) => {
@@ -166,6 +169,8 @@ export function CommandProvider(props: ParentProps) {
     getKeyboardShortcuts,
     shortcutRefOpen,
     setShortcutRefOpen,
+    paletteOpen,
+    setPaletteOpen,
   }
 
   return <CommandContext.Provider value={value}>{props.children}</CommandContext.Provider>
