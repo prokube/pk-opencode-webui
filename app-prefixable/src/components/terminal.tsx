@@ -218,7 +218,7 @@ export function Terminal(props: TerminalProps) {
         "min-height": "100px",
       }}
     >
-      <div ref={container} class="size-full" />
+      <div ref={container} class="size-full" style={{ "min-height": "100px" }} />
     </div>
   )
 }
