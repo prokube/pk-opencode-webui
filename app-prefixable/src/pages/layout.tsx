@@ -60,6 +60,16 @@ const SIDEBAR_EXPANDED_KEY = "opencode.sidebarExpanded";
 const SHOW_ARCHIVED_KEY = "opencode.showArchived";
 const NOTIFY_STORAGE_KEY = "opencode.sessionNotify";
 
+/** Read the per-session notification toggle map from localStorage */
+function readNotifyMap(): Record<string, boolean> {
+  if (typeof window === "undefined") return {};
+  const raw = window.localStorage.getItem(NOTIFY_STORAGE_KEY);
+  if (!raw) return {};
+  const parsed = (() => { try { return JSON.parse(raw) as Record<string, boolean> } catch { return null } })();
+  if (!parsed) { window.localStorage.removeItem(NOTIFY_STORAGE_KEY); return {}; }
+  return parsed;
+}
+
 /** Remove a session's entry from the notification toggle localStorage map */
 function cleanupNotifyState(id: string) {
   const raw = window.localStorage.getItem(NOTIFY_STORAGE_KEY);
@@ -459,6 +469,140 @@ export function Layout(props: ParentProps) {
       unsub();
       window.removeEventListener("keydown", handleKeyDown);
     });
+  });
+
+  // --- Global alarm monitoring for ALL sessions with bell enabled ---
+  // Track busy state per session so we detect genuine busy→idle transitions
+  const busyTracker: Record<string, boolean> = {};
+  // Track which sessions already fired a permission/question alarm to avoid repeats
+  const firedPermission = new Set<string>();
+  const firedQuestion = new Set<string>();
+
+  // Tab title flash (works for any alarming session)
+  const titleFlash = { original: "", active: false };
+
+  function flashTitle() {
+    if (typeof document === "undefined") return;
+    if (titleFlash.active) return;
+    titleFlash.original = document.title;
+    titleFlash.active = true;
+    document.title = `* ${titleFlash.original}`;
+  }
+
+  function restoreTitle() {
+    if (typeof document === "undefined") return;
+    if (!titleFlash.active) return;
+    document.title = titleFlash.original;
+    titleFlash.active = false;
+  }
+
+  onMount(() => {
+    titleFlash.original = document.title;
+    function handleVisibility() {
+      if (!document.hidden) restoreTitle();
+    }
+    document.addEventListener("visibilitychange", handleVisibility);
+    onCleanup(() => {
+      document.removeEventListener("visibilitychange", handleVisibility);
+      restoreTitle();
+    });
+  });
+
+  function fireNotification(sessionID: string, title: string, body: string, tag: string) {
+    if (typeof window === "undefined" || !("Notification" in window)) return;
+    if (Notification.permission !== "granted") return;
+
+    // Flash the tab title when the page is in the background
+    if (document.hidden) flashTitle();
+
+    const n = new Notification(title, {
+      body,
+      requireInteraction: true,
+      tag,
+      icon: basePath() + "/favicon.svg",
+    });
+    n.onclick = () => {
+      window.focus();
+      n.close();
+      // Navigate to the alarming session
+      navigate(`/${dirSlug()}/session/${sessionID}`);
+    };
+  }
+
+  function getSessionSummary(sessionID: string): string {
+    const msgs = sync.messages(sessionID);
+    const last = [...msgs].reverse().find((m) => m.info.role === "assistant");
+    if (!last) return "The agent has finished processing.";
+    const text = last.parts
+      .filter((p) => p.type === "text")
+      .map((p) => (p as { text?: string }).text ?? "")
+      .join("")
+      .trim();
+    if (!text) return "The agent has finished processing.";
+    const line = text.split("\n")[0];
+    return line.length > 120 ? line.slice(0, 120) + "..." : line;
+  }
+
+  // Subscribe to session status events for all sessions
+  onMount(() => {
+    const alarmUnsub = events.subscribe((event) => {
+      // Track busy→idle transitions for all sessions
+      if (event.type === "session.status") {
+        const props = event.properties as { sessionID: string; status: { type: string } };
+        const sid = props.sessionID;
+        const type = props.status.type;
+
+        if (type === "busy" || type === "retry") {
+          busyTracker[sid] = true;
+          return;
+        }
+
+        if (type === "idle" && busyTracker[sid]) {
+          busyTracker[sid] = false;
+          // Clear fired sets since session completed — new permission/question events are fresh
+          firedPermission.delete(sid);
+          firedQuestion.delete(sid);
+
+          // Check if bell is enabled for this session
+          if (!readNotifyMap()[sid]) return;
+
+          const sess = sync.session.get(sid);
+          const title = sess?.title || "Task complete";
+          fireNotification(sid, title, getSessionSummary(sid), `session-complete-${sid}`);
+        }
+        return;
+      }
+
+      // Permission request alarms
+      if (event.type === "permission.asked") {
+        const props = event.properties as { id: string; sessionID: string };
+        const sid = props.sessionID;
+        if (!readNotifyMap()[sid]) return;
+        // Deduplicate: only fire once per session until the session goes idle again
+        if (firedPermission.has(sid)) return;
+        firedPermission.add(sid);
+
+        const sess = sync.session.get(sid);
+        const title = sess?.title || "Permission needed";
+        fireNotification(sid, title, "A tool needs your approval to continue.", `session-permission-${sid}`);
+        return;
+      }
+
+      // Agent question alarms
+      if (event.type === "question.asked") {
+        const props = event.properties as { sessionID: string };
+        const sid = props.sessionID;
+        if (!readNotifyMap()[sid]) return;
+        if (firedQuestion.has(sid)) return;
+        firedQuestion.add(sid);
+
+        const sess = sync.session.get(sid);
+        const title = sess?.title || "Question from agent";
+        fireNotification(sid, title, "The agent has a question and is waiting for your response.", `session-question-${sid}`);
+      }
+    });
+
+    onCleanup(alarmUnsub);
   });
 
   async function createNewSession() {

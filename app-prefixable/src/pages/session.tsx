@@ -238,39 +238,6 @@ export function Session() {
   // Track whether the agent was genuinely processing (not initial load)
   const wasProcessing = { value: false };
 
-  // --- Tab title flash when agent finishes in background ---
-  const originalTitle = { value: "" };
-  const titleFlashing = { value: false };
-
-  function flashTitle() {
-    if (typeof document === "undefined") return;
-    if (titleFlashing.value) return;
-    originalTitle.value = document.title;
-    titleFlashing.value = true;
-    document.title = `* ${originalTitle.value}`;
-  }
-
-  function restoreTitle() {
-    if (typeof document === "undefined") return;
-    if (!titleFlashing.value) return;
-    document.title = originalTitle.value;
-    titleFlashing.value = false;
-  }
-
-  function handleVisibilityChange() {
-    if (typeof document === "undefined") return;
-    if (!document.hidden) restoreTitle();
-  }
-
-  onMount(() => {
-    originalTitle.value = document.title;
-    document.addEventListener("visibilitychange", handleVisibilityChange);
-  });
-  onCleanup(() => {
-    document.removeEventListener("visibilitychange", handleVisibilityChange);
-    restoreTitle();
-  });
-
   // Keep sessionId in sync with URL params and sync session data
   createEffect(() => {
     const id = params.id;
@@ -486,8 +453,8 @@ export function Session() {
     },
     {
       id: "prompt.pick",
-      title: "Send Saved Prompt",
-      description: "Send a saved prompt in a new session",
+      title: "Insert Saved Prompt",
+      description: "Insert a saved prompt into the input",
       slash: "prompt",
       onSelect: () => {
         setPromptPickerFilter("");
@@ -718,49 +685,8 @@ export function Session() {
             }
             setPendingUserMessageText(null);
 
-            // Fire notification / flash title on genuine busy→idle transition
-            if (wasProcessing.value) {
-              wasProcessing.value = false;
-
-              // Tab title flash (regardless of toggle)
-              if (document.hidden) flashTitle();
-
-              // Browser notification (when toggle is on)
-              if (
-                notifyEnabled() &&
-                typeof window !== "undefined" &&
-                "Notification" in window &&
-                Notification.permission === "granted"
-              ) {
-                const sid = sessionId();
-                const sess = sid ? sync.session.get(sid) : null;
-                const title = sess?.title || "Task complete";
-                const msgs = sid ? sync.messages(sid) : [];
-                const last = [...msgs].reverse().find((m) => m.info.role === "assistant");
-                const body = (() => {
-                  if (!last) return "The agent has finished processing.";
-                  const text = last.parts
-                    .filter((p) => p.type === "text")
-                    .map((p) => (p as { text?: string }).text ?? "")
-                    .join("")
-                    .trim();
-                  if (!text) return "The agent has finished processing.";
-                  const line = text.split("\n")[0];
-                  return line.length > 120 ? line.slice(0, 120) + "..." : line;
-                })();
-                const n = new Notification(title, {
-                  body,
-                  requireInteraction: true,
-                  tag: `session-complete-${sid}`,
-                  icon: "/favicon.ico",
-                });
-                n.onclick = () => {
-                  window.focus();
-                  n.close();
-                };
-              }
-            }
-
+            // Reset local processing tracker (notifications now handled globally in Layout)
+            wasProcessing.value = false;
             setProcessing(false);
           } else if (props.sessionID === id) {
             wasProcessing.value = true;
@@ -1646,58 +1572,60 @@ export function Session() {
                   </div>
                 </Show>
 
-                <div class="relative flex-1">
-                  <textarea
-                    ref={inputRef}
-                    value={input()}
-                    onPaste={handlePaste}
-                    onInput={(e) => {
-                      handleInputChange(e.currentTarget.value);
-                      // Auto-grow: reset height then set to scrollHeight
-                      e.currentTarget.style.height = "auto";
-                      e.currentTarget.style.height =
-                        Math.min(e.currentTarget.scrollHeight, 200) + "px";
-                    }}
-                    onKeyDown={(e) => {
-                      // Handle slash command navigation first
-                      if (showSlashPopover()) {
-                        handleInputKeyDown(e);
-                        return;
+                <textarea
+                  ref={inputRef}
+                  value={input()}
+                  onPaste={handlePaste}
+                  onInput={(e) => {
+                    handleInputChange(e.currentTarget.value);
+                    // Auto-grow: reset height then set to scrollHeight
+                    e.currentTarget.style.height = "auto";
+                    e.currentTarget.style.height =
+                      Math.min(e.currentTarget.scrollHeight, 200) + "px";
+                  }}
+                  onKeyDown={(e) => {
+                    // Handle slash command navigation first
+                    if (showSlashPopover()) {
+                      handleInputKeyDown(e);
+                      return;
+                    }
+                    // Tab to cycle agents (when input is empty)
+                    if (e.key === "Tab" && !input().trim()) {
+                      e.preventDefault();
+                      const agents = providers.agents;
+                      if (agents.length > 1) {
+                        const currentIdx = agents.findIndex(
+                          (a) => a.name === providers.selectedAgent,
+                        );
+                        const nextIdx = e.shiftKey
+                          ? (currentIdx - 1 + agents.length) % agents.length
+                          : (currentIdx + 1) % agents.length;
+                        providers.setSelectedAgent(agents[nextIdx].name);
                       }
-                      // Tab to cycle agents (when input is empty)
-                      if (e.key === "Tab" && !input().trim()) {
-                        e.preventDefault();
-                        const agents = providers.agents;
-                        if (agents.length > 1) {
-                          const currentIdx = agents.findIndex(
-                            (a) => a.name === providers.selectedAgent,
-                          );
-                          const nextIdx = e.shiftKey
-                            ? (currentIdx - 1 + agents.length) % agents.length
-                            : (currentIdx + 1) % agents.length;
-                          providers.setSelectedAgent(agents[nextIdx].name);
-                        }
-                        return;
-                      }
-                      // Enter to submit (without shift), Shift+Enter for newline
-                      if (e.key === "Enter" && !e.shiftKey) {
-                        e.preventDefault();
-                        const form = e.currentTarget.closest("form");
-                        if (form) form.requestSubmit();
-                      }
-                    }}
-                    placeholder="Type a message... (Tab to switch agent, / for commands)"
-                    rows={1}
-                    class="w-full px-4 py-3 pr-10 focus:outline-none resize-none bg-transparent"
-                    style={{
-                      color: "var(--text-base)",
-                      "min-height": "48px",
-                      "max-height": "200px",
-                      "overflow-y": "auto",
-                    }}
-                  />
-                  {/* Attach buttons - inside input area */}
-                  <div class="absolute right-2 top-2 flex items-center gap-1">
+                      return;
+                    }
+                    // Enter to submit (without shift), Shift+Enter for newline
+                    if (e.key === "Enter" && !e.shiftKey) {
+                      e.preventDefault();
+                      const form = e.currentTarget.closest("form");
+                      if (form) form.requestSubmit();
+                    }
+                  }}
+                  placeholder="Type a message... (Tab to switch agent, / for commands)"
+                  rows={1}
+                  class="w-full px-4 py-3 focus:outline-none resize-none bg-transparent"
+                  style={{
+                    color: "var(--text-base)",
+                    "min-height": "48px",
+                    "max-height": "200px",
+                    "overflow-y": "auto",
+                  }}
+                />
+
+                {/* Bottom bar: attach buttons + session info */}
+                <div class="flex items-center px-2 py-1">
+                  {/* Attach buttons */}
+                  <div class="flex items-center gap-1 shrink-0">
                     {/* Save as prompt button */}
                     <Show when={input().trim()}>
                       <button
@@ -1767,16 +1695,18 @@ export function Session() {
                       <Paperclip class="w-4 h-4" />
                     </button>
                   </div>
-                </div>
 
-                {/* Session info: Git branch, Agent, Model, Token usage */}
-                <SessionInfo
-                  input={input}
-                  loading={loading}
-                  processing={processing}
-                  onAbort={handleAbort}
-                  onAgentClick={() => setShowAgentPicker(true)}
-                />
+                  {/* Session info: Agent, Model, Token usage */}
+                  <div class="flex-1 min-w-0">
+                    <SessionInfo
+                      input={input}
+                      loading={loading}
+                      processing={processing}
+                      onAbort={handleAbort}
+                      onAgentClick={() => setShowAgentPicker(true)}
+                    />
+                  </div>
+                </div>
               </div>
             </form>
           </div>
@@ -1850,7 +1780,7 @@ export function Session() {
         {/* Saved Prompt Picker Dialog */}
         <Show when={showPromptPicker()}>
           <PickerDialog
-            title="Send Saved Prompt"
+            title="Insert Saved Prompt"
             placeholder="Filter prompts..."
             emptyMessage="No saved prompts. Add them in Settings."
             initialFilter={promptPickerFilter()}
@@ -1858,7 +1788,15 @@ export function Session() {
             onSelect={(item) => {
               const found = savedPrompts.prompts().find((p) => p.id === item.id);
               if (!found) return;
-              createSessionAndSendPrompt(found.text);
+              setInput(found.text);
+              // Auto-grow textarea after DOM updates with new value
+              requestAnimationFrame(() => {
+                if (inputRef) {
+                  inputRef.style.height = "auto";
+                  inputRef.style.height = Math.min(inputRef.scrollHeight, 200) + "px";
+                  inputRef.focus();
+                }
+              });
             }}
             onClose={() => setShowPromptPicker(false)}
           />
@@ -1926,7 +1864,7 @@ export function Session() {
               edge="start"
               size={layout.review.width()}
               min={200}
-              max={600}
+              max={Math.round(window.innerWidth * 0.8)}
               onResize={layout.review.resize}
               onCollapse={layout.review.close}
               collapseThreshold={100}
