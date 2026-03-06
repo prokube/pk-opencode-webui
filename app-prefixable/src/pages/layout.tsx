@@ -478,8 +478,10 @@ export function Layout(props: ParentProps) {
 
   // Keyboard handler for context menu navigation
   function handleMenuKeyDown(e: KeyboardEvent) {
-    // Count of menu items for the focused session (active sessions have 4: Rename, AI Rename, Archive, Delete)
-    const MENU_ITEMS = 4;
+    // Dynamically count menu items from the DOM (active sessions have 4, archived have 2)
+    const menu = document.querySelector("[data-sidebar-menu-dropdown]") as HTMLElement | null;
+    const menuItems = menu ? menu.querySelectorAll("[data-menu-item]") : [];
+    const count = menuItems.length || 1;
 
     if (e.key === "Escape") {
       e.preventDefault();
@@ -491,23 +493,19 @@ export function Layout(props: ParentProps) {
 
     if (e.key === "ArrowDown") {
       e.preventDefault();
-      setMenuFocusIndex((prev) => (prev < MENU_ITEMS - 1 ? prev + 1 : 0));
+      setMenuFocusIndex((prev) => (prev < count - 1 ? prev + 1 : 0));
       return;
     }
 
     if (e.key === "ArrowUp") {
       e.preventDefault();
-      setMenuFocusIndex((prev) => (prev > 0 ? prev - 1 : MENU_ITEMS - 1));
+      setMenuFocusIndex((prev) => (prev > 0 ? prev - 1 : count - 1));
       return;
     }
 
     if (e.key === "Enter") {
       e.preventDefault();
-      // Click the focused menu item
-      const menu = document.querySelector("[data-sidebar-menu-dropdown]") as HTMLElement | null;
-      if (!menu) return;
-      const items = menu.querySelectorAll("[data-menu-item]") as NodeListOf<HTMLButtonElement>;
-      const item = items[menuFocusIndex()];
+      const item = menuItems[menuFocusIndex()] as HTMLButtonElement | undefined;
       if (item) item.click();
       setMenuFocusIndex(-1);
       return;
@@ -706,6 +704,7 @@ export function Layout(props: ParentProps) {
         global: true,
         onSelect: () => {
           if (isDialogOpen() || command.paletteOpen() || command.shortcutRefOpen()) return;
+          if (!sidebarExpanded()) return; // Don't focus collapsed sidebar
           focusPanel("sidebar");
         },
       },
@@ -1924,14 +1923,20 @@ export function Layout(props: ParentProps) {
                                       background: "var(--background-base)",
                                       border: "1px solid var(--border-base)",
                                     }}
-                                    data-sidebar-menu
+                                    data-sidebar-menu-dropdown
+                                    role="menu"
                                   >
                                     {/* Restore */}
                                     <button
+                                      data-menu-item
+                                      role="menuitem"
                                       class="w-full flex items-center gap-2 px-3 py-1.5 text-sm text-left transition-colors"
-                                      style={{ color: "var(--text-base)" }}
-                                      onMouseEnter={(e) => (e.currentTarget.style.background = "var(--surface-inset)")}
-                                      onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
+                                      style={{
+                                        color: "var(--text-base)",
+                                        background: menuFocusIndex() === 0 ? "var(--surface-inset)" : "transparent",
+                                      }}
+                                      onMouseEnter={() => setMenuFocusIndex(0)}
+                                      onMouseLeave={(e) => { if (menuFocusIndex() !== 0) e.currentTarget.style.background = "transparent" }}
                                       onClick={(e) => {
                                         e.preventDefault();
                                         e.stopPropagation();
@@ -1944,14 +1949,19 @@ export function Layout(props: ParentProps) {
                                     </button>
 
                                     {/* Separator */}
-                                    <div class="my-1" style={{ "border-top": "1px solid var(--border-base)" }} />
+                                    <div class="my-1" role="separator" style={{ "border-top": "1px solid var(--border-base)" }} />
 
                                     {/* Delete */}
                                     <button
+                                      data-menu-item
+                                      role="menuitem"
                                       class="w-full flex items-center gap-2 px-3 py-1.5 text-sm text-left transition-colors"
-                                      style={{ color: "var(--text-critical-base)" }}
-                                      onMouseEnter={(e) => (e.currentTarget.style.background = "var(--surface-inset)")}
-                                      onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
+                                      style={{
+                                        color: "var(--text-critical-base)",
+                                        background: menuFocusIndex() === 1 ? "var(--surface-inset)" : "transparent",
+                                      }}
+                                      onMouseEnter={() => setMenuFocusIndex(1)}
+                                      onMouseLeave={(e) => { if (menuFocusIndex() !== 1) e.currentTarget.style.background = "transparent" }}
                                       onClick={(e) => {
                                         e.preventDefault();
                                         e.stopPropagation();

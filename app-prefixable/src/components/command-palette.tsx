@@ -246,9 +246,15 @@ export function CommandPalette() {
     onCleanup(() => window.removeEventListener("keydown", handleKeyDown, true))
   })
 
-  // Build a flat index offset map so grouped rendering maps to correct flat index
+  // Pre-computed index map for O(1) lookup instead of O(n) indexOf per item
+  const flatIndexMap = createMemo(() => {
+    const map = new Map<string, number>()
+    flatItems().forEach((item, i) => map.set(item.id, i))
+    return map
+  })
+
   function flatIndexOf(item: PaletteItem): number {
-    return flatItems().indexOf(item)
+    return flatIndexMap().get(item.id) ?? -1
   }
 
   function renderIcon(item: PaletteItem) {
