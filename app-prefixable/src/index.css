@@ -57,6 +57,12 @@
     --surface-brand-subtle: theme(colors.brand.50);
     --border-brand-subtle: theme(colors.brand.100);
     --surface-brand-muted: theme(colors.brand.100);
+
+    /* Diff colors */
+    --diff-removed-bg: rgba(192, 38, 211, 0.12);
+    --diff-removed-text: #c026d3;
+    --diff-added-bg: rgba(99, 102, 241, 0.12);
+    --diff-added-text: #6366f1;
   }
 
   .dark {
@@ -87,9 +93,16 @@
     --interactive-critical: #ef4444;
     --interactive-critical-hover: #dc2626;
 
+    /* Brand tints */
     --surface-brand-subtle: color-mix(in srgb, theme(colors.brand.500) 10%, transparent);
     --border-brand-subtle: color-mix(in srgb, theme(colors.brand.500) 20%, transparent);
     --surface-brand-muted: color-mix(in srgb, theme(colors.brand.500) 15%, transparent);
+
+    /* Diff colors */
+    --diff-removed-bg: rgba(192, 38, 211, 0.18);
+    --diff-removed-text: #d946ef;
+    --diff-added-bg: rgba(99, 102, 241, 0.18);
+    --diff-added-text: #818cf8;
   }
 }
 

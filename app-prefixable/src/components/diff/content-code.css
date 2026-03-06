@@ -33,3 +33,13 @@
 .content-code pre span {
   white-space: break-spaces;
 }
+
+/* Shiki dual-theme: activate dark theme colors when .dark class is on <html> */
+.dark .content-code .shiki,
+.dark .content-code .shiki span {
+  color: var(--shiki-dark) !important;
+  background-color: var(--shiki-dark-bg) !important;
+  font-style: var(--shiki-dark-font-style) !important;
+  font-weight: var(--shiki-dark-font-weight) !important;
+  text-decoration: var(--shiki-dark-text-decoration) !important;
+}
