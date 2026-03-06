@@ -271,7 +271,6 @@ export function Terminal(props: TerminalProps) {
       const theme = activeTheme()
       if (!term) return
       term.options.theme = theme
-      wrapper.style.background = theme.background!
     })
 
     onCleanup(() => {
@@ -308,6 +307,7 @@ export function Terminal(props: TerminalProps) {
         style={{ background: activeTheme().background }}
       >
         <button
+          type="button"
           onClick={cycleScheme}
           class="flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] transition-colors opacity-60 hover:opacity-100"
           style={{ color: activeTheme().foreground }}
