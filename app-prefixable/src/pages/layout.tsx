@@ -488,7 +488,8 @@ export function Layout(props: ParentProps) {
   const firedPermission = new Set<string>();
   const firedQuestion = new Set<string>();
 
-  // Cached notify map — avoids repeated localStorage reads + JSON.parse on every SSE event
+  // Cached notify map — avoids repeated localStorage reads + JSON.parse on every SSE event.
+  // Updated via storage events (including synthetic same-tab events dispatched by writeNotifyMap).
   const [notifyCache, setNotifyCache] = createSignal(readNotifyMap());
   onMount(() => {
     function handleStorage(e: StorageEvent) {
@@ -497,11 +498,6 @@ export function Layout(props: ParentProps) {
     window.addEventListener("storage", handleStorage);
     onCleanup(() => window.removeEventListener("storage", handleStorage));
   });
-  // Also refresh when the bell toggle is changed from the same tab (storage event
-  // only fires across tabs). We poll on a relaxed interval since same-tab updates
-  // are typically followed closely by an SSE event that checks the cache.
-  const notifyPollTimer = setInterval(() => setNotifyCache(readNotifyMap()), 5000);
-  onCleanup(() => clearInterval(notifyPollTimer));
 
   // Tab title flash (works for any alarming session)
   const titleFlash = { original: "", active: false };

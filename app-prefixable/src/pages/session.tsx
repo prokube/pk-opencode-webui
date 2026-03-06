@@ -166,6 +166,9 @@ export function Session() {
     if (typeof window === "undefined") return;
     try {
       window.localStorage.setItem(NOTIFY_KEY, JSON.stringify(map));
+      // Dispatch a synthetic storage event so same-tab listeners (Layout alarm cache) update immediately.
+      // The native storage event only fires cross-tab.
+      window.dispatchEvent(new StorageEvent("storage", { key: NOTIFY_KEY }));
     } catch {}
   }
 
