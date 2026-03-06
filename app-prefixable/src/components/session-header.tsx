@@ -137,6 +137,7 @@ export function SessionHeader(props: SessionHeaderProps) {
       <div class="flex items-center gap-1">
         {/* MCP toggle */}
         <button
+          data-hint-target
           onClick={props.onOpenMCPDialog}
           class="p-1.5 rounded-md transition-colors relative"
           style={{
@@ -163,6 +164,7 @@ export function SessionHeader(props: SessionHeaderProps) {
 
         {/* Review panel toggle */}
         <button
+          data-hint-target
           onClick={layout.review.toggle}
           class="p-1.5 rounded-md transition-colors"
           style={{
@@ -183,6 +185,7 @@ export function SessionHeader(props: SessionHeaderProps) {
 
         {/* Info panel toggle */}
         <button
+          data-hint-target
           onClick={layout.info.toggle}
           class="p-1.5 rounded-md transition-colors"
           style={{
@@ -203,6 +206,7 @@ export function SessionHeader(props: SessionHeaderProps) {
 
         {/* Terminal toggle */}
         <button
+          data-hint-target
           onClick={() => terminal.toggle(directory)}
           class="p-1.5 rounded-md transition-colors"
           style={{

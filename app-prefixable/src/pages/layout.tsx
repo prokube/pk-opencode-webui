@@ -55,6 +55,7 @@ import { ResizeHandle } from "../components/resize-handle";
 import { ConfirmDialog } from "../components/confirm-dialog";
 import { ShortcutReference } from "../components/shortcut-reference";
 import { CommandPalette } from "../components/command-palette";
+import { HintMode } from "../components/hint-mode";
 import { suggestSessionTitle } from "../utils/ai-rename";
 
 import { readNotifyMap, cleanupNotifyState, NOTIFY_STORAGE_KEY } from "../utils/notify";
@@ -1221,6 +1222,7 @@ export function Layout(props: ParentProps) {
           <For each={projects()}>
             {(project) => (
               <div
+                data-hint-target
                 onClick={() => navigateToProject(project.worktree)}
                 class="group relative cursor-pointer"
                 title={project.name || getFilename(project.worktree)}
@@ -1258,6 +1260,7 @@ export function Layout(props: ParentProps) {
 
           {/* Add project button */}
           <button
+            data-hint-target
             onClick={() => setProjectDialogOpen(true)}
             class="w-10 h-10 rounded-lg flex items-center justify-center transition-colors"
             style={{
@@ -1282,6 +1285,7 @@ export function Layout(props: ParentProps) {
           style={{ "border-top": "1px solid var(--border-base)" }}
         >
           <button
+            data-hint-target
             onClick={() => terminal.toggle(directory)}
             class="w-10 h-10 rounded-lg flex items-center justify-center transition-colors"
             style={{
@@ -1297,6 +1301,7 @@ export function Layout(props: ParentProps) {
             <SquareTerminal class="w-5 h-5" />
           </button>
           <button
+            data-hint-target
             onClick={() => navigate(`/${dirSlug()}/settings`)}
             class="w-10 h-10 rounded-lg flex items-center justify-center transition-colors"
             style={{
@@ -1378,6 +1383,7 @@ export function Layout(props: ParentProps) {
           <div class="px-3 py-2 relative">
             <div class="flex w-full">
               <Button
+                data-hint-target
                 onClick={createNewSession}
                 variant="ghost"
                 class={`flex-1 justify-start ${savedPrompts.prompts().length > 0 ? "rounded-r-none" : ""}`}
@@ -1472,6 +1478,7 @@ export function Layout(props: ParentProps) {
                                 when={renamingId() === session.id}
                                 fallback={
                                   <A
+                                    data-hint-target
                                     href={`/${dirSlug()}/session/${session.id}`}
                                     tabIndex={-1}
                                     class="flex items-center gap-2 px-2.5 py-2 rounded-md text-sm transition-colors"
@@ -2259,6 +2266,9 @@ export function Layout(props: ParentProps) {
 
       {/* Command palette overlay */}
       <CommandPalette />
+
+      {/* Vimium-style hint mode overlay */}
+      <HintMode />
     </div>
   );
 }
