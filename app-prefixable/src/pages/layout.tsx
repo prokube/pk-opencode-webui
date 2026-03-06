@@ -54,27 +54,12 @@ import { ResizeHandle } from "../components/resize-handle";
 import { ConfirmDialog } from "../components/confirm-dialog";
 import { suggestSessionTitle } from "../utils/ai-rename";
 
+import { readNotifyMap, cleanupNotifyState, NOTIFY_STORAGE_KEY } from "../utils/notify";
+
 // Storage keys
 const PROJECTS_STORAGE_KEY = "opencode.projects";
 const SIDEBAR_EXPANDED_KEY = "opencode.sidebarExpanded";
 const SHOW_ARCHIVED_KEY = "opencode.showArchived";
-const NOTIFY_STORAGE_KEY = "opencode.sessionNotify";
-
-/** Remove a session's entry from the notification toggle localStorage map */
-function cleanupNotifyState(id: string) {
-  const raw = window.localStorage.getItem(NOTIFY_STORAGE_KEY);
-  if (!raw) return;
-  let map: Record<string, boolean>;
-  try {
-    map = JSON.parse(raw) as Record<string, boolean>;
-  } catch {
-    window.localStorage.removeItem(NOTIFY_STORAGE_KEY);
-    return;
-  }
-  if (!(id in map)) return;
-  delete map[id];
-  window.localStorage.setItem(NOTIFY_STORAGE_KEY, JSON.stringify(map));
-}
 
 // Group sessions by date bucket
 export function groupSessionsByDate(
@@ -459,6 +444,186 @@ export function Layout(props: ParentProps) {
       unsub();
       window.removeEventListener("keydown", handleKeyDown);
     });
+  });
+
+  // --- Global alarm monitoring for ALL sessions with bell enabled ---
+  // NOTE: Currently scoped to the active directory's SSE stream (EventProvider connects
+  // to `/event?directory=...`). Cross-project alarms would require subscribing to
+  // multiple directory streams or an unscoped endpoint — left for a future iteration.
+  // Track busy state per session so we detect genuine busy→idle transitions
+  const busyTracker: Record<string, boolean> = {};
+  // Track which individual permission/question requests already fired an alarm (keyed by request ID)
+  const firedPermission = new Set<string>();
+  const firedQuestion = new Set<string>();
+
+  // Cached notify map — avoids repeated localStorage reads + JSON.parse on every SSE event.
+  // Updated via storage events (including synthetic same-tab events dispatched by writeNotifyMap).
+  const [notifyCache, setNotifyCache] = createSignal(readNotifyMap());
+  onMount(() => {
+    function handleStorage(e: StorageEvent) {
+      if (e.key === NOTIFY_STORAGE_KEY) setNotifyCache(readNotifyMap());
+    }
+    window.addEventListener("storage", handleStorage);
+    onCleanup(() => window.removeEventListener("storage", handleStorage));
+  });
+
+  // Tab title flash (works for any alarming session)
+  const titleFlash = { original: "", active: false };
+
+  function flashTitle() {
+    if (typeof document === "undefined") return;
+    if (titleFlash.active) return;
+    titleFlash.original = document.title;
+    titleFlash.active = true;
+    document.title = `* ${titleFlash.original}`;
+  }
+
+  function restoreTitle() {
+    if (typeof document === "undefined") return;
+    if (!titleFlash.active) return;
+    document.title = titleFlash.original;
+    titleFlash.active = false;
+  }
+
+  onMount(() => {
+    titleFlash.original = document.title;
+    function handleVisibility() {
+      if (!document.hidden) restoreTitle();
+    }
+    document.addEventListener("visibilitychange", handleVisibility);
+    onCleanup(() => {
+      document.removeEventListener("visibilitychange", handleVisibility);
+      restoreTitle();
+    });
+  });
+
+  function fireNotification(sessionID: string, title: string, body: string, tag: string) {
+    // Flash the tab title when the page is in the background, regardless of Notification permission
+    if (typeof document !== "undefined" && document.hidden) flashTitle();
+
+    if (typeof window === "undefined" || !("Notification" in window)) return;
+    if (Notification.permission !== "granted") return;
+
+    const n = new Notification(title, {
+      body,
+      requireInteraction: true,
+      tag,
+      icon: basePath + "favicon.svg",
+    });
+    n.onclick = () => {
+      window.focus();
+      n.close();
+      // Navigate to the alarming session using its actual directory
+      const sess = sync.session.get(sessionID);
+      const slug = sess ? base64Encode(sess.directory) : dirSlug();
+      navigate(`/${slug}/session/${sessionID}`);
+    };
+  }
+
+  function getSessionSummary(sessionID: string): string {
+    const msgs = sync.messages(sessionID);
+    // Iterate from end to find last assistant message without copying/reversing the array
+    let last: (typeof msgs)[number] | undefined;
+    for (let i = msgs.length - 1; i >= 0; i--) {
+      if (msgs[i].info.role === "assistant") { last = msgs[i]; break; }
+    }
+    if (!last) return "The agent has finished processing.";
+    const text = last.parts
+      .filter((p) => p.type === "text")
+      .map((p) => (p as { text?: string }).text ?? "")
+      .join("")
+      .trim();
+    if (!text) return "The agent has finished processing.";
+    const line = text.split("\n")[0];
+    return line.length > 120 ? line.slice(0, 120) + "..." : line;
+  }
+
+  // Seed busyTracker reactively from already-known statuses so sessions that were busy
+  // before we mounted (or before the status fetch resolved) still trigger notifications
+  // when they go idle. Only fill entries that aren't already tracked.
+  createEffect(() => {
+    for (const [sid, s] of Object.entries(events.status)) {
+      if ((s.type === "busy" || s.type === "retry") && !(sid in busyTracker)) {
+        busyTracker[sid] = true;
+      }
+    }
+  });
+
+  // Subscribe to session status events for all sessions
+  onMount(() => {
+    const alarmUnsub = events.subscribe((event) => {
+      // Track busy→idle transitions for all sessions
+      if (event.type === "session.status") {
+        const props = event.properties as { sessionID?: string; status?: { type?: string } } | undefined;
+        const sid = props?.sessionID;
+        const type = props?.status?.type;
+        if (!sid || !type) return;
+
+        if (type === "busy" || type === "retry") {
+          busyTracker[sid] = true;
+          return;
+        }
+
+        if (type === "idle" && busyTracker[sid]) {
+          busyTracker[sid] = false;
+
+          // Check if bell is enabled for this session
+          if (notifyCache()[sid] !== true) return;
+
+          const sess = sync.session.get(sid);
+          const title = sess?.title || "Task complete";
+          fireNotification(sid, title, getSessionSummary(sid), `session-complete-${sid}`);
+        }
+        return;
+      }
+
+      // Permission request alarms (keyed by request ID so multiple requests per session each fire)
+      if (event.type === "permission.asked") {
+        const props = event.properties as { id?: string; sessionID?: string };
+        const sid = props.sessionID;
+        const rid = props.id;
+        if (!sid || !rid) return;
+        if (notifyCache()[sid] !== true) return;
+        if (firedPermission.has(rid)) return;
+        firedPermission.add(rid);
+
+        const sess = sync.session.get(sid);
+        const title = sess?.title || "Permission needed";
+        fireNotification(sid, title, "A tool needs your approval to continue.", `session-permission-${rid}`);
+        return;
+      }
+
+      // Clear permission dedup on reply
+      if (event.type === "permission.replied") {
+        const props = event.properties as { requestID?: string };
+        if (props.requestID) firedPermission.delete(props.requestID);
+        return;
+      }
+
+      // Agent question alarms (keyed by request ID)
+      if (event.type === "question.asked") {
+        const props = event.properties as { id?: string; sessionID?: string };
+        const sid = props.sessionID;
+        const rid = props.id;
+        if (!sid || !rid) return;
+        if (notifyCache()[sid] !== true) return;
+        if (firedQuestion.has(rid)) return;
+        firedQuestion.add(rid);
+
+        const sess = sync.session.get(sid);
+        const title = sess?.title || "Question from agent";
+        fireNotification(sid, title, "The agent has a question and is waiting for your response.", `session-question-${rid}`);
+        return;
+      }
+
+      // Clear question dedup on reply/reject
+      if (event.type === "question.replied" || event.type === "question.rejected") {
+        const props = event.properties as { requestID?: string };
+        if (props.requestID) firedQuestion.delete(props.requestID);
+      }
+    });
+
+    onCleanup(alarmUnsub);
   });
 
   async function createNewSession() {
