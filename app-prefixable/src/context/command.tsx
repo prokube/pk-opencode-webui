@@ -11,6 +11,8 @@ export interface Command {
   global?: boolean
   /** When true, preventDefault is NOT called automatically — the handler receives the event */
   passive?: boolean
+  /** When true, the command is hidden from the shortcut reference and command palette */
+  hidden?: boolean
   onSelect: (e?: KeyboardEvent) => void
 }
 
@@ -26,6 +28,9 @@ interface CommandContextValue {
   setShortcutRefOpen: (open: boolean) => void
   paletteOpen: () => boolean
   setPaletteOpen: (open: boolean) => void
+  /** Initial filter to apply when the palette opens (e.g. "#" for projects) */
+  paletteFilter: () => string
+  setPaletteFilter: (filter: string) => void
 }
 
 const CommandContext = createContext<CommandContextValue>()
@@ -62,6 +67,11 @@ export function formatKeybind(keybind: string): string {
       if (part === "`") return "`"
       if (part === "?") return "?"
       if (part === "/") return "/"
+      if (part === "ArrowUp") return "↑"
+      if (part === "ArrowDown") return "↓"
+      if (part === "ArrowLeft") return "←"
+      if (part === "ArrowRight") return "→"
+      if (part === "Escape") return "Esc"
       return part.toUpperCase()
     })
     .join(isMac ? "" : "+")
@@ -87,6 +97,7 @@ export function CommandProvider(props: ParentProps) {
   const [commands, setCommands] = createSignal<Command[]>([])
   const [shortcutRefOpen, setShortcutRefOpen] = createSignal(false)
   const [paletteOpen, setPaletteOpen] = createSignal(false)
+  const [paletteFilter, setPaletteFilter] = createSignal("")
 
   function register(newCommands: Command[]) {
     setCommands((prev) => {
@@ -120,7 +131,7 @@ export function CommandProvider(props: ParentProps) {
   }
 
   function getKeyboardShortcuts() {
-    return commands().filter((c) => c.keybind)
+    return commands().filter((c) => c.keybind && !c.hidden)
   }
 
   // Reactively bind shortcuts via tinykeys whenever commands change
@@ -171,6 +182,8 @@ export function CommandProvider(props: ParentProps) {
     setShortcutRefOpen,
     paletteOpen,
     setPaletteOpen,
+    paletteFilter,
+    setPaletteFilter,
   }
 
   return <CommandContext.Provider value={value}>{props.children}</CommandContext.Provider>

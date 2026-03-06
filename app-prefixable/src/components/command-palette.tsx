@@ -82,8 +82,9 @@ export function CommandPalette() {
       }
     }
 
-    // Commands — all registered commands (excluding internal/passive ones)
+    // Commands — all registered commands (excluding internal/passive/hidden ones)
     for (const cmd of command.commands) {
+      if (cmd.hidden) continue
       if (cmd.id === "focus.escape") continue // Skip escape handler
       if (cmd.id === "palette.open") continue // Skip self
       result.push({
@@ -188,10 +189,12 @@ export function CommandPalette() {
     setTimeout(() => item.onSelect(), 0)
   }
 
-  // Focus input when opened
+  // Focus input when opened; apply initial filter if set
   createEffect(() => {
     if (command.paletteOpen()) {
-      setFilter("")
+      const initial = command.paletteFilter()
+      setFilter(initial)
+      command.setPaletteFilter("")
       setActiveIndex(0)
       // Focus after the portal renders
       requestAnimationFrame(() => inputRef?.focus())

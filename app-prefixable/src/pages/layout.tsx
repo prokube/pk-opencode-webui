@@ -220,6 +220,7 @@ export function Layout(props: ParentProps) {
   const [deleteError, setDeleteError] = createSignal<string | null>(null);
   const [promptDropdownOpen, setPromptDropdownOpen] = createSignal(false);
   const [promptDropdownIndex, setPromptDropdownIndex] = createSignal(0);
+  const [confirmArchiveSession, setConfirmArchiveSession] = createSignal<Session | null>(null);
 
   // Responsive breakpoint - collapse sidebar below 900px
   const COLLAPSE_BREAKPOINT = 900;
@@ -417,6 +418,51 @@ export function Layout(props: ParentProps) {
     return true;
   }
 
+  // Helper: find the current session ID from the URL
+  function currentSessionId(): string | undefined {
+    const match = location.pathname.match(/\/session\/([^/]+)/);
+    return match ? match[1] : undefined;
+  }
+
+  // Navigate to session by index in the sidebar list (0-based)
+  function navigateToSessionIndex(index: number) {
+    const list = projectSessions();
+    if (!list.length) return;
+    const clamped = Math.max(0, Math.min(index, list.length - 1));
+    navigate(`/${dirSlug()}/session/${list[clamped].id}`);
+  }
+
+  // Navigate to next/previous session with wrap-around
+  function navigateSessionDelta(delta: number) {
+    const list = projectSessions();
+    if (!list.length) return;
+    const current = currentSessionId();
+    const idx = current ? list.findIndex((s) => s.id === current) : -1;
+    // If no current session, go to first
+    if (idx === -1) {
+      navigate(`/${dirSlug()}/session/${list[0].id}`);
+      return;
+    }
+    const next = (idx + delta + list.length) % list.length;
+    navigate(`/${dirSlug()}/session/${list[next].id}`);
+  }
+
+  // Archive the current session (with confirmation if busy)
+  function archiveCurrentSession() {
+    const id = currentSessionId();
+    if (!id) return;
+    const list = projectSessions();
+    const session = list.find((s) => s.id === id);
+    if (!session) return;
+    const status = events.status[id]?.type;
+    if (status === "busy" || status === "retry") {
+      // Show confirmation dialog for busy sessions
+      setConfirmArchiveSession(session);
+      return;
+    }
+    archiveAndNavigate(session);
+  }
+
   // Register keyboard shortcuts via CommandProvider
   onMount(() => {
     command.register([
@@ -433,6 +479,47 @@ export function Layout(props: ParentProps) {
         description: "Create a new chat session",
         keybind: "mod+n",
         onSelect: createNewSession,
+      },
+      {
+        id: "session.archive",
+        title: "Archive Session",
+        description: "Archive the current session",
+        keybind: "mod+w",
+        onSelect: archiveCurrentSession,
+      },
+      {
+        id: "session.next",
+        title: "Next Session",
+        description: "Switch to the next session in the list",
+        keybind: "alt+ArrowDown",
+        onSelect: () => navigateSessionDelta(1),
+      },
+      {
+        id: "session.prev",
+        title: "Previous Session",
+        description: "Switch to the previous session in the list",
+        keybind: "alt+ArrowUp",
+        onSelect: () => navigateSessionDelta(-1),
+      },
+      // Alt+1 through Alt+9: jump to session by position
+      // Alt+1 is visible in the cheat sheet as representative; Alt+2-9 are hidden
+      ...Array.from({ length: 9 }, (_, i) => ({
+        id: `session.jump.${i + 1}`,
+        title: i === 0 ? "Jump to Session 1–9" : `Go to Session ${i + 1}`,
+        description: i === 0 ? "Switch to a session by its sidebar position" : undefined,
+        keybind: `alt+${i + 1}`,
+        hidden: i > 0,
+        onSelect: () => navigateToSessionIndex(i),
+      })),
+      {
+        id: "palette.projects",
+        title: "Switch Project",
+        description: "Open command palette filtered to projects",
+        keybind: "mod+shift+k",
+        onSelect: () => {
+          command.setPaletteFilter("# ");
+          command.setPaletteOpen(true);
+        },
       },
       {
         id: "settings.open",
@@ -530,6 +617,11 @@ export function Layout(props: ParentProps) {
       command.unregister([
         "palette.open",
         "session.new",
+        "session.archive",
+        "session.next",
+        "session.prev",
+        ...Array.from({ length: 9 }, (_, i) => `session.jump.${i + 1}`),
+        "palette.projects",
         "settings.open",
         "terminal.toggle",
         "sidebar.toggle",
@@ -1943,6 +2035,22 @@ export function Layout(props: ParentProps) {
           setDeleteError(null);
           setConfirmDeleteSession(null);
         }}
+      />
+
+      {/* Archive confirmation dialog for busy sessions (Cmd+W) */}
+      <ConfirmDialog
+        open={!!confirmArchiveSession()}
+        title="Archive busy session?"
+        message={`"${confirmArchiveSession()?.title || "This session"}" is currently running. Archive it anyway?`}
+        confirmLabel="Archive"
+        cancelLabel="Cancel"
+        variant="warning"
+        onConfirm={() => {
+          const session = confirmArchiveSession();
+          setConfirmArchiveSession(null);
+          if (session) archiveAndNavigate(session);
+        }}
+        onCancel={() => setConfirmArchiveSession(null)}
       />
 
       {/* Keyboard shortcut reference overlay */}
