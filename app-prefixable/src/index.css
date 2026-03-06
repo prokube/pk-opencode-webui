@@ -40,6 +40,8 @@
     --icon-base: #52525b;
     --icon-weak: #a1a1aa;
     --icon-strong: #18181b;
+    --icon-success-base: #16a34a;
+    --icon-warning-base: #ca8a04;
 
     /* Border colors */
     --border-base: #e4e4e7;
@@ -69,6 +71,8 @@
     --icon-base: #a1a1aa;
     --icon-weak: #52525b;
     --icon-strong: #fafafa;
+    --icon-success-base: #22c55e;
+    --icon-warning-base: #eab308;
 
     --border-base: #27272a;
     --border-strong: #3f3f46;
@@ -413,8 +417,8 @@
   }
 
   .dark .markdown-content pre {
-    background: #09090b;
-    color: #e4e4e7;
+    background: var(--background-stronger);
+    color: var(--text-strong);
   }
 
   .markdown-content pre code {
