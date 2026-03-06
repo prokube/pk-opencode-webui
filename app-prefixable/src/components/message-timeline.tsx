@@ -425,7 +425,7 @@ export function FlatMessageList(props: { messages: DisplayMessage[]; processing:
                       }
                     >
                       <Show when={hasText}>
-                        <Markdown content={text} class="text-gray-800" />
+                        <Markdown content={text} class="text-[var(--text-strong)]" />
                       </Show>
                     </Show>
                   </div>

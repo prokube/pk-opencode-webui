@@ -24,9 +24,9 @@ export function getInitials(name: string): string {
 
 export function OpenCodeLogo(props: { class?: string }) {
   return (
-    <svg class={props.class} viewBox="0 0 240 300" fill="none" xmlns="http://www.w3.org/2000/svg">
-      <path d="M180 240H60V120H180V240Z" fill="#CFCECD" />
-      <path d="M180 60H60V240H180V60ZM240 300H0V0H240V300Z" fill="#211E1E" />
+    <svg class={props.class} viewBox="0 0 240 300" fill="none" xmlns="http://www.w3.org/2000/svg" style={{ color: "var(--text-strong)" }}>
+      <path d="M180 240H60V120H180V240Z" fill="var(--icon-weak)" />
+      <path d="M180 60H60V240H180V60ZM240 300H0V0H240V300Z" fill="currentColor" />
     </svg>
   )
 }
@@ -42,9 +42,9 @@ export function ProjectAvatar(props: { project: Project; size?: "small" | "large
     <div
       class={`${size()} rounded-xl flex items-center justify-center font-medium text-sm shrink-0 transition-all border-2`}
       style={{
-        background: props.selected ? "#f5f5ff" : "white",
-        color: props.selected ? "var(--interactive-base)" : "rgb(55, 65, 81)",
-        "border-color": props.selected ? "var(--interactive-base)" : "rgb(229, 231, 235)",
+        background: props.selected ? "var(--surface-inset)" : "var(--background-base)",
+        color: props.selected ? "var(--interactive-base)" : "var(--text-base)",
+        "border-color": props.selected ? "var(--interactive-base)" : "var(--border-base)",
         "box-shadow": props.selected ? "0 4px 6px -1px rgb(0 0 0 / 0.1)" : "none",
       }}
     >

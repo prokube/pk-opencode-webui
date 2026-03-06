@@ -116,7 +116,7 @@ export function SessionHeader(props: SessionHeaderProps) {
             style={{
               border: "1px solid var(--interactive-base)",
               color: "var(--text-interactive-base)",
-              background: "rgba(147, 112, 219, 0.1)",
+              background: "var(--surface-inset)",
             }}
           >
             <div class="w-1.5 h-1.5 rounded-full animate-pulse" style={{ background: "var(--interactive-base)" }} />

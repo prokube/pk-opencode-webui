@@ -576,8 +576,8 @@ export function Settings() {
                             style={{ background: "var(--surface-inset)" }}
                           >
                             <div class="flex items-center gap-3">
-                              <div class="w-6 h-6 bg-green-100 rounded flex items-center justify-center">
-                                <Check class="w-3 h-3 text-green-600" />
+                              <div class="w-6 h-6 rounded flex items-center justify-center" style={{ background: "var(--surface-strong)" }}>
+                                <Check class="w-3 h-3" style={{ color: "var(--icon-success-base)" }} />
                               </div>
                               <span class="text-sm font-medium" style={{ color: "var(--text-strong)" }}>
                                 {getProviderDisplayName(providerID)}
@@ -610,7 +610,15 @@ export function Settings() {
                 <div class="p-4">
                   {/* Success/Error messages at top */}
                   <Show when={success()}>
-                    <div class="mb-4 p-3 bg-green-50 border border-green-200 text-green-800 rounded-md text-sm flex items-center justify-between">
+                    <div
+                      class="mb-4 p-3 rounded-md text-sm flex items-center justify-between"
+                      style={{
+                        background: "var(--surface-inset)",
+                        border: "1px solid var(--border-base)",
+                        "border-left": "3px solid var(--icon-success-base)",
+                        color: "var(--icon-success-base)",
+                      }}
+                    >
                       <span>{success()}</span>
                       <button onClick={() => setSuccess(null)} class="ml-2">
                         <X class="w-4 h-4" />
@@ -619,7 +627,15 @@ export function Settings() {
                   </Show>
 
                   <Show when={error()}>
-                    <div class="mb-4 p-3 bg-red-50 border border-red-200 text-red-800 rounded-md text-sm flex items-center justify-between">
+                    <div
+                      class="mb-4 p-3 rounded-md text-sm flex items-center justify-between"
+                      style={{
+                        background: "var(--surface-inset)",
+                        border: "1px solid var(--border-base)",
+                        "border-left": "3px solid var(--interactive-critical)",
+                        color: "var(--interactive-critical)",
+                      }}
+                    >
                       <span>{error()}</span>
                       <button onClick={() => setError(null)} class="ml-2">
                         <X class="w-4 h-4" />
@@ -980,7 +996,15 @@ export function Settings() {
                   </Show>
 
                   <Show when={sshKeyError()}>
-                    <div class="p-3 bg-red-50 border border-red-200 text-red-800 rounded-md text-sm mb-4">
+                    <div
+                      class="p-3 rounded-md text-sm mb-4"
+                      style={{
+                        background: "var(--surface-inset)",
+                        border: "1px solid var(--border-base)",
+                        "border-left": "3px solid var(--interactive-critical)",
+                        color: "var(--interactive-critical)",
+                      }}
+                    >
                       {sshKeyError()}
                     </div>
                   </Show>
@@ -1291,7 +1315,7 @@ export function Settings() {
                                 <div
                                   class="absolute top-0.5 w-4 h-4 rounded-full transition-all"
                                   style={{
-                                    background: "white",
+                                    background: "var(--background-base)",
                                     left: isConnected() ? "calc(100% - 18px)" : "2px",
                                   }}
                                 />
