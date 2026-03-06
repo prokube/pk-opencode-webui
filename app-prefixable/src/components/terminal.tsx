@@ -312,6 +312,7 @@ export function Terminal(props: TerminalProps) {
           class="flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] transition-colors opacity-60 hover:opacity-100"
           style={{ color: activeTheme().foreground }}
           title={`Terminal theme: ${schemeLabel()} (click to cycle)`}
+          aria-label={`Terminal theme: ${schemeLabel()}`}
         >
           {terminalScheme() === "auto" && <Monitor class="w-3 h-3" />}
           {terminalScheme() === "light" && <Sun class="w-3 h-3" />}
