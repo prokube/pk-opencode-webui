@@ -1472,7 +1472,7 @@ export function Settings() {
                   </h2>
                 </div>
                 <div class="p-4">
-                  <div class="flex gap-2">
+                  <div class="flex gap-2" role="group" aria-label="Theme selection">
                     <For each={[
                       { value: "light" as const, label: "Light", icon: () => <Sun class="w-4 h-4" /> },
                       { value: "dark" as const, label: "Dark", icon: () => <Moon class="w-4 h-4" /> },
@@ -1480,6 +1480,8 @@ export function Settings() {
                     ]}>
                       {(option) => (
                         <button
+                          type="button"
+                          aria-pressed={theme.theme() === option.value}
                           onClick={() => theme.setTheme(option.value)}
                           class="flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium transition-colors"
                           style={{

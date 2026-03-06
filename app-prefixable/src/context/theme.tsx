@@ -11,11 +11,13 @@ type ThemePreference = "light" | "dark" | "system"
 
 const STORAGE_KEY = "opencode.theme"
 
-const query = window.matchMedia("(prefers-color-scheme: dark)")
-
 function loadPreference(): ThemePreference {
-  const stored = localStorage.getItem(STORAGE_KEY)
-  if (stored === "light" || stored === "dark" || stored === "system") return stored
+  try {
+    const stored = localStorage.getItem(STORAGE_KEY)
+    if (stored === "light" || stored === "dark" || stored === "system") return stored
+  } catch {
+    // localStorage may be unavailable (e.g. privacy mode)
+  }
   return "system"
 }
 
@@ -34,15 +36,26 @@ const ThemeContext = createContext<ThemeContextValue>()
 
 export function ThemeProvider(props: ParentProps) {
   const [theme, setThemeRaw] = createSignal<ThemePreference>(loadPreference())
-  const [systemDark, setSystemDark] = createSignal(query.matches)
 
-  const handler = (e: MediaQueryListEvent) => setSystemDark(e.matches)
-  query.addEventListener("change", handler)
-  onCleanup(() => query.removeEventListener("change", handler))
+  const query = typeof window !== "undefined"
+    ? window.matchMedia("(prefers-color-scheme: dark)")
+    : undefined
+
+  const [systemDark, setSystemDark] = createSignal(query?.matches ?? false)
+
+  if (query) {
+    const handler = (e: MediaQueryListEvent) => setSystemDark(e.matches)
+    query.addEventListener("change", handler)
+    onCleanup(() => query.removeEventListener("change", handler))
+  }
 
   const setTheme = (v: ThemePreference) => {
     setThemeRaw(v)
-    localStorage.setItem(STORAGE_KEY, v)
+    try {
+      localStorage.setItem(STORAGE_KEY, v)
+    } catch {
+      // Ignore persistence errors (e.g. storage disabled or quota exceeded)
+    }
   }
 
   const resolved = () => resolve(theme(), systemDark())
