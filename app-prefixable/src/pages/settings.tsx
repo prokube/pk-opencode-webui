@@ -7,7 +7,7 @@ import { useSDK } from "../context/sdk"
 import { MCPAddDialog } from "../components/mcp-add-dialog"
 import { ConfirmDialog } from "../components/confirm-dialog"
 import { Button } from "../components/ui/button"
-import { Check, Copy, Plug, GitBranch, Server, ExternalLink, Key, Search, X, Plus, Trash2, BookmarkPlus, Pencil, Palette, Sun, Moon, Monitor } from "lucide-solid"
+import { Check, Copy, Plug, GitBranch, Server, ExternalLink, Key, Search, X, Trash2, BookmarkPlus, Pencil, Palette, Sun, Moon, Monitor } from "lucide-solid"
 import { useSavedPrompts } from "../context/saved-prompts"
 import { useTheme } from "../context/theme"
 
@@ -1486,7 +1486,7 @@ export function Settings() {
                           class="flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium transition-colors"
                           style={{
                             background: theme.theme() === option.value ? "var(--interactive-base)" : "var(--surface-inset)",
-                            color: theme.theme() === option.value ? "white" : "var(--text-base)",
+                            color: theme.theme() === option.value ? "var(--background-base)" : "var(--text-base)",
                             border: theme.theme() === option.value ? "1px solid var(--interactive-base)" : "1px solid var(--border-base)",
                           }}
                         >
