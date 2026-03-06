@@ -508,7 +508,7 @@ export function Layout(props: ParentProps) {
       body,
       requireInteraction: true,
       tag,
-      icon: basePath() + "/favicon.svg",
+      icon: basePath + "favicon.svg",
     });
     n.onclick = () => {
       window.focus();
@@ -543,7 +543,7 @@ export function Layout(props: ParentProps) {
   // when they go idle. Only fill entries that aren't already tracked.
   createEffect(() => {
     for (const [sid, s] of Object.entries(events.status)) {
-      if ((s.type === "busy" || s.type === "retry") && !busyTracker[sid]) {
+      if ((s.type === "busy" || s.type === "retry") && !(sid in busyTracker)) {
         busyTracker[sid] = true;
       }
     }
@@ -595,8 +595,8 @@ export function Layout(props: ParentProps) {
 
       // Clear permission dedup on reply
       if (event.type === "permission.replied") {
-        const props = event.properties as { id?: string };
-        if (props.id) firedPermission.delete(props.id);
+        const props = event.properties as { requestID?: string };
+        if (props.requestID) firedPermission.delete(props.requestID);
         return;
       }
 
@@ -618,8 +618,8 @@ export function Layout(props: ParentProps) {
 
       // Clear question dedup on reply/reject
       if (event.type === "question.replied" || event.type === "question.rejected") {
-        const props = event.properties as { id?: string };
-        if (props.id) firedQuestion.delete(props.id);
+        const props = event.properties as { requestID?: string };
+        if (props.requestID) firedQuestion.delete(props.requestID);
       }
     });
 
