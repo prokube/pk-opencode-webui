@@ -615,6 +615,7 @@ export function Settings() {
                       style={{
                         background: "var(--surface-inset)",
                         border: "1px solid var(--border-base)",
+                        "border-left": "3px solid var(--icon-success-base)",
                         color: "var(--icon-success-base)",
                       }}
                     >
@@ -631,6 +632,7 @@ export function Settings() {
                       style={{
                         background: "var(--surface-inset)",
                         border: "1px solid var(--border-base)",
+                        "border-left": "3px solid var(--interactive-critical)",
                         color: "var(--interactive-critical)",
                       }}
                     >
@@ -999,6 +1001,7 @@ export function Settings() {
                       style={{
                         background: "var(--surface-inset)",
                         border: "1px solid var(--border-base)",
+                        "border-left": "3px solid var(--interactive-critical)",
                         color: "var(--interactive-critical)",
                       }}
                     >
