@@ -1408,6 +1408,7 @@ export function Session() {
 
         {/* Input */}
         <div
+          data-panel="chat"
           class="p-4"
           style={{
             background: "var(--background-base)",
@@ -1888,7 +1889,7 @@ export function Session() {
 
         {/* Review Panel - collapsible with resize handle */}
         <Show when={layout.review.opened()}>
-          <div class="flex shrink-0">
+          <aside class="flex shrink-0" aria-label="Review panel">
             <ResizeHandle
               direction="horizontal"
               edge="start"
@@ -1901,17 +1902,19 @@ export function Session() {
               collapseThreshold={100}
             />
             <div
-              class="shrink-0 overflow-hidden"
+              data-panel="review"
+              tabIndex={-1}
+              class="shrink-0 overflow-hidden focus-visible:outline-2 focus-visible:outline-[var(--interactive-base)] focus-visible:outline-offset-[-2px]"
               style={{ width: `${layout.review.width()}px` }}
             >
               <ReviewPanel sessionId={sessionId()!} />
             </div>
-          </div>
+          </aside>
         </Show>
 
         {/* Info Panel (Session Sidebar) - collapsible with resize handle */}
         <Show when={layout.info.opened()}>
-          <div class="flex shrink-0">
+          <aside class="flex shrink-0" aria-label="Session info">
             <ResizeHandle
               direction="horizontal"
               edge="start"
@@ -1928,7 +1931,7 @@ export function Session() {
             >
               <SessionSidebar sessionId={sessionId()} />
             </div>
-          </div>
+          </aside>
         </Show>
       </div>
     </Show>

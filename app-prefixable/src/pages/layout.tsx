@@ -50,7 +50,7 @@ import {
 import { useSync } from "../context/sync";
 import { usePermission } from "../context/permission";
 import { useSavedPrompts } from "../context/saved-prompts";
-import { useCommand } from "../context/command";
+import { useCommand, isDialogOpen } from "../context/command";
 import { ResizeHandle } from "../components/resize-handle";
 import { ConfirmDialog } from "../components/confirm-dialog";
 import { ShortcutReference } from "../components/shortcut-reference";
@@ -395,6 +395,27 @@ export function Layout(props: ParentProps) {
     }
   }
 
+  // Focus a panel by data-panel attribute. Returns true if focus was set.
+  function focusPanel(name: string): boolean {
+    const el = document.querySelector(`[data-panel="${name}"]`) as HTMLElement | null;
+    if (!el) return false;
+    // For chat panel, focus the textarea inside it
+    if (name === "chat") {
+      const textarea = el.querySelector("textarea") as HTMLTextAreaElement | null;
+      if (textarea) { textarea.focus(); return true; }
+    }
+    // For terminal, find and focus the xterm instance
+    if (name === "terminal") {
+      const xterm = el.querySelector(".xterm-helper-textarea") as HTMLTextAreaElement | null;
+      if (xterm) { xterm.focus(); return true; }
+      el.focus();
+      return true;
+    }
+    // For sidebar and review, focus the container itself
+    el.focus();
+    return true;
+  }
+
   // Register keyboard shortcuts via CommandProvider
   onMount(() => {
     command.register([
@@ -422,6 +443,64 @@ export function Layout(props: ParentProps) {
         keybind: "mod+shift+i",
         onSelect: () => layout.info.toggle(),
       },
+      // Panel focus shortcuts
+      {
+        id: "focus.sidebar",
+        title: "Focus Sidebar",
+        description: "Jump to session list sidebar",
+        keybind: "ctrl+1",
+        global: true,
+        onSelect: () => focusPanel("sidebar"),
+      },
+      {
+        id: "focus.chat",
+        title: "Focus Chat Input",
+        description: "Jump to the chat input area",
+        keybind: "ctrl+2",
+        global: true,
+        onSelect: () => focusPanel("chat"),
+      },
+      {
+        id: "focus.terminal",
+        title: "Focus Terminal",
+        description: "Jump to the terminal panel (if open)",
+        keybind: "ctrl+3",
+        global: true,
+        onSelect: () => {
+          if (terminal.opened()) focusPanel("terminal");
+        },
+      },
+      {
+        id: "focus.review",
+        title: "Focus Review Panel",
+        description: "Jump to the review panel (if open)",
+        keybind: "ctrl+4",
+        global: true,
+        onSelect: () => {
+          if (layout.review.opened()) focusPanel("review");
+        },
+      },
+      {
+        id: "focus.escape",
+        title: "Return to Chat Input",
+        description: "Press Escape to return focus to chat input",
+        keybind: "Escape",
+        global: true,
+        passive: true,
+        onSelect: (e) => {
+          // Don't steal Escape from open dialogs/modals
+          if (isDialogOpen()) return;
+          // Don't steal Escape from the shortcut reference overlay
+          if (command.shortcutRefOpen()) return;
+          // Don't steal Escape from handlers that already consumed it
+          if (e?.defaultPrevented) return;
+          // Don't steal Escape from the terminal (Escape is heavily used there)
+          const target = e?.target;
+          if (target instanceof HTMLElement && target.closest(".xterm")) return;
+          e?.preventDefault();
+          focusPanel("chat");
+        },
+      },
     ]);
 
     onCleanup(() => {
@@ -430,6 +509,11 @@ export function Layout(props: ParentProps) {
         "sidebar.toggle",
         "review.toggle",
         "info.toggle",
+        "focus.sidebar",
+        "focus.chat",
+        "focus.terminal",
+        "focus.review",
+        "focus.escape",
       ]);
     });
   });
@@ -971,8 +1055,11 @@ export function Layout(props: ParentProps) {
       </div>
 
       {/* Sessions Panel (collapsible) */}
-      <div
-        class={`shrink-0 flex flex-col ${sidebarDragging() ? "" : "transition-all duration-200"}`}
+      <nav
+        data-panel="sidebar"
+        tabIndex={-1}
+        aria-label="Session list"
+        class={`shrink-0 flex flex-col focus-visible:outline-2 focus-visible:outline-[var(--interactive-base)] focus-visible:outline-offset-[-2px] ${sidebarDragging() ? "" : "transition-all duration-200"}`}
         style={{
           width: showSidebar() ? `${layout.sidebar.width()}px` : "0px",
           overflow: "hidden",
@@ -1572,7 +1659,7 @@ export function Layout(props: ParentProps) {
             </div>
           </div>
         </div>
-      </div>
+      </nav>
 
       {/* Sidebar resize handle */}
       <Show when={showSidebar()}>
@@ -1635,6 +1722,7 @@ export function Layout(props: ParentProps) {
           }
         >
           <div
+            data-panel="terminal"
             class="flex flex-col relative"
             style={{
               height:

@@ -7,7 +7,11 @@ export interface Command {
   description?: string
   slash?: string
   keybind?: string
-  onSelect: () => void
+  /** When true, the shortcut fires even from inputs, textareas, and terminals */
+  global?: boolean
+  /** When true, preventDefault is NOT called automatically — the handler receives the event */
+  passive?: boolean
+  onSelect: (e?: KeyboardEvent) => void
 }
 
 interface CommandContextValue {
@@ -72,6 +76,11 @@ function shouldSuppressShortcut(e: KeyboardEvent): boolean {
   return false
 }
 
+/** Check if a dialog or modal is currently open in the DOM */
+export function isDialogOpen(): boolean {
+  return !!document.querySelector('[role="dialog"][aria-modal="true"], [role="alertdialog"][aria-modal="true"]')
+}
+
 export function CommandProvider(props: ParentProps) {
   const [commands, setCommands] = createSignal<Command[]>([])
   const [shortcutRefOpen, setShortcutRefOpen] = createSignal(false)
@@ -120,7 +129,11 @@ export function CommandProvider(props: ParentProps) {
       if (!cmd.keybind) continue
       const key = toTinykeysBinding(cmd.keybind)
       bindings[key] = (e) => {
-        if (shouldSuppressShortcut(e)) return
+        if (!cmd.global && shouldSuppressShortcut(e)) return
+        if (cmd.passive) {
+          cmd.onSelect(e)
+          return
+        }
         e.preventDefault()
         cmd.onSelect()
       }
