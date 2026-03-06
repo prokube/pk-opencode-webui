@@ -14,7 +14,7 @@
           var prefersDark = typeof window.matchMedia === "function"
             ? window.matchMedia("(prefers-color-scheme: dark)").matches
             : false;
-          if (t === "dark" || ((t === "system" || !t) && prefersDark)) {
+          if (t === "dark" || ((t !== "light" && t !== "dark") && prefersDark)) {
             document.documentElement.classList.add("dark");
           }
         } catch (e) {}
@@ -38,6 +38,7 @@
       }
       .dark .loading-initial {
         background-color: #18181b;
+        color: #a1a1aa;
       }
     </style>
   </head>
