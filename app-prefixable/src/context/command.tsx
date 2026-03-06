@@ -1,4 +1,5 @@
-import { createContext, useContext, createSignal, createMemo, onMount, onCleanup, type ParentProps } from "solid-js"
+import { createContext, useContext, createSignal, createEffect, onCleanup, type ParentProps } from "solid-js"
+import { tinykeys } from "tinykeys"
 
 export interface Command {
   id: string
@@ -16,12 +17,64 @@ interface CommandContextValue {
   trigger: (id: string) => void
   getSlashCommands: () => Command[]
   filterSlashCommands: (query: string) => Command[]
+  getKeyboardShortcuts: () => Command[]
+  shortcutRefOpen: () => boolean
+  setShortcutRefOpen: (open: boolean) => void
 }
 
 const CommandContext = createContext<CommandContextValue>()
 
+// Convert our keybind format to tinykeys format
+// Our format: "mod+shift+r" -> tinykeys: "$mod+Shift+r"
+// Our format: "ctrl+`" -> tinykeys: "Control+`"
+// Our format: "?" -> tinykeys: "?"
+function toTinykeysBinding(keybind: string): string {
+  return keybind
+    .split("+")
+    .map((part) => {
+      const lower = part.toLowerCase()
+      if (lower === "mod") return "$mod"
+      if (lower === "shift") return "Shift"
+      if (lower === "alt") return "Alt"
+      if (lower === "ctrl") return "Control"
+      return part
+    })
+    .join("+")
+}
+
+// Format a keybind string for display in the cheat sheet
+export function formatKeybind(keybind: string): string {
+  const isMac = typeof navigator !== "undefined" && navigator.platform.includes("Mac")
+  return keybind
+    .split("+")
+    .map((part) => {
+      const lower = part.toLowerCase()
+      if (lower === "mod") return isMac ? "⌘" : "Ctrl"
+      if (lower === "shift") return isMac ? "⇧" : "Shift"
+      if (lower === "alt") return isMac ? "⌥" : "Alt"
+      if (lower === "ctrl") return isMac ? "⌃" : "Ctrl"
+      if (part === "`") return "`"
+      if (part === "?") return "?"
+      if (part === "/") return "/"
+      return part.toUpperCase()
+    })
+    .join(isMac ? "" : "+")
+}
+
+function shouldSuppressShortcut(e: KeyboardEvent): boolean {
+  const target = e.target
+  if (!(target instanceof HTMLElement)) return false
+  // Suppress in text inputs, textareas, contenteditable, and terminal
+  const tag = target.tagName
+  if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return true
+  if (target.isContentEditable) return true
+  if (target.closest(".xterm")) return true
+  return false
+}
+
 export function CommandProvider(props: ParentProps) {
   const [commands, setCommands] = createSignal<Command[]>([])
+  const [shortcutRefOpen, setShortcutRefOpen] = createSignal(false)
 
   function register(newCommands: Command[]) {
     setCommands((prev) => {
@@ -54,31 +107,38 @@ export function CommandProvider(props: ParentProps) {
     )
   }
 
-  // Global keyboard shortcut handler
-  onMount(() => {
-    function handleKeyDown(e: KeyboardEvent) {
-      const isMac = navigator.platform.includes("Mac")
-      const mod = isMac ? e.metaKey : e.ctrlKey
+  function getKeyboardShortcuts() {
+    return commands().filter((c) => c.keybind)
+  }
 
-      for (const cmd of commands()) {
-        if (!cmd.keybind) continue
+  // Reactively bind shortcuts via tinykeys whenever commands change
+  createEffect(() => {
+    const cmds = commands()
+    const bindings: Record<string, (e: KeyboardEvent) => void> = {}
 
-        const parts = cmd.keybind.toLowerCase().split("+")
-        const key = parts.pop()
-        const needsMod = parts.includes("mod")
-        const needsShift = parts.includes("shift")
-        const needsAlt = parts.includes("alt")
-
-        if (e.key.toLowerCase() === key && mod === needsMod && e.shiftKey === needsShift && e.altKey === needsAlt) {
-          e.preventDefault()
-          cmd.onSelect()
-          return
-        }
+    for (const cmd of cmds) {
+      if (!cmd.keybind) continue
+      const key = toTinykeysBinding(cmd.keybind)
+      bindings[key] = (e) => {
+        if (shouldSuppressShortcut(e)) return
+        e.preventDefault()
+        cmd.onSelect()
       }
     }
 
-    document.addEventListener("keydown", handleKeyDown)
-    onCleanup(() => document.removeEventListener("keydown", handleKeyDown))
+    // Shortcut reference: ? (only when not in input) and $mod+/
+    bindings["?"] = (e) => {
+      if (shouldSuppressShortcut(e)) return
+      e.preventDefault()
+      setShortcutRefOpen((v) => !v)
+    }
+    bindings["$mod+/"] = (e) => {
+      e.preventDefault()
+      setShortcutRefOpen((v) => !v)
+    }
+
+    const unsub = tinykeys(window, bindings)
+    onCleanup(unsub)
   })
 
   const value: CommandContextValue = {
@@ -90,6 +150,9 @@ export function CommandProvider(props: ParentProps) {
     trigger,
     getSlashCommands,
     filterSlashCommands,
+    getKeyboardShortcuts,
+    shortcutRefOpen,
+    setShortcutRefOpen,
   }
 
   return <CommandContext.Provider value={value}>{props.children}</CommandContext.Provider>

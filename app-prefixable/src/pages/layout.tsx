@@ -50,8 +50,10 @@ import {
 import { useSync } from "../context/sync";
 import { usePermission } from "../context/permission";
 import { useSavedPrompts } from "../context/saved-prompts";
+import { useCommand } from "../context/command";
 import { ResizeHandle } from "../components/resize-handle";
 import { ConfirmDialog } from "../components/confirm-dialog";
+import { ShortcutReference } from "../components/shortcut-reference";
 import { suggestSessionTitle } from "../utils/ai-rename";
 
 import { readNotifyMap, cleanupNotifyState, NOTIFY_STORAGE_KEY } from "../utils/notify";
@@ -192,6 +194,7 @@ export function Layout(props: ParentProps) {
   const sync = useSync();
   const permission = usePermission();
   const savedPrompts = useSavedPrompts();
+  const command = useCommand();
   const location = useLocation();
   const navigate = useNavigate();
 
@@ -392,6 +395,45 @@ export function Layout(props: ParentProps) {
     }
   }
 
+  // Register keyboard shortcuts via CommandProvider
+  onMount(() => {
+    command.register([
+      {
+        id: "terminal.toggle",
+        title: "Toggle Terminal",
+        keybind: "ctrl+`",
+        onSelect: () => terminal.toggle(directory),
+      },
+      {
+        id: "sidebar.toggle",
+        title: "Toggle Sidebar",
+        keybind: "ctrl+b",
+        onSelect: toggleSidebar,
+      },
+      {
+        id: "review.toggle",
+        title: "Toggle Review Panel",
+        keybind: "mod+shift+r",
+        onSelect: () => layout.review.toggle(),
+      },
+      {
+        id: "info.toggle",
+        title: "Toggle Info Panel",
+        keybind: "mod+shift+i",
+        onSelect: () => layout.info.toggle(),
+      },
+    ]);
+
+    onCleanup(() => {
+      command.unregister([
+        "terminal.toggle",
+        "sidebar.toggle",
+        "review.toggle",
+        "info.toggle",
+      ]);
+    });
+  });
+
   onMount(() => {
     loadSessions();
 
@@ -408,42 +450,7 @@ export function Layout(props: ParentProps) {
       }
     });
 
-    function handleKeyDown(e: KeyboardEvent) {
-      // Terminal toggle: Ctrl+`
-      if (e.ctrlKey && e.key === "`") {
-        e.preventDefault();
-        terminal.toggle(directory);
-      }
-      // Sidebar toggle: Ctrl+B
-      if (e.ctrlKey && e.key === "b") {
-        e.preventDefault();
-        toggleSidebar();
-      }
-      // Review panel toggle: Cmd+Shift+R (Mac) or Ctrl+Shift+R
-      if (
-        (e.metaKey || e.ctrlKey) &&
-        e.shiftKey &&
-        e.key.toLowerCase() === "r"
-      ) {
-        e.preventDefault();
-        layout.review.toggle();
-      }
-      // Info panel toggle: Cmd+Shift+I (Mac) or Ctrl+Shift+I
-      if (
-        (e.metaKey || e.ctrlKey) &&
-        e.shiftKey &&
-        e.key.toLowerCase() === "i"
-      ) {
-        e.preventDefault();
-        layout.info.toggle();
-      }
-    }
-    window.addEventListener("keydown", handleKeyDown);
-
-    onCleanup(() => {
-      unsub();
-      window.removeEventListener("keydown", handleKeyDown);
-    });
+    onCleanup(unsub);
   });
 
   // --- Global alarm monitoring for ALL sessions with bell enabled ---
@@ -1823,6 +1830,9 @@ export function Layout(props: ParentProps) {
           setConfirmDeleteSession(null);
         }}
       />
+
+      {/* Keyboard shortcut reference overlay */}
+      <ShortcutReference />
     </div>
   );
 }

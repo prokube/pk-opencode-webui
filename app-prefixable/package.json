@@ -23,7 +23,8 @@
     "lucide-solid": "0.563.0",
     "marked": "17.0.1",
     "shiki": "^3.4.2",
-    "solid-js": "1.9.10"
+    "solid-js": "1.9.10",
+    "tinykeys": "^3.0.0"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.0",
