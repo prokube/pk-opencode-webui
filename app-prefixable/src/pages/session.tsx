@@ -526,9 +526,19 @@ export function Session() {
     document.removeEventListener("click", handleClickOutside);
   });
 
+  // Reset escape state when processing stops (prevents stale timestamps across processing windows)
+  createEffect(() => {
+    if (!processing()) {
+      lastEsc.ts = 0;
+      setEscHint(false);
+      clearTimeout(escHintTimer.id);
+    }
+  });
+
   // Global keydown listener for double-Escape to abort
   function handleGlobalKeyDown(e: KeyboardEvent) {
     if (e.key !== "Escape") return;
+    if (e.repeat) return; // Ignore held-key auto-repeat
     // Let dialogs/popovers handle their own Escape
     if (
       showSlashPopover() ||
