@@ -37,7 +37,7 @@ const ThemeContext = createContext<ThemeContextValue>()
 export function ThemeProvider(props: ParentProps) {
   const [theme, setThemeRaw] = createSignal<ThemePreference>(loadPreference())
 
-  const query = typeof window !== "undefined"
+  const query = typeof window !== "undefined" && typeof window.matchMedia === "function"
     ? window.matchMedia("(prefers-color-scheme: dark)")
     : undefined
 
@@ -45,8 +45,13 @@ export function ThemeProvider(props: ParentProps) {
 
   if (query) {
     const handler = (e: MediaQueryListEvent) => setSystemDark(e.matches)
-    query.addEventListener("change", handler)
-    onCleanup(() => query.removeEventListener("change", handler))
+    if ("addEventListener" in query) {
+      query.addEventListener("change", handler)
+      onCleanup(() => query.removeEventListener("change", handler))
+    } else if ("addListener" in query) {
+      query.addListener(handler)
+      onCleanup(() => query.removeListener(handler))
+    }
   }
 
   const setTheme = (v: ThemePreference) => {
