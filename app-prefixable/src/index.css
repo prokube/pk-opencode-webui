@@ -107,7 +107,7 @@
   }
 
   .pk-button-destructive {
-    @apply pk-button text-[var(--interactive-critical)] hover:text-[var(--interactive-critical-hover)];
+    @apply pk-button border text-[var(--interactive-critical)] hover:text-[var(--interactive-critical-hover)];
     border-color: var(--border-base);
   }
 
@@ -413,11 +413,6 @@
   .markdown-content pre {
     @apply p-4 rounded-lg mb-4 overflow-x-auto;
     background: var(--background-strongest);
-    color: var(--text-strong);
-  }
-
-  .dark .markdown-content pre {
-    background: var(--background-stronger);
     color: var(--text-strong);
   }
 

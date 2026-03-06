@@ -576,7 +576,7 @@ export function Settings() {
                             style={{ background: "var(--surface-inset)" }}
                           >
                             <div class="flex items-center gap-3">
-                              <div class="w-6 h-6 rounded flex items-center justify-center" style={{ background: "var(--surface-inset)" }}>
+                              <div class="w-6 h-6 rounded flex items-center justify-center" style={{ background: "var(--surface-strong)" }}>
                                 <Check class="w-3 h-3" style={{ color: "var(--icon-success-base)" }} />
                               </div>
                               <span class="text-sm font-medium" style={{ color: "var(--text-strong)" }}>
