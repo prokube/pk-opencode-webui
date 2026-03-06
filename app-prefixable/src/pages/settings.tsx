@@ -7,13 +7,15 @@ import { useSDK } from "../context/sdk"
 import { MCPAddDialog } from "../components/mcp-add-dialog"
 import { ConfirmDialog } from "../components/confirm-dialog"
 import { Button } from "../components/ui/button"
-import { Check, Copy, Plug, GitBranch, Server, ExternalLink, Key, Search, X, Plus, Trash2, BookmarkPlus, Pencil } from "lucide-solid"
+import { Check, Copy, Plug, GitBranch, Server, ExternalLink, Key, Search, X, Trash2, BookmarkPlus, Pencil, Palette, Sun, Moon, Monitor } from "lucide-solid"
 import { useSavedPrompts } from "../context/saved-prompts"
+import { useTheme } from "../context/theme"
 
 export function Settings() {
   const providers = useProviders()
   const mcp = useMCP()
   const { client, global, url, directory } = useSDK()
+  const theme = useTheme()
   const [selectedProvider, setSelectedProvider] = createSignal<string | null>(null)
   const [apiKey, setApiKey] = createSignal("")
   const [connecting, setConnecting] = createSignal(false)
@@ -22,7 +24,7 @@ export function Settings() {
   // Initialize tab from URL hash, default to "providers"
   const getInitialTab = () => {
     const hash = window.location.hash.slice(1)
-    const validTabs = ["providers", "git", "mcp", "prompts"]
+    const validTabs = ["providers", "git", "mcp", "prompts", "appearance"]
     return validTabs.includes(hash) ? hash : "providers"
   }
   const [activeTab, setActiveTab] = createSignal(getInitialTab())
@@ -482,6 +484,7 @@ export function Settings() {
     { id: "git", label: "Git", icon: () => <GitBranch class="w-4 h-4" /> },
     { id: "mcp", label: "MCP Servers", icon: () => <Server class="w-4 h-4" /> },
     { id: "prompts", label: "Prompts", icon: () => <BookmarkPlus class="w-4 h-4" /> },
+    { id: "appearance", label: "Appearance", icon: () => <Palette class="w-4 h-4" /> },
   ]
 
   return (
@@ -1440,6 +1443,65 @@ export function Settings() {
                     </For>
                   </div>
                 </Show>
+              </section>
+            </div>
+          </Show>
+
+          {/* Appearance Tab */}
+          <Show when={activeTab() === "appearance"}>
+            <div class="space-y-6">
+              <header>
+                <h1 class="text-lg font-medium" style={{ color: "var(--text-strong)" }}>
+                  Appearance
+                </h1>
+                <p class="text-sm mt-1" style={{ color: "var(--text-weak)" }}>
+                  Customize the look and feel of the interface
+                </p>
+              </header>
+
+              <section
+                class="rounded-lg overflow-hidden"
+                style={{
+                  background: "var(--background-base)",
+                  border: "1px solid var(--border-base)",
+                }}
+              >
+                <div class="px-4 py-3" style={{ "border-bottom": "1px solid var(--border-base)" }}>
+                  <h2 class="text-sm font-medium" style={{ color: "var(--text-strong)" }}>
+                    Theme
+                  </h2>
+                </div>
+                <div class="p-4">
+                  <div class="flex gap-2" role="group" aria-label="Theme selection">
+                    <For each={[
+                      { value: "light" as const, label: "Light", icon: () => <Sun class="w-4 h-4" /> },
+                      { value: "dark" as const, label: "Dark", icon: () => <Moon class="w-4 h-4" /> },
+                      { value: "system" as const, label: "System", icon: () => <Monitor class="w-4 h-4" /> },
+                    ]}>
+                      {(option) => (
+                        <button
+                          type="button"
+                          aria-pressed={theme.theme() === option.value}
+                          onClick={() => theme.setTheme(option.value)}
+                          class="flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium transition-colors"
+                          style={{
+                            background: theme.theme() === option.value ? "var(--interactive-base)" : "var(--surface-inset)",
+                            color: theme.theme() === option.value ? "var(--background-base)" : "var(--text-base)",
+                            border: theme.theme() === option.value ? "1px solid var(--interactive-base)" : "1px solid var(--border-base)",
+                          }}
+                        >
+                          {option.icon()}
+                          {option.label}
+                        </button>
+                      )}
+                    </For>
+                  </div>
+                  <p class="text-xs mt-3" style={{ color: "var(--text-weak)" }}>
+                    {theme.theme() === "system"
+                      ? `System preference detected: ${theme.resolved()}`
+                      : `Current theme: ${theme.theme()}`}
+                  </p>
+                </div>
               </section>
             </div>
           </Show>
