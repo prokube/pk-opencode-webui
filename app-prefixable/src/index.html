@@ -7,6 +7,14 @@
     <!-- Base path will be injected here by server or set statically -->
     <base href="/" />
     <link rel="icon" type="image/svg+xml" href="./favicon.svg" />
+    <script>
+      (function() {
+        var t = localStorage.getItem("opencode.theme");
+        if (t === "dark" || (t === "system" || !t) && window.matchMedia("(prefers-color-scheme: dark)").matches) {
+          document.documentElement.classList.add("dark");
+        }
+      })();
+    </script>
     <link rel="stylesheet" href="./styles.css" />
     <link rel="stylesheet" href="./entry.css" />
     <style>
@@ -16,12 +24,15 @@
         display: flex;
         align-items: center;
         justify-content: center;
-        background-color: #0a0a0a;
+        background-color: #ffffff;
         color: #6b7280;
         font-family:
           system-ui,
           -apple-system,
           sans-serif;
+      }
+      .dark .loading-initial {
+        background-color: #0a0a0a;
       }
     </style>
   </head>
