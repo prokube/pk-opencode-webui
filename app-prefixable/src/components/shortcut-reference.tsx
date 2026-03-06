@@ -36,6 +36,9 @@ export function ShortcutReference() {
         {/* Dialog */}
         <div
           ref={ref}
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="shortcut-ref-title"
           class="w-full max-w-md mx-4 rounded-lg shadow-xl overflow-hidden"
           style={{
             background: "var(--background-base)",
@@ -48,6 +51,7 @@ export function ShortcutReference() {
             style={{ "border-bottom": "1px solid var(--border-base)" }}
           >
             <h2
+              id="shortcut-ref-title"
               class="text-sm font-semibold"
               style={{ color: "var(--text-strong)" }}
             >

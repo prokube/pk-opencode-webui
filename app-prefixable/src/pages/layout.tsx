@@ -406,10 +406,11 @@ export function Layout(props: ParentProps) {
 
   // Keyboard handler for session list navigation
   function handleSessionListKeyDown(e: KeyboardEvent) {
-    // Only handle events originating from the listbox or its children — don't hijack
-    // keyboard events from child controls like rename inputs, dropdowns, etc.
+    // Don't hijack keyboard events from actual input controls inside the sidebar
+    // (e.g. rename inputs, dropdowns, etc.)
     const target = e.target as HTMLElement;
-    if (!target.closest('[role="listbox"]') && !target.closest('[data-panel="sidebar"]')) return;
+    const tag = target.tagName;
+    if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || target.isContentEditable) return;
 
     const ids = flatSessionIds();
     if (!ids.length) return;
@@ -703,7 +704,10 @@ export function Layout(props: ParentProps) {
         description: "Jump to session list sidebar",
         keybind: "ctrl+1",
         global: true,
-        onSelect: () => focusPanel("sidebar"),
+        onSelect: () => {
+          if (isDialogOpen() || command.paletteOpen() || command.shortcutRefOpen()) return;
+          focusPanel("sidebar");
+        },
       },
       {
         id: "focus.chat",
@@ -711,7 +715,10 @@ export function Layout(props: ParentProps) {
         description: "Jump to the chat input area",
         keybind: "ctrl+2",
         global: true,
-        onSelect: () => focusPanel("chat"),
+        onSelect: () => {
+          if (isDialogOpen() || command.paletteOpen() || command.shortcutRefOpen()) return;
+          focusPanel("chat");
+        },
       },
       {
         id: "focus.terminal",
@@ -720,6 +727,7 @@ export function Layout(props: ParentProps) {
         keybind: "ctrl+3",
         global: true,
         onSelect: () => {
+          if (isDialogOpen() || command.paletteOpen() || command.shortcutRefOpen()) return;
           if (terminal.opened()) focusPanel("terminal");
         },
       },
@@ -730,6 +738,7 @@ export function Layout(props: ParentProps) {
         keybind: "ctrl+4",
         global: true,
         onSelect: () => {
+          if (isDialogOpen() || command.paletteOpen() || command.shortcutRefOpen()) return;
           if (layout.review.opened()) focusPanel("review");
         },
       },
@@ -2056,6 +2065,7 @@ export function Layout(props: ParentProps) {
         >
           <div
             data-panel="terminal"
+            tabIndex={-1}
             class="flex flex-col relative"
             style={{
               height:

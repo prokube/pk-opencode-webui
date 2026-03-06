@@ -13,6 +13,8 @@ import { base64Encode } from "../utils/path"
 import { getFilename } from "./shared"
 
 
+const PROJECTS_STORAGE_KEY = "opencode.projects"
+
 interface PaletteItem {
   id: string
   title: string
@@ -69,7 +71,7 @@ export function CommandPalette() {
     let projects: { worktree: string; name?: string }[] = []
     try {
       if (typeof localStorage !== "undefined") {
-        const stored = localStorage.getItem("opencode.projects")
+        const stored = localStorage.getItem(PROJECTS_STORAGE_KEY)
         if (stored) {
           projects = JSON.parse(stored) as { worktree: string; name?: string }[]
         }

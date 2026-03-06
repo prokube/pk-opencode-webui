@@ -160,6 +160,7 @@ export function CommandProvider(props: ParentProps) {
       setShortcutRefOpen((v) => !v)
     }
     bindings["$mod+/"] = (e) => {
+      if (shouldSuppressShortcut(e)) return
       e.preventDefault()
       setShortcutRefOpen((v) => !v)
     }
