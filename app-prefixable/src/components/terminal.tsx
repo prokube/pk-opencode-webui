@@ -79,6 +79,14 @@ function saveTerminalTheme(scheme: TerminalColorScheme) {
   }
 }
 
+// Module-level shared state so all Terminal instances use the same scheme
+const [terminalScheme, setTerminalSchemeRaw] = createSignal<TerminalColorScheme>(loadTerminalTheme())
+
+const setTerminalScheme = (v: TerminalColorScheme) => {
+  setTerminalSchemeRaw(v)
+  saveTerminalTheme(v)
+}
+
 export interface TerminalProps {
   ptyId: string
   onClose?: () => void
@@ -97,12 +105,6 @@ export function Terminal(props: TerminalProps) {
 
   const [status, setStatus] = createSignal<"connecting" | "connected" | "error" | "disconnected">("connecting")
   const [error, setError] = createSignal<string | null>(null)
-  const [terminalScheme, setTerminalSchemeRaw] = createSignal<TerminalColorScheme>(loadTerminalTheme())
-
-  const setTerminalScheme = (v: TerminalColorScheme) => {
-    setTerminalSchemeRaw(v)
-    saveTerminalTheme(v)
-  }
 
   const resolvedScheme = () => {
     const scheme = terminalScheme()
