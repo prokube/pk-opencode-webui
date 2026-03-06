@@ -406,6 +406,11 @@ export function Layout(props: ParentProps) {
 
   // Keyboard handler for session list navigation
   function handleSessionListKeyDown(e: KeyboardEvent) {
+    // Only handle events originating from the listbox or its children — don't hijack
+    // keyboard events from child controls like rename inputs, dropdowns, etc.
+    const target = e.target as HTMLElement;
+    if (!target.closest('[role="listbox"]') && !target.closest('[data-panel="sidebar"]')) return;
+
     const ids = flatSessionIds();
     if (!ids.length) return;
 
@@ -1425,6 +1430,7 @@ export function Layout(props: ParentProps) {
             role="listbox"
             aria-label="Sessions"
             aria-activedescendant={focusedId() ? `session-${focusedId()}` : undefined}
+            tabIndex={0}
           >
             <Show when={loading()}>
               <div
@@ -1480,7 +1486,7 @@ export function Layout(props: ParentProps) {
                                   <A
                                     data-hint-target
                                     href={`/${dirSlug()}/session/${session.id}`}
-                                    tabIndex={-1}
+                                    tabIndex={isActive(session.id) ? 0 : -1}
                                     class="flex items-center gap-2 px-2.5 py-2 rounded-md text-sm transition-colors"
                                     style={{
                                       color: isActive(session.id)
@@ -1721,6 +1727,7 @@ export function Layout(props: ParentProps) {
                                           onClick={(e) => {
                                             e.preventDefault();
                                             e.stopPropagation();
+                                            setMenuOpenId(null);
                                             setMenuFocusIndex(-1);
                                             handleAiRename(session);
                                           }}

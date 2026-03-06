@@ -10,9 +10,10 @@ export function ShortcutReference() {
     cmd.setShortcutRefOpen(false)
   }
 
-  // Close on Escape
+  // Close on Escape — only when the overlay is actually open
   onMount(() => {
     function handleKeyDown(e: KeyboardEvent) {
+      if (!cmd.shortcutRefOpen()) return
       if (e.key === "Escape") {
         e.preventDefault()
         close()

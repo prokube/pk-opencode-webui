@@ -11,7 +11,7 @@ import { usePermission } from "../context/permission"
 import { useProviders } from "../context/providers"
 import { base64Encode } from "../utils/path"
 import { getFilename } from "./shared"
-import type { Session } from "../sdk/client"
+
 
 interface PaletteItem {
   id: string
@@ -65,21 +65,28 @@ export function CommandPalette() {
       })
     }
 
-    // Projects from localStorage
-    const stored = localStorage.getItem("opencode.projects")
-    if (stored) {
-      const projects = JSON.parse(stored) as { worktree: string; name?: string }[]
-      for (const p of projects) {
-        if (p.worktree === directory) continue // Skip current project
-        result.push({
-          id: `project:${p.worktree}`,
-          title: p.name || getFilename(p.worktree),
-          description: p.worktree.replace(/^\/home\/[^/]+/, "~"),
-          category: "project",
-          icon: "project",
-          onSelect: () => navigate(`/${base64Encode(p.worktree)}/session`),
-        })
+    // Projects from localStorage (with error handling for privacy mode / corrupt JSON)
+    let projects: { worktree: string; name?: string }[] = []
+    try {
+      if (typeof localStorage !== "undefined") {
+        const stored = localStorage.getItem("opencode.projects")
+        if (stored) {
+          projects = JSON.parse(stored) as { worktree: string; name?: string }[]
+        }
       }
+    } catch {
+      projects = []
+    }
+    for (const p of projects) {
+      if (p.worktree === directory) continue // Skip current project
+      result.push({
+        id: `project:${p.worktree}`,
+        title: p.name || getFilename(p.worktree),
+        description: p.worktree.replace(/^\/home\/[^/]+/, "~"),
+        category: "project",
+        icon: "project",
+        onSelect: () => navigate(`/${base64Encode(p.worktree)}/session`),
+      })
     }
 
     // Commands — all registered commands (excluding internal/passive/hidden ones)
