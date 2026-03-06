@@ -452,7 +452,7 @@ export function Layout(props: ParentProps) {
   // multiple directory streams or an unscoped endpoint — left for a future iteration.
   // Track busy state per session so we detect genuine busy→idle transitions
   const busyTracker: Record<string, boolean> = {};
-  // Track which sessions already fired a permission/question alarm to avoid repeats
+  // Track which individual permission/question requests already fired an alarm (keyed by request ID)
   const firedPermission = new Set<string>();
   const firedQuestion = new Set<string>();
 
@@ -566,9 +566,6 @@ export function Layout(props: ParentProps) {
 
         if (type === "idle" && busyTracker[sid]) {
           busyTracker[sid] = false;
-          // Clear fired sets since session completed — new permission/question events are fresh
-          firedPermission.delete(sid);
-          firedQuestion.delete(sid);
 
           // Check if bell is enabled for this session
           if (!notifyCache()[sid]) return;
@@ -580,32 +577,49 @@ export function Layout(props: ParentProps) {
         return;
       }
 
-      // Permission request alarms
+      // Permission request alarms (keyed by request ID so multiple requests per session each fire)
       if (event.type === "permission.asked") {
-        const props = event.properties as { id: string; sessionID: string };
+        const props = event.properties as { id?: string; sessionID?: string };
         const sid = props.sessionID;
+        const rid = props.id;
+        if (!sid || !rid) return;
         if (!notifyCache()[sid]) return;
-        // Deduplicate: only fire once per session until the session goes idle again
-        if (firedPermission.has(sid)) return;
-        firedPermission.add(sid);
+        if (firedPermission.has(rid)) return;
+        firedPermission.add(rid);
 
         const sess = sync.session.get(sid);
         const title = sess?.title || "Permission needed";
-        fireNotification(sid, title, "A tool needs your approval to continue.", `session-permission-${sid}`);
+        fireNotification(sid, title, "A tool needs your approval to continue.", `session-permission-${rid}`);
         return;
       }
 
-      // Agent question alarms
+      // Clear permission dedup on reply
+      if (event.type === "permission.replied") {
+        const props = event.properties as { id?: string };
+        if (props.id) firedPermission.delete(props.id);
+        return;
+      }
+
+      // Agent question alarms (keyed by request ID)
       if (event.type === "question.asked") {
-        const props = event.properties as { sessionID: string };
+        const props = event.properties as { id?: string; sessionID?: string };
         const sid = props.sessionID;
+        const rid = props.id;
+        if (!sid || !rid) return;
         if (!notifyCache()[sid]) return;
-        if (firedQuestion.has(sid)) return;
-        firedQuestion.add(sid);
+        if (firedQuestion.has(rid)) return;
+        firedQuestion.add(rid);
 
         const sess = sync.session.get(sid);
         const title = sess?.title || "Question from agent";
-        fireNotification(sid, title, "The agent has a question and is waiting for your response.", `session-question-${sid}`);
+        fireNotification(sid, title, "The agent has a question and is waiting for your response.", `session-question-${rid}`);
+        return;
+      }
+
+      // Clear question dedup on reply/reject
+      if (event.type === "question.replied" || event.type === "question.rejected") {
+        const props = event.properties as { id?: string };
+        if (props.id) firedQuestion.delete(props.id);
       }
     });
 
