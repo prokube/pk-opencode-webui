@@ -1,4 +1,4 @@
-import { onMount, onCleanup, createSignal, createEffect } from "solid-js"
+import { onMount, onCleanup, createSignal, createEffect, createMemo } from "solid-js"
 import { Terminal as XTerm } from "@xterm/xterm"
 import { FitAddon } from "@xterm/addon-fit"
 import "@xterm/xterm/css/xterm.css"
@@ -112,7 +112,7 @@ export function Terminal(props: TerminalProps) {
     return scheme
   }
 
-  const activeTheme = () => resolvedScheme() === "dark" ? darkTheme : lightTheme
+  const activeTheme = createMemo(() => resolvedScheme() === "dark" ? darkTheme : lightTheme)
 
   function writeStatus(message: string, type: "info" | "error" | "success" = "info") {
     if (!term) return
