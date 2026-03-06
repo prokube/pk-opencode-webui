@@ -66,6 +66,7 @@ export function ThemeProvider(props: ParentProps) {
   const resolved = () => resolve(theme(), systemDark())
 
   createEffect(() => {
+    if (typeof document === "undefined") return
     const dark = resolved() === "dark"
     document.documentElement.classList.toggle("dark", dark)
   })
