@@ -51,21 +51,7 @@ const ACCEPTED_TYPES = [
 ];
 const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB limit
 
-/** Remove a session's entry from the notification toggle localStorage map */
-function cleanupNotifyState(id: string) {
-  const raw = window.localStorage.getItem("opencode.sessionNotify");
-  if (!raw) return;
-  let map: Record<string, boolean>;
-  try {
-    map = JSON.parse(raw) as Record<string, boolean>;
-  } catch {
-    window.localStorage.removeItem("opencode.sessionNotify");
-    return;
-  }
-  if (!(id in map)) return;
-  delete map[id];
-  window.localStorage.setItem("opencode.sessionNotify", JSON.stringify(map));
-}
+import { readNotifyMap, writeNotifyMap, cleanupNotifyState } from "../utils/notify";
 
 interface Command {
   id: string;
@@ -144,34 +130,6 @@ export function Session() {
   onCleanup(() => clearTimeout(toastTimer.id));
 
   // --- Notification toggle (per-session, persisted in localStorage) ---
-  const NOTIFY_KEY = "opencode.sessionNotify";
-
-  function readNotifyMap(): Record<string, boolean> {
-    if (typeof window === "undefined") return {};
-    try {
-      const raw = window.localStorage.getItem(NOTIFY_KEY);
-      if (!raw) return {};
-      try {
-        return JSON.parse(raw) as Record<string, boolean>;
-      } catch {
-        try { window.localStorage.removeItem(NOTIFY_KEY) } catch {}
-        return {};
-      }
-    } catch {
-      return {};
-    }
-  }
-
-  function writeNotifyMap(map: Record<string, boolean>) {
-    if (typeof window === "undefined") return;
-    try {
-      window.localStorage.setItem(NOTIFY_KEY, JSON.stringify(map));
-      // Dispatch a synthetic storage event so same-tab listeners (Layout alarm cache) update immediately.
-      // The native storage event only fires cross-tab.
-      window.dispatchEvent(new StorageEvent("storage", { key: NOTIFY_KEY }));
-    } catch {}
-  }
-
   const [notifyEnabled, setNotifyEnabled] = createSignal(
     (() => {
       const id = params.id;

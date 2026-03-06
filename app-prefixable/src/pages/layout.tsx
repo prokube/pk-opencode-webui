@@ -54,44 +54,12 @@ import { ResizeHandle } from "../components/resize-handle";
 import { ConfirmDialog } from "../components/confirm-dialog";
 import { suggestSessionTitle } from "../utils/ai-rename";
 
+import { readNotifyMap, cleanupNotifyState, NOTIFY_STORAGE_KEY } from "../utils/notify";
+
 // Storage keys
 const PROJECTS_STORAGE_KEY = "opencode.projects";
 const SIDEBAR_EXPANDED_KEY = "opencode.sidebarExpanded";
 const SHOW_ARCHIVED_KEY = "opencode.showArchived";
-const NOTIFY_STORAGE_KEY = "opencode.sessionNotify";
-
-/** Read the per-session notification toggle map from localStorage */
-function readNotifyMap(): Record<string, boolean> {
-  if (typeof window === "undefined") return {};
-  try {
-    const raw = window.localStorage.getItem(NOTIFY_STORAGE_KEY);
-    if (!raw) return {};
-    const parsed = JSON.parse(raw) as Record<string, boolean>;
-    if (!parsed || typeof parsed !== "object") {
-      window.localStorage.removeItem(NOTIFY_STORAGE_KEY);
-      return {};
-    }
-    return parsed;
-  } catch {
-    return {};
-  }
-}
-
-/** Remove a session's entry from the notification toggle localStorage map */
-function cleanupNotifyState(id: string) {
-  const raw = window.localStorage.getItem(NOTIFY_STORAGE_KEY);
-  if (!raw) return;
-  let map: Record<string, boolean>;
-  try {
-    map = JSON.parse(raw) as Record<string, boolean>;
-  } catch {
-    window.localStorage.removeItem(NOTIFY_STORAGE_KEY);
-    return;
-  }
-  if (!(id in map)) return;
-  delete map[id];
-  window.localStorage.setItem(NOTIFY_STORAGE_KEY, JSON.stringify(map));
-}
 
 // Group sessions by date bucket
 export function groupSessionsByDate(
@@ -554,7 +522,11 @@ export function Layout(props: ParentProps) {
 
   function getSessionSummary(sessionID: string): string {
     const msgs = sync.messages(sessionID);
-    const last = [...msgs].reverse().find((m) => m.info.role === "assistant");
+    // Iterate from end to find last assistant message without copying/reversing the array
+    let last: (typeof msgs)[number] | undefined;
+    for (let i = msgs.length - 1; i >= 0; i--) {
+      if (msgs[i].info.role === "assistant") { last = msgs[i]; break; }
+    }
     if (!last) return "The agent has finished processing.";
     const text = last.parts
       .filter((p) => p.type === "text")
