@@ -6,6 +6,7 @@ import { SDKProvider } from "../context/sdk"
 import { EventProvider } from "../context/events"
 import { ProviderProvider } from "../context/providers"
 import { MCPProvider } from "../context/mcp"
+import { useGlobalEvents } from "../context/global-events"
 import { ProjectDialog } from "../components/project-dialog"
 import { Terminal } from "../components/terminal"
 import { getFilename, OpenCodeLogo, ProjectAvatar, type Project } from "../components/shared"
@@ -21,6 +22,7 @@ const PROJECTS_STORAGE_KEY = "opencode.projects"
  */
 export function HomeLayout(props: ParentProps) {
   const navigate = useNavigate()
+  const globalEvents = useGlobalEvents()
 
   const [projects, setProjects] = createSignal<Project[]>([])
   const [projectDialogOpen, setProjectDialogOpen] = createSignal(false)
@@ -99,11 +101,21 @@ export function HomeLayout(props: ParentProps) {
 
   function saveProjects(list: Project[]) {
     setProjects(list)
+    const value = JSON.stringify(list)
     try {
-      localStorage.setItem(PROJECTS_STORAGE_KEY, JSON.stringify(list))
+      localStorage.setItem(PROJECTS_STORAGE_KEY, value)
     } catch (e) {
       console.error("Failed to save projects:", e)
+      return
     }
+    // Synthetic storage event so same-tab listeners (GlobalEventsProvider) update
+    try {
+      window.dispatchEvent(new StorageEvent("storage", {
+        key: PROJECTS_STORAGE_KEY,
+        newValue: value,
+        storageArea: localStorage,
+      }))
+    } catch { /* ignore */ }
   }
 
   function addProject(worktree: string) {
@@ -163,7 +175,7 @@ export function HomeLayout(props: ParentProps) {
                         class="group relative cursor-pointer"
                         title={project.name || getFilename(project.worktree)}
                       >
-                        <ProjectAvatar project={project} size="large" selected={false} />
+                        <ProjectAvatar project={project} size="large" selected={false} badge={globalEvents.badge(project.worktree)} />
                         <button
                           onClick={(e) => {
                             e.stopPropagation()
