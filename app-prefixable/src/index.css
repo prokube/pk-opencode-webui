@@ -52,6 +52,17 @@
     --interactive-hover: #7b72e8;
     --interactive-critical: #dc2626;
     --interactive-critical-hover: #b91c1c;
+
+    /* Brand tints */
+    --surface-brand-subtle: theme(colors.brand.50);
+    --border-brand-subtle: theme(colors.brand.100);
+    --surface-brand-muted: theme(colors.brand.100);
+
+    /* Diff colors */
+    --diff-removed-bg: rgba(192, 38, 211, 0.12);
+    --diff-removed-text: #c026d3;
+    --diff-added-bg: rgba(99, 102, 241, 0.12);
+    --diff-added-text: #6366f1;
   }
 
   .dark {
@@ -81,6 +92,17 @@
     --interactive-hover: #958dff;
     --interactive-critical: #ef4444;
     --interactive-critical-hover: #dc2626;
+
+    /* Brand tints */
+    --surface-brand-subtle: color-mix(in srgb, theme(colors.brand.500) 10%, transparent);
+    --border-brand-subtle: color-mix(in srgb, theme(colors.brand.500) 20%, transparent);
+    --surface-brand-muted: color-mix(in srgb, theme(colors.brand.500) 15%, transparent);
+
+    /* Diff colors */
+    --diff-removed-bg: rgba(192, 38, 211, 0.18);
+    --diff-removed-text: #d946ef;
+    --diff-added-bg: rgba(99, 102, 241, 0.18);
+    --diff-added-text: #818cf8;
   }
 }
 
@@ -247,7 +269,9 @@
   }
 
   .pk-chat-message-user {
-    @apply pk-chat-message bg-brand-50 border border-brand-100 ml-12;
+    @apply pk-chat-message border ml-12;
+    background: var(--surface-brand-subtle);
+    border-color: var(--border-brand-subtle);
   }
 
   .pk-chat-message-assistant {
@@ -325,7 +349,8 @@
   }
 
   .pk-empty-state-icon {
-    @apply w-16 h-16 bg-brand-100 rounded-full flex items-center justify-center mb-4;
+    @apply w-16 h-16 rounded-full flex items-center justify-center mb-4;
+    background: var(--surface-brand-muted);
   }
 
   .pk-empty-state-title {

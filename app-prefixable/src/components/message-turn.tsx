@@ -135,7 +135,7 @@ export function MessageTurn(props: {
         onFocusOut={() => setFocused(false)}
       >
         {/* User icon */}
-        <div class="w-8 h-8 rounded-full flex items-center justify-center shrink-0 bg-brand-100">
+        <div class="w-8 h-8 rounded-full flex items-center justify-center shrink-0" style={{ background: "var(--surface-brand-muted)" }}>
           <User class="w-4 h-4 text-brand-600" />
         </div>
 

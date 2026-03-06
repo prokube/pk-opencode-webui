@@ -51,7 +51,7 @@
 
 /* Removed lines (fuchsia/magenta) */
 .diff-slot[data-diff-type="removed"] {
-  background-color: rgba(192, 38, 211, 0.12);
+  background-color: var(--diff-removed-bg);
 }
 
 .diff-slot[data-diff-type="removed"]::before {
@@ -60,7 +60,7 @@
   left: 0.6ch;
   top: 0;
   user-select: none;
-  color: #c026d3;
+  color: var(--diff-removed-text);
   font-weight: 600;
   font-size: 0.75rem;
   line-height: 1.6;
@@ -68,14 +68,14 @@
 
 /* Added lines (indigo) */
 .diff-slot[data-diff-type="added"] {
-  background-color: rgba(99, 102, 241, 0.12);
+  background-color: var(--diff-added-bg);
 }
 
 .diff-slot[data-diff-type="added"]::before {
   content: "+";
   position: absolute;
   user-select: none;
-  color: #6366f1;
+  color: var(--diff-added-text);
   left: 0.6ch;
   top: 0;
   font-weight: 600;
@@ -98,7 +98,7 @@
 
 .diff-mobile > .diff-block > div[data-diff-type="removed"] {
   position: relative;
-  background-color: rgba(192, 38, 211, 0.12);
+  background-color: var(--diff-removed-bg);
 }
 
 .diff-mobile > .diff-block > div[data-diff-type="removed"]::before {
@@ -107,7 +107,7 @@
   left: 0.6ch;
   top: 0;
   user-select: none;
-  color: #c026d3;
+  color: var(--diff-removed-text);
   font-weight: 600;
   font-size: 0.75rem;
   line-height: 1.6;
@@ -115,7 +115,7 @@
 
 .diff-mobile > .diff-block > div[data-diff-type="added"] {
   position: relative;
-  background-color: rgba(99, 102, 241, 0.12);
+  background-color: var(--diff-added-bg);
 }
 
 .diff-mobile > .diff-block > div[data-diff-type="added"]::before {
@@ -124,7 +124,7 @@
   left: 0.6ch;
   top: 0;
   user-select: none;
-  color: #6366f1;
+  color: var(--diff-added-text);
   font-weight: 600;
   font-size: 0.75rem;
   line-height: 1.6;
