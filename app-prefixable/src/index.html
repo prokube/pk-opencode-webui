@@ -9,15 +9,19 @@
     <link rel="icon" type="image/svg+xml" href="./favicon.svg" />
     <script>
       (function() {
+        var t = "system";
         try {
-          var t = localStorage.getItem("opencode.theme");
-          var prefersDark = typeof window.matchMedia === "function"
-            ? window.matchMedia("(prefers-color-scheme: dark)").matches
-            : false;
-          if (t === "dark" || ((t !== "light" && t !== "dark") && prefersDark)) {
-            document.documentElement.classList.add("dark");
+          var stored = localStorage.getItem("opencode.theme");
+          if (stored === "light" || stored === "dark") {
+            t = stored;
           }
         } catch (e) {}
+        var prefersDark = typeof window.matchMedia === "function"
+          ? window.matchMedia("(prefers-color-scheme: dark)").matches
+          : false;
+        if (t === "dark" || (t === "system" && prefersDark)) {
+          document.documentElement.classList.add("dark");
+        }
       })();
     </script>
     <link rel="stylesheet" href="./styles.css" />
