@@ -160,7 +160,7 @@ export function FileViewer(props: FileViewerProps) {
                 {props.path}
               </div>
               <div class="overflow-x-auto">
-                <Show when={content()} fallback={<div class="p-4 text-xs text-gray-500">Empty file</div>}>
+                <Show when={content()} fallback={<div class="p-4 text-xs" style={{ color: "var(--text-weak)" }}>Empty file</div>}>
                   <ContentCode code={content()} lang={lang()} />
                 </Show>
               </div>

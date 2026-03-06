@@ -293,7 +293,7 @@ export function MCPAddDialog(props: Props) {
                     <div
                       class="absolute top-0.5 w-4 h-4 rounded-full transition-transform"
                       style={{
-                        background: "white",
+                        background: "var(--background-base)",
                         left: oauthEnabled() ? "calc(100% - 18px)" : "2px",
                       }}
                     />

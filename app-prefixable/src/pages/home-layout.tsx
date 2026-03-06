@@ -262,7 +262,7 @@ export function HomeLayout(props: ParentProps) {
                       }}
                     >
                       <div
-                        class="mx-auto mt-0.5 w-12 h-1 rounded-full transition-colors group-hover:bg-gray-400"
+                        class="mx-auto mt-0.5 w-12 h-1 rounded-full transition-colors group-hover:bg-[var(--surface-strong)]"
                         style={{ background: "var(--border-base)" }}
                       />
                     </div>

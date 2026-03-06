@@ -20,14 +20,14 @@ export function Button(props: ButtonProps) {
   const variantClasses = {
     // Primary: brand bg, white text
     primary: "bg-brand-500 border-brand-500 text-white hover:bg-brand-600 hover:border-brand-600 hover:shadow-md",
-    // Secondary: white bg, gray text, brand hover
+    // Secondary: themed bg, themed text, brand hover
     secondary:
-      "bg-white border-gray-200 text-gray-900 hover:border-brand-500 hover:bg-brand-50 hover:text-brand-600 hover:shadow-md",
+      "bg-[var(--background-base)] border-[var(--border-base)] text-[var(--text-strong)] hover:border-brand-500 hover:bg-[var(--surface-inset)] hover:text-[var(--text-interactive-base)] hover:shadow-md",
     // Ghost: transparent, brand hover
-    ghost: "bg-transparent border-transparent text-gray-700 hover:bg-brand-50 hover:text-brand-600",
-    // Danger: white bg, red text, red hover
+    ghost: "bg-transparent border-transparent text-[var(--text-base)] hover:bg-[var(--surface-inset)] hover:text-[var(--text-interactive-base)]",
+    // Danger: themed bg, red text, red hover
     danger:
-      "bg-white border-gray-200 text-red-600 hover:border-red-500 hover:bg-red-50 hover:text-red-700 hover:shadow-md",
+      "bg-[var(--background-base)] border-[var(--border-base)] text-[var(--interactive-critical)] hover:border-[var(--interactive-critical)] hover:bg-[var(--surface-inset)] hover:text-[var(--interactive-critical-hover)] hover:shadow-md",
   }
 
   const sizeClasses: Record<string, string> = {

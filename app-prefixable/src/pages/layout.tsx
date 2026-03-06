@@ -179,11 +179,9 @@ function PromptDropdown(props: {
           {(prompt, i) => (
             <button
               class="w-full text-left px-3 py-2 text-sm transition-colors truncate"
-              classList={{
-                "bg-brand-50 text-brand-600": i() === props.activeIndex,
-              }}
               style={{
-                color: i() === props.activeIndex ? undefined : "var(--text-base)",
+                background: i() === props.activeIndex ? "var(--surface-inset)" : "transparent",
+                color: i() === props.activeIndex ? "var(--text-interactive-base)" : "var(--text-base)",
               }}
               role="option"
               aria-selected={i() === props.activeIndex}
@@ -864,7 +862,7 @@ export function Layout(props: ParentProps) {
                     setPromptDropdownIndex(0);
                     setPromptDropdownOpen(!promptDropdownOpen());
                   }}
-                  class="inline-flex items-center px-1.5 rounded-r-xl border-2 border-l-0 border-transparent bg-transparent text-gray-700 hover:bg-brand-50 hover:text-brand-600 transition-all"
+                  class="inline-flex items-center px-1.5 rounded-r-xl border-2 border-l-0 border-transparent bg-transparent text-[var(--text-base)] hover:bg-[var(--surface-inset)] hover:text-[var(--text-interactive-base)] transition-all"
                   title="New session from saved prompt"
                   aria-haspopup="listbox"
                   aria-expanded={promptDropdownOpen()}
@@ -1509,7 +1507,7 @@ export function Layout(props: ParentProps) {
                 }}
               >
                 <div
-                  class="mx-auto mt-0.5 w-12 h-1 rounded-full transition-colors group-hover:bg-gray-400"
+                  class="mx-auto mt-0.5 w-12 h-1 rounded-full transition-colors group-hover:bg-[var(--surface-strong)]"
                   style={{ background: "var(--border-base)" }}
                 />
               </div>
