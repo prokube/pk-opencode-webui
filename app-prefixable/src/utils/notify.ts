@@ -38,8 +38,14 @@ export function writeNotifyMap(map: Record<string, boolean>) {
       storageArea: window.localStorage,
     }));
   } catch {
-    // Fallback for environments that don't support StorageEvent construction
-    try { window.dispatchEvent(new CustomEvent("storage", { detail: { key: NOTIFY_STORAGE_KEY } })); } catch {}
+    // Fallback for environments that don't support StorageEvent construction.
+    // Attach StorageEvent-like properties so listeners reading e.key still work.
+    try {
+      const fallback = new CustomEvent("storage", { detail: { key: NOTIFY_STORAGE_KEY, newValue: value } });
+      Object.defineProperty(fallback, "key", { value: NOTIFY_STORAGE_KEY });
+      Object.defineProperty(fallback, "newValue", { value });
+      window.dispatchEvent(fallback);
+    } catch {}
   }
 }
 
