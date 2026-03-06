@@ -1,6 +1,7 @@
 import { Router, Route, Navigate, useParams } from "@solidjs/router"
 import { BasePathProvider, useBasePath } from "./context/base-path"
 import { BrandingProvider } from "./context/branding"
+import { ThemeProvider } from "./context/theme"
 import { CommandProvider } from "./context/command"
 import { RecentProjectsProvider } from "./context/recent-projects"
 import { SavedPromptsProvider } from "./context/saved-prompts"
@@ -63,15 +64,17 @@ function AppRoutes() {
 export function App() {
   return (
     <BasePathProvider>
-      <BrandingProvider>
-        <RecentProjectsProvider>
-          <SavedPromptsProvider>
-            <CommandProvider>
-              <AppRoutes />
-            </CommandProvider>
-          </SavedPromptsProvider>
-        </RecentProjectsProvider>
-      </BrandingProvider>
+      <ThemeProvider>
+        <BrandingProvider>
+          <RecentProjectsProvider>
+            <SavedPromptsProvider>
+              <CommandProvider>
+                <AppRoutes />
+              </CommandProvider>
+            </SavedPromptsProvider>
+          </RecentProjectsProvider>
+        </BrandingProvider>
+      </ThemeProvider>
     </BasePathProvider>
   )
 }
