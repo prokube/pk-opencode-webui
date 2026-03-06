@@ -8,7 +8,9 @@ interface ButtonProps extends JSX.ButtonHTMLAttributes<HTMLButtonElement> {
 /**
  * Button component styled like pkui dev-labs UI
  * - Primary: brand color background with white text
- * - Secondary/Ghost: white/transparent with brand hover
+ * - Secondary: theme-aware bg/border/text via CSS variables, brand hover
+ * - Ghost: transparent background, theme-aware text via CSS variables
+ * - Danger: theme-aware bg/border via CSS variables, critical-color text
  * - Rounded corners
  */
 export function Button(props: ButtonProps) {
