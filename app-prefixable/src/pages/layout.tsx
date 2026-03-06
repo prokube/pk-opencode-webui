@@ -479,11 +479,29 @@ export function Layout(props: ParentProps) {
   });
 
   // --- Global alarm monitoring for ALL sessions with bell enabled ---
+  // NOTE: Currently scoped to the active directory's SSE stream (EventProvider connects
+  // to `/event?directory=...`). Cross-project alarms would require subscribing to
+  // multiple directory streams or an unscoped endpoint — left for a future iteration.
   // Track busy state per session so we detect genuine busy→idle transitions
   const busyTracker: Record<string, boolean> = {};
   // Track which sessions already fired a permission/question alarm to avoid repeats
   const firedPermission = new Set<string>();
   const firedQuestion = new Set<string>();
+
+  // Cached notify map — avoids repeated localStorage reads + JSON.parse on every SSE event
+  const [notifyCache, setNotifyCache] = createSignal(readNotifyMap());
+  onMount(() => {
+    function handleStorage(e: StorageEvent) {
+      if (e.key === NOTIFY_STORAGE_KEY) setNotifyCache(readNotifyMap());
+    }
+    window.addEventListener("storage", handleStorage);
+    onCleanup(() => window.removeEventListener("storage", handleStorage));
+  });
+  // Also refresh when the bell toggle is changed from the same tab (storage event
+  // only fires across tabs). We poll on a relaxed interval since same-tab updates
+  // are typically followed closely by an SSE event that checks the cache.
+  const notifyPollTimer = setInterval(() => setNotifyCache(readNotifyMap()), 5000);
+  onCleanup(() => clearInterval(notifyPollTimer));
 
   // Tab title flash (works for any alarming session)
   const titleFlash = { original: "", active: false };
@@ -516,11 +534,11 @@ export function Layout(props: ParentProps) {
   });
 
   function fireNotification(sessionID: string, title: string, body: string, tag: string) {
+    // Flash the tab title when the page is in the background, regardless of Notification permission
+    if (typeof document !== "undefined" && document.hidden) flashTitle();
+
     if (typeof window === "undefined" || !("Notification" in window)) return;
     if (Notification.permission !== "granted") return;
-
-    // Flash the tab title when the page is in the background
-    if (document.hidden) flashTitle();
 
     const n = new Notification(title, {
       body,
@@ -552,14 +570,19 @@ export function Layout(props: ParentProps) {
     return line.length > 120 ? line.slice(0, 120) + "..." : line;
   }
 
+  // Seed busyTracker reactively from already-known statuses so sessions that were busy
+  // before we mounted (or before the status fetch resolved) still trigger notifications
+  // when they go idle. Only fill entries that aren't already tracked.
+  createEffect(() => {
+    for (const [sid, s] of Object.entries(events.status)) {
+      if ((s.type === "busy" || s.type === "retry") && !busyTracker[sid]) {
+        busyTracker[sid] = true;
+      }
+    }
+  });
+
   // Subscribe to session status events for all sessions
   onMount(() => {
-    // Seed busyTracker from already-known statuses so sessions that were busy
-    // before we mounted still trigger notifications when they go idle.
-    for (const [sid, s] of Object.entries(events.status)) {
-      if (s.type === "busy" || s.type === "retry") busyTracker[sid] = true;
-    }
-
     const alarmUnsub = events.subscribe((event) => {
       // Track busy→idle transitions for all sessions
       if (event.type === "session.status") {
@@ -580,7 +603,7 @@ export function Layout(props: ParentProps) {
           firedQuestion.delete(sid);
 
           // Check if bell is enabled for this session
-          if (!readNotifyMap()[sid]) return;
+          if (!notifyCache()[sid]) return;
 
           const sess = sync.session.get(sid);
           const title = sess?.title || "Task complete";
@@ -593,7 +616,7 @@ export function Layout(props: ParentProps) {
       if (event.type === "permission.asked") {
         const props = event.properties as { id: string; sessionID: string };
         const sid = props.sessionID;
-        if (!readNotifyMap()[sid]) return;
+        if (!notifyCache()[sid]) return;
         // Deduplicate: only fire once per session until the session goes idle again
         if (firedPermission.has(sid)) return;
         firedPermission.add(sid);
@@ -608,7 +631,7 @@ export function Layout(props: ParentProps) {
       if (event.type === "question.asked") {
         const props = event.properties as { sessionID: string };
         const sid = props.sessionID;
-        if (!readNotifyMap()[sid]) return;
+        if (!notifyCache()[sid]) return;
         if (firedQuestion.has(sid)) return;
         firedQuestion.add(sid);
 
