@@ -568,7 +568,7 @@ export function Layout(props: ParentProps) {
           busyTracker[sid] = false;
 
           // Check if bell is enabled for this session
-          if (!notifyCache()[sid]) return;
+          if (notifyCache()[sid] !== true) return;
 
           const sess = sync.session.get(sid);
           const title = sess?.title || "Task complete";
@@ -583,7 +583,7 @@ export function Layout(props: ParentProps) {
         const sid = props.sessionID;
         const rid = props.id;
         if (!sid || !rid) return;
-        if (!notifyCache()[sid]) return;
+        if (notifyCache()[sid] !== true) return;
         if (firedPermission.has(rid)) return;
         firedPermission.add(rid);
 
@@ -606,7 +606,7 @@ export function Layout(props: ParentProps) {
         const sid = props.sessionID;
         const rid = props.id;
         if (!sid || !rid) return;
-        if (!notifyCache()[sid]) return;
+        if (notifyCache()[sid] !== true) return;
         if (firedQuestion.has(rid)) return;
         firedQuestion.add(rid);
 

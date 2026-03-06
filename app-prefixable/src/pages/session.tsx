@@ -1824,6 +1824,7 @@ export function Session() {
               edge="start"
               size={layout.review.width()}
               min={200}
+              // Evaluated as a getter on each drag event (SolidJS prop), so it reflects current viewport width
               max={typeof window !== "undefined" ? Math.round(window.innerWidth * 0.8) : 800}
               onResize={layout.review.resize}
               onCollapse={layout.review.close}
