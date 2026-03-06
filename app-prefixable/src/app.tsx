@@ -89,16 +89,28 @@ function useActiveDirectory() {
     }
   }
 
-  const [dir, setDir] = createSignal(derive())
+  const [dir, setDir] = createSignal<string | undefined>(
+    typeof window === "undefined" ? undefined : derive(),
+  )
 
   onMount(() => {
+    // Ensure correct value once mounted (covers SSR hydration)
+    setDir(derive())
+
     function update() { setDir(derive()) }
+
+    // Patch pushState/replaceState to detect SolidJS Router navigations
+    // instead of polling with setInterval
+    const origPushState = history.pushState.bind(history)
+    const origReplaceState = history.replaceState.bind(history)
+    history.pushState = (...args) => { origPushState(...args); update() }
+    history.replaceState = (...args) => { origReplaceState(...args); update() }
     window.addEventListener("popstate", update)
-    // SolidJS Router uses pushState — poll briefly to catch navigations
-    const poll = setInterval(update, 500)
+
     onCleanup(() => {
+      history.pushState = origPushState
+      history.replaceState = origReplaceState
       window.removeEventListener("popstate", update)
-      clearInterval(poll)
     })
   })
 

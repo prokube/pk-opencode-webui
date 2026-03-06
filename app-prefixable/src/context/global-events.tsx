@@ -48,7 +48,10 @@ export function GlobalEventsProvider(props: ParentProps & {
   const [alerts, setAlerts] = createStore<Record<string, ProjectAlerts>>({})
 
   // Map of directory → SSE connection
-  const connections = new Map<string, { source: EventSource; timer: ReturnType<typeof setTimeout> | null }>()
+  const connections = new Map<string, { source: EventSource }>()
+
+  // Pending reconnect timers (separate from connections so they survive disconnectDirectory)
+  const reconnectTimers = new Map<string, ReturnType<typeof setTimeout>>()
 
   // Per-directory tracking sets for deduplication
   const perDir = new Map<string, {
@@ -82,12 +85,18 @@ export function GlobalEventsProvider(props: ParentProps & {
   function connectToDirectory(dir: string) {
     if (connections.has(dir)) return
 
+    // Cancel any pending reconnect timer for this directory
+    const pending = reconnectTimers.get(dir)
+    if (pending) {
+      clearTimeout(pending)
+      reconnectTimers.delete(dir)
+    }
+
     const dirParam = `?directory=${encodeURIComponent(dir)}`
     const url = prefix(`/event${dirParam}`)
     const source = new EventSource(url)
 
-    const conn = { source, timer: null as ReturnType<typeof setTimeout> | null }
-    connections.set(dir, conn)
+    connections.set(dir, { source })
 
     // Seed initial state from REST endpoints
     seedDirectory(dir)
@@ -151,20 +160,18 @@ export function GlobalEventsProvider(props: ParentProps & {
     }
 
     source.onerror = () => {
-      source.close()
-      connections.delete(dir)
-      // Reconnect after delay
-      if (!conn.timer) {
-        conn.timer = setTimeout(() => {
-          conn.timer = null
-          // Only reconnect if we still want this directory
-          const active = props.activeDirectory()
-          const wanted = props.projects().some((p) => p.worktree === dir)
-          if (wanted && dir !== active) {
-            connectToDirectory(dir)
-          }
-        }, 5000)
-      }
+      // Clear all state (source, perDir, alerts) so stale badges don't linger
+      disconnectDirectory(dir)
+      // Schedule reconnect outside the connection lifecycle
+      const reconnectTimer = setTimeout(() => {
+        const active = props.activeDirectory()
+        const wanted = props.projects().some((p) => p.worktree === dir)
+        if (wanted && dir !== active) {
+          connectToDirectory(dir)
+        }
+      }, 5000)
+      // Store timer so cleanup can cancel it if the component unmounts
+      reconnectTimers.set(dir, reconnectTimer)
     }
   }
 
@@ -172,8 +179,12 @@ export function GlobalEventsProvider(props: ParentProps & {
     const conn = connections.get(dir)
     if (conn) {
       conn.source.close()
-      if (conn.timer) clearTimeout(conn.timer)
       connections.delete(dir)
+    }
+    const timer = reconnectTimers.get(dir)
+    if (timer) {
+      clearTimeout(timer)
+      reconnectTimers.delete(dir)
     }
     perDir.delete(dir)
     setAlerts(produce((draft) => { delete draft[dir] }))
@@ -261,6 +272,11 @@ export function GlobalEventsProvider(props: ParentProps & {
     for (const dir of [...connections.keys()]) {
       disconnectDirectory(dir)
     }
+    // Cancel any orphaned reconnect timers (directory already disconnected but timer pending)
+    for (const [dir, timer] of reconnectTimers) {
+      clearTimeout(timer)
+    }
+    reconnectTimers.clear()
   })
 
   function badge(directory: string) {

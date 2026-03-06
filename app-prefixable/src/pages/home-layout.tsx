@@ -115,7 +115,14 @@ export function HomeLayout(props: ParentProps) {
         newValue: value,
         storageArea: localStorage,
       }))
-    } catch { /* ignore */ }
+    } catch {
+      // Fallback for environments where StorageEvent constructor isn't supported
+      try {
+        window.dispatchEvent(new CustomEvent("storage", {
+          detail: { key: PROJECTS_STORAGE_KEY, newValue: value },
+        }))
+      } catch { /* ignore */ }
+    }
   }
 
   function addProject(worktree: string) {
