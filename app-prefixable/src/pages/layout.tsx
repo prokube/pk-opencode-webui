@@ -238,6 +238,7 @@ export function Layout(props: ParentProps) {
   const [searching, setSearching] = createSignal(false);
   const [searchFocusIdx, setSearchFocusIdx] = createSignal(-1);
   const searchTimer = { id: undefined as ReturnType<typeof setTimeout> | undefined };
+  let searchInputRef: HTMLInputElement | undefined;
 
   // Keyboard navigation state for session list
   const [focusedId, setFocusedId] = createSignal<string | null>(null);
@@ -1003,7 +1004,7 @@ export function Layout(props: ParentProps) {
 
   function handleSearchInput(query: string) {
     const trimmed = query.trim();
-    setSearchQuery(trimmed);
+    setSearchQuery(query);
     if (searchTimer.id !== undefined) clearTimeout(searchTimer.id);
     if (!trimmed) {
       clearSearch();
@@ -1019,7 +1020,7 @@ export function Layout(props: ParentProps) {
       client.session.list({ search: trimmed, directory, roots: true })
         .then((res) => {
           // Only update if query hasn't changed while waiting
-          if (searchQuery() !== trimmed) return;
+          if (searchQuery().trim() !== trimmed) return;
           const data = res.data;
           const valid = Array.isArray(data)
             ? data.filter((s): s is Session => s && typeof s === "object" && typeof s.id === "string")
@@ -1028,10 +1029,10 @@ export function Layout(props: ParentProps) {
         })
         .catch((err: unknown) => {
           console.error("Session search failed:", err);
-          if (searchQuery() === trimmed) setSearchResults([]);
+          if (searchQuery().trim() === trimmed) setSearchResults([]);
         })
         .finally(() => {
-          if (searchQuery() === trimmed) setSearching(false);
+          if (searchQuery().trim() === trimmed) setSearching(false);
         });
     }, 300);
   }
@@ -1994,6 +1995,7 @@ export function Layout(props: ParentProps) {
                 <Search class="w-3.5 h-3.5 shrink-0" style={{ color: "var(--icon-weak)" }} />
               </Show>
               <input
+                ref={el => searchInputRef = el}
                 type="text"
                 placeholder="Search sessions..."
                 aria-label="Search sessions"
@@ -2013,18 +2015,16 @@ export function Layout(props: ParentProps) {
               <button
                 onClick={() => {
                   clearSearch();
-                  // Move focus back to the search input after clearing
-                  const input = document.querySelector<HTMLInputElement>('input[aria-label="Search sessions"]');
-                  if (input) input.focus();
+                  searchInputRef?.focus();
                 }}
                 class="p-0.5 rounded transition-colors shrink-0"
                 style={{
                   color: "var(--icon-weak)",
-                  opacity: searchQuery() ? 1 : 0,
-                  "pointer-events": searchQuery() ? "auto" : "none",
+                  opacity: searchQuery().trim() ? 1 : 0,
+                  "pointer-events": searchQuery().trim() ? "auto" : "none",
                 }}
-                disabled={!searchQuery()}
-                tabIndex={searchQuery() ? 0 : -1}
+                disabled={!searchQuery().trim()}
+                tabIndex={searchQuery().trim() ? 0 : -1}
                 onMouseEnter={(e) => (e.currentTarget.style.color = "var(--icon-base)")}
                 onMouseLeave={(e) => (e.currentTarget.style.color = "var(--icon-weak)")}
                 aria-label="Clear search"
