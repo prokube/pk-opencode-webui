@@ -56,6 +56,7 @@ import { ConfirmDialog } from "../components/confirm-dialog";
 import { suggestSessionTitle } from "../utils/ai-rename";
 
 import { readNotifyMap, cleanupNotifyState, NOTIFY_STORAGE_KEY } from "../utils/notify";
+import { dispatchStorageEvent } from "../utils/storage";
 
 // Storage keys
 const PROJECTS_STORAGE_KEY = "opencode.projects";
@@ -294,22 +295,7 @@ export function Layout(props: ParentProps) {
       console.error("Failed to save projects:", e);
       return;
     }
-    // Synthetic storage event so same-tab listeners (GlobalEventsProvider) update
-    try {
-      window.dispatchEvent(new StorageEvent("storage", {
-        key: PROJECTS_STORAGE_KEY,
-        newValue: value,
-        storageArea: localStorage,
-      }));
-    } catch {
-      // Fallback for environments where StorageEvent constructor isn't supported
-      try {
-        const event = new CustomEvent("storage") as CustomEvent & { key?: string | null; newValue?: string | null };
-        event.key = PROJECTS_STORAGE_KEY;
-        event.newValue = value;
-        window.dispatchEvent(event);
-      } catch { /* ignore */ }
-    }
+    dispatchStorageEvent(PROJECTS_STORAGE_KEY, value);
   }
 
   function toggleSidebar() {

@@ -12,6 +12,7 @@ import { Terminal } from "../components/terminal"
 import { getFilename, OpenCodeLogo, ProjectAvatar, type Project } from "../components/shared"
 import { Spinner } from "../components/ui/spinner"
 import { Plus, X, Settings, SquareTerminal, ChevronDown } from "lucide-solid"
+import { dispatchStorageEvent } from "../utils/storage"
 
 // Storage key
 const PROJECTS_STORAGE_KEY = "opencode.projects"
@@ -108,22 +109,7 @@ export function HomeLayout(props: ParentProps) {
       console.error("Failed to save projects:", e)
       return
     }
-    // Synthetic storage event so same-tab listeners (GlobalEventsProvider) update
-    try {
-      window.dispatchEvent(new StorageEvent("storage", {
-        key: PROJECTS_STORAGE_KEY,
-        newValue: value,
-        storageArea: localStorage,
-      }))
-    } catch {
-      // Fallback for environments where StorageEvent constructor isn't supported
-      try {
-        const event = new CustomEvent("storage") as CustomEvent & { key?: string | null; newValue?: string | null }
-        event.key = PROJECTS_STORAGE_KEY
-        event.newValue = value
-        window.dispatchEvent(event)
-      } catch { /* ignore */ }
-    }
+    dispatchStorageEvent(PROJECTS_STORAGE_KEY, value)
   }
 
   function addProject(worktree: string) {

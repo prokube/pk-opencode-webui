@@ -107,10 +107,20 @@ export function GlobalEventsProvider(props: ParentProps & {
 
     connections.set(dir, { source })
 
-    // Seed initial state from REST endpoints
-    seedDirectory(dir)
+    // Buffer events until seed completes to avoid races where an SSE event
+    // adds state, then the seed clears and repopulates (dropping the event).
+    const buffer: MessageEvent[] = []
+    let seeded = false
 
-    source.onmessage = (e) => {
+    function handleMessage(e: MessageEvent) {
+      if (!seeded) {
+        buffer.push(e)
+        return
+      }
+      processMessage(e)
+    }
+
+    function processMessage(e: MessageEvent) {
       const data = (() => { try { return JSON.parse(e.data) } catch { return null } })()
       if (!data) return
       const event = data?.payload ?? data
@@ -168,6 +178,15 @@ export function GlobalEventsProvider(props: ParentProps & {
       }
     }
 
+    source.onmessage = handleMessage
+
+    // Seed initial state, then flush any buffered SSE events
+    seedDirectory(dir).then(() => {
+      seeded = true
+      for (const buffered of buffer) processMessage(buffered)
+      buffer.length = 0
+    })
+
     source.onerror = () => {
       // Clear all state (source, perDir, alerts) so stale badges don't linger
       disconnectDirectory(dir)
@@ -199,16 +218,19 @@ export function GlobalEventsProvider(props: ParentProps & {
     setAlerts(produce((draft) => { delete draft[dir] }))
   }
 
-  // Seed permission/question/status state from REST for a directory
+  // Seed permission/question/status state from REST for a directory.
+  // Returns a promise that resolves when all seeds complete (or fail).
   function seedDirectory(dir: string) {
-    seedPermissions(dir)
-    seedQuestions(dir)
-    seedStatuses(dir)
+    return Promise.allSettled([
+      seedPermissions(dir),
+      seedQuestions(dir),
+      seedStatuses(dir),
+    ])
   }
 
   function seedPermissions(dir: string) {
     const tracking = getTracking(dir)
-    fetch(prefix(`/permission?directory=${encodeURIComponent(dir)}`))
+    return fetch(prefix(`/permission?directory=${encodeURIComponent(dir)}`))
       .then((r) => r.json())
       .then((data) => {
         const perms = Array.isArray(data) ? data : (data?.data ?? [])
@@ -218,12 +240,12 @@ export function GlobalEventsProvider(props: ParentProps & {
         }
         recalcAlerts(dir)
       })
-      .catch(() => {})
+      .catch((e) => console.warn("[GlobalEvents] Failed to seed permissions for", dir, e))
   }
 
   function seedQuestions(dir: string) {
     const tracking = getTracking(dir)
-    fetch(prefix(`/question?directory=${encodeURIComponent(dir)}`))
+    return fetch(prefix(`/question?directory=${encodeURIComponent(dir)}`))
       .then((r) => r.json())
       .then((data) => {
         const questions = Array.isArray(data) ? data : (data?.data ?? [])
@@ -233,12 +255,12 @@ export function GlobalEventsProvider(props: ParentProps & {
         }
         recalcAlerts(dir)
       })
-      .catch(() => {})
+      .catch((e) => console.warn("[GlobalEvents] Failed to seed questions for", dir, e))
   }
 
   function seedStatuses(dir: string) {
     const tracking = getTracking(dir)
-    fetch(prefix(`/session/status?directory=${encodeURIComponent(dir)}`))
+    return fetch(prefix(`/session/status?directory=${encodeURIComponent(dir)}`))
       .then((r) => r.json())
       .then((data) => {
         const statuses = (data?.data ?? data ?? {}) as Record<string, { type?: string }>
@@ -250,7 +272,7 @@ export function GlobalEventsProvider(props: ParentProps & {
         }
         recalcAlerts(dir)
       })
-      .catch(() => {})
+      .catch((e) => console.warn("[GlobalEvents] Failed to seed statuses for", dir, e))
   }
 
   // Reactively manage connections when projects or active directory change.
