@@ -781,8 +781,8 @@ export function Layout(props: ParentProps) {
           // Don't steal Escape from the terminal (Escape is heavily used there)
           const target = e?.target;
           if (target instanceof HTMLElement && target.closest(".xterm")) return;
-          e?.preventDefault();
-          focusPanel("chat");
+          // Only preventDefault when we actually move focus (e.g. skip on settings page)
+          if (focusPanel("chat")) e?.preventDefault();
         },
       },
     ]);

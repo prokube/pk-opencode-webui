@@ -91,7 +91,6 @@ export function HintMode() {
     exit()
     // Click the element (works for buttons, links, etc.)
     hint.element.click()
-    hint.element.focus()
   }
 
   // Register the hint-mode trigger command
