@@ -1609,7 +1609,8 @@ export function Layout(props: ParentProps) {
                           href={`/${dirSlug()}/session/${session.id}`}
                           onClick={() => clearSearch()}
                           role="option"
-                          id={`search-result-${session.id}`}
+                          id={`session-${session.id}`}
+                          aria-selected={isActive(session.id)}
                           class="flex items-center gap-2 px-2.5 py-2 rounded-md text-sm transition-colors"
                           style={{
                             color: isActive(session.id)
