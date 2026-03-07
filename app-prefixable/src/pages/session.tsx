@@ -127,6 +127,14 @@ export function Session() {
     })),
   );
 
+  const [input, setInput] = createSignal("");
+  const [optimisticMessage, setOptimisticMessage] =
+    createSignal<DisplayMessage | null>(null);
+  const [loading, setLoading] = createSignal(false);
+  const [processing, setProcessing] = createSignal(false);
+  const [loadingHistory, setLoadingHistory] = createSignal(false);
+  const [sessionId, setSessionId] = createSignal(params.id);
+
   // Fork picker items: user messages in reverse chronological order
   const forkPickerItems = createMemo(() => {
     const id = sessionId();
@@ -136,12 +144,11 @@ export function Session() {
       .filter((m) => m.info.role === "user")
       .map((m) => {
         const textParts = m.parts
-          .filter((p) => p.type === "text")
-          .map((p) => (p as { text?: string }).text ?? "")
+          .filter((p): p is import("../sdk/client").TextPart => p.type === "text")
+          .map((p) => p.text)
           .join(" ");
         const preview = textParts.length > 80 ? textParts.slice(0, 80) + "..." : textParts;
-        const time = (m.info as { time: { created: number } }).time.created;
-        const date = new Date(time);
+        const date = new Date(m.info.time.created);
         const timestamp = date.toLocaleString(undefined, {
           month: "short",
           day: "numeric",
@@ -156,14 +163,6 @@ export function Session() {
       })
       .reverse();
   });
-
-  const [input, setInput] = createSignal("");
-  const [optimisticMessage, setOptimisticMessage] =
-    createSignal<DisplayMessage | null>(null);
-  const [loading, setLoading] = createSignal(false);
-  const [processing, setProcessing] = createSignal(false);
-  const [loadingHistory, setLoadingHistory] = createSignal(false);
-  const [sessionId, setSessionId] = createSignal(params.id);
   const [showSlashPopover, setShowSlashPopover] = createSignal(false);
   const [slashQuery, setSlashQuery] = createSignal("");
   const [slashIndex, setSlashIndex] = createSignal(0);
@@ -2125,15 +2124,18 @@ export function Session() {
               client.session
                 .fork({ sessionID: id, messageID: item.id })
                 .then((res) => {
-                  if (!res.data) return;
+                  if (!res.data) {
+                    setError("Failed to fork session");
+                    return;
+                  }
                   const forkedId = res.data.id;
                   // Find the selected message text to restore in the new session's input
                   const msgs = sync.messages(id);
                   const selected = msgs.find((m) => m.info.id === item.id);
                   const restoredText = selected
                     ? selected.parts
-                        .filter((p) => p.type === "text")
-                        .map((p) => (p as { text?: string }).text ?? "")
+                        .filter((p): p is import("../sdk/client").TextPart => p.type === "text")
+                        .map((p) => p.text)
                         .join("\n")
                     : "";
                   navigate(`/${dirSlug()}/session/${forkedId}`);
