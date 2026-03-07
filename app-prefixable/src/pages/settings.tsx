@@ -4,12 +4,15 @@ import { Spinner } from "../components/ui/spinner"
 import { useProviders } from "../context/providers"
 import { useMCP } from "../context/mcp"
 import { useSDK } from "../context/sdk"
+import { useBasePath } from "../context/base-path"
 import { MCPAddDialog } from "../components/mcp-add-dialog"
 import { ConfirmDialog } from "../components/confirm-dialog"
 import { Button } from "../components/ui/button"
-import { Check, Copy, Plug, GitBranch, Server, ExternalLink, Key, Search, X, Trash2, BookmarkPlus, Pencil, Palette, Sun, Moon, Monitor } from "lucide-solid"
+import { Check, Copy, Plug, GitBranch, Server, ExternalLink, Key, Search, X, Trash2, BookmarkPlus, Pencil, Palette, Sun, Moon, Monitor, BookOpen, Plus, Save } from "lucide-solid"
 import { useSavedPrompts } from "../context/saved-prompts"
 import { useTheme } from "../context/theme"
+import { writeFile } from "../utils/extended-api"
+import type { Config } from "../sdk/client"
 
 export function Settings() {
   const providers = useProviders()
@@ -24,7 +27,7 @@ export function Settings() {
   // Initialize tab from URL hash, default to "providers"
   const getInitialTab = () => {
     const hash = window.location.hash.slice(1)
-    const validTabs = ["providers", "git", "mcp", "prompts", "appearance"]
+    const validTabs = ["providers", "git", "mcp", "prompts", "instructions", "appearance"]
     return validTabs.includes(hash) ? hash : "providers"
   }
   const [activeTab, setActiveTab] = createSignal(getInitialTab())
@@ -43,6 +46,18 @@ export function Settings() {
 
   // Provider search
   const [providerSearch, setProviderSearch] = createSignal("")
+
+  // Instructions state
+  const basePath = useBasePath()
+  const [instructionPaths, setInstructionPaths] = createSignal<string[]>([])
+  const [instructionContents, setInstructionContents] = createSignal<Record<string, { content: string; exists: boolean }>>({})
+  const [instructionEdits, setInstructionEdits] = createSignal<Record<string, string>>({})
+  const [instructionLoading, setInstructionLoading] = createSignal(false)
+  const [instructionSaving, setInstructionSaving] = createSignal<string | null>(null)
+  const [instructionSaved, setInstructionSaved] = createSignal<string | null>(null)
+  const [instructionError, setInstructionError] = createSignal<string | null>(null)
+  const [instructionCreating, setInstructionCreating] = createSignal(false)
+  const [instructionLoaded, setInstructionLoaded] = createSignal(false)
 
   // OAuth state
   const [oauthPending, setOauthPending] = createSignal<{
@@ -108,6 +123,10 @@ export function Settings() {
       setSshKeyLoaded(true)
       loadSshKey()
     }
+    if (tabId === "instructions" && !instructionLoaded()) {
+      setInstructionLoaded(true)
+      loadInstructions()
+    }
   }
 
   // Load SSH key on mount if starting on git tab
@@ -115,6 +134,10 @@ export function Settings() {
     if (activeTab() === "git" && !sshKeyLoaded()) {
       setSshKeyLoaded(true)
       loadSshKey()
+    }
+    if (activeTab() === "instructions" && !instructionLoaded()) {
+      setInstructionLoaded(true)
+      loadInstructions()
     }
   })
 
@@ -291,6 +314,117 @@ export function Settings() {
     } catch (e) {
       console.error("Failed to copy:", e)
     }
+  }
+
+  async function loadInstructions() {
+    setInstructionLoading(true)
+    setInstructionError(null)
+    const configRes = await client.config.get().catch(() => null)
+    const cfg = configRes?.data as Config | undefined
+    const paths = cfg?.instructions ?? []
+    setInstructionPaths(paths)
+
+    const contents: Record<string, { content: string; exists: boolean }> = {}
+    for (const p of paths) {
+      const fileRes = await client.file.read({ path: p, directory }).catch(() => null)
+      const data = fileRes?.data as { content?: string } | undefined
+      if (data?.content !== undefined) {
+        contents[p] = { content: data.content, exists: true }
+      } else {
+        contents[p] = { content: "", exists: false }
+      }
+    }
+    setInstructionContents(contents)
+    setInstructionEdits({})
+    setInstructionLoading(false)
+  }
+
+  async function saveInstruction(path: string) {
+    const edits = instructionEdits()
+    const content = edits[path]
+    if (content === undefined) return
+
+    // Build absolute path if relative
+    const absolute = path.startsWith("/") ? path : (directory ? `${directory.replace(/\/$/, "")}/${path}` : path)
+
+    setInstructionSaving(path)
+    setInstructionError(null)
+    const ok = await writeFile(basePath.serverUrl, absolute, content)
+    setInstructionSaving(null)
+    if (!ok) {
+      setInstructionError(`Failed to save ${path}`)
+      return
+    }
+    // Update stored content
+    setInstructionContents((prev) => ({ ...prev, [path]: { content, exists: true } }))
+    setInstructionEdits((prev) => {
+      const next = { ...prev }
+      delete next[path]
+      return next
+    })
+    setInstructionSaved(path)
+    setTimeout(() => setInstructionSaved(null), 2000)
+  }
+
+  async function createInstructionsFile() {
+    if (!directory) return
+    setInstructionCreating(true)
+    setInstructionError(null)
+
+    const template = `# Project Instructions
+
+These instructions are automatically included in every session.
+
+## Coding Conventions
+
+- Use TypeScript for all new code
+- Follow existing code style and patterns
+- Prefer functional style where possible
+
+## Project-Specific Notes
+
+Add your project-specific instructions here.
+`
+    const agentsPath = `${directory.replace(/\/$/, "")}/AGENTS.md`
+
+    // Check if AGENTS.md already exists before writing to avoid overwriting user content
+    const existingAgents = await client.file.read({ path: "AGENTS.md", directory }).catch(() => null)
+    const agentsData = existingAgents?.data as { content?: string } | undefined
+    if (!agentsData?.content) {
+      // File doesn't exist — write the template
+      const ok = await writeFile(basePath.serverUrl, agentsPath, template)
+      if (!ok) {
+        setInstructionError("Failed to create AGENTS.md")
+        setInstructionCreating(false)
+        return
+      }
+    }
+
+    // Update opencode.json to include the instructions field
+    const configPath = `${directory.replace(/\/$/, "")}/opencode.json`
+    // Read existing config if any
+    const existingRes = await client.file.read({ path: "opencode.json", directory }).catch(() => null)
+    const existingData = existingRes?.data as { content?: string } | undefined
+    const existing = (() => {
+      if (!existingData?.content) return {}
+      try { return JSON.parse(existingData.content) } catch { return {} }
+    })()
+    const existingInstructions = (existing as { instructions?: string[] }).instructions ?? []
+    const hasAgents = existingInstructions.includes("AGENTS.md")
+    const updated = {
+      ...existing,
+      instructions: hasAgents ? existingInstructions : [...existingInstructions, "AGENTS.md"],
+    }
+    const configOk = await writeFile(basePath.serverUrl, configPath, JSON.stringify(updated, null, 2))
+    if (!configOk) {
+      setInstructionError("Failed to update opencode.json")
+      setInstructionCreating(false)
+      return
+    }
+
+    setInstructionCreating(false)
+    // Reload instructions
+    await loadInstructions()
   }
 
   async function handleConnect(e: SubmitEvent) {
@@ -484,6 +618,7 @@ export function Settings() {
     { id: "git", label: "Git", icon: () => <GitBranch class="w-4 h-4" /> },
     { id: "mcp", label: "MCP Servers", icon: () => <Server class="w-4 h-4" /> },
     { id: "prompts", label: "Prompts", icon: () => <BookmarkPlus class="w-4 h-4" /> },
+    { id: "instructions", label: "Instructions", icon: () => <BookOpen class="w-4 h-4" /> },
     { id: "appearance", label: "Appearance", icon: () => <Palette class="w-4 h-4" /> },
   ]
 
@@ -1468,6 +1603,217 @@ export function Settings() {
                   </div>
                 </Show>
               </section>
+            </div>
+          </Show>
+
+          {/* Instructions Tab */}
+          <Show when={activeTab() === "instructions"}>
+            <div class="space-y-6">
+              <header>
+                <h1 class="text-lg font-medium" style={{ color: "var(--text-strong)" }}>
+                  Project Instructions
+                </h1>
+                <p class="text-sm mt-1" style={{ color: "var(--text-weak)" }}>
+                  Persistent instructions that are automatically included in every session for this project
+                </p>
+              </header>
+
+              <Show when={instructionError()}>
+                <div
+                  class="p-3 rounded-md text-sm"
+                  style={{
+                    background: "var(--surface-inset)",
+                    border: "1px solid var(--border-base)",
+                    "border-left": "3px solid var(--interactive-critical)",
+                    color: "var(--interactive-critical)",
+                  }}
+                >
+                  {instructionError()}
+                </div>
+              </Show>
+
+              <Show when={instructionLoading()}>
+                <div class="flex items-center gap-2" style={{ color: "var(--text-weak)" }}>
+                  <Spinner class="w-4 h-4" />
+                  <span class="text-sm">Loading instructions...</span>
+                </div>
+              </Show>
+
+              {/* No instructions configured */}
+              <Show when={!instructionLoading() && instructionPaths().length === 0}>
+                <section
+                  class="rounded-lg overflow-hidden"
+                  style={{
+                    background: "var(--background-base)",
+                    border: "1px solid var(--border-base)",
+                  }}
+                >
+                  <div class="p-6 text-center space-y-4">
+                    <BookOpen class="w-10 h-10 mx-auto" style={{ color: "var(--text-weak)", opacity: "0.5" }} />
+                    <div>
+                      <p class="text-sm font-medium" style={{ color: "var(--text-strong)" }}>
+                        No project instructions configured
+                      </p>
+                      <p class="text-sm mt-1" style={{ color: "var(--text-weak)" }}>
+                        Project instructions are defined in <code class="text-xs px-1 py-0.5 rounded" style={{ background: "var(--surface-inset)" }}>opencode.json</code> and included in every session automatically.
+                      </p>
+                    </div>
+                    <Button
+                      onClick={createInstructionsFile}
+                      variant="primary"
+                      size="sm"
+                      disabled={instructionCreating()}
+                    >
+                      <Show when={instructionCreating()} fallback={
+                        <>
+                          <Plus class="w-4 h-4" />
+                          Create Instructions File
+                        </>
+                      }>
+                        <Spinner class="w-4 h-4" />
+                        Creating...
+                      </Show>
+                    </Button>
+                  </div>
+                </section>
+
+                <section
+                  class="rounded-lg p-4"
+                  style={{
+                    background: "var(--surface-inset)",
+                    border: "1px solid var(--border-base)",
+                  }}
+                >
+                  <h3 class="text-sm font-medium mb-2" style={{ color: "var(--text-strong)" }}>
+                    How instructions work
+                  </h3>
+                  <div class="text-xs space-y-2" style={{ color: "var(--text-weak)" }}>
+                    <p>
+                      Add an <code class="px-1 py-0.5 rounded" style={{ background: "var(--background-base)" }}>instructions</code> field to your project's <code class="px-1 py-0.5 rounded" style={{ background: "var(--background-base)" }}>opencode.json</code>:
+                    </p>
+                    <pre
+                      class="p-3 rounded-md overflow-x-auto"
+                      style={{ background: "var(--background-base)", color: "var(--text-base)" }}
+                    >{`{
+  "instructions": ["AGENTS.md", ".opencode/instructions/*.md"]
+}`}</pre>
+                    <p>
+                      Each file path is resolved relative to the project root. The content is injected into the system prompt for every new session.
+                    </p>
+                  </div>
+                </section>
+              </Show>
+
+              {/* Instructions configured */}
+              <Show when={!instructionLoading() && instructionPaths().length > 0}>
+                <For each={instructionPaths()}>
+                  {(path) => {
+                    const info = () => instructionContents()[path]
+                    const edited = () => instructionEdits()[path]
+                    const currentContent = () => edited() ?? info()?.content ?? ""
+                    const isDirty = () => edited() !== undefined
+                    const isSaving = () => instructionSaving() === path
+                    const wasSaved = () => instructionSaved() === path
+
+                    return (
+                      <section
+                        class="rounded-lg overflow-hidden"
+                        style={{
+                          background: "var(--background-base)",
+                          border: "1px solid var(--border-base)",
+                        }}
+                      >
+                        <div
+                          class="px-4 py-3 flex items-center justify-between"
+                          style={{ "border-bottom": "1px solid var(--border-base)" }}
+                        >
+                          <div class="flex items-center gap-2">
+                            <BookOpen class="w-4 h-4" style={{ color: "var(--text-weak)" }} />
+                            <span class="text-sm font-medium font-mono" style={{ color: "var(--text-strong)" }}>
+                              {path}
+                            </span>
+                            <Show when={info()?.exists === false}>
+                              <span
+                                class="text-xs px-1.5 py-0.5 rounded"
+                                style={{
+                                  background: "var(--surface-inset)",
+                                  color: "var(--icon-warning-base)",
+                                }}
+                              >
+                                Missing
+                              </span>
+                            </Show>
+                            <Show when={info()?.exists}>
+                              <span
+                                class="text-xs px-1.5 py-0.5 rounded"
+                                style={{
+                                  background: "var(--surface-inset)",
+                                  color: "var(--icon-success-base)",
+                                }}
+                              >
+                                Active
+                              </span>
+                            </Show>
+                          </div>
+                          <div class="flex items-center gap-2">
+                            <Show when={wasSaved()}>
+                              <span class="text-xs flex items-center gap-1" style={{ color: "var(--icon-success-base)" }}>
+                                <Check class="w-3 h-3" /> Saved
+                              </span>
+                            </Show>
+                            <Button
+                              onClick={() => saveInstruction(path)}
+                              variant="primary"
+                              size="sm"
+                              disabled={!isDirty() || isSaving()}
+                            >
+                              <Show when={isSaving()} fallback={
+                                <>
+                                  <Save class="w-3.5 h-3.5" />
+                                  Save
+                                </>
+                              }>
+                                <Spinner class="w-3.5 h-3.5" />
+                                Saving...
+                              </Show>
+                            </Button>
+                          </div>
+                        </div>
+                        <div class="p-4">
+                          <textarea
+                            value={currentContent()}
+                            onInput={(e) => {
+                              const val = e.currentTarget.value
+                              setInstructionEdits((prev) => ({ ...prev, [path]: val }))
+                            }}
+                            rows={12}
+                            class="w-full px-3 py-2 rounded-md text-sm font-mono resize-y"
+                            style={{
+                              background: "var(--surface-inset)",
+                              border: "1px solid var(--border-base)",
+                              color: "var(--text-base)",
+                              "min-height": "160px",
+                            }}
+                            placeholder={info()?.exists === false ? "This file does not exist yet. Type content and save to create it." : "Enter instructions..."}
+                          />
+                        </div>
+                      </section>
+                    )
+                  }}
+                </For>
+
+                <section
+                  class="rounded-lg p-4"
+                  style={{
+                    background: "var(--surface-inset)",
+                    border: "1px solid var(--border-base)",
+                  }}
+                >
+                  <p class="text-xs" style={{ color: "var(--text-weak)" }}>
+                    Instruction files are defined in your project's <code class="px-1 py-0.5 rounded" style={{ background: "var(--background-base)" }}>opencode.json</code>. Changes take effect on the next session.
+                  </p>
+                </section>
+              </Show>
             </div>
           </Show>
 

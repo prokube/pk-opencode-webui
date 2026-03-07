@@ -6,7 +6,7 @@ import { useMCP } from "../context/mcp"
 import { usePermission } from "../context/permission"
 import { useTerminal } from "../context/terminal"
 import { useSDK } from "../context/sdk"
-import { PanelBottom, FileCode, ListTodo, Plug, ArrowLeft, Users, Bell, BellRing } from "lucide-solid"
+import { PanelBottom, FileCode, ListTodo, Plug, ArrowLeft, Users, Bell, BellRing, BookOpen } from "lucide-solid"
 import { base64Encode } from "../utils/path"
 import type { Session } from "../sdk/client"
 
@@ -17,6 +17,8 @@ interface SessionHeaderProps {
   notifyEnabled: boolean
   notifyDenied: boolean
   onToggleNotify: () => void
+  instructionsActive: boolean
+  onOpenInstructions: () => void
 }
 
 export function SessionHeader(props: SessionHeaderProps) {
@@ -122,6 +124,24 @@ export function SessionHeader(props: SessionHeaderProps) {
             <div class="w-1.5 h-1.5 rounded-full animate-pulse" style={{ background: "var(--interactive-base)" }} />
             <span>{pendingPermissions().length} pending</span>
           </div>
+        </Show>
+
+        {/* Instructions active indicator */}
+        <Show when={props.instructionsActive}>
+          <button
+            onClick={props.onOpenInstructions}
+            class="flex items-center gap-1.5 px-2 py-1 text-xs rounded-md transition-colors"
+            style={{
+              border: "1px solid var(--border-base)",
+              color: "var(--text-base)",
+            }}
+            onMouseEnter={(e) => ((e.currentTarget as HTMLElement).style.background = "var(--surface-inset)")}
+            onMouseLeave={(e) => ((e.currentTarget as HTMLElement).style.background = "transparent")}
+            title="Project instructions are active — click to view"
+          >
+            <BookOpen class="w-3 h-3" style={{ color: "var(--icon-success-base)" }} />
+            <span>Instructions</span>
+          </button>
         </Show>
 
         {/* Processing indicator */}

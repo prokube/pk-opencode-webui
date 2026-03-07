@@ -283,6 +283,35 @@ export async function handleExtendedEndpoint(
     }
   }
 
+  // PUT /api/ext/file - Write file content
+  if (path === "/api/ext/file" && method === "PUT") {
+    const body = await req.json().catch(() => null)
+    if (!body || typeof body.path !== "string" || typeof body.content !== "string") {
+      return Response.json({ error: "path and content are required" }, { status: 400 })
+    }
+
+    const allowedRoot = getAllowedRoot()
+    const validatedPath = validatePath(body.path, allowedRoot)
+    if (!validatedPath) {
+      console.warn("[ExtAPI] file write: path outside allowed root:", body.path)
+      return Response.json({ error: "path must be within allowed directory" }, { status: 403 })
+    }
+
+    console.log("[ExtAPI] file write:", validatedPath)
+
+    try {
+      // Create parent directories if needed
+      const parentDir = nodePath.dirname(validatedPath)
+      await fs.promises.mkdir(parentDir, { recursive: true })
+
+      await fs.promises.writeFile(validatedPath, body.content, "utf-8")
+      return Response.json({ success: true })
+    } catch (e) {
+      console.error("[ExtAPI] file write error:", e)
+      return Response.json({ error: String(e) }, { status: 500 })
+    }
+  }
+
   // Not an extended endpoint
   return undefined
 }
