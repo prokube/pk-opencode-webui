@@ -85,17 +85,17 @@ export function Session() {
   // Unified toast system — only one toast visible at a time
   const [toastMessage, setToastMessage] = createSignal<string | null>(null);
   const [toastVariant, setToastVariant] = createSignal<"default" | "hint">("default");
-  const toastMsgTimer = { id: 0 as ReturnType<typeof setTimeout> };
-  onCleanup(() => clearTimeout(toastMsgTimer.id));
+  const toastMsgTimer: { id: ReturnType<typeof setTimeout> | null } = { id: null };
+  onCleanup(() => { if (toastMsgTimer.id !== null) clearTimeout(toastMsgTimer.id); });
 
   function hideToast() {
-    clearTimeout(toastMsgTimer.id);
-    toastMsgTimer.id = undefined as unknown as ReturnType<typeof setTimeout>;
+    if (toastMsgTimer.id !== null) clearTimeout(toastMsgTimer.id);
+    toastMsgTimer.id = null;
     setToastMessage(null);
   }
 
   function showToast(msg: string, duration = 2500, variant: "default" | "hint" = "default") {
-    clearTimeout(toastMsgTimer.id);
+    if (toastMsgTimer.id !== null) clearTimeout(toastMsgTimer.id);
     setToastMessage(msg);
     setToastVariant(variant);
     toastMsgTimer.id = setTimeout(() => hideToast(), duration);
