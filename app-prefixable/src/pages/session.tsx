@@ -1573,7 +1573,7 @@ export function Session() {
                   }}
                   placeholder="Type a message... (Tab to switch agent, / for commands)"
                   rows={1}
-                  class="w-full px-4 py-3 focus:outline-none resize-none bg-transparent"
+                  class="w-full px-4 pt-3 pb-2 focus:outline-none resize-none bg-transparent"
                   style={{
                     color: "var(--text-base)",
                     "min-height": "48px",
