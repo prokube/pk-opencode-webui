@@ -20,6 +20,7 @@ import { usePermission } from "../context/permission";
 import { useLayout } from "../context/layout";
 import { useBranding } from "../context/branding";
 import { useSavedPrompts } from "../context/saved-prompts";
+import { useTerminal } from "../context/terminal";
 import { MessageTimeline } from "../components/message-timeline";
 import { MCPDialog } from "../components/mcp-dialog";
 import { MCPAddDialog } from "../components/mcp-add-dialog";
@@ -79,6 +80,18 @@ export function Session() {
   const layout = useLayout();
   const branding = useBranding();
   const savedPrompts = useSavedPrompts();
+  const terminal = useTerminal();
+
+  // General-purpose toast for slash command feedback
+  const [toastMessage, setToastMessage] = createSignal<string | null>(null);
+  const toastMsgTimer = { id: 0 as ReturnType<typeof setTimeout> };
+  onCleanup(() => clearTimeout(toastMsgTimer.id));
+
+  function showToast(msg: string, duration = 2500) {
+    clearTimeout(toastMsgTimer.id);
+    setToastMessage(msg);
+    toastMsgTimer.id = setTimeout(() => setToastMessage(null), duration);
+  }
 
   // Helper to get the current directory slug
   const dirSlug = createMemo(() =>
@@ -349,92 +362,256 @@ export function Session() {
   let slashPopoverRef: HTMLDivElement | undefined;
   let fileInputRef: HTMLInputElement | undefined;
 
-  // Base slash commands (static ones)
-  const baseSlashCommands: Command[] = [
-    {
-      id: "session.new",
-      title: "New Session",
-      description: "Create a new chat session",
-      slash: "new",
-      onSelect: async () => {
-        console.log("[Command] New session - creating...");
-        try {
+  // Slash commands — computed so state-dependent commands update reactively
+  const baseSlashCommands = createMemo<Command[]>(() => {
+    const id = sessionId();
+    const sess = session();
+    const msgs = syncMessages();
+    const hasMessages = msgs.length > 0;
+    const isProcessing = processing();
+    const lastUserMsg = [...msgs].reverse().find((m) => m.role === "user");
+
+    const commands: Command[] = [
+      {
+        id: "session.new",
+        title: "New Session",
+        description: "Create a new chat session",
+        slash: "new",
+        onSelect: async () => {
+          console.log("[Command] New session - creating...");
           const res = await client.session.create({});
           if (res.data) {
             console.log("[Command] Created session:", res.data.id);
             navigate(`/${dirSlug()}/session/${res.data.id}`);
           }
-        } catch (e) {
-          console.error("[Command] Failed to create session:", e);
-        }
+        },
       },
-    },
-    {
-      id: "settings.open",
-      title: "Settings",
-      description: "Open settings page",
-      slash: "settings",
-      onSelect: () => {
-        console.log("[Command] Settings");
-        navigate(`/${dirSlug()}/settings`);
+      {
+        id: "settings.open",
+        title: "Settings",
+        description: "Open settings page",
+        slash: "settings",
+        onSelect: () => {
+          console.log("[Command] Settings");
+          navigate(`/${dirSlug()}/settings`);
+        },
       },
-    },
-    {
-      id: "provider.connect",
-      title: "Connect Provider",
-      description: "Add an AI provider",
-      slash: "connect",
-      onSelect: () => {
-        console.log("[Command] Connect");
-        navigate(`/${dirSlug()}/settings`);
+      {
+        id: "provider.connect",
+        title: "Connect Provider",
+        description: "Add an AI provider",
+        slash: "connect",
+        onSelect: () => {
+          console.log("[Command] Connect");
+          navigate(`/${dirSlug()}/settings`);
+        },
       },
-    },
-    {
-      id: "model.choose",
-      title: "Choose Model",
-      description: "Select the AI model to use",
-      slash: "model",
-      onSelect: () => {
-        setShowModelPicker(true);
+      {
+        id: "model.choose",
+        title: "Choose Model",
+        description: "Select the AI model to use",
+        slash: "model",
+        onSelect: () => {
+          setShowModelPicker(true);
+        },
       },
-    },
-    {
-      id: "agent.choose",
-      title: "Choose Agent",
-      description: "Select the agent to use",
-      slash: "agent",
-      onSelect: () => {
-        setShowAgentPicker(true);
+      {
+        id: "agent.choose",
+        title: "Choose Agent",
+        description: "Select the agent to use",
+        slash: "agent",
+        onSelect: () => {
+          setShowAgentPicker(true);
+        },
       },
-    },
-    {
-      id: "mcp.manage",
-      title: "MCP Servers",
-      description: "Manage MCP server connections",
-      slash: "mcp",
-      onSelect: () => {
-        console.log("[Command] MCP dialog");
-        setShowMCPDialog(true);
+      {
+        id: "mcp.manage",
+        title: "MCP Servers",
+        description: "Manage MCP server connections",
+        slash: "mcp",
+        onSelect: () => {
+          console.log("[Command] MCP dialog");
+          setShowMCPDialog(true);
+        },
       },
-    },
-    {
-      id: "prompt.pick",
-      title: "Insert Saved Prompt",
-      description: "Insert a saved prompt into the input",
-      slash: "prompt",
-      onSelect: () => {
-        setPromptPickerFilter("");
-        setShowPromptPicker(true);
+      {
+        id: "prompt.pick",
+        title: "Insert Saved Prompt",
+        description: "Insert a saved prompt into the input",
+        slash: "prompt",
+        onSelect: () => {
+          setPromptPickerFilter("");
+          setShowPromptPicker(true);
+        },
       },
-    },
-  ];
+      {
+        id: "terminal.toggle",
+        title: "Toggle Terminal",
+        description: "Open or close the terminal panel",
+        slash: "terminal",
+        onSelect: () => {
+          terminal.toggle(directory);
+        },
+      },
+    ];
+
+    // /compact — requires a session with messages and a selected model
+    if (id && hasMessages && !isProcessing && providers.selectedModel) {
+      commands.push({
+        id: "session.compact",
+        title: "Compact Session",
+        description: "Summarize conversation to free up context space",
+        slash: "compact",
+        onSelect: async () => {
+          if (!id) return;
+          const model = providers.selectedModel;
+          if (!model) {
+            showToast("Select a model before compacting");
+            return;
+          }
+          showToast("Compacting session...", 10000);
+          const res = await client.session.summarize({
+            sessionID: id,
+            providerID: model.providerID,
+            modelID: model.modelID,
+          });
+          if (res.error) {
+            showToast("Failed to compact session");
+            return;
+          }
+          showToast("Session compacted");
+        },
+      });
+    }
+
+    // /share — requires an active session, not already shared
+    if (id && !sess?.share?.url) {
+      commands.push({
+        id: "session.share",
+        title: "Share Session",
+        description: "Generate a shareable link and copy to clipboard",
+        slash: "share",
+        onSelect: async () => {
+          if (!id) return;
+          const res = await client.session.share({ sessionID: id });
+          if (res.error || !res.data?.share?.url) {
+            showToast("Failed to share session");
+            return;
+          }
+          await navigator.clipboard.writeText(res.data.share.url);
+          showToast("Share link copied to clipboard");
+          refetchSession();
+        },
+      });
+    }
+
+    // /share — already shared: copy existing link
+    if (id && sess?.share?.url) {
+      commands.push({
+        id: "session.share",
+        title: "Copy Share Link",
+        description: "Copy the existing share link to clipboard",
+        slash: "share",
+        onSelect: async () => {
+          await navigator.clipboard.writeText(sess!.share!.url);
+          showToast("Share link copied to clipboard");
+        },
+      });
+    }
+
+    // /unshare — only when session is already shared
+    if (id && sess?.share?.url) {
+      commands.push({
+        id: "session.unshare",
+        title: "Unshare Session",
+        description: "Remove the shared link and make session private",
+        slash: "unshare",
+        onSelect: async () => {
+          if (!id) return;
+          const res = await client.session.unshare({ sessionID: id });
+          if (res.error) {
+            showToast("Failed to unshare session");
+            return;
+          }
+          showToast("Session unshared");
+          refetchSession();
+        },
+      });
+    }
+
+    // /undo — requires a session with at least one user message
+    if (id && lastUserMsg && !isProcessing) {
+      commands.push({
+        id: "session.undo",
+        title: "Undo Last Message",
+        description: "Revert the last user message and restore its text",
+        slash: "undo",
+        onSelect: async () => {
+          if (!id || !lastUserMsg) return;
+          // If processing, abort first
+          if (processing()) {
+            await client.session.abort({ sessionID: id, directory });
+            setProcessing(false);
+          }
+          const res = await client.session.revert({
+            sessionID: id,
+            messageID: lastUserMsg.id,
+          });
+          if (res.error) {
+            showToast("Failed to undo message");
+            return;
+          }
+          // Restore the reverted message text into the input field
+          const textPart = lastUserMsg.parts.find((p) => p.type === "text") as
+            | { type: "text"; text?: string }
+            | undefined;
+          if (textPart?.text) {
+            setInput(textPart.text);
+            requestAnimationFrame(() => {
+              if (inputRef) {
+                inputRef.style.height = "auto";
+                inputRef.style.height = Math.min(inputRef.scrollHeight, 200) + "px";
+                inputRef.focus();
+              }
+            });
+          }
+          showToast("Message undone");
+          refetchSession();
+        },
+      });
+    }
+
+    // /redo — only when session is in a reverted state
+    if (id && sess?.revert?.messageID) {
+      commands.push({
+        id: "session.redo",
+        title: "Redo Message",
+        description: "Restore previously reverted messages",
+        slash: "redo",
+        onSelect: async () => {
+          if (!id) return;
+          const res = await client.session.unrevert({ sessionID: id });
+          if (res.error) {
+            showToast("Failed to redo messages");
+            return;
+          }
+          setInput("");
+          showToast("Messages restored");
+          refetchSession();
+        },
+      });
+    }
+
+    return commands;
+  });
 
   // Filtered slash commands based on query
   const filteredSlashCommands = createMemo(() => {
+    const cmds = baseSlashCommands();
     const q = slashQuery().toLowerCase();
-    if (!q) return baseSlashCommands;
+    if (!q) return cmds;
 
-    return baseSlashCommands.filter(
+    return cmds.filter(
       (c) =>
         c.slash?.toLowerCase().startsWith(q) ||
         c.title.toLowerCase().includes(q) ||
@@ -1858,6 +2035,19 @@ export function Session() {
             }}
           >
             Prompt saved
+          </div>
+        </Show>
+
+        {/* General command toast */}
+        <Show when={toastMessage()}>
+          <div
+            class="fixed bottom-20 left-1/2 -translate-x-1/2 z-[100] px-4 py-2 rounded-lg shadow-lg text-sm font-medium"
+            style={{
+              background: "var(--interactive-base)",
+              color: "white",
+            }}
+          >
+            {toastMessage()}
           </div>
         </Show>
 
