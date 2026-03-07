@@ -287,14 +287,14 @@ export function Layout(props: ParentProps) {
 
     // Load pinned sessions for current directory
     if (directory) {
-      const stored = localStorage.getItem(PINNED_SESSIONS_PREFIX + directory);
-      if (stored) {
-        try {
+      try {
+        const stored = localStorage.getItem(PINNED_SESSIONS_PREFIX + directory);
+        if (stored) {
           const parsed = JSON.parse(stored) as string[];
           if (Array.isArray(parsed)) setPinnedIds(parsed.slice(0, MAX_PINNED));
-        } catch (e) {
-          console.error("Failed to load pinned sessions state:", e);
         }
+      } catch (e) {
+        console.error("Failed to load pinned sessions state:", e);
       }
     }
 
