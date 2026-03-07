@@ -63,6 +63,7 @@ export function ShortcutReference() {
               style={{ color: "var(--icon-base)" }}
               onMouseEnter={(e) => (e.currentTarget.style.background = "var(--surface-inset)")}
               onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
+              aria-label="Close"
             >
               <X class="w-4 h-4" />
             </button>

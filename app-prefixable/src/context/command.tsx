@@ -158,13 +158,15 @@ export function CommandProvider(props: ParentProps) {
     // Shortcut reference: ? (only when not in input) and $mod+/
     bindings["?"] = (e) => {
       if (shouldSuppressShortcut(e)) return
-      if (isDialogOpen()) return
+      // Allow toggling the shortcut reference closed via its own shortcut
+      if (isDialogOpen() && !shortcutRefOpen()) return
       e.preventDefault()
       setShortcutRefOpen((v) => !v)
     }
     bindings["$mod+/"] = (e) => {
       if (shouldSuppressShortcut(e)) return
-      if (isDialogOpen()) return
+      // Allow toggling the shortcut reference closed via its own shortcut
+      if (isDialogOpen() && !shortcutRefOpen()) return
       e.preventDefault()
       setShortcutRefOpen((v) => !v)
     }

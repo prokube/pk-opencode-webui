@@ -636,6 +636,7 @@ export function Layout(props: ParentProps) {
         title: "Command Palette",
         description: "Open the command palette",
         keybind: "mod+k",
+        global: true,
         onSelect: () => command.setPaletteOpen(!command.paletteOpen()),
       },
       {
