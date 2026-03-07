@@ -560,7 +560,20 @@ export function Layout(props: ParentProps) {
     // For sidebar, focus the inner listbox so aria-activedescendant applies immediately
     if (name === "sidebar") {
       const listbox = el.querySelector('[role="listbox"]') as HTMLElement | null;
-      if (listbox) { listbox.focus(); return true; }
+      if (listbox) {
+        listbox.focus();
+        // Initialize focus state so the active session is highlighted
+        const ids = flatSessionIds();
+        const current = currentSessionId();
+        if (current && ids.includes(current)) {
+          setFocusedId(current);
+          scrollFocusedIntoView(current);
+        } else if (ids.length) {
+          setFocusedId(ids[0]);
+          scrollFocusedIntoView(ids[0]);
+        }
+        return true;
+      }
     }
     // For review and other panels, focus the container itself
     el.focus();
