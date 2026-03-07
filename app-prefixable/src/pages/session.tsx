@@ -141,7 +141,16 @@ export function Session() {
       .filter((p): p is TextPart => p.type === "text")
       .map((p) => p.text)
       .join(separator);
-    return maxLen ? text.slice(0, maxLen) : text;
+    if (maxLen && text.length > maxLen) return text.slice(0, maxLen) + "...";
+    return text;
+  }
+
+  // Set textarea value, trigger auto-grow, and focus
+  function applyInputAndAutogrow(el: HTMLTextAreaElement, text: string) {
+    const nativeSet = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")?.set;
+    nativeSet?.call(el, text);
+    el.dispatchEvent(new Event("input", { bubbles: true }));
+    requestAnimationFrame(() => el.focus());
   }
 
   // Fork picker items: user messages in reverse chronological order
@@ -152,8 +161,7 @@ export function Session() {
     return msgs
       .filter((m) => m.info.role === "user")
       .map((m) => {
-        const textParts = textFromParts(m.parts);
-        const preview = textParts.length > 80 ? textParts.slice(0, 80) + "..." : textParts;
+        const preview = textFromParts(m.parts, " ", 80);
         const date = new Date(m.info.time.created);
         const timestamp = date.toLocaleString(undefined, {
           month: "short",
@@ -2093,15 +2101,7 @@ export function Session() {
             onSelect={(item) => {
               const found = savedPrompts.prompts().find((p) => p.id === item.id);
               if (!found) return;
-              setInput(found.text);
-              // Auto-grow textarea after DOM updates with new value
-              requestAnimationFrame(() => {
-                if (inputRef) {
-                  inputRef.style.height = "auto";
-                  inputRef.style.height = Math.min(inputRef.scrollHeight, 200) + "px";
-                  inputRef.focus();
-                }
-              });
+              if (inputRef) applyInputAndAutogrow(inputRef, found.text);
             }}
             onClose={() => setShowPromptPicker(false)}
           />
@@ -2127,6 +2127,7 @@ export function Session() {
             onSelect={(item) => {
               const id = sessionId();
               if (!id) return;
+              setError(null);
               client.session
                 .fork({ sessionID: id, messageID: item.id })
                 .then((res) => {
@@ -2134,6 +2135,7 @@ export function Session() {
                     setError("Failed to fork session");
                     return;
                   }
+                  setError(null);
                   const forkedId = res.data.id;
                   // Find the selected message text to restore in the new session's input
                   const msgs = sync.messages(id);
@@ -2143,16 +2145,9 @@ export function Session() {
                     : "";
                   navigate(`/${dirSlug()}/session/${forkedId}`);
                   // Restore the message text into the new session's input after navigation
-                  if (restoredText) {
+                  if (restoredText && inputRef) {
                     requestAnimationFrame(() => {
-                      setInput(restoredText);
-                      requestAnimationFrame(() => {
-                        if (inputRef) {
-                          inputRef.style.height = "auto";
-                          inputRef.style.height = Math.min(inputRef.scrollHeight, 200) + "px";
-                          inputRef.focus();
-                        }
-                      });
+                      applyInputAndAutogrow(inputRef!, restoredText);
                     });
                   }
                 })
