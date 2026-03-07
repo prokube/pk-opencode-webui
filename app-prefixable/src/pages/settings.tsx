@@ -319,7 +319,7 @@ export function Settings() {
   async function loadInstructions() {
     setInstructionLoading(true)
     setInstructionError(null)
-    const configRes = await client.global.config.get().catch(() => null)
+    const configRes = await client.config.get().catch(() => null)
     const cfg = configRes?.data as Config | undefined
     const paths = cfg?.instructions ?? []
     setInstructionPaths(paths)

@@ -83,7 +83,7 @@ export function Session() {
   // Instructions active state
   const [instructionsActive, setInstructionsActive] = createSignal(false);
   onMount(() => {
-    client.global.config
+    client.config
       .get()
       .then((res) => {
         const cfg = res.data as { instructions?: string[] } | undefined;
