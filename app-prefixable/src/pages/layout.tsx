@@ -368,8 +368,8 @@ export function Layout(props: ParentProps) {
   }
 
   function renderSessionItem(session: Session, pinned: boolean) {
-    const showPinItem = pinned || pinnedIds().length < MAX_PINNED;
-    const idx = (n: number) => showPinItem ? n : n - 1;
+    const showPinItem = () => pinned || pinnedIds().length < MAX_PINNED;
+    const idx = (n: number) => showPinItem() ? n : n - 1;
     const DefaultIcon = pinned ? Pin : MessageCircle;
 
     const statusIcon = () => (
@@ -562,7 +562,7 @@ export function Layout(props: ParentProps) {
                   data-sidebar-menu-dropdown
                 >
                   {/* Pin / Unpin */}
-                  <Show when={showPinItem}>
+                  <Show when={showPinItem()}>
                     <button
                       data-menu-item
                       class="w-full flex items-center gap-2 px-3 py-1.5 text-sm text-left transition-colors"
