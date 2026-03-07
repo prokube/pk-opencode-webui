@@ -409,7 +409,12 @@ Add your project-specific instructions here.
       if (!existingData?.content) return {}
       try { return JSON.parse(existingData.content) } catch { return {} }
     })()
-    const updated = { ...existing, instructions: [...(existing.instructions ?? []), "AGENTS.md"] }
+    const existingInstructions = (existing as { instructions?: string[] }).instructions ?? []
+    const hasAgents = existingInstructions.includes("AGENTS.md")
+    const updated = {
+      ...existing,
+      instructions: hasAgents ? existingInstructions : [...existingInstructions, "AGENTS.md"],
+    }
     const configOk = await writeFile(basePath.serverUrl, configPath, JSON.stringify(updated, null, 2))
     if (!configOk) {
       setInstructionError("Failed to update opencode.json")
