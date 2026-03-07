@@ -569,11 +569,11 @@ export function Session() {
   }
 
   onMount(() => {
-    document.addEventListener("keydown", handleGlobalKeyDown);
+    window.addEventListener("keydown", handleGlobalKeyDown);
   });
 
   onCleanup(() => {
-    document.removeEventListener("keydown", handleGlobalKeyDown);
+    window.removeEventListener("keydown", handleGlobalKeyDown);
   });
 
   // Get session from sync context - reactive, automatically updated via SSE
