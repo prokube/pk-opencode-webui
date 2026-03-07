@@ -1,5 +1,7 @@
 /** Shared helpers for the per-session notification toggle stored in localStorage */
 
+import { dispatchStorageEvent } from "./storage"
+
 export const NOTIFY_STORAGE_KEY = "opencode.sessionNotify";
 
 /** Read the per-session notification toggle map from localStorage */
@@ -30,23 +32,7 @@ export function writeNotifyMap(map: Record<string, boolean>) {
   } catch {
     return; // If write failed, no point notifying listeners
   }
-  // Dispatch a synthetic StorageEvent for same-tab listeners (native storage events only fire cross-tab)
-  try {
-    window.dispatchEvent(new StorageEvent("storage", {
-      key: NOTIFY_STORAGE_KEY,
-      newValue: value,
-      storageArea: window.localStorage,
-    }));
-  } catch {
-    // Fallback for environments that don't support StorageEvent construction.
-    // Attach StorageEvent-like properties so listeners reading e.key still work.
-    try {
-      const fallback = new CustomEvent("storage", { detail: { key: NOTIFY_STORAGE_KEY, newValue: value } });
-      Object.defineProperty(fallback, "key", { value: NOTIFY_STORAGE_KEY });
-      Object.defineProperty(fallback, "newValue", { value });
-      window.dispatchEvent(fallback);
-    } catch {}
-  }
+  dispatchStorageEvent(NOTIFY_STORAGE_KEY, value);
 }
 
 /** Remove a session's entry from the notification toggle map */

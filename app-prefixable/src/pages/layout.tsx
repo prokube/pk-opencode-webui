@@ -49,12 +49,14 @@ import {
 } from "lucide-solid";
 import { useSync } from "../context/sync";
 import { usePermission } from "../context/permission";
+import { useGlobalEvents } from "../context/global-events";
 import { useSavedPrompts } from "../context/saved-prompts";
 import { ResizeHandle } from "../components/resize-handle";
 import { ConfirmDialog } from "../components/confirm-dialog";
 import { suggestSessionTitle } from "../utils/ai-rename";
 
 import { readNotifyMap, cleanupNotifyState, NOTIFY_STORAGE_KEY } from "../utils/notify";
+import { dispatchStorageEvent } from "../utils/storage";
 
 // Storage keys
 const PROJECTS_STORAGE_KEY = "opencode.projects";
@@ -191,6 +193,7 @@ export function Layout(props: ParentProps) {
   const layout = useLayout();
   const sync = useSync();
   const permission = usePermission();
+  const globalEvents = useGlobalEvents();
   const savedPrompts = useSavedPrompts();
   const location = useLocation();
   const navigate = useNavigate();
@@ -285,11 +288,14 @@ export function Layout(props: ParentProps) {
 
   function saveProjects(list: Project[]) {
     setProjects(list);
+    const value = JSON.stringify(list);
     try {
-      localStorage.setItem(PROJECTS_STORAGE_KEY, JSON.stringify(list));
+      localStorage.setItem(PROJECTS_STORAGE_KEY, value);
     } catch (e) {
       console.error("Failed to save projects:", e);
+      return;
     }
+    dispatchStorageEvent(PROJECTS_STORAGE_KEY, value);
   }
 
   function toggleSidebar() {
@@ -878,6 +884,7 @@ export function Layout(props: ParentProps) {
                   project={project}
                   size="large"
                   selected={project.worktree === directory}
+                  badge={project.worktree !== directory ? globalEvents.badge(project.worktree) : undefined}
                 />
                 <button
                   onClick={(e) => {
