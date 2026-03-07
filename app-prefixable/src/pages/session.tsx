@@ -145,11 +145,14 @@ export function Session() {
     return text;
   }
 
-  // Set textarea value, trigger auto-grow, and focus
+  // Set textarea value, trigger auto-grow, and focus — bypasses input handler
+  // to avoid slash-command detection when restored text starts with "/"
   function applyInputAndAutogrow(el: HTMLTextAreaElement, text: string) {
+    setInput(text);
     const nativeSet = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")?.set;
     nativeSet?.call(el, text);
-    el.dispatchEvent(new Event("input", { bubbles: true }));
+    el.style.height = "auto";
+    el.style.height = `${el.scrollHeight}px`;
     requestAnimationFrame(() => el.focus());
   }
 
@@ -171,7 +174,7 @@ export function Session() {
         });
         return {
           id: m.info.id,
-          title: preview || "(empty message)",
+          title: preview || (m.parts && m.parts.length > 0 ? "(attachments)" : "(empty message)"),
           description: timestamp,
         };
       })
