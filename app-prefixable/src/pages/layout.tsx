@@ -428,6 +428,9 @@ export function Layout(props: ParentProps) {
     const tag = target.tagName;
     if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || target.isContentEditable) return;
 
+    // When search is active, don't intercept keys that should go to search results
+    if (searchQuery().trim()) return;
+
     const ids = flatSessionIds();
     if (!ids.length) return;
 
@@ -1539,6 +1542,7 @@ export function Layout(props: ParentProps) {
               <input
                 type="text"
                 placeholder="Search sessions..."
+                aria-label="Search sessions"
                 value={searchQuery()}
                 onInput={(e) => handleSearchInput(e.currentTarget.value)}
                 onKeyDown={(e) => {
@@ -1559,6 +1563,7 @@ export function Layout(props: ParentProps) {
                   style={{ color: "var(--icon-weak)" }}
                   onMouseEnter={(e) => (e.currentTarget.style.color = "var(--icon-base)")}
                   onMouseLeave={(e) => (e.currentTarget.style.color = "var(--icon-weak)")}
+                  aria-label="Clear search"
                   title="Clear search"
                 >
                   <X class="w-3.5 h-3.5" />
