@@ -6,6 +6,7 @@ import { SDKProvider } from "../context/sdk"
 import { EventProvider } from "../context/events"
 import { ProviderProvider } from "../context/providers"
 import { MCPProvider } from "../context/mcp"
+import { ConfigProvider } from "../context/config"
 import { useGlobalEvents } from "../context/global-events"
 import { ProjectDialog } from "../components/project-dialog"
 import { Terminal } from "../components/terminal"
@@ -135,8 +136,9 @@ export function HomeLayout(props: ParentProps) {
   return (
     <SDKProvider>
       <EventProvider>
-        <ProviderProvider>
-          <MCPProvider>
+        <ConfigProvider>
+          <ProviderProvider>
+            <MCPProvider>
             <div class="flex h-screen" style={{ background: "var(--background-stronger)" }}>
               {/* Project Dialog */}
               <ProjectDialog
@@ -312,8 +314,9 @@ export function HomeLayout(props: ParentProps) {
                 </Show>
               </div>
             </div>
-          </MCPProvider>
-        </ProviderProvider>
+            </MCPProvider>
+          </ProviderProvider>
+        </ConfigProvider>
       </EventProvider>
     </SDKProvider>
   )

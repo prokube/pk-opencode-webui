@@ -1,14 +1,15 @@
 import { createContext, useContext, createResource, createEffect, type ParentProps, onMount } from "solid-js"
 import { createStore } from "solid-js/store"
 import { useSDK } from "./sdk"
+import { useConfig } from "./config"
 
 // Storage key
 const MODELS_BY_AGENT_KEY = "opencode.modelsByAgent"
 
-// Default model to use
-const DEFAULT_PROVIDER = "opencode"
-const DEFAULT_MODEL = "big-pickle"
-const DEFAULT_AGENT = "build"
+// Fallback defaults when no config is available
+const FALLBACK_PROVIDER = "opencode"
+const FALLBACK_MODEL = "big-pickle"
+const FALLBACK_AGENT = "build"
 
 // Define types locally to avoid SDK type mismatches
 interface Model {
@@ -78,10 +79,11 @@ const ProviderContext = createContext<ProviderContextValue>()
 
 export function ProviderProvider(props: ParentProps) {
   const { client } = useSDK()
+  const cfg = useConfig()
 
   const [store, setStore] = createStore({
     modelsByAgent: {} as Record<string, ModelKey>,
-    selectedAgent: DEFAULT_AGENT,
+    selectedAgent: FALLBACK_AGENT,
   })
 
   // Load models from localStorage
@@ -126,18 +128,43 @@ export function ProviderProvider(props: ParentProps) {
     }
   })
 
-  // Auto-select default model when provider data loads
+  // Auto-select default model/agent from project config, falling back to hardcoded defaults.
+  // localStorage selections take priority (user's runtime choice wins).
   createEffect(() => {
     const data = providerData()
     if (!data) return
 
-    // Check if default provider is connected
-    if (data.connected.includes(DEFAULT_PROVIDER)) {
-      const provider = data.all.find((p) => p.id === DEFAULT_PROVIDER)
-      if (provider && provider.models[DEFAULT_MODEL]) {
-        // Only set default model for DEFAULT_AGENT if not already set
-        if (!store.modelsByAgent[DEFAULT_AGENT]) {
-          setStore("modelsByAgent", DEFAULT_AGENT, { providerID: DEFAULT_PROVIDER, modelID: DEFAULT_MODEL })
+    // Resolve default agent from config or fallback
+    const configAgent = cfg.project.default_agent
+    const defaultAgent = configAgent || FALLBACK_AGENT
+
+    // Set selected agent if still on fallback and config specifies something different
+    if (configAgent && store.selectedAgent === FALLBACK_AGENT && configAgent !== FALLBACK_AGENT) {
+      setStore("selectedAgent", configAgent)
+    }
+
+    // Resolve default model from config. Config format is "provider/model".
+    const configModel = cfg.project.model
+    const validConfigModel = configModel && configModel.includes("/") && configModel.split("/")[0] && configModel.split("/").slice(1).join("/")
+    const targetProvider = validConfigModel ? configModel.split("/")[0] : FALLBACK_PROVIDER
+    const targetModel = validConfigModel ? configModel.split("/").slice(1).join("/") : FALLBACK_MODEL
+
+    if (data.connected.includes(targetProvider)) {
+      const provider = data.all.find((p) => p.id === targetProvider)
+      if (provider && provider.models[targetModel]) {
+        // Only set default model if not already set (localStorage takes priority)
+        if (!store.modelsByAgent[defaultAgent]) {
+          setStore("modelsByAgent", defaultAgent, { providerID: targetProvider, modelID: targetModel })
+        }
+      }
+    }
+
+    // Fallback: if config model's provider isn't connected, try the hardcoded default
+    if (validConfigModel && !data.connected.includes(targetProvider)) {
+      if (data.connected.includes(FALLBACK_PROVIDER)) {
+        const provider = data.all.find((p) => p.id === FALLBACK_PROVIDER)
+        if (provider && provider.models[FALLBACK_MODEL] && !store.modelsByAgent[defaultAgent]) {
+          setStore("modelsByAgent", defaultAgent, { providerID: FALLBACK_PROVIDER, modelID: FALLBACK_MODEL })
         }
       }
     }
@@ -179,10 +206,11 @@ export function ProviderProvider(props: ParentProps) {
 
   function setSelectedAgent(agent: string) {
     if (!store.modelsByAgent[agent]) {
+      const defaultAgent = cfg.project.default_agent || FALLBACK_AGENT
       const source = store.modelsByAgent[store.selectedAgent]
         ? store.selectedAgent
-        : store.modelsByAgent[DEFAULT_AGENT]
-          ? DEFAULT_AGENT
+        : store.modelsByAgent[defaultAgent]
+          ? defaultAgent
           : null
 
       if (source) {
