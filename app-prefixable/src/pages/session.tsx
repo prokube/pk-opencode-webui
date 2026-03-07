@@ -378,6 +378,13 @@ export function Session() {
   let slashPopoverRef: HTMLDivElement | undefined;
   let fileInputRef: HTMLInputElement | undefined;
 
+  // Get session from sync context - reactive, automatically updated via SSE
+  const session = createMemo(() => {
+    const id = params.id;
+    if (!id) return null;
+    return sync.session.get(id) ?? null;
+  });
+
   // Slash commands — computed so state-dependent commands update reactively
   const baseSlashCommands = createMemo<Command[]>(() => {
     const id = sessionId();
@@ -788,13 +795,6 @@ export function Session() {
 
   onCleanup(() => {
     window.removeEventListener("keydown", handleGlobalKeyDown);
-  });
-
-  // Get session from sync context - reactive, automatically updated via SSE
-  const session = createMemo(() => {
-    const id = params.id;
-    if (!id) return null;
-    return sync.session.get(id) ?? null;
   });
 
   // Refetch is now just re-syncing
