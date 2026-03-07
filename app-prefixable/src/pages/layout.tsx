@@ -386,10 +386,13 @@ export function Layout(props: ParentProps) {
     groupedSessions().flatMap((g) => g.sessions.map((s) => s.id)),
   );
 
-  // When sidebar itself receives focus (not a child), highlight the currently active session
+  // When focus enters the sidebar from outside, highlight the currently active session
   function handleSidebarFocus(e: FocusEvent) {
-    // Only activate when the nav element itself receives focus (e.g. via Ctrl+1)
-    if (e.target !== e.currentTarget) return;
+    // Ignore focus moves within the sidebar — only act when focus enters from outside
+    const container = e.currentTarget as HTMLElement | null;
+    if (container && e.relatedTarget instanceof Node && container.contains(e.relatedTarget)) return;
+    // Skip if focusedId is already set (e.g. focusPanel already initialized it)
+    if (focusedId()) return;
     const current = currentSessionId();
     const ids = flatSessionIds();
     if (current && ids.includes(current)) {
