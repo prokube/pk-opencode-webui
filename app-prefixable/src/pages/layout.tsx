@@ -557,7 +557,12 @@ export function Layout(props: ParentProps) {
       el.focus();
       return true;
     }
-    // For sidebar and review, focus the container itself
+    // For sidebar, focus the inner listbox so aria-activedescendant applies immediately
+    if (name === "sidebar") {
+      const listbox = el.querySelector('[role="listbox"]') as HTMLElement | null;
+      if (listbox) { listbox.focus(); return true; }
+    }
+    // For review and other panels, focus the container itself
     el.focus();
     return true;
   }
@@ -1704,6 +1709,7 @@ export function Layout(props: ParentProps) {
                                           }}
                                           role="menuitem"
                                           onMouseEnter={() => setMenuFocusIndex(0)}
+                                          onFocus={() => setMenuFocusIndex(0)}
                                           onMouseLeave={(e) => { if (menuFocusIndex() !== 0) e.currentTarget.style.background = "transparent" }}
                                           onClick={(e) => {
                                             e.preventDefault();
@@ -1731,6 +1737,7 @@ export function Layout(props: ParentProps) {
                                           }}
                                           role="menuitem"
                                           onMouseEnter={() => setMenuFocusIndex(1)}
+                                          onFocus={() => setMenuFocusIndex(1)}
                                           onMouseLeave={(e) => { if (menuFocusIndex() !== 1) e.currentTarget.style.background = "transparent" }}
                                           onClick={(e) => {
                                             e.preventDefault();
@@ -1755,6 +1762,7 @@ export function Layout(props: ParentProps) {
                                           }}
                                           role="menuitem"
                                           onMouseEnter={() => setMenuFocusIndex(2)}
+                                          onFocus={() => setMenuFocusIndex(2)}
                                           onMouseLeave={(e) => { if (menuFocusIndex() !== 2) e.currentTarget.style.background = "transparent" }}
                                           onClick={(e) => {
                                             e.preventDefault();
@@ -1781,6 +1789,7 @@ export function Layout(props: ParentProps) {
                                           }}
                                           role="menuitem"
                                           onMouseEnter={() => setMenuFocusIndex(3)}
+                                          onFocus={() => setMenuFocusIndex(3)}
                                           onMouseLeave={(e) => { if (menuFocusIndex() !== 3) e.currentTarget.style.background = "transparent" }}
                                           onClick={(e) => {
                                             e.preventDefault();
@@ -1895,7 +1904,9 @@ export function Layout(props: ParentProps) {
                                   onClick={(e) => {
                                     e.preventDefault();
                                     e.stopPropagation();
-                                    setMenuOpenId(menuOpenId() === session.id ? null : session.id);
+                                    const opening = menuOpenId() !== session.id;
+                                    setMenuOpenId(opening ? session.id : null);
+                                    setMenuFocusIndex(opening ? 0 : -1);
                                   }}
                                   class="p-1 rounded transition-colors"
                                   style={{ color: "var(--icon-weak)" }}
@@ -1936,6 +1947,7 @@ export function Layout(props: ParentProps) {
                                         background: menuFocusIndex() === 0 ? "var(--surface-inset)" : "transparent",
                                       }}
                                       onMouseEnter={() => setMenuFocusIndex(0)}
+                                      onFocus={() => setMenuFocusIndex(0)}
                                       onMouseLeave={(e) => { if (menuFocusIndex() !== 0) e.currentTarget.style.background = "transparent" }}
                                       onClick={(e) => {
                                         e.preventDefault();
@@ -1961,6 +1973,7 @@ export function Layout(props: ParentProps) {
                                         background: menuFocusIndex() === 1 ? "var(--surface-inset)" : "transparent",
                                       }}
                                       onMouseEnter={() => setMenuFocusIndex(1)}
+                                      onFocus={() => setMenuFocusIndex(1)}
                                       onMouseLeave={(e) => { if (menuFocusIndex() !== 1) e.currentTarget.style.background = "transparent" }}
                                       onClick={(e) => {
                                         e.preventDefault();

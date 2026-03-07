@@ -144,6 +144,8 @@ export function CommandProvider(props: ParentProps) {
       const key = toTinykeysBinding(cmd.keybind)
       bindings[key] = (e) => {
         if (!cmd.global && shouldSuppressShortcut(e)) return
+        // Suppress non-global shortcuts while a modal dialog is open
+        if (!cmd.global && isDialogOpen()) return
         if (cmd.passive) {
           cmd.onSelect(e)
           return
@@ -156,11 +158,13 @@ export function CommandProvider(props: ParentProps) {
     // Shortcut reference: ? (only when not in input) and $mod+/
     bindings["?"] = (e) => {
       if (shouldSuppressShortcut(e)) return
+      if (isDialogOpen()) return
       e.preventDefault()
       setShortcutRefOpen((v) => !v)
     }
     bindings["$mod+/"] = (e) => {
       if (shouldSuppressShortcut(e)) return
+      if (isDialogOpen()) return
       e.preventDefault()
       setShortcutRefOpen((v) => !v)
     }
