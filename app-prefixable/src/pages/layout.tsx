@@ -951,19 +951,20 @@ export function Layout(props: ParentProps) {
   }
 
   function handleSearchInput(query: string) {
-    setSearchQuery(query);
+    const trimmed = query.trim();
+    setSearchQuery(trimmed);
     if (searchTimer.id !== undefined) clearTimeout(searchTimer.id);
-    if (!query.trim()) {
-      setSearchResults([]);
-      setSearching(false);
+    if (!trimmed) {
+      clearSearch();
       return;
     }
     setSearching(true);
     searchTimer.id = setTimeout(() => {
-      client.session.list({ search: query.trim(), directory, roots: true })
+      setSearchResults([]);
+      client.session.list({ search: trimmed, directory, roots: true })
         .then((res) => {
           // Only update if query hasn't changed while waiting
-          if (searchQuery() !== query) return;
+          if (searchQuery() !== trimmed) return;
           const data = res.data;
           const valid = Array.isArray(data)
             ? data.filter((s): s is Session => s && typeof s === "object" && typeof s.id === "string")
@@ -972,10 +973,10 @@ export function Layout(props: ParentProps) {
         })
         .catch((err: unknown) => {
           console.error("Session search failed:", err);
-          if (searchQuery() === query) setSearchResults([]);
+          if (searchQuery() === trimmed) setSearchResults([]);
         })
         .finally(() => {
-          if (searchQuery() === query) setSearching(false);
+          if (searchQuery() === trimmed) setSearching(false);
         });
     }, 300);
   }
@@ -985,6 +986,9 @@ export function Layout(props: ParentProps) {
     setSearchQuery("");
     setSearchResults([]);
     setSearching(false);
+    setMenuOpenId(null);
+    setMenuFocusIndex(-1);
+    setFocusedId(null);
   }
 
   onCleanup(() => {
@@ -1998,6 +2002,8 @@ export function Layout(props: ParentProps) {
                         <A
                           href={`/${dirSlug()}/session/${session.id}`}
                           onClick={() => clearSearch()}
+                          role="option"
+                          id={`search-result-${session.id}`}
                           class="flex items-center gap-2 px-2.5 py-2 rounded-md text-sm transition-colors"
                           style={{
                             color: isActive(session.id)
