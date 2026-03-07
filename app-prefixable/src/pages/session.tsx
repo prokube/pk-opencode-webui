@@ -152,7 +152,7 @@ export function Session() {
     const nativeSet = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")?.set;
     nativeSet?.call(el, text);
     el.style.height = "auto";
-    el.style.height = `${el.scrollHeight}px`;
+    el.style.height = `${Math.min(el.scrollHeight, 200)}px`;
     requestAnimationFrame(() => el.focus());
   }
 
