@@ -195,6 +195,7 @@ export function GlobalEventsProvider(props: ParentProps & {
       disconnectDirectory(dir)
       // Schedule reconnect outside the connection lifecycle
       const reconnectTimer = setTimeout(() => {
+        reconnectTimers.delete(dir)
         const active = props.activeDirectory()
         const wanted = props.projects().some((p) => p.worktree === dir)
         if (wanted && dir !== active) {

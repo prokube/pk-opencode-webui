@@ -75,9 +75,10 @@ function useActiveDirectory() {
   const base = basePath.endsWith("/") ? basePath.slice(0, -1) : basePath
 
   function derive(): string | undefined {
-    const path = window.location.pathname.startsWith(base)
-      ? window.location.pathname.slice(base.length)
-      : window.location.pathname
+    const pathname = window.location.pathname
+    const path = (pathname === base || pathname.startsWith(base + "/"))
+      ? pathname.slice(base.length)
+      : pathname
     const segments = path.split("/").filter(Boolean)
     if (segments.length === 0) return undefined
     try {
