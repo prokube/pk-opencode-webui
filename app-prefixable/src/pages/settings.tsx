@@ -7,7 +7,8 @@ import { useSDK } from "../context/sdk"
 import { MCPAddDialog } from "../components/mcp-add-dialog"
 import { ConfirmDialog } from "../components/confirm-dialog"
 import { Button } from "../components/ui/button"
-import { Check, Copy, Plug, GitBranch, Server, ExternalLink, Key, Search, X, Trash2, BookmarkPlus, Pencil, Palette, Sun, Moon, Monitor } from "lucide-solid"
+import { Check, Copy, Plug, GitBranch, Server, ExternalLink, Key, Search, X, Trash2, BookmarkPlus, Pencil, Palette, Sun, Moon, Monitor, Volume2, Play } from "lucide-solid"
+import { SOUND_OPTIONS, readSoundSettings, writeSoundSettings, playSound, SOUND_STORAGE_KEY, type SoundSettings } from "../utils/sound"
 import { useSavedPrompts } from "../context/saved-prompts"
 import { useTheme } from "../context/theme"
 
@@ -24,7 +25,7 @@ export function Settings() {
   // Initialize tab from URL hash, default to "providers"
   const getInitialTab = () => {
     const hash = window.location.hash.slice(1)
-    const validTabs = ["providers", "git", "mcp", "prompts", "appearance"]
+    const validTabs = ["providers", "git", "mcp", "prompts", "appearance", "sounds"]
     return validTabs.includes(hash) ? hash : "providers"
   }
   const [activeTab, setActiveTab] = createSignal(getInitialTab())
@@ -40,6 +41,24 @@ export function Settings() {
   const [promptTitle, setPromptTitle] = createSignal("")
   const [promptText, setPromptText] = createSignal("")
   const [promptToDelete, setPromptToDelete] = createSignal<string | null>(null)
+
+  // Sound settings
+  const [soundSettings, setSoundSettings] = createSignal<SoundSettings>(readSoundSettings())
+
+  // Keep soundSettings in sync with localStorage changes from other tabs
+  onMount(() => {
+    function handleStorage(e: StorageEvent) {
+      if (e.key === SOUND_STORAGE_KEY) setSoundSettings(readSoundSettings())
+    }
+    window.addEventListener("storage", handleStorage)
+    onCleanup(() => window.removeEventListener("storage", handleStorage))
+  })
+
+  function updateSoundSettings(patch: Partial<SoundSettings>) {
+    const next = { ...soundSettings(), ...patch }
+    setSoundSettings(next)
+    writeSoundSettings(next)
+  }
 
   // Provider search
   const [providerSearch, setProviderSearch] = createSignal("")
@@ -485,6 +504,7 @@ export function Settings() {
     { id: "mcp", label: "MCP Servers", icon: () => <Server class="w-4 h-4" /> },
     { id: "prompts", label: "Prompts", icon: () => <BookmarkPlus class="w-4 h-4" /> },
     { id: "appearance", label: "Appearance", icon: () => <Palette class="w-4 h-4" /> },
+    { id: "sounds", label: "Sounds", icon: () => <Volume2 class="w-4 h-4" /> },
   ]
 
   return (
@@ -1525,6 +1545,116 @@ export function Settings() {
                       ? `System preference detected: ${theme.resolved()}`
                       : `Current theme: ${theme.theme()}`}
                   </p>
+                </div>
+              </section>
+            </div>
+          </Show>
+
+          {/* Sounds Tab */}
+          <Show when={activeTab() === "sounds"}>
+            <div class="space-y-6">
+              <header>
+                <h1 class="text-lg font-medium" style={{ color: "var(--text-strong)" }}>
+                  Sound Notifications
+                </h1>
+                <p class="text-sm mt-1" style={{ color: "var(--text-weak)" }}>
+                  Play a sound when notification-worthy events occur (task complete, permission request, agent question)
+                </p>
+              </header>
+
+              <section
+                class="rounded-lg overflow-hidden"
+                style={{
+                  background: "var(--background-base)",
+                  border: "1px solid var(--border-base)",
+                }}
+              >
+                <div class="px-4 py-3 flex items-center justify-between" style={{ "border-bottom": "1px solid var(--border-base)" }}>
+                  <h2 class="text-sm font-medium" style={{ color: "var(--text-strong)" }}>
+                    Enable Sound
+                  </h2>
+                  <button
+                    onClick={() => updateSoundSettings({ enabled: !soundSettings().enabled })}
+                    class="relative w-10 h-5 rounded-full transition-colors"
+                    style={{
+                      background: soundSettings().enabled ? "var(--interactive-base)" : "var(--surface-inset)",
+                    }}
+                    role="switch"
+                    aria-checked={soundSettings().enabled}
+                    aria-label="Enable sound notifications"
+                  >
+                    <div
+                      class="absolute top-0.5 w-4 h-4 rounded-full transition-all"
+                      style={{
+                        background: "var(--background-base)",
+                        left: soundSettings().enabled ? "calc(100% - 18px)" : "2px",
+                      }}
+                    />
+                  </button>
+                </div>
+
+                <div class="p-4">
+                  <p class="text-xs mb-3" style={{ color: "var(--text-weak)" }}>
+                    Sound only plays for sessions with the bell icon enabled. Enable the bell on individual sessions from the chat header.
+                  </p>
+
+                  <div class="space-y-2">
+                    <label class="block text-sm font-medium" style={{ color: "var(--text-base)" }}>
+                      Notification Sound
+                    </label>
+                    <div class="space-y-1">
+                      <For each={SOUND_OPTIONS}>
+                        {(option) => (
+                          <div
+                            class="flex items-center justify-between px-3 py-2 rounded-md transition-colors cursor-pointer"
+                            style={{
+                              background: soundSettings().sound === option.id ? "var(--surface-inset)" : "transparent",
+                              border: soundSettings().sound === option.id ? "1px solid var(--interactive-base)" : "1px solid transparent",
+                            }}
+                            onClick={() => {
+                              updateSoundSettings({ sound: option.id })
+                              playSound(option.id)
+                            }}
+                            onMouseEnter={(e) => {
+                              if (soundSettings().sound !== option.id) e.currentTarget.style.background = "var(--surface-inset)"
+                            }}
+                            onMouseLeave={(e) => {
+                              if (soundSettings().sound !== option.id) e.currentTarget.style.background = "transparent"
+                            }}
+                          >
+                            <div class="flex items-center gap-3">
+                              <input
+                                type="radio"
+                                name="sound"
+                                checked={soundSettings().sound === option.id}
+                                onChange={() => {
+                                  updateSoundSettings({ sound: option.id })
+                                  playSound(option.id)
+                                }}
+                                class="accent-[var(--interactive-base)]"
+                              />
+                              <span class="text-sm" style={{ color: "var(--text-base)" }}>{option.label}</span>
+                            </div>
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation()
+                                playSound(option.id)
+                              }}
+                              class="p-1 rounded transition-colors"
+                              style={{ color: "var(--icon-weak)" }}
+                              onMouseEnter={(e) => (e.currentTarget.style.color = "var(--icon-base)")}
+                              onMouseLeave={(e) => (e.currentTarget.style.color = "var(--icon-weak)")}
+                              title={`Preview ${option.label}`}
+                              aria-label={`Preview ${option.label} sound`}
+                            >
+                              <Play class="w-4 h-4" />
+                            </button>
+                          </div>
+                        )}
+                      </For>
+                    </div>
+                  </div>
                 </div>
               </section>
             </div>
