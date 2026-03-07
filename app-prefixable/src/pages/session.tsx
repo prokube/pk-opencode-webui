@@ -33,7 +33,7 @@ import { ReviewPanel } from "../components/review-panel";
 import { SessionHeader } from "../components/session-header";
 import { ResizeHandle } from "../components/resize-handle";
 import { base64Encode, base64Decode } from "../utils/path";
-import type { Part, QuestionRequest } from "../sdk/client";
+import type { Part, QuestionRequest, TextPart } from "../sdk/client";
 import { Plus, Settings, Paperclip, Upload, Bookmark, BookOpen } from "lucide-solid";
 import { Portal } from "solid-js/web";
 import { ContextItems, type FileContext } from "../components/context-items";
@@ -144,7 +144,7 @@ export function Session() {
       .filter((m) => m.info.role === "user")
       .map((m) => {
         const textParts = m.parts
-          .filter((p): p is import("../sdk/client").TextPart => p.type === "text")
+          .filter((p): p is TextPart => p.type === "text")
           .map((p) => p.text)
           .join(" ");
         const preview = textParts.length > 80 ? textParts.slice(0, 80) + "..." : textParts;
@@ -2134,7 +2134,7 @@ export function Session() {
                   const selected = msgs.find((m) => m.info.id === item.id);
                   const restoredText = selected
                     ? selected.parts
-                        .filter((p): p is import("../sdk/client").TextPart => p.type === "text")
+                        .filter((p): p is TextPart => p.type === "text")
                         .map((p) => p.text)
                         .join("\n")
                     : "";
