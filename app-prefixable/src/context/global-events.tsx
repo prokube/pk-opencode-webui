@@ -114,10 +114,12 @@ export function GlobalEventsProvider(props: ParentProps & {
     // Buffer events until seed completes to avoid races where an SSE event
     // adds state, then the seed clears and repopulates (dropping the event).
     const buffer: MessageEvent[] = []
+    const MAX_BUFFER = 1000
     let seeded = false
 
     function handleMessage(e: MessageEvent) {
       if (!seeded) {
+        if (buffer.length >= MAX_BUFFER) buffer.shift()
         buffer.push(e)
         return
       }

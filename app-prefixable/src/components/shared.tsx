@@ -78,9 +78,16 @@ function AlertBadge(props: { kind: AlertKind; count: number }) {
     return <Loader2 class="w-2.5 h-2.5 animate-spin" />
   }
 
+  const label = () => {
+    const k = props.kind === "permission" ? "permission request" : props.kind === "question" ? "question" : "busy session"
+    return props.count === 1 ? `1 ${k}` : `${props.count} ${k}s`
+  }
+
   return (
     <div
       class="absolute -top-1.5 -right-1.5 flex items-center gap-px rounded-full px-0.5 min-w-4 h-4 justify-center"
+      role="status"
+      aria-label={label()}
       style={{
         background: "var(--background-base)",
         color: color(),
@@ -92,7 +99,7 @@ function AlertBadge(props: { kind: AlertKind; count: number }) {
     >
       <Icon />
       <Show when={props.count > 1}>
-        <span>{props.count}</span>
+        <span aria-hidden="true">{props.count}</span>
       </Show>
     </div>
   )
