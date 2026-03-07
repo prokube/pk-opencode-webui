@@ -798,6 +798,9 @@ export function Layout(props: ParentProps) {
     if (container && e.relatedTarget instanceof Node && container.contains(e.relatedTarget)) return;
     // Skip if focusedId is already set (e.g. focusPanel already initialized it)
     if (focusedId()) return;
+    // During search, don't initialize focusedId from the grouped session list —
+    // those DOM elements are unmounted and aria-activedescendant would dangle.
+    if (searchQuery().trim()) return;
     const current = currentSessionId();
     const ids = flatSessionIds();
     if (current && ids.includes(current)) {
@@ -827,6 +830,10 @@ export function Layout(props: ParentProps) {
 
     // When search is active, provide keyboard navigation for search results
     if (searchQuery().trim()) {
+      // Only intercept keys when focus is within the search input or sessions list
+      const inSearchArea = target === searchInputRef || !!target.closest('[aria-label="Sessions"]');
+      if (!inSearchArea) return;
+
       const results = searchResults();
       if (!results.length) return;
 
