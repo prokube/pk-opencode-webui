@@ -5,15 +5,16 @@ import { useProviders } from "../context/providers"
 import { useMCP } from "../context/mcp"
 import { useSDK } from "../context/sdk"
 import { useBasePath } from "../context/base-path"
+import { useConfig } from "../context/config"
 import { MCPAddDialog } from "../components/mcp-add-dialog"
 import { ConfirmDialog } from "../components/confirm-dialog"
 import { Button } from "../components/ui/button"
-import { Check, Copy, Plug, GitBranch, Server, ExternalLink, Key, Search, X, Trash2, BookmarkPlus, Pencil, Palette, Sun, Moon, Monitor, BookOpen, Plus, Save, Volume2, Play } from "lucide-solid"
+import { Check, Copy, Plug, GitBranch, Server, ExternalLink, Key, Search, X, Trash2, BookmarkPlus, Pencil, Palette, Sun, Moon, Monitor, BookOpen, Plus, Save, Volume2, Play, Settings2, Code, Shield, Cpu, Wrench, ChevronDown, ChevronRight, Info } from "lucide-solid"
 import { SOUND_OPTIONS, readSoundSettings, writeSoundSettings, playSound, primeAudioContext, SOUND_STORAGE_KEY, type SoundSettings } from "../utils/sound"
 import { useSavedPrompts } from "../context/saved-prompts"
 import { useTheme } from "../context/theme"
 import { writeFile } from "../utils/extended-api"
-import type { Config } from "../sdk/client"
+import type { Config, PermissionActionConfig } from "../sdk/client"
 
 export function Settings() {
   const providers = useProviders()
@@ -28,7 +29,8 @@ export function Settings() {
   // Initialize tab from URL hash, default to "providers"
   const getInitialTab = () => {
     const hash = window.location.hash.slice(1)
-    const validTabs = ["providers", "git", "mcp", "prompts", "instructions", "appearance", "sounds"]
+    const baseTabs = ["providers", "git", "mcp", "prompts", "instructions", "appearance", "sounds"]
+    const validTabs = directory ? [...baseTabs, "config"] : baseTabs
     return validTabs.includes(hash) ? hash : "providers"
   }
   const [activeTab, setActiveTab] = createSignal(getInitialTab())
@@ -638,6 +640,7 @@ Add your project-specific instructions here.
     { id: "mcp", label: "MCP Servers", icon: () => <Server class="w-4 h-4" /> },
     { id: "prompts", label: "Prompts", icon: () => <BookmarkPlus class="w-4 h-4" /> },
     { id: "instructions", label: "Instructions", icon: () => <BookOpen class="w-4 h-4" /> },
+    { id: "config", label: "Project Config", icon: () => <Settings2 class="w-4 h-4" /> },
     { id: "appearance", label: "Appearance", icon: () => <Palette class="w-4 h-4" /> },
     { id: "sounds", label: "Sounds", icon: () => <Volume2 class="w-4 h-4" /> },
   ]
@@ -1837,6 +1840,11 @@ Add your project-specific instructions here.
             </div>
           </Show>
 
+          {/* Project Config Tab */}
+          <Show when={activeTab() === "config"}>
+            <ProjectConfigTab />
+          </Show>
+
           {/* Appearance Tab */}
           <Show when={activeTab() === "appearance"}>
             <div class="space-y-6">
@@ -2055,6 +2063,697 @@ Add your project-specific instructions here.
       />
     </div>
   )
+}
+
+// ── Known permission tools with human-friendly labels ──
+const PERMISSION_TOOLS = [
+  { key: "read", label: "Read Files" },
+  { key: "edit", label: "Edit Files" },
+  { key: "bash", label: "Bash Commands" },
+  { key: "glob", label: "Glob Search" },
+  { key: "grep", label: "Grep Search" },
+  { key: "list", label: "List Files" },
+  { key: "webfetch", label: "Web Fetch" },
+  { key: "task", label: "Task (Sub-agent)" },
+  { key: "todowrite", label: "Todo Write" },
+  { key: "todoread", label: "Todo Read" },
+  { key: "question", label: "Question" },
+  { key: "websearch", label: "Web Search" },
+  { key: "codesearch", label: "Code Search" },
+  { key: "lsp", label: "LSP" },
+  { key: "skill", label: "Skill" },
+] as const
+
+// Known tools that can be toggled on/off
+const TOGGLEABLE_TOOLS = [
+  { key: "bash", label: "Bash" },
+  { key: "webfetch", label: "Web Fetch" },
+  { key: "websearch", label: "Web Search" },
+  { key: "codesearch", label: "Code Search" },
+  { key: "glob", label: "Glob" },
+  { key: "grep", label: "Grep" },
+  { key: "read", label: "Read" },
+  { key: "edit", label: "Edit" },
+  { key: "list", label: "List" },
+  { key: "task", label: "Task" },
+  { key: "todowrite", label: "Todo Write" },
+  { key: "todoread", label: "Todo Read" },
+  { key: "question", label: "Question" },
+  { key: "lsp", label: "LSP" },
+  { key: "skill", label: "Skill" },
+] as const
+
+const ACTION_OPTIONS: PermissionActionConfig[] = ["allow", "ask", "deny"]
+
+function getPermissionAction(rule: unknown): PermissionActionConfig {
+  if (rule === "allow" || rule === "ask" || rule === "deny") return rule
+  if (typeof rule === "object" && rule !== null && "*" in rule) {
+    const val = (rule as Record<string, unknown>)["*"]
+    if (val === "allow" || val === "ask" || val === "deny") return val
+  }
+  return "ask"
+}
+
+function getPermissionPatterns(rule: unknown): Array<{ pattern: string; action: PermissionActionConfig }> {
+  if (typeof rule !== "object" || rule === null) return []
+  const patterns: Array<{ pattern: string; action: PermissionActionConfig }> = []
+  for (const [k, v] of Object.entries(rule as Record<string, unknown>)) {
+    if (k === "*" || k === "__originalKeys") continue
+    if (v === "allow" || v === "ask" || v === "deny") {
+      patterns.push({ pattern: k, action: v })
+    }
+  }
+  return patterns
+}
+
+function ProjectConfigTab() {
+  const config = useConfig()
+  const providers = useProviders()
+  const { directory } = useSDK()
+  const [view, setView] = createSignal<"form" | "json">("form")
+  const [jsonText, setJsonText] = createSignal("")
+  const [jsonError, setJsonError] = createSignal<string | null>(null)
+  const [saving, setSaving] = createSignal(false)
+  const [saved, setSaved] = createSignal(false)
+  const [expandedPerms, setExpandedPerms] = createSignal<string | null>(null)
+  const [newPatternTool, setNewPatternTool] = createSignal<string | null>(null)
+  const [newPatternValue, setNewPatternValue] = createSignal("")
+  const [newPatternAction, setNewPatternAction] = createSignal<PermissionActionConfig>("deny")
+
+  // Sync JSON text from config when switching to JSON view
+  createEffect(() => {
+    if (view() === "json") {
+      setJsonText(JSON.stringify(config.project, null, 2))
+      setJsonError(null)
+    }
+  })
+
+  function showSaved() {
+    setSaved(true)
+    setTimeout(() => setSaved(false), 2000)
+  }
+
+  // ── Permission handlers ──
+
+  async function setPermissionDefault(tool: string, action: PermissionActionConfig) {
+    setSaving(true)
+    const current = config.project.permission
+    const currentRule = typeof current === "object" && current !== null ? (current as Record<string, unknown>)[tool] : undefined
+    const patterns = getPermissionPatterns(currentRule)
+
+    // Build the new rule: if there are patterns, keep them. Otherwise just use the action string.
+    const newRule = patterns.length > 0
+      ? { "*": action, ...Object.fromEntries(patterns.map((p) => [p.pattern, p.action])) }
+      : action
+
+    const patch: Config = {
+      permission: { [tool]: newRule } as Config["permission"],
+    }
+    const result = await config.updateProject(patch)
+    setSaving(false)
+    if (result) showSaved()
+  }
+
+  async function addPermissionPattern(tool: string, pattern: string, action: PermissionActionConfig) {
+    if (!pattern.trim()) return
+    setSaving(true)
+    const current = config.project.permission
+    const currentRule = typeof current === "object" && current !== null ? (current as Record<string, unknown>)[tool] : undefined
+    const defaultAction = getPermissionAction(currentRule)
+    const existingPatterns = getPermissionPatterns(currentRule)
+
+    const newRule = {
+      "*": defaultAction,
+      ...Object.fromEntries(existingPatterns.map((p) => [p.pattern, p.action])),
+      [pattern]: action,
+    }
+
+    const patch: Config = {
+      permission: { [tool]: newRule } as Config["permission"],
+    }
+    const result = await config.updateProject(patch)
+    setSaving(false)
+    if (result) {
+      setNewPatternTool(null)
+      setNewPatternValue("")
+      setNewPatternAction("deny")
+      showSaved()
+    }
+  }
+
+  async function removePermissionPattern(tool: string, pattern: string) {
+    setSaving(true)
+    const current = config.project.permission
+    const currentRule = typeof current === "object" && current !== null ? (current as Record<string, unknown>)[tool] : undefined
+    const defaultAction = getPermissionAction(currentRule)
+    const existingPatterns = getPermissionPatterns(currentRule).filter((p) => p.pattern !== pattern)
+
+    const newRule = existingPatterns.length > 0
+      ? { "*": defaultAction, ...Object.fromEntries(existingPatterns.map((p) => [p.pattern, p.action])) }
+      : defaultAction
+
+    const patch: Config = {
+      permission: { [tool]: newRule } as Config["permission"],
+    }
+    const result = await config.updateProject(patch)
+    setSaving(false)
+    if (result) showSaved()
+  }
+
+  // ── Model defaults handlers ──
+
+  const availableModels = createMemo(() => {
+    const models: Array<{ id: string; name: string; provider: string }> = []
+    for (const p of providers.providers) {
+      if (!providers.connected.includes(p.id)) continue
+      for (const [id, m] of Object.entries(p.models)) {
+        models.push({ id: `${p.id}/${id}`, name: m.name || id, provider: p.name })
+      }
+    }
+    return models
+  })
+
+  async function setDefaultModel(value: string) {
+    setSaving(true)
+    const patch: Config = { model: value || undefined }
+    const result = await config.updateProject(patch)
+    setSaving(false)
+    if (result) showSaved()
+  }
+
+  async function setDefaultAgent(value: string) {
+    setSaving(true)
+    const patch: Config = { default_agent: value || undefined }
+    const result = await config.updateProject(patch)
+    setSaving(false)
+    if (result) showSaved()
+  }
+
+  // ── Tool toggle handlers ──
+
+  async function toggleTool(tool: string, enabled: boolean) {
+    setSaving(true)
+    const currentTools = (config.project.tools as Record<string, boolean> | undefined) ?? {}
+    const patch: Config = {
+      tools: { ...currentTools, [tool]: enabled },
+    }
+    const result = await config.updateProject(patch)
+    setSaving(false)
+    if (result) showSaved()
+  }
+
+  function isToolEnabled(tool: string): boolean {
+    const tools = config.project.tools as Record<string, boolean> | undefined
+    if (!tools || tools[tool] === undefined) return true // enabled by default
+    return tools[tool]
+  }
+
+  // ── JSON save handler ──
+
+  async function saveJson() {
+    const text = jsonText()
+    try {
+      JSON.parse(text)
+    } catch (e) {
+      setJsonError(`Invalid JSON: ${e instanceof Error ? e.message : String(e)}`)
+      return
+    }
+    setJsonError(null)
+    setSaving(true)
+    // We need to send the full config as a patch. The backend does a deep merge.
+    const parsed = JSON.parse(text) as Config
+    const result = await config.updateProject(parsed)
+    setSaving(false)
+    if (result) showSaved()
+  }
+
+  return (
+    <div class="space-y-6">
+      <header>
+        <div class="flex items-center justify-between">
+          <div>
+            <h1 class="text-lg font-medium" style={{ color: "var(--text-strong)" }}>
+              Project Config
+            </h1>
+            <p class="text-sm mt-1" style={{ color: "var(--text-weak)" }}>
+              Configure permissions, model defaults, and tool access for this project
+            </p>
+          </div>
+          <div class="flex items-center gap-2">
+            <Show when={saving()}>
+              <Spinner class="w-4 h-4" />
+            </Show>
+            <Show when={saved()}>
+              <span class="text-xs flex items-center gap-1" style={{ color: "var(--icon-success-base)" }}>
+                <Check class="w-3 h-3" /> Saved
+              </span>
+            </Show>
+          </div>
+        </div>
+        {/* Scope indicator */}
+        <div
+          class="mt-3 flex items-center gap-2 px-3 py-2 rounded-md text-xs"
+          style={{
+            background: "var(--surface-inset)",
+            color: "var(--text-weak)",
+            border: "1px solid var(--border-base)",
+          }}
+        >
+          <Info class="w-3.5 h-3.5 shrink-0" />
+          <span>
+            Saved to <code class="px-1 py-0.5 rounded" style={{ background: "var(--background-base)" }}>opencode.json</code> in your project
+            {directory ? ` (${directory})` : ""}
+          </span>
+        </div>
+      </header>
+
+      {/* View toggle */}
+      <div class="flex gap-1 p-1 rounded-md" style={{ background: "var(--surface-inset)" }}>
+        <button
+          onClick={() => setView("form")}
+          class="flex-1 flex items-center justify-center gap-1.5 px-3 py-1.5 rounded text-sm font-medium transition-colors"
+          style={{
+            background: view() === "form" ? "var(--background-base)" : "transparent",
+            color: view() === "form" ? "var(--text-strong)" : "var(--text-weak)",
+            "box-shadow": view() === "form" ? "0 1px 2px rgba(0,0,0,0.05)" : "none",
+          }}
+        >
+          <Settings2 class="w-3.5 h-3.5" />
+          Form
+        </button>
+        <button
+          onClick={() => setView("json")}
+          class="flex-1 flex items-center justify-center gap-1.5 px-3 py-1.5 rounded text-sm font-medium transition-colors"
+          style={{
+            background: view() === "json" ? "var(--background-base)" : "transparent",
+            color: view() === "json" ? "var(--text-strong)" : "var(--text-weak)",
+            "box-shadow": view() === "json" ? "0 1px 2px rgba(0,0,0,0.05)" : "none",
+          }}
+        >
+          <Code class="w-3.5 h-3.5" />
+          JSON
+        </button>
+      </div>
+
+      <Show when={config.error()}>
+        <div
+          class="p-3 rounded-md text-sm"
+          style={{
+            background: "var(--surface-inset)",
+            border: "1px solid var(--border-base)",
+            "border-left": "3px solid var(--interactive-critical)",
+            color: "var(--interactive-critical)",
+          }}
+        >
+          {config.error()}
+        </div>
+      </Show>
+
+      <Show when={config.loading()}>
+        <div class="flex items-center gap-2" style={{ color: "var(--text-weak)" }}>
+          <Spinner class="w-4 h-4" />
+          <span class="text-sm">Loading configuration...</span>
+        </div>
+      </Show>
+
+      {/* Form View */}
+      <Show when={!config.loading() && view() === "form"}>
+        <div class="space-y-6">
+
+          {/* Permissions Section */}
+          <section
+            class="rounded-lg overflow-hidden"
+            style={{
+              background: "var(--background-base)",
+              border: "1px solid var(--border-base)",
+            }}
+          >
+            <div class="px-4 py-3 flex items-center gap-2" style={{ "border-bottom": "1px solid var(--border-base)" }}>
+              <Shield class="w-4 h-4" style={{ color: "var(--text-weak)" }} />
+              <h2 class="text-sm font-medium" style={{ color: "var(--text-strong)" }}>
+                Permissions
+              </h2>
+            </div>
+            <div class="divide-y" style={{ "border-color": "var(--border-base)" }}>
+              <For each={PERMISSION_TOOLS}>
+                {(tool) => {
+                  const permission = () => {
+                    const p = config.project.permission
+                    if (typeof p === "string") return p
+                    if (typeof p === "object" && p !== null) return (p as Record<string, unknown>)[tool.key]
+                    return undefined
+                  }
+                  const action = () => getPermissionAction(permission())
+                  const patterns = () => getPermissionPatterns(permission())
+                  const expanded = () => expandedPerms() === tool.key
+
+                  return (
+                    <div class="px-4 py-3">
+                      <div class="flex items-center justify-between">
+                        <button
+                          class="flex items-center gap-2 text-sm font-medium"
+                          style={{ color: "var(--text-strong)" }}
+                          onClick={() => setExpandedPerms(expanded() ? null : tool.key)}
+                        >
+                          <Show when={expanded()} fallback={<ChevronRight class="w-3.5 h-3.5" style={{ color: "var(--text-weak)" }} />}>
+                            <ChevronDown class="w-3.5 h-3.5" style={{ color: "var(--text-weak)" }} />
+                          </Show>
+                          {tool.label}
+                          <Show when={patterns().length > 0}>
+                            <span
+                              class="text-xs px-1.5 py-0.5 rounded"
+                              style={{ background: "var(--surface-inset)", color: "var(--text-weak)" }}
+                            >
+                              {patterns().length} rule{patterns().length > 1 ? "s" : ""}
+                            </span>
+                          </Show>
+                        </button>
+                        {/* Default action segmented control */}
+                        <div class="flex gap-0.5 p-0.5 rounded" style={{ background: "var(--surface-inset)" }}>
+                          <For each={ACTION_OPTIONS}>
+                            {(opt) => (
+                              <button
+                                onClick={() => setPermissionDefault(tool.key, opt)}
+                                class="px-2.5 py-1 rounded text-xs font-medium transition-colors capitalize"
+                                style={{
+                                  background: action() === opt ? actionColor(opt) : "transparent",
+                                  color: action() === opt ? "white" : "var(--text-weak)",
+                                }}
+                              >
+                                {opt}
+                              </button>
+                            )}
+                          </For>
+                        </div>
+                      </div>
+
+                      {/* Expanded: show patterns */}
+                      <Show when={expanded()}>
+                        <div class="mt-3 ml-5 space-y-2">
+                          <Show when={patterns().length > 0}>
+                            <div class="space-y-1">
+                              <For each={patterns()}>
+                                {(p) => (
+                                  <div
+                                    class="flex items-center justify-between px-3 py-1.5 rounded text-xs"
+                                    style={{ background: "var(--surface-inset)" }}
+                                  >
+                                    <code class="font-mono" style={{ color: "var(--text-base)" }}>{p.pattern}</code>
+                                    <div class="flex items-center gap-2">
+                                      <span
+                                        class="px-1.5 py-0.5 rounded capitalize font-medium"
+                                        style={{
+                                          background: actionColor(p.action),
+                                          color: "white",
+                                        }}
+                                      >
+                                        {p.action}
+                                      </span>
+                                      <button
+                                        onClick={() => removePermissionPattern(tool.key, p.pattern)}
+                                        class="p-0.5 rounded transition-colors opacity-50 hover:opacity-100"
+                                        style={{ color: "var(--icon-critical-base)" }}
+                                        title="Remove rule"
+                                      >
+                                        <X class="w-3 h-3" />
+                                      </button>
+                                    </div>
+                                  </div>
+                                )}
+                              </For>
+                            </div>
+                          </Show>
+
+                          {/* Add pattern form */}
+                          <Show when={newPatternTool() === tool.key} fallback={
+                            <button
+                              onClick={() => setNewPatternTool(tool.key)}
+                              class="text-xs hover:underline"
+                              style={{ color: "var(--text-interactive-base)" }}
+                            >
+                              + Add pattern rule
+                            </button>
+                          }>
+                            <div class="flex items-center gap-2">
+                              <input
+                                type="text"
+                                value={newPatternValue()}
+                                onInput={(e) => setNewPatternValue(e.currentTarget.value)}
+                                placeholder="e.g. *.env or src/**"
+                                class="flex-1 px-2 py-1 rounded text-xs font-mono"
+                                style={{
+                                  background: "var(--background-base)",
+                                  border: "1px solid var(--border-base)",
+                                  color: "var(--text-base)",
+                                }}
+                                onKeyDown={(e) => {
+                                  if (e.key === "Enter") {
+                                    addPermissionPattern(tool.key, newPatternValue(), newPatternAction())
+                                  }
+                                  if (e.key === "Escape") {
+                                    setNewPatternTool(null)
+                                    setNewPatternValue("")
+                                  }
+                                }}
+                              />
+                              <select
+                                value={newPatternAction()}
+                                onChange={(e) => setNewPatternAction(e.currentTarget.value as PermissionActionConfig)}
+                                class="px-2 py-1 rounded text-xs"
+                                style={{
+                                  background: "var(--background-base)",
+                                  border: "1px solid var(--border-base)",
+                                  color: "var(--text-base)",
+                                }}
+                              >
+                                <For each={ACTION_OPTIONS}>
+                                  {(opt) => <option value={opt}>{opt}</option>}
+                                </For>
+                              </select>
+                              <Button
+                                onClick={() => addPermissionPattern(tool.key, newPatternValue(), newPatternAction())}
+                                variant="primary"
+                                size="sm"
+                                disabled={!newPatternValue().trim()}
+                              >
+                                Add
+                              </Button>
+                              <button
+                                onClick={() => { setNewPatternTool(null); setNewPatternValue("") }}
+                                class="p-1 rounded"
+                                style={{ color: "var(--text-weak)" }}
+                              >
+                                <X class="w-3.5 h-3.5" />
+                              </button>
+                            </div>
+                          </Show>
+                        </div>
+                      </Show>
+                    </div>
+                  )
+                }}
+              </For>
+            </div>
+          </section>
+
+          {/* Model Defaults Section */}
+          <section
+            class="rounded-lg overflow-hidden"
+            style={{
+              background: "var(--background-base)",
+              border: "1px solid var(--border-base)",
+            }}
+          >
+            <div class="px-4 py-3 flex items-center gap-2" style={{ "border-bottom": "1px solid var(--border-base)" }}>
+              <Cpu class="w-4 h-4" style={{ color: "var(--text-weak)" }} />
+              <h2 class="text-sm font-medium" style={{ color: "var(--text-strong)" }}>
+                Model Defaults
+              </h2>
+            </div>
+            <div class="p-4 space-y-4">
+              <div>
+                <label class="block text-sm font-medium mb-1.5" style={{ color: "var(--text-base)" }}>
+                  Default Model
+                </label>
+                <select
+                  value={config.project.model ?? ""}
+                  onChange={(e) => setDefaultModel(e.currentTarget.value)}
+                  class="w-full px-3 py-2 rounded-md text-sm"
+                  style={{
+                    background: "var(--background-base)",
+                    border: "1px solid var(--border-base)",
+                    color: "var(--text-base)",
+                  }}
+                >
+                  <option value="">Use system default</option>
+                  <For each={availableModels()}>
+                    {(m) => (
+                      <option value={m.id}>
+                        {m.provider} / {m.name}
+                      </option>
+                    )}
+                  </For>
+                </select>
+                <p class="text-xs mt-1" style={{ color: "var(--text-weak)" }}>
+                  Format: <code class="px-1 py-0.5 rounded" style={{ background: "var(--surface-inset)" }}>provider/model</code> (e.g. anthropic/claude-sonnet-4-5)
+                </p>
+              </div>
+
+              <div>
+                <label class="block text-sm font-medium mb-1.5" style={{ color: "var(--text-base)" }}>
+                  Default Agent
+                </label>
+                <select
+                  value={config.project.default_agent ?? ""}
+                  onChange={(e) => setDefaultAgent(e.currentTarget.value)}
+                  class="w-full px-3 py-2 rounded-md text-sm"
+                  style={{
+                    background: "var(--background-base)",
+                    border: "1px solid var(--border-base)",
+                    color: "var(--text-base)",
+                  }}
+                >
+                  <option value="">Use system default</option>
+                  <For each={providers.agents}>
+                    {(agent) => (
+                      <option value={agent.name}>{agent.name}</option>
+                    )}
+                  </For>
+                </select>
+              </div>
+            </div>
+          </section>
+
+          {/* Tool Access Section */}
+          <section
+            class="rounded-lg overflow-hidden"
+            style={{
+              background: "var(--background-base)",
+              border: "1px solid var(--border-base)",
+            }}
+          >
+            <div class="px-4 py-3 flex items-center gap-2" style={{ "border-bottom": "1px solid var(--border-base)" }}>
+              <Wrench class="w-4 h-4" style={{ color: "var(--text-weak)" }} />
+              <h2 class="text-sm font-medium" style={{ color: "var(--text-strong)" }}>
+                Tool Access
+              </h2>
+            </div>
+            <div class="divide-y" style={{ "border-color": "var(--border-base)" }}>
+              <For each={TOGGLEABLE_TOOLS}>
+                {(tool) => {
+                  const enabled = () => isToolEnabled(tool.key)
+
+                  return (
+                    <div class="px-4 py-3 flex items-center justify-between">
+                      <span class="text-sm" style={{ color: "var(--text-base)" }}>{tool.label}</span>
+                      <button
+                        onClick={() => toggleTool(tool.key, !enabled())}
+                        class="relative w-10 h-5 rounded-full transition-colors"
+                        style={{
+                          background: enabled() ? "var(--interactive-base)" : "var(--surface-inset)",
+                        }}
+                      >
+                        <div
+                          class="absolute top-0.5 w-4 h-4 rounded-full transition-all"
+                          style={{
+                            background: "var(--background-base)",
+                            left: enabled() ? "calc(100% - 18px)" : "2px",
+                          }}
+                        />
+                      </button>
+                    </div>
+                  )
+                }}
+              </For>
+            </div>
+          </section>
+
+        </div>
+      </Show>
+
+      {/* JSON View */}
+      <Show when={!config.loading() && view() === "json"}>
+        <section
+          class="rounded-lg overflow-hidden"
+          style={{
+            background: "var(--background-base)",
+            border: "1px solid var(--border-base)",
+          }}
+        >
+          <div
+            class="px-4 py-3 flex items-center justify-between"
+            style={{ "border-bottom": "1px solid var(--border-base)" }}
+          >
+            <div class="flex items-center gap-2">
+              <Code class="w-4 h-4" style={{ color: "var(--text-weak)" }} />
+              <h2 class="text-sm font-medium" style={{ color: "var(--text-strong)" }}>
+                opencode.json
+              </h2>
+            </div>
+            <Button
+              onClick={saveJson}
+              variant="primary"
+              size="sm"
+              disabled={saving()}
+            >
+              <Show when={saving()} fallback={
+                <>
+                  <Save class="w-3.5 h-3.5" />
+                  Save
+                </>
+              }>
+                <Spinner class="w-3.5 h-3.5" />
+                Saving...
+              </Show>
+            </Button>
+          </div>
+
+          <Show when={jsonError()}>
+            <div
+              class="mx-4 mt-3 p-3 rounded-md text-sm"
+              style={{
+                background: "var(--surface-inset)",
+                border: "1px solid var(--border-base)",
+                "border-left": "3px solid var(--interactive-critical)",
+                color: "var(--interactive-critical)",
+              }}
+            >
+              {jsonError()}
+            </div>
+          </Show>
+
+          <div class="p-4">
+            <textarea
+              value={jsonText()}
+              onInput={(e) => {
+                setJsonText(e.currentTarget.value)
+                setJsonError(null)
+              }}
+              rows={20}
+              class="w-full px-3 py-2 rounded-md text-sm font-mono resize-y"
+              style={{
+                background: "var(--surface-inset)",
+                border: "1px solid var(--border-base)",
+                color: "var(--text-base)",
+                "min-height": "300px",
+                "tab-size": "2",
+              }}
+              spellcheck={false}
+            />
+            <p class="text-xs mt-2" style={{ color: "var(--text-weak)" }}>
+              Schema: <code class="px-1 py-0.5 rounded" style={{ background: "var(--surface-inset)" }}>https://opencode.ai/config.json</code>
+            </p>
+          </div>
+        </section>
+      </Show>
+    </div>
+  )
+}
+
+function actionColor(action: PermissionActionConfig): string {
+  if (action === "allow") return "var(--icon-success-base)"
+  if (action === "deny") return "var(--interactive-critical)"
+  return "var(--icon-warning-base)"
 }
 
 function PromptDialog(props: {
