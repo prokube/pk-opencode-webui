@@ -2038,7 +2038,8 @@ function ProjectConfigTab() {
   }
 
   async function addPermissionPattern(tool: string, pattern: string, action: PermissionActionConfig) {
-    if (!pattern.trim()) return
+    const trimmed = pattern.trim()
+    if (!trimmed) return
     setSaving(true)
     const current = config.project.permission
     const currentRule = typeof current === "object" && current !== null ? (current as Record<string, unknown>)[tool] : undefined
@@ -2048,7 +2049,7 @@ function ProjectConfigTab() {
     const newRule = {
       "*": defaultAction,
       ...Object.fromEntries(existingPatterns.map((p) => [p.pattern, p.action])),
-      [pattern]: action,
+      [trimmed]: action,
     }
 
     const patch: Config = {
@@ -2098,7 +2099,8 @@ function ProjectConfigTab() {
 
   async function setDefaultModel(value: string) {
     setSaving(true)
-    const patch: Config = { model: value || undefined }
+    // Send empty string to clear (undefined would be omitted in deep merge)
+    const patch: Config = { model: value || "" }
     const result = await config.updateProject(patch)
     setSaving(false)
     if (result) showSaved()
@@ -2106,7 +2108,8 @@ function ProjectConfigTab() {
 
   async function setDefaultAgent(value: string) {
     setSaving(true)
-    const patch: Config = { default_agent: value || undefined }
+    // Send empty string to clear (undefined would be omitted in deep merge)
+    const patch: Config = { default_agent: value || "" }
     const result = await config.updateProject(patch)
     setSaving(false)
     if (result) showSaved()
@@ -2135,17 +2138,20 @@ function ProjectConfigTab() {
 
   async function saveJson() {
     const text = jsonText()
+    let parsed: unknown
     try {
-      JSON.parse(text)
+      parsed = JSON.parse(text)
     } catch (e) {
       setJsonError(`Invalid JSON: ${e instanceof Error ? e.message : String(e)}`)
       return
     }
+    if (parsed === null || Array.isArray(parsed) || typeof parsed !== "object") {
+      setJsonError("Config must be a JSON object at the top level.")
+      return
+    }
     setJsonError(null)
     setSaving(true)
-    // We need to send the full config as a patch. The backend does a deep merge.
-    const parsed = JSON.parse(text) as Config
-    const result = await config.updateProject(parsed)
+    const result = await config.updateProject(parsed as Config)
     setSaving(false)
     if (result) showSaved()
   }
@@ -2512,6 +2518,9 @@ function ProjectConfigTab() {
                       <button
                         onClick={() => toggleTool(tool.key, !enabled())}
                         class="relative w-10 h-5 rounded-full transition-colors"
+                        role="switch"
+                        aria-checked={enabled()}
+                        aria-label={`Toggle ${tool.label} access`}
                         style={{
                           background: enabled() ? "var(--interactive-base)" : "var(--surface-inset)",
                         }}
