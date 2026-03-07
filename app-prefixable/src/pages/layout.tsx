@@ -289,8 +289,12 @@ export function Layout(props: ParentProps) {
     if (directory) {
       const stored = localStorage.getItem(PINNED_SESSIONS_PREFIX + directory);
       if (stored) {
-        const parsed = JSON.parse(stored) as string[];
-        if (Array.isArray(parsed)) setPinnedIds(parsed.slice(0, MAX_PINNED));
+        try {
+          const parsed = JSON.parse(stored) as string[];
+          if (Array.isArray(parsed)) setPinnedIds(parsed.slice(0, MAX_PINNED));
+        } catch (e) {
+          console.error("Failed to load pinned sessions state:", e);
+        }
       }
     }
 
@@ -345,7 +349,11 @@ export function Layout(props: ParentProps) {
   function savePinnedIds(ids: string[]) {
     setPinnedIds(ids);
     if (!directory) return;
-    localStorage.setItem(PINNED_SESSIONS_PREFIX + directory, JSON.stringify(ids));
+    try {
+      localStorage.setItem(PINNED_SESSIONS_PREFIX + directory, JSON.stringify(ids));
+    } catch (e) {
+      console.error("Failed to save pinned session IDs:", e);
+    }
   }
 
   function pinSession(id: string) {
@@ -357,6 +365,342 @@ export function Layout(props: ParentProps) {
   function unpinSession(id: string) {
     if (!pinnedIds().includes(id)) return;
     savePinnedIds(pinnedIds().filter((pid) => pid !== id));
+  }
+
+  function renderSessionItem(session: Session, pinned: boolean) {
+    const showPinItem = pinned || pinnedIds().length < MAX_PINNED;
+    const idx = (n: number) => showPinItem ? n : n - 1;
+    const DefaultIcon = pinned ? Pin : MessageCircle;
+
+    const statusIcon = () => (
+      <Show
+        when={aiRenamingId() === session.id}
+        fallback={
+          <Show
+            when={permission.pendingForSession(session.id).length > 0}
+            fallback={
+              <Show
+                when={!!events.pendingQuestions[session.id]}
+                fallback={
+                  <Show
+                    when={
+                      events.status[session.id]?.type === "busy" ||
+                      events.status[session.id]?.type === "retry"
+                    }
+                    fallback={<DefaultIcon class="w-4 h-4" />}
+                  >
+                    <Loader2 class="w-4 h-4 animate-spin" />
+                  </Show>
+                }
+              >
+                <CircleHelp class="w-4 h-4" style={{ color: "var(--icon-warning-base)" }} />
+              </Show>
+            }
+          >
+            <ShieldAlert class="w-4 h-4" style={{ color: "var(--interactive-base)" }} />
+          </Show>
+        }
+      >
+        <Spinner class="w-4 h-4" style={{ color: "var(--text-interactive-base)" }} />
+      </Show>
+    );
+
+    return (
+      <div
+        id={`session-${session.id}`}
+        class="group relative"
+        role="option"
+        aria-selected={isActive(session.id)}
+      >
+        <Show
+          when={renamingId() === session.id}
+          fallback={
+            <A
+              data-hint-target
+              href={`/${dirSlug()}/session/${session.id}`}
+              tabIndex={isActive(session.id) ? 0 : -1}
+              class="flex items-center gap-2 px-2.5 py-2 rounded-md text-sm transition-colors"
+              style={{
+                color: isActive(session.id)
+                  ? "var(--text-interactive-base)"
+                  : focusedId() === session.id
+                    ? "var(--text-interactive-base)"
+                    : "var(--text-base)",
+                background: isActive(session.id)
+                  ? "var(--surface-inset)"
+                  : focusedId() === session.id
+                    ? "var(--surface-inset)"
+                    : "transparent",
+                outline: focusedId() === session.id
+                  ? "2px solid var(--interactive-base)"
+                  : "none",
+                "outline-offset": "-2px",
+                "border-radius": "0.375rem",
+              }}
+              onMouseEnter={(e) => {
+                if (!isActive(session.id))
+                  e.currentTarget.style.background =
+                    "var(--surface-inset)";
+              }}
+              onMouseLeave={(e) => {
+                if (!isActive(session.id) && focusedId() !== session.id)
+                  e.currentTarget.style.background =
+                    "transparent";
+              }}
+            >
+              <span
+                class="shrink-0"
+                style={{ color: "var(--icon-weak)" }}
+              >
+                {statusIcon()}
+              </span>
+              <span class="min-w-0 flex-1">
+                <span class="block truncate">
+                  {session.title || "Untitled"}
+                </span>
+                <Show when={renameError()?.id === session.id}>
+                  <span class="block text-xs truncate" style={{ color: "var(--text-critical-base)" }}>
+                    {renameError()?.msg}
+                  </span>
+                </Show>
+              </span>
+            </A>
+          }
+        >
+          <div
+            class="flex items-center gap-2 px-2.5 py-1.5 rounded-md"
+            style={{ background: "var(--surface-inset)" }}
+          >
+            <span
+              class="shrink-0"
+              style={{ color: "var(--icon-weak)" }}
+            >
+              {statusIcon()}
+            </span>
+            <input
+              class="flex-1 min-w-0 text-sm bg-transparent outline-none"
+              style={{ color: "var(--text-base)" }}
+              value={editTitle()}
+              aria-label="Session title"
+              ref={(el) => queueMicrotask(() => { if (!el?.isConnected) return; el.focus(); el.select() })}
+              onInput={(e) => setEditTitle(e.currentTarget.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  e.currentTarget.dataset.committed = "true";
+                  renameSession(session, editTitle());
+                  setRenamingId(null);
+                } else if (e.key === "Escape") {
+                  e.currentTarget.dataset.cancelRename = "true";
+                  setRenamingId(null);
+                }
+              }}
+              onBlur={(e) => {
+                if (e.currentTarget.dataset.cancelRename === "true") return;
+                if (e.currentTarget.dataset.committed === "true") return;
+                renameSession(session, editTitle());
+                setRenamingId(null);
+              }}
+            />
+          </div>
+        </Show>
+        <Show when={renamingId() !== session.id}>
+          <div
+            class={`absolute right-0 top-0 bottom-0 items-center rounded-r-md ${menuOpenId() === session.id || focusedId() === session.id ? "flex" : "hidden group-hover:flex group-focus-within:flex"}`}
+            style={{ "pointer-events": "none" }}
+          >
+             <div
+              class="w-6 h-full"
+              style={{
+                background: `linear-gradient(to right, transparent, var(${isActive(session.id) || focusedId() === session.id ? "--surface-inset" : "--background-stronger"}))`,
+              }}
+            />
+            <div
+              class="flex items-center pr-1.5 relative"
+              style={{
+                "pointer-events": "auto",
+                background: isActive(session.id) || focusedId() === session.id ? "var(--surface-inset)" : "var(--background-stronger)",
+              }}
+              data-sidebar-menu
+            >
+              <button
+                onClick={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  const opening = menuOpenId() !== session.id;
+                  setMenuOpenId(opening ? session.id : null);
+                  setMenuFocusIndex(opening ? 0 : -1);
+                }}
+                class="p-1 rounded transition-colors"
+                style={{ color: "var(--icon-weak)" }}
+                onMouseEnter={(e) =>
+                  (e.currentTarget.style.color =
+                    "var(--icon-base)")
+                }
+                onMouseLeave={(e) =>
+                  (e.currentTarget.style.color =
+                    "var(--icon-weak)")
+                }
+                title="More options"
+                aria-label="More session options"
+                aria-haspopup="true"
+                aria-expanded={menuOpenId() === session.id}
+              >
+                <MoreHorizontal class="w-3.5 h-3.5" />
+              </button>
+
+              {/* Dropdown menu */}
+              <Show when={menuOpenId() === session.id}>
+                <div
+                  class="absolute right-0 top-full mt-1 w-44 rounded-md shadow-lg z-30 py-1"
+                  style={{
+                    background: "var(--background-base)",
+                    border: "1px solid var(--border-base)",
+                  }}
+                  role="menu"
+                  aria-label="Session options"
+                  data-sidebar-menu
+                  data-sidebar-menu-dropdown
+                >
+                  {/* Pin / Unpin */}
+                  <Show when={showPinItem}>
+                    <button
+                      data-menu-item
+                      class="w-full flex items-center gap-2 px-3 py-1.5 text-sm text-left transition-colors"
+                      style={{
+                        color: "var(--text-base)",
+                        background: menuFocusIndex() === 0 ? "var(--surface-inset)" : "transparent",
+                      }}
+                      role="menuitem"
+                      onMouseEnter={() => setMenuFocusIndex(0)}
+                      onFocus={() => setMenuFocusIndex(0)}
+                      onMouseLeave={(e) => { if (menuFocusIndex() !== 0) e.currentTarget.style.background = "transparent" }}
+                      onClick={(e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        setMenuOpenId(null);
+                        setMenuFocusIndex(-1);
+                        if (pinned) unpinSession(session.id);
+                        else pinSession(session.id);
+                      }}
+                    >
+                      <Show when={pinned} fallback={<Pin class="w-3.5 h-3.5 shrink-0" style={{ color: "var(--icon-weak)" }} />}>
+                        <PinOff class="w-3.5 h-3.5 shrink-0" style={{ color: "var(--icon-weak)" }} />
+                      </Show>
+                      {pinned ? "Unpin" : "Pin to top"}
+                    </button>
+                  </Show>
+
+                  {/* Rename */}
+                  <button
+                    data-menu-item
+                    class="w-full flex items-center gap-2 px-3 py-1.5 text-sm text-left transition-colors"
+                    style={{
+                      color: "var(--text-base)",
+                      background: menuFocusIndex() === idx(1) ? "var(--surface-inset)" : "transparent",
+                    }}
+                    role="menuitem"
+                    onMouseEnter={() => setMenuFocusIndex(idx(1))}
+                    onFocus={() => setMenuFocusIndex(idx(1))}
+                    onMouseLeave={(e) => { if (menuFocusIndex() !== idx(1)) e.currentTarget.style.background = "transparent" }}
+                    onClick={(e) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      setMenuOpenId(null);
+                      setMenuFocusIndex(-1);
+                      setEditTitle(session.title || "");
+                      setRenamingId(session.id);
+                    }}
+                  >
+                    <Pencil class="w-3.5 h-3.5 shrink-0" style={{ color: "var(--icon-weak)" }} />
+                    Rename
+                  </button>
+
+                  {/* Rename with AI */}
+                  <button
+                    data-menu-item
+                    class="w-full flex items-center gap-2 px-3 py-1.5 text-sm text-left transition-colors"
+                    disabled={!!aiRenamingId()}
+                    style={{
+                      color: "var(--text-base)",
+                      opacity: aiRenamingId() ? 0.6 : 1,
+                      cursor: aiRenamingId() ? "not-allowed" : "pointer",
+                      background: menuFocusIndex() === idx(2) ? "var(--surface-inset)" : "transparent",
+                    }}
+                    role="menuitem"
+                    onMouseEnter={() => setMenuFocusIndex(idx(2))}
+                    onFocus={() => setMenuFocusIndex(idx(2))}
+                    onMouseLeave={(e) => { if (menuFocusIndex() !== idx(2)) e.currentTarget.style.background = "transparent" }}
+                    onClick={(e) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      setMenuOpenId(null);
+                      setMenuFocusIndex(-1);
+                      handleAiRename(session);
+                    }}
+                    title={aiRenamingId() ? "AI rename in progress" : "Suggests a title based on conversation"}
+                  >
+                    <Sparkles class="w-3.5 h-3.5 shrink-0" style={{ color: "var(--icon-weak)" }} />
+                    Rename with AI
+                  </button>
+
+                  {/* Archive */}
+                  <button
+                    data-menu-item
+                    class="w-full flex items-center gap-2 px-3 py-1.5 text-sm text-left transition-colors"
+                    style={{
+                      color: "var(--text-base)",
+                      background: menuFocusIndex() === idx(3) ? "var(--surface-inset)" : "transparent",
+                    }}
+                    role="menuitem"
+                    onMouseEnter={() => setMenuFocusIndex(idx(3))}
+                    onFocus={() => setMenuFocusIndex(idx(3))}
+                    onMouseLeave={(e) => { if (menuFocusIndex() !== idx(3)) e.currentTarget.style.background = "transparent" }}
+                    onClick={(e) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      setMenuOpenId(null);
+                      setMenuFocusIndex(-1);
+                      archiveAndNavigate(session);
+                    }}
+                  >
+                    <Archive class="w-3.5 h-3.5 shrink-0" style={{ color: "var(--icon-weak)" }} />
+                    Archive
+                  </button>
+
+                  {/* Separator */}
+                  <div class="my-1" role="separator" style={{ "border-top": "1px solid var(--border-base)" }} />
+
+                  {/* Delete */}
+                  <button
+                    data-menu-item
+                    class="w-full flex items-center gap-2 px-3 py-1.5 text-sm text-left transition-colors"
+                    style={{
+                      color: "var(--text-critical-base)",
+                      background: menuFocusIndex() === idx(4) ? "var(--surface-inset)" : "transparent",
+                    }}
+                    role="menuitem"
+                    onMouseEnter={() => setMenuFocusIndex(idx(4))}
+                    onFocus={() => setMenuFocusIndex(idx(4))}
+                    onMouseLeave={(e) => { if (menuFocusIndex() !== idx(4)) e.currentTarget.style.background = "transparent" }}
+                    onClick={(e) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      setMenuOpenId(null);
+                      setMenuFocusIndex(-1);
+                      setDeleteError(null);
+                      setConfirmDeleteSession(session);
+                    }}
+                  >
+                    <Trash2 class="w-3.5 h-3.5 shrink-0" />
+                    Delete
+                  </button>
+                </div>
+              </Show>
+            </div>
+          </div>
+        </Show>
+      </div>
+    );
   }
 
   function addProject(worktree: string) {
@@ -1569,327 +1913,7 @@ export function Layout(props: ParentProps) {
                     </h3>
                     <div class="space-y-0.5">
                       <For each={pinnedSessions()}>
-                        {(session) => (
-                          <div
-                            id={`session-${session.id}`}
-                            class="group relative"
-                            role="option"
-                            aria-selected={isActive(session.id)}
-                          >
-                            <Show
-                              when={renamingId() === session.id}
-                              fallback={
-                                <A
-                                  data-hint-target
-                                  href={`/${dirSlug()}/session/${session.id}`}
-                                  tabIndex={isActive(session.id) ? 0 : -1}
-                                  class="flex items-center gap-2 px-2.5 py-2 rounded-md text-sm transition-colors"
-                                  style={{
-                                    color: isActive(session.id)
-                                      ? "var(--text-interactive-base)"
-                                      : focusedId() === session.id
-                                        ? "var(--text-interactive-base)"
-                                        : "var(--text-base)",
-                                    background: isActive(session.id)
-                                      ? "var(--surface-inset)"
-                                      : focusedId() === session.id
-                                        ? "var(--surface-inset)"
-                                        : "transparent",
-                                    outline: focusedId() === session.id
-                                      ? "2px solid var(--interactive-base)"
-                                      : "none",
-                                    "outline-offset": "-2px",
-                                    "border-radius": "0.375rem",
-                                  }}
-                                  onMouseEnter={(e) => {
-                                    if (!isActive(session.id))
-                                      e.currentTarget.style.background =
-                                        "var(--surface-inset)";
-                                  }}
-                                  onMouseLeave={(e) => {
-                                    if (!isActive(session.id) && focusedId() !== session.id)
-                                      e.currentTarget.style.background =
-                                        "transparent";
-                                  }}
-                                >
-                                  <span
-                                    class="shrink-0"
-                                    style={{ color: "var(--icon-weak)" }}
-                                  >
-                                    <Show
-                                      when={aiRenamingId() === session.id}
-                                      fallback={
-                                        <Show
-                                          when={permission.pendingForSession(session.id).length > 0}
-                                          fallback={
-                                            <Show
-                                              when={!!events.pendingQuestions[session.id]}
-                                              fallback={
-                                                <Show
-                                                  when={
-                                                    events.status[session.id]?.type === "busy" ||
-                                                    events.status[session.id]?.type === "retry"
-                                                  }
-                                                  fallback={<Pin class="w-4 h-4" />}
-                                                >
-                                                  <Loader2 class="w-4 h-4 animate-spin" />
-                                                </Show>
-                                              }
-                                            >
-                                              <CircleHelp class="w-4 h-4" style={{ color: "var(--icon-warning-base)" }} />
-                                            </Show>
-                                          }
-                                        >
-                                          <ShieldAlert class="w-4 h-4" style={{ color: "var(--interactive-base)" }} />
-                                        </Show>
-                                      }
-                                    >
-                                      <Spinner class="w-4 h-4" style={{ color: "var(--text-interactive-base)" }} />
-                                    </Show>
-                                  </span>
-                                  <span class="min-w-0 flex-1">
-                                    <span class="block truncate">
-                                      {session.title || "Untitled"}
-                                    </span>
-                                    <Show when={renameError()?.id === session.id}>
-                                      <span class="block text-xs truncate" style={{ color: "var(--text-critical-base)" }}>
-                                        {renameError()?.msg}
-                                      </span>
-                                    </Show>
-                                  </span>
-                                </A>
-                              }
-                            >
-                              <div
-                                class="flex items-center gap-2 px-2.5 py-1.5 rounded-md"
-                                style={{ background: "var(--surface-inset)" }}
-                              >
-                                <span
-                                  class="shrink-0"
-                                  style={{ color: "var(--icon-weak)" }}
-                                >
-                                  <Pin class="w-4 h-4" />
-                                </span>
-                                <input
-                                  class="flex-1 min-w-0 text-sm bg-transparent outline-none"
-                                  style={{ color: "var(--text-base)" }}
-                                  value={editTitle()}
-                                  aria-label="Session title"
-                                  ref={(el) => queueMicrotask(() => { if (!el?.isConnected) return; el.focus(); el.select() })}
-                                  onInput={(e) => setEditTitle(e.currentTarget.value)}
-                                  onKeyDown={(e) => {
-                                    if (e.key === "Enter") {
-                                      e.currentTarget.dataset.committed = "true";
-                                      renameSession(session, editTitle());
-                                      setRenamingId(null);
-                                    }
-                                    if (e.key === "Escape") {
-                                      e.currentTarget.dataset.cancelRename = "true";
-                                      setRenamingId(null);
-                                    }
-                                  }}
-                                  onBlur={(e) => {
-                                    if (e.currentTarget.dataset.cancelRename === "true") return;
-                                    if (e.currentTarget.dataset.committed === "true") return;
-                                    renameSession(session, editTitle());
-                                    setRenamingId(null);
-                                  }}
-                                />
-                              </div>
-                            </Show>
-                            <Show when={renamingId() !== session.id}>
-                              <div
-                                class={`absolute right-0 top-0 bottom-0 items-center rounded-r-md ${menuOpenId() === session.id || focusedId() === session.id ? "flex" : "hidden group-hover:flex group-focus-within:flex"}`}
-                                style={{ "pointer-events": "none" }}
-                              >
-                                 <div
-                                  class="w-6 h-full"
-                                  style={{
-                                    background: `linear-gradient(to right, transparent, var(${isActive(session.id) || focusedId() === session.id ? "--surface-inset" : "--background-stronger"}))`,
-                                  }}
-                                />
-                                <div
-                                  class="flex items-center pr-1.5 relative"
-                                  style={{
-                                    "pointer-events": "auto",
-                                    background: isActive(session.id) || focusedId() === session.id ? "var(--surface-inset)" : "var(--background-stronger)",
-                                  }}
-                                  data-sidebar-menu
-                                >
-                                  <button
-                                    onClick={(e) => {
-                                      e.preventDefault();
-                                      e.stopPropagation();
-                                      const opening = menuOpenId() !== session.id;
-                                      setMenuOpenId(opening ? session.id : null);
-                                      setMenuFocusIndex(opening ? 0 : -1);
-                                    }}
-                                    class="p-1 rounded transition-colors"
-                                    style={{ color: "var(--icon-weak)" }}
-                                    onMouseEnter={(e) =>
-                                      (e.currentTarget.style.color =
-                                        "var(--icon-base)")
-                                    }
-                                    onMouseLeave={(e) =>
-                                      (e.currentTarget.style.color =
-                                        "var(--icon-weak)")
-                                    }
-                                    title="More options"
-                                    aria-label="More session options"
-                                    aria-haspopup="true"
-                                    aria-expanded={menuOpenId() === session.id}
-                                  >
-                                    <MoreHorizontal class="w-3.5 h-3.5" />
-                                  </button>
-
-                                  {/* Dropdown menu for pinned sessions */}
-                                  <Show when={menuOpenId() === session.id}>
-                                    <div
-                                      class="absolute right-0 top-full mt-1 w-44 rounded-md shadow-lg z-30 py-1"
-                                      style={{
-                                        background: "var(--background-base)",
-                                        border: "1px solid var(--border-base)",
-                                      }}
-                                      role="menu"
-                                      aria-label="Session options"
-                                      data-sidebar-menu
-                                      data-sidebar-menu-dropdown
-                                    >
-                                      {/* Unpin */}
-                                      <button
-                                        data-menu-item
-                                        class="w-full flex items-center gap-2 px-3 py-1.5 text-sm text-left transition-colors"
-                                        style={{
-                                          color: "var(--text-base)",
-                                          background: menuFocusIndex() === 0 ? "var(--surface-inset)" : "transparent",
-                                        }}
-                                        role="menuitem"
-                                        onMouseEnter={() => setMenuFocusIndex(0)}
-                                        onFocus={() => setMenuFocusIndex(0)}
-                                        onMouseLeave={(e) => { if (menuFocusIndex() !== 0) e.currentTarget.style.background = "transparent" }}
-                                        onClick={(e) => {
-                                          e.preventDefault();
-                                          e.stopPropagation();
-                                          setMenuOpenId(null);
-                                          setMenuFocusIndex(-1);
-                                          unpinSession(session.id);
-                                        }}
-                                      >
-                                        <PinOff class="w-3.5 h-3.5 shrink-0" style={{ color: "var(--icon-weak)" }} />
-                                        Unpin
-                                      </button>
-
-                                      {/* Rename */}
-                                      <button
-                                        data-menu-item
-                                        class="w-full flex items-center gap-2 px-3 py-1.5 text-sm text-left transition-colors"
-                                        style={{
-                                          color: "var(--text-base)",
-                                          background: menuFocusIndex() === 1 ? "var(--surface-inset)" : "transparent",
-                                        }}
-                                        role="menuitem"
-                                        onMouseEnter={() => setMenuFocusIndex(1)}
-                                        onFocus={() => setMenuFocusIndex(1)}
-                                        onMouseLeave={(e) => { if (menuFocusIndex() !== 1) e.currentTarget.style.background = "transparent" }}
-                                        onClick={(e) => {
-                                          e.preventDefault();
-                                          e.stopPropagation();
-                                          setMenuOpenId(null);
-                                          setMenuFocusIndex(-1);
-                                          setEditTitle(session.title || "");
-                                          setRenamingId(session.id);
-                                        }}
-                                      >
-                                        <Pencil class="w-3.5 h-3.5 shrink-0" style={{ color: "var(--icon-weak)" }} />
-                                        Rename
-                                      </button>
-
-                                      {/* Rename with AI */}
-                                      <button
-                                        data-menu-item
-                                        class="w-full flex items-center gap-2 px-3 py-1.5 text-sm text-left transition-colors"
-                                        disabled={!!aiRenamingId()}
-                                        style={{
-                                          color: "var(--text-base)",
-                                          opacity: aiRenamingId() ? 0.6 : 1,
-                                          cursor: aiRenamingId() ? "not-allowed" : "pointer",
-                                          background: menuFocusIndex() === 2 ? "var(--surface-inset)" : "transparent",
-                                        }}
-                                        role="menuitem"
-                                        onMouseEnter={() => setMenuFocusIndex(2)}
-                                        onFocus={() => setMenuFocusIndex(2)}
-                                        onMouseLeave={(e) => { if (menuFocusIndex() !== 2) e.currentTarget.style.background = "transparent" }}
-                                        onClick={(e) => {
-                                          e.preventDefault();
-                                          e.stopPropagation();
-                                          setMenuOpenId(null);
-                                          setMenuFocusIndex(-1);
-                                          handleAiRename(session);
-                                        }}
-                                        title={aiRenamingId() ? "AI rename in progress" : "Suggests a title based on conversation"}
-                                      >
-                                        <Sparkles class="w-3.5 h-3.5 shrink-0" style={{ color: "var(--icon-weak)" }} />
-                                        Rename with AI
-                                      </button>
-
-                                      {/* Archive */}
-                                      <button
-                                        data-menu-item
-                                        class="w-full flex items-center gap-2 px-3 py-1.5 text-sm text-left transition-colors"
-                                        style={{
-                                          color: "var(--text-base)",
-                                          background: menuFocusIndex() === 3 ? "var(--surface-inset)" : "transparent",
-                                        }}
-                                        role="menuitem"
-                                        onMouseEnter={() => setMenuFocusIndex(3)}
-                                        onFocus={() => setMenuFocusIndex(3)}
-                                        onMouseLeave={(e) => { if (menuFocusIndex() !== 3) e.currentTarget.style.background = "transparent" }}
-                                        onClick={(e) => {
-                                          e.preventDefault();
-                                          e.stopPropagation();
-                                          setMenuOpenId(null);
-                                          setMenuFocusIndex(-1);
-                                          archiveAndNavigate(session);
-                                        }}
-                                      >
-                                        <Archive class="w-3.5 h-3.5 shrink-0" style={{ color: "var(--icon-weak)" }} />
-                                        Archive
-                                      </button>
-
-                                      {/* Separator */}
-                                      <div class="my-1" role="separator" style={{ "border-top": "1px solid var(--border-base)" }} />
-
-                                      {/* Delete */}
-                                      <button
-                                        data-menu-item
-                                        class="w-full flex items-center gap-2 px-3 py-1.5 text-sm text-left transition-colors"
-                                        style={{
-                                          color: "var(--text-critical-base)",
-                                          background: menuFocusIndex() === 4 ? "var(--surface-inset)" : "transparent",
-                                        }}
-                                        role="menuitem"
-                                        onMouseEnter={() => setMenuFocusIndex(4)}
-                                        onFocus={() => setMenuFocusIndex(4)}
-                                        onMouseLeave={(e) => { if (menuFocusIndex() !== 4) e.currentTarget.style.background = "transparent" }}
-                                        onClick={(e) => {
-                                          e.preventDefault();
-                                          e.stopPropagation();
-                                          setMenuOpenId(null);
-                                          setMenuFocusIndex(-1);
-                                          setDeleteError(null);
-                                          setConfirmDeleteSession(session);
-                                        }}
-                                      >
-                                        <Trash2 class="w-3.5 h-3.5 shrink-0" />
-                                        Delete
-                                      </button>
-                                    </div>
-                                  </Show>
-                                </div>
-                              </div>
-                            </Show>
-                          </div>
-                        )}
+                        {(session) => renderSessionItem(session, true)}
                       </For>
                     </div>
                   </div>
@@ -1908,357 +1932,7 @@ export function Layout(props: ParentProps) {
                       </h3>
                       <div class="space-y-0.5">
                         <For each={group.sessions}>
-                          {(session) => (
-                            <div
-                              id={`session-${session.id}`}
-                              class="group relative"
-                              role="option"
-                              aria-selected={isActive(session.id)}
-                            >
-                              <Show
-                                when={renamingId() === session.id}
-                                fallback={
-                                  <A
-                                    data-hint-target
-                                    href={`/${dirSlug()}/session/${session.id}`}
-                                    tabIndex={isActive(session.id) ? 0 : -1}
-                                    class="flex items-center gap-2 px-2.5 py-2 rounded-md text-sm transition-colors"
-                                    style={{
-                                      color: isActive(session.id)
-                                        ? "var(--text-interactive-base)"
-                                        : focusedId() === session.id
-                                          ? "var(--text-interactive-base)"
-                                          : "var(--text-base)",
-                                      background: isActive(session.id)
-                                        ? "var(--surface-inset)"
-                                        : focusedId() === session.id
-                                          ? "var(--surface-inset)"
-                                          : "transparent",
-                                      outline: focusedId() === session.id
-                                        ? "2px solid var(--interactive-base)"
-                                        : "none",
-                                      "outline-offset": "-2px",
-                                      "border-radius": "0.375rem",
-                                    }}
-                                    onMouseEnter={(e) => {
-                                      if (!isActive(session.id))
-                                        e.currentTarget.style.background =
-                                          "var(--surface-inset)";
-                                    }}
-                                    onMouseLeave={(e) => {
-                                      if (!isActive(session.id) && focusedId() !== session.id)
-                                        e.currentTarget.style.background =
-                                          "transparent";
-                                    }}
-                                  >
-                                    <span
-                                      class="shrink-0"
-                                      style={{ color: "var(--icon-weak)" }}
-                                    >
-                                      <Show
-                                        when={aiRenamingId() === session.id}
-                                        fallback={
-                                          <Show
-                                            when={permission.pendingForSession(session.id).length > 0}
-                                            fallback={
-                                              <Show
-                                                when={!!events.pendingQuestions[session.id]}
-                                                fallback={
-                                                  <Show
-                                                    when={
-                                                      events.status[session.id]?.type === "busy" ||
-                                                      events.status[session.id]?.type === "retry"
-                                                    }
-                                                    fallback={<MessageCircle class="w-4 h-4" />}
-                                                  >
-                                                    <Loader2 class="w-4 h-4 animate-spin" />
-                                                  </Show>
-                                                }
-                                              >
-                                                <CircleHelp class="w-4 h-4" style={{ color: "var(--icon-warning-base)" }} />
-                                              </Show>
-                                            }
-                                          >
-                                            <ShieldAlert class="w-4 h-4" style={{ color: "var(--interactive-base)" }} />
-                                          </Show>
-                                        }
-                                      >
-                                        <Spinner class="w-4 h-4" style={{ color: "var(--text-interactive-base)" }} />
-                                      </Show>
-                                    </span>
-                                    <span class="min-w-0 flex-1">
-                                      <span class="block truncate">
-                                        {session.title || "Untitled"}
-                                      </span>
-                                      <Show when={renameError()?.id === session.id}>
-                                        <span class="block text-xs truncate" style={{ color: "var(--text-critical-base)" }}>
-                                          {renameError()?.msg}
-                                        </span>
-                                      </Show>
-                                    </span>
-                                  </A>
-                                }
-                              >
-                                <div
-                                  class="flex items-center gap-2 px-2.5 py-1.5 rounded-md"
-                                  style={{ background: "var(--surface-inset)" }}
-                                >
-                                  <span
-                                    class="shrink-0"
-                                    style={{ color: "var(--icon-weak)" }}
-                                  >
-                                    <Show
-                                      when={aiRenamingId() === session.id}
-                                      fallback={
-                                        <Show
-                                          when={permission.pendingForSession(session.id).length > 0}
-                                          fallback={
-                                            <Show
-                                              when={!!events.pendingQuestions[session.id]}
-                                              fallback={
-                                                <Show
-                                                  when={
-                                                    events.status[session.id]?.type === "busy" ||
-                                                    events.status[session.id]?.type === "retry"
-                                                  }
-                                                  fallback={<MessageCircle class="w-4 h-4" />}
-                                                >
-                                                  <Loader2 class="w-4 h-4 animate-spin" />
-                                                </Show>
-                                              }
-                                            >
-                                              <CircleHelp class="w-4 h-4" style={{ color: "var(--icon-warning-base)" }} />
-                                            </Show>
-                                          }
-                                        >
-                                          <ShieldAlert class="w-4 h-4" style={{ color: "var(--interactive-base)" }} />
-                                        </Show>
-                                      }
-                                    >
-                                      <Spinner class="w-4 h-4" style={{ color: "var(--text-interactive-base)" }} />
-                                    </Show>
-                                  </span>
-                                  <input
-                                    class="flex-1 min-w-0 text-sm bg-transparent outline-none"
-                                    style={{ color: "var(--text-base)" }}
-                                    value={editTitle()}
-                                    aria-label="Session title"
-                                    ref={(el) => queueMicrotask(() => { if (!el?.isConnected) return; el.focus(); el.select() })}
-                                    onInput={(e) => setEditTitle(e.currentTarget.value)}
-                                    onKeyDown={(e) => {
-                                      if (e.key === "Enter") {
-                                        e.currentTarget.dataset.committed = "true";
-                                        renameSession(session, editTitle());
-                                        setRenamingId(null);
-                                      } else if (e.key === "Escape") {
-                                        e.currentTarget.dataset.cancelRename = "true";
-                                        setRenamingId(null);
-                                      }
-                                    }}
-                                    onBlur={(e) => {
-                                      if (e.currentTarget.dataset.cancelRename === "true") return;
-                                      if (e.currentTarget.dataset.committed === "true") return;
-                                      renameSession(session, editTitle());
-                                      setRenamingId(null);
-                                    }}
-                                  />
-                                </div>
-                              </Show>
-                              <Show when={renamingId() !== session.id}>
-                                <div
-                                  class={`absolute right-0 top-0 bottom-0 items-center rounded-r-md ${menuOpenId() === session.id || focusedId() === session.id ? "flex" : "hidden group-hover:flex group-focus-within:flex"}`}
-                                  style={{ "pointer-events": "none" }}
-                                >
-                                   <div
-                                    class="w-6 h-full"
-                                    style={{
-                                      background: `linear-gradient(to right, transparent, var(${isActive(session.id) || focusedId() === session.id ? "--surface-inset" : "--background-stronger"}))`,
-                                    }}
-                                  />
-                                  <div
-                                    class="flex items-center pr-1.5 relative"
-                                    style={{
-                                      "pointer-events": "auto",
-                                      background: isActive(session.id) || focusedId() === session.id ? "var(--surface-inset)" : "var(--background-stronger)",
-                                    }}
-                                    data-sidebar-menu
-                                  >
-                                    <button
-                                      onClick={(e) => {
-                                        e.preventDefault();
-                                        e.stopPropagation();
-                                        const opening = menuOpenId() !== session.id;
-                                        setMenuOpenId(opening ? session.id : null);
-                                        setMenuFocusIndex(opening ? 0 : -1);
-                                      }}
-                                      class="p-1 rounded transition-colors"
-                                      style={{ color: "var(--icon-weak)" }}
-                                      onMouseEnter={(e) =>
-                                        (e.currentTarget.style.color =
-                                          "var(--icon-base)")
-                                      }
-                                      onMouseLeave={(e) =>
-                                        (e.currentTarget.style.color =
-                                          "var(--icon-weak)")
-                                      }
-                                      title="More options"
-                                      aria-label="More session options"
-                                      aria-haspopup="true"
-                                      aria-expanded={menuOpenId() === session.id}
-                                    >
-                                      <MoreHorizontal class="w-3.5 h-3.5" />
-                                    </button>
-
-                                    {/* Dropdown menu */}
-                                    <Show when={menuOpenId() === session.id}>
-                                      <div
-                                        class="absolute right-0 top-full mt-1 w-44 rounded-md shadow-lg z-30 py-1"
-                                        style={{
-                                          background: "var(--background-base)",
-                                          border: "1px solid var(--border-base)",
-                                        }}
-                                        role="menu"
-                                        aria-label="Session options"
-                                        data-sidebar-menu
-                                        data-sidebar-menu-dropdown
-                                      >
-                                        {/* Pin to top */}
-                                        <Show when={pinnedIds().length < MAX_PINNED}>
-                                          <button
-                                            data-menu-item
-                                            class="w-full flex items-center gap-2 px-3 py-1.5 text-sm text-left transition-colors"
-                                            style={{
-                                              color: "var(--text-base)",
-                                              background: menuFocusIndex() === 0 ? "var(--surface-inset)" : "transparent",
-                                            }}
-                                            role="menuitem"
-                                            onMouseEnter={() => setMenuFocusIndex(0)}
-                                            onFocus={() => setMenuFocusIndex(0)}
-                                            onMouseLeave={(e) => { if (menuFocusIndex() !== 0) e.currentTarget.style.background = "transparent" }}
-                                            onClick={(e) => {
-                                              e.preventDefault();
-                                              e.stopPropagation();
-                                              setMenuOpenId(null);
-                                              setMenuFocusIndex(-1);
-                                              pinSession(session.id);
-                                            }}
-                                          >
-                                            <Pin class="w-3.5 h-3.5 shrink-0" style={{ color: "var(--icon-weak)" }} />
-                                            Pin to top
-                                          </button>
-                                        </Show>
-
-                                        {/* Rename */}
-                                        <button
-                                          data-menu-item
-                                          class="w-full flex items-center gap-2 px-3 py-1.5 text-sm text-left transition-colors"
-                                          style={{
-                                            color: "var(--text-base)",
-                                            background: menuFocusIndex() === (pinnedIds().length < MAX_PINNED ? 1 : 0) ? "var(--surface-inset)" : "transparent",
-                                          }}
-                                          role="menuitem"
-                                          onMouseEnter={() => setMenuFocusIndex(pinnedIds().length < MAX_PINNED ? 1 : 0)}
-                                          onFocus={() => setMenuFocusIndex(pinnedIds().length < MAX_PINNED ? 1 : 0)}
-                                          onMouseLeave={(e) => { if (menuFocusIndex() !== (pinnedIds().length < MAX_PINNED ? 1 : 0)) e.currentTarget.style.background = "transparent" }}
-                                          onClick={(e) => {
-                                            e.preventDefault();
-                                            e.stopPropagation();
-                                            setMenuOpenId(null);
-                                            setMenuFocusIndex(-1);
-                                            setEditTitle(session.title || "");
-                                            setRenamingId(session.id);
-                                          }}
-                                        >
-                                          <Pencil class="w-3.5 h-3.5 shrink-0" style={{ color: "var(--icon-weak)" }} />
-                                          Rename
-                                        </button>
-
-                                        {/* Rename with AI — disabled when already renaming */}
-                                        <button
-                                          data-menu-item
-                                          class="w-full flex items-center gap-2 px-3 py-1.5 text-sm text-left transition-colors"
-                                          disabled={!!aiRenamingId()}
-                                          style={{
-                                            color: "var(--text-base)",
-                                            opacity: aiRenamingId() ? 0.6 : 1,
-                                            cursor: aiRenamingId() ? "not-allowed" : "pointer",
-                                            background: menuFocusIndex() === (pinnedIds().length < MAX_PINNED ? 2 : 1) ? "var(--surface-inset)" : "transparent",
-                                          }}
-                                          role="menuitem"
-                                          onMouseEnter={() => setMenuFocusIndex(pinnedIds().length < MAX_PINNED ? 2 : 1)}
-                                          onFocus={() => setMenuFocusIndex(pinnedIds().length < MAX_PINNED ? 2 : 1)}
-                                          onMouseLeave={(e) => { if (menuFocusIndex() !== (pinnedIds().length < MAX_PINNED ? 2 : 1)) e.currentTarget.style.background = "transparent" }}
-                                          onClick={(e) => {
-                                            e.preventDefault();
-                                            e.stopPropagation();
-                                            setMenuOpenId(null);
-                                            setMenuFocusIndex(-1);
-                                            handleAiRename(session);
-                                          }}
-                                          title={aiRenamingId() ? "AI rename in progress" : "Suggests a title based on conversation"}
-                                        >
-                                          <Sparkles class="w-3.5 h-3.5 shrink-0" style={{ color: "var(--icon-weak)" }} />
-                                          Rename with AI
-                                        </button>
-
-                                        {/* Archive */}
-                                        <button
-                                          data-menu-item
-                                          class="w-full flex items-center gap-2 px-3 py-1.5 text-sm text-left transition-colors"
-                                          style={{
-                                            color: "var(--text-base)",
-                                            background: menuFocusIndex() === (pinnedIds().length < MAX_PINNED ? 3 : 2) ? "var(--surface-inset)" : "transparent",
-                                          }}
-                                          role="menuitem"
-                                          onMouseEnter={() => setMenuFocusIndex(pinnedIds().length < MAX_PINNED ? 3 : 2)}
-                                          onFocus={() => setMenuFocusIndex(pinnedIds().length < MAX_PINNED ? 3 : 2)}
-                                          onMouseLeave={(e) => { if (menuFocusIndex() !== (pinnedIds().length < MAX_PINNED ? 3 : 2)) e.currentTarget.style.background = "transparent" }}
-                                          onClick={(e) => {
-                                            e.preventDefault();
-                                            e.stopPropagation();
-                                            setMenuOpenId(null);
-                                            setMenuFocusIndex(-1);
-                                            archiveAndNavigate(session);
-                                          }}
-                                        >
-                                          <Archive class="w-3.5 h-3.5 shrink-0" style={{ color: "var(--icon-weak)" }} />
-                                          Archive
-                                        </button>
-
-                                        {/* Separator */}
-                                        <div class="my-1" role="separator" style={{ "border-top": "1px solid var(--border-base)" }} />
-
-                                        {/* Delete */}
-                                        <button
-                                          data-menu-item
-                                          class="w-full flex items-center gap-2 px-3 py-1.5 text-sm text-left transition-colors"
-                                          style={{
-                                            color: "var(--text-critical-base)",
-                                            background: menuFocusIndex() === (pinnedIds().length < MAX_PINNED ? 4 : 3) ? "var(--surface-inset)" : "transparent",
-                                          }}
-                                          role="menuitem"
-                                          onMouseEnter={() => setMenuFocusIndex(pinnedIds().length < MAX_PINNED ? 4 : 3)}
-                                          onFocus={() => setMenuFocusIndex(pinnedIds().length < MAX_PINNED ? 4 : 3)}
-                                          onMouseLeave={(e) => { if (menuFocusIndex() !== (pinnedIds().length < MAX_PINNED ? 4 : 3)) e.currentTarget.style.background = "transparent" }}
-                                          onClick={(e) => {
-                                            e.preventDefault();
-                                            e.stopPropagation();
-                                            setMenuOpenId(null);
-                                            setMenuFocusIndex(-1);
-                                            setDeleteError(null);
-                                            setConfirmDeleteSession(session);
-                                          }}
-                                        >
-                                          <Trash2 class="w-3.5 h-3.5 shrink-0" />
-                                          Delete
-                                        </button>
-                                      </div>
-                                    </Show>
-                                  </div>
-                                </div>
-                              </Show>
-                            </div>
-                          )}
+                          {(session) => renderSessionItem(session, false)}
                         </For>
                       </div>
                     </div>
