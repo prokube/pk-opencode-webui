@@ -68,7 +68,7 @@ function AppRoutes() {
 
 /**
  * Reads the active directory from window.location (outside Router context).
- * Re-evaluates on popstate and periodically for pushState-based navigation.
+ * Re-evaluates on popstate and on history.pushState/history.replaceState navigation.
  */
 function useActiveDirectory() {
   const basePath = getBasePath()
@@ -123,8 +123,15 @@ function useProjectsList() {
   function load() {
     try {
       const stored = localStorage.getItem(PROJECTS_STORAGE_KEY)
-      if (stored) setProjects(JSON.parse(stored))
-    } catch { /* ignore */ }
+      if (stored) {
+        const parsed = JSON.parse(stored)
+        setProjects(Array.isArray(parsed) ? parsed : [])
+      } else {
+        setProjects([])
+      }
+    } catch {
+      setProjects([])
+    }
   }
 
   onMount(() => {

@@ -118,9 +118,10 @@ export function HomeLayout(props: ParentProps) {
     } catch {
       // Fallback for environments where StorageEvent constructor isn't supported
       try {
-        window.dispatchEvent(new CustomEvent("storage", {
-          detail: { key: PROJECTS_STORAGE_KEY, newValue: value },
-        }))
+        const event = new CustomEvent("storage") as CustomEvent & { key?: string | null; newValue?: string | null }
+        event.key = PROJECTS_STORAGE_KEY
+        event.newValue = value
+        window.dispatchEvent(event)
       } catch { /* ignore */ }
     }
   }

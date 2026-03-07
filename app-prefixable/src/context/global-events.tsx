@@ -21,6 +21,8 @@ export interface ProjectAlerts {
   questions: number
   /** Number of sessions that are busy/retrying */
   busy: number
+  /** Total unique sessions needing attention (union, avoids double-counting) */
+  totalSessions: number
 }
 
 interface GlobalEventsContextValue {
@@ -50,7 +52,7 @@ export function GlobalEventsProvider(props: ParentProps & {
   // Map of directory → SSE connection
   const connections = new Map<string, { source: EventSource }>()
 
-  // Pending reconnect timers (separate from connections so they survive disconnectDirectory)
+  // Pending reconnect timers, tracked separately from connections but cleared by disconnectDirectory
   const reconnectTimers = new Map<string, ReturnType<typeof setTimeout>>()
 
   // Per-directory tracking sets for deduplication
@@ -75,10 +77,17 @@ export function GlobalEventsProvider(props: ParentProps & {
   function recalcAlerts(dir: string) {
     const tracking = perDir.get(dir)
     if (!tracking) return
+    // Compute union of session IDs to avoid double-counting
+    const allSessions = new Set([
+      ...tracking.permissionSessions,
+      ...tracking.questionSessions,
+      ...tracking.busySessions,
+    ])
     setAlerts(dir, {
       permissions: tracking.permissionSessions.size,
       questions: tracking.questionSessions.size,
       busy: tracking.busySessions.size,
+      totalSessions: allSessions.size,
     })
   }
 
@@ -282,11 +291,10 @@ export function GlobalEventsProvider(props: ParentProps & {
   function badge(directory: string) {
     const a = alerts[directory]
     if (!a) return undefined
-    const total = a.permissions + a.questions + a.busy
-    if (total === 0) return undefined
+    if (a.totalSessions === 0) return undefined
 
     const kind: AlertKind = a.permissions > 0 ? "permission" : a.questions > 0 ? "question" : "busy"
-    return { kind, count: total }
+    return { kind, count: a.totalSessions }
   }
 
   return (
