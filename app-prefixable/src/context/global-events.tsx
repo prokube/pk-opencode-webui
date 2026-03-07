@@ -51,6 +51,7 @@ export function GlobalEventsProvider(props: ParentProps & {
 
   // Map of directory → SSE connection
   const connections = new Map<string, { source: EventSource }>()
+  let disposed = false
 
   // Pending reconnect timers, tracked separately from connections but cleared by disconnectDirectory
   const reconnectTimers = new Map<string, ReturnType<typeof setTimeout>>()
@@ -202,11 +203,13 @@ export function GlobalEventsProvider(props: ParentProps & {
     })
 
     source.onerror = () => {
+      if (disposed) return
       // Clear all state (source, perDir, alerts) so stale badges don't linger
       disconnectDirectory(dir)
       // Schedule reconnect outside the connection lifecycle
       const reconnectTimer = setTimeout(() => {
         reconnectTimers.delete(dir)
+        if (disposed) return
         const active = props.activeDirectory()
         const wanted = props.projects().some((p) => p.worktree === dir)
         if (wanted && dir !== active) {
@@ -333,6 +336,7 @@ export function GlobalEventsProvider(props: ParentProps & {
   ))
 
   onCleanup(() => {
+    disposed = true
     for (const dir of [...connections.keys()]) {
       disconnectDirectory(dir)
     }

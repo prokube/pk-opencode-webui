@@ -86,7 +86,7 @@ function AlertBadge(props: { kind: AlertKind; count: number }) {
   return (
     <div
       class="absolute -top-1.5 -right-1.5 flex items-center gap-px rounded-full px-0.5 min-w-4 h-4 justify-center"
-      role="status"
+      title={label()}
       aria-label={label()}
       style={{
         background: "var(--background-base)",
