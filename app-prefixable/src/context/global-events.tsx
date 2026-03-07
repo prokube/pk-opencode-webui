@@ -180,8 +180,11 @@ export function GlobalEventsProvider(props: ParentProps & {
 
     source.onmessage = handleMessage
 
-    // Seed initial state, then flush any buffered SSE events
+    // Seed initial state, then flush any buffered SSE events.
+    // Guard: only flush if this connection is still active (not torn down mid-flight).
     seedDirectory(dir).then(() => {
+      const conn = connections.get(dir)
+      if (!conn || conn.source !== source) return
       seeded = true
       for (const buffered of buffer) processMessage(buffered)
       buffer.length = 0
@@ -230,14 +233,27 @@ export function GlobalEventsProvider(props: ParentProps & {
 
   function seedPermissions(dir: string) {
     const tracking = getTracking(dir)
+    // Snapshot sessions added by SSE before the fetch started so we can
+    // merge them back, avoiding a race where clear() drops concurrent events.
+    const before = new Set(tracking.permissionSessions)
     return fetch(prefix(`/permission?directory=${encodeURIComponent(dir)}`))
       .then((r) => r.json())
       .then((data) => {
         const perms = Array.isArray(data) ? data : (data?.data ?? [])
-        tracking.permissionSessions.clear()
+        const fetched = new Set<string>()
         for (const p of perms) {
-          if (p?.sessionID) tracking.permissionSessions.add(p.sessionID)
+          if (p?.sessionID) fetched.add(p.sessionID)
         }
+        // Merge: use the fetched set as the base, but preserve any sessions
+        // that were added by SSE events AFTER we started the fetch (i.e.,
+        // sessions in current set that weren't in the pre-fetch snapshot).
+        const added = new Set<string>()
+        for (const sid of tracking.permissionSessions) {
+          if (!before.has(sid)) added.add(sid)
+        }
+        tracking.permissionSessions.clear()
+        for (const sid of fetched) tracking.permissionSessions.add(sid)
+        for (const sid of added) tracking.permissionSessions.add(sid)
         recalcAlerts(dir)
       })
       .catch((e) => console.warn("[GlobalEvents] Failed to seed permissions for", dir, e))
