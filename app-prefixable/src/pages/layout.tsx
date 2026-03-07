@@ -1479,9 +1479,9 @@ export function Layout(props: ParentProps) {
   }
 
   function archiveAndNavigate(session: Session) {
-    const current = projectSessions();
-    const index = current.findIndex((s) => s.id === session.id);
-    const neighbor = current[index + 1] ?? current[index - 1];
+    const ids = flatSessionIds();
+    const index = ids.indexOf(session.id);
+    const neighborId = ids[index + 1] ?? ids[index - 1];
 
     // Optimistic remove from sidebar list
     setSessions((prev) => prev.filter((s) => s.id !== session.id));
@@ -1498,7 +1498,7 @@ export function Layout(props: ParentProps) {
         unpinSession(session.id);
         // Navigate only after successful archive
         if (isActive(session.id)) {
-          navigate(neighbor ? `/${dirSlug()}/session/${neighbor.id}` : `/${dirSlug()}/session`);
+          navigate(neighborId ? `/${dirSlug()}/session/${neighborId}` : `/${dirSlug()}/session`);
         }
       })
       .catch((err: unknown) => {
@@ -1517,16 +1517,17 @@ export function Layout(props: ParentProps) {
     setDeleteError(null);
     setDeleting(true);
 
-    // Compute neighbor before delete.
-    // Archived sessions live in archivedSessions(), not projectSessions(),
-    // so guard against findIndex returning -1.
+    // Compute neighbor before delete using visual order (flatSessionIds
+    // includes pinned sessions at the top, matching sidebar order).
+    // Archived sessions live in archivedSessions(), not flatSessionIds(),
+    // so guard against indexOf returning -1.
     const isArchived = !!session.time?.archived;
-    const neighbor = (() => {
+    const neighborId = (() => {
       if (isArchived) return undefined;
-      const all = projectSessions();
-      const idx = all.findIndex((s) => s.id === session.id);
-      if (idx === -1) return all[0];
-      return all[idx + 1] ?? all[idx - 1];
+      const ids = flatSessionIds();
+      const idx = ids.indexOf(session.id);
+      if (idx === -1) return ids[0];
+      return ids[idx + 1] ?? ids[idx - 1];
     })();
 
     client.session.delete({ sessionID: session.id })
@@ -1535,7 +1536,7 @@ export function Layout(props: ParentProps) {
         cleanupNotifyState(session.id);
         unpinSession(session.id);
         if (isActive(session.id)) {
-          navigate(neighbor ? `/${dirSlug()}/session/${neighbor.id}` : `/${dirSlug()}/session`);
+          navigate(neighborId ? `/${dirSlug()}/session/${neighborId}` : `/${dirSlug()}/session`);
         }
       })
       .catch((err: unknown) => {
