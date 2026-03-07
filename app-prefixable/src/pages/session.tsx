@@ -82,14 +82,16 @@ export function Session() {
   const savedPrompts = useSavedPrompts();
   const terminal = useTerminal();
 
-  // General-purpose toast for slash command feedback
+  // Unified toast system — only one toast visible at a time
   const [toastMessage, setToastMessage] = createSignal<string | null>(null);
+  const [toastVariant, setToastVariant] = createSignal<"default" | "hint">("default");
   const toastMsgTimer = { id: 0 as ReturnType<typeof setTimeout> };
   onCleanup(() => clearTimeout(toastMsgTimer.id));
 
-  function showToast(msg: string, duration = 2500) {
+  function showToast(msg: string, duration = 2500, variant: "default" | "hint" = "default") {
     clearTimeout(toastMsgTimer.id);
     setToastMessage(msg);
+    setToastVariant(variant);
     toastMsgTimer.id = setTimeout(() => setToastMessage(null), duration);
   }
 
@@ -127,7 +129,7 @@ export function Session() {
   const [showSavePrompt, setShowSavePrompt] = createSignal(false);
   const [savePromptTitle, setSavePromptTitle] = createSignal("");
   const [savePromptBody, setSavePromptBody] = createSignal("");
-  const [savePromptSuccess, setSavePromptSuccess] = createSignal(false);
+
   const [fileContext, setFileContext] = createSignal<FileContext[]>([]);
   const [imageAttachments, setImageAttachments] = createSignal<
     ImageAttachment[]
@@ -138,14 +140,10 @@ export function Session() {
   const [pendingUserMessageText, setPendingUserMessageText] = createSignal<
     string | null
   >(null);
-  const toastTimer = { id: 0 as ReturnType<typeof setTimeout> };
-  onCleanup(() => clearTimeout(toastTimer.id));
+
 
   // Double-Escape to abort: track last Escape press timestamp
   const lastEsc = { ts: 0 };
-  const [escHint, setEscHint] = createSignal(false);
-  const escHintTimer = { id: 0 as ReturnType<typeof setTimeout> };
-  onCleanup(() => clearTimeout(escHintTimer.id));
 
   // --- Notification toggle (per-session, persisted in localStorage) ---
   const [notifyEnabled, setNotifyEnabled] = createSignal(
@@ -369,7 +367,12 @@ export function Session() {
     const msgs = syncMessages();
     const hasMessages = msgs.length > 0;
     const isProcessing = processing();
-    const lastUserMsg = [...msgs].reverse().find((m) => m.role === "user");
+    const lastUserMsg = (() => {
+      for (let i = msgs.length - 1; i >= 0; i--) {
+        if (msgs[i].role === "user") return msgs[i];
+      }
+      return undefined;
+    })();
 
     const commands: Command[] = [
       {
@@ -470,16 +473,16 @@ export function Session() {
             return;
           }
           showToast("Compacting session...", 10000);
-          const res = await client.session.summarize({
-            sessionID: id,
-            providerID: model.providerID,
-            modelID: model.modelID,
-          });
-          if (res.error) {
-            showToast("Failed to compact session");
-            return;
+          try {
+            await client.session.summarize({
+              sessionID: id,
+              providerID: model.providerID,
+              modelID: model.modelID,
+            });
+            showToast("Session compacted");
+          } catch (err) {
+            showToast(`Failed to compact session: ${err instanceof Error ? err.message : String(err)}`);
           }
-          showToast("Session compacted");
         },
       });
     }
@@ -493,14 +496,23 @@ export function Session() {
         slash: "share",
         onSelect: async () => {
           if (!id) return;
-          const res = await client.session.share({ sessionID: id });
-          if (res.error || !res.data?.share?.url) {
-            showToast("Failed to share session");
-            return;
+          try {
+            const res = await client.session.share({ sessionID: id });
+            const url = res.data?.share?.url;
+            if (!url) {
+              showToast("Failed to share session: no URL returned");
+              return;
+            }
+            try {
+              await navigator.clipboard.writeText(url);
+              showToast("Share link copied to clipboard");
+            } catch {
+              showToast(`Share link: ${url}`, 8000);
+            }
+            refetchSession();
+          } catch (err) {
+            showToast(`Failed to share session: ${err instanceof Error ? err.message : String(err)}`);
           }
-          await navigator.clipboard.writeText(res.data.share.url);
-          showToast("Share link copied to clipboard");
-          refetchSession();
         },
       });
     }
@@ -513,8 +525,13 @@ export function Session() {
         description: "Copy the existing share link to clipboard",
         slash: "share",
         onSelect: async () => {
-          await navigator.clipboard.writeText(sess!.share!.url);
-          showToast("Share link copied to clipboard");
+          const url = sess!.share!.url;
+          try {
+            await navigator.clipboard.writeText(url);
+            showToast("Share link copied to clipboard");
+          } catch {
+            showToast(`Share link: ${url}`, 8000);
+          }
         },
       });
     }
@@ -528,19 +545,20 @@ export function Session() {
         slash: "unshare",
         onSelect: async () => {
           if (!id) return;
-          const res = await client.session.unshare({ sessionID: id });
-          if (res.error) {
-            showToast("Failed to unshare session");
-            return;
+          try {
+            await client.session.unshare({ sessionID: id });
+            showToast("Session unshared");
+            refetchSession();
+          } catch (err) {
+            showToast(`Failed to unshare session: ${err instanceof Error ? err.message : String(err)}`);
           }
-          showToast("Session unshared");
-          refetchSession();
         },
       });
     }
 
     // /undo — requires a session with at least one user message
-    if (id && lastUserMsg && !isProcessing) {
+    // Allowed during processing so abort-then-revert flow works
+    if (id && lastUserMsg) {
       commands.push({
         id: "session.undo",
         title: "Undo Last Message",
@@ -548,35 +566,35 @@ export function Session() {
         slash: "undo",
         onSelect: async () => {
           if (!id || !lastUserMsg) return;
-          // If processing, abort first
-          if (processing()) {
-            await client.session.abort({ sessionID: id, directory });
-            setProcessing(false);
-          }
-          const res = await client.session.revert({
-            sessionID: id,
-            messageID: lastUserMsg.id,
-          });
-          if (res.error) {
-            showToast("Failed to undo message");
-            return;
-          }
-          // Restore the reverted message text into the input field
-          const textPart = lastUserMsg.parts.find((p) => p.type === "text") as
-            | { type: "text"; text?: string }
-            | undefined;
-          if (textPart?.text) {
-            setInput(textPart.text);
-            requestAnimationFrame(() => {
-              if (inputRef) {
-                inputRef.style.height = "auto";
-                inputRef.style.height = Math.min(inputRef.scrollHeight, 200) + "px";
-                inputRef.focus();
-              }
+          try {
+            // If processing, abort first
+            if (processing()) {
+              await client.session.abort({ sessionID: id, directory });
+              setProcessing(false);
+            }
+            await client.session.revert({
+              sessionID: id,
+              messageID: lastUserMsg.id,
             });
+            // Restore the reverted message text into the input field
+            const textPart = lastUserMsg.parts.find((p) => p.type === "text") as
+              | { type: "text"; text?: string }
+              | undefined;
+            if (textPart?.text) {
+              setInput(textPart.text);
+              requestAnimationFrame(() => {
+                if (inputRef) {
+                  inputRef.style.height = "auto";
+                  inputRef.style.height = Math.min(inputRef.scrollHeight, 200) + "px";
+                  inputRef.focus();
+                }
+              });
+            }
+            showToast("Message undone");
+            refetchSession();
+          } catch (err) {
+            showToast(`Failed to undo message: ${err instanceof Error ? err.message : String(err)}`);
           }
-          showToast("Message undone");
-          refetchSession();
         },
       });
     }
@@ -590,14 +608,14 @@ export function Session() {
         slash: "redo",
         onSelect: async () => {
           if (!id) return;
-          const res = await client.session.unrevert({ sessionID: id });
-          if (res.error) {
-            showToast("Failed to redo messages");
-            return;
+          try {
+            await client.session.unrevert({ sessionID: id });
+            setInput("");
+            showToast("Messages restored");
+            refetchSession();
+          } catch (err) {
+            showToast(`Failed to redo messages: ${err instanceof Error ? err.message : String(err)}`);
           }
-          setInput("");
-          showToast("Messages restored");
-          refetchSession();
         },
       });
     }
@@ -707,8 +725,6 @@ export function Session() {
   createEffect(() => {
     if (!processing()) {
       lastEsc.ts = 0;
-      setEscHint(false);
-      clearTimeout(escHintTimer.id);
     }
   });
 
@@ -734,15 +750,12 @@ export function Session() {
     if (now - lastEsc.ts < 500) {
       e.preventDefault();
       lastEsc.ts = 0;
-      setEscHint(false);
-      clearTimeout(escHintTimer.id);
+      setToastMessage(null);
       handleAbort();
       return;
     }
     lastEsc.ts = now;
-    setEscHint(true);
-    clearTimeout(escHintTimer.id);
-    escHintTimer.id = setTimeout(() => setEscHint(false), 1500);
+    showToast("Press Esc again to stop", 1500, "hint");
   }
 
   onMount(() => {
@@ -2017,51 +2030,28 @@ export function Session() {
               if (!title || !body) return;
               savedPrompts.add(title, body);
               setShowSavePrompt(false);
-              setSavePromptSuccess(true);
-              clearTimeout(toastTimer.id);
-              toastTimer.id = setTimeout(() => setSavePromptSuccess(false), 2000);
+              showToast("Prompt saved");
             }}
             onClose={() => setShowSavePrompt(false)}
           />
         </Show>
 
-        {/* Save Prompt Success Toast */}
-        <Show when={savePromptSuccess()}>
-          <div
-            class="fixed bottom-20 left-1/2 -translate-x-1/2 z-[100] px-4 py-2 rounded-lg shadow-lg text-sm font-medium"
-            style={{
-              background: "var(--interactive-base)",
-              color: "white",
-            }}
-          >
-            Prompt saved
-          </div>
-        </Show>
-
-        {/* General command toast */}
+        {/* Unified toast — only one visible at a time */}
         <Show when={toastMessage()}>
           <div
             class="fixed bottom-20 left-1/2 -translate-x-1/2 z-[100] px-4 py-2 rounded-lg shadow-lg text-sm font-medium"
-            style={{
-              background: "var(--interactive-base)",
-              color: "white",
-            }}
+            style={toastVariant() === "hint"
+              ? {
+                  background: "var(--surface-inset)",
+                  color: "var(--text-strong)",
+                  border: "1px solid var(--border-base)",
+                }
+              : {
+                  background: "var(--interactive-base)",
+                  color: "white",
+                }}
           >
             {toastMessage()}
-          </div>
-        </Show>
-
-        {/* Double-Escape hint toast */}
-        <Show when={escHint()}>
-          <div
-            class="fixed bottom-20 left-1/2 -translate-x-1/2 z-[100] px-4 py-2 rounded-lg shadow-lg text-sm font-medium"
-            style={{
-              background: "var(--surface-inset)",
-              color: "var(--text-strong)",
-              border: "1px solid var(--border-base)",
-            }}
-          >
-            Press Esc again to stop
           </div>
         </Show>
       </div>
