@@ -637,7 +637,13 @@ export function Layout(props: ParentProps) {
         description: "Open the command palette",
         keybind: "mod+k",
         global: true,
-        onSelect: () => command.setPaletteOpen(!command.paletteOpen()),
+        passive: true,
+        onSelect: (e) => {
+          // Don't open palette from terminal (Cmd+K is used there for clearing)
+          if (e?.target instanceof HTMLElement && e.target.closest(".xterm")) return;
+          e?.preventDefault();
+          command.setPaletteOpen(!command.paletteOpen());
+        },
       },
       {
         id: "session.new",
@@ -717,17 +723,18 @@ export function Layout(props: ParentProps) {
         keybind: "mod+shift+i",
         onSelect: () => layout.info.toggle(),
       },
-      // Panel focus shortcuts
+      // Panel focus shortcuts — passive so we only preventDefault when we actually handle the key
       {
         id: "focus.sidebar",
         title: "Focus Sidebar",
         description: "Jump to session list sidebar",
         keybind: "ctrl+1",
         global: true,
-        onSelect: () => {
+        passive: true,
+        onSelect: (e) => {
           if (isDialogOpen() || command.paletteOpen() || command.shortcutRefOpen()) return;
-          if (!showSidebar()) return; // Don't focus collapsed/hidden sidebar
-          focusPanel("sidebar");
+          if (!showSidebar()) return;
+          if (focusPanel("sidebar")) e?.preventDefault();
         },
       },
       {
@@ -736,9 +743,10 @@ export function Layout(props: ParentProps) {
         description: "Jump to the chat input area",
         keybind: "ctrl+2",
         global: true,
-        onSelect: () => {
+        passive: true,
+        onSelect: (e) => {
           if (isDialogOpen() || command.paletteOpen() || command.shortcutRefOpen()) return;
-          focusPanel("chat");
+          if (focusPanel("chat")) e?.preventDefault();
         },
       },
       {
@@ -747,9 +755,10 @@ export function Layout(props: ParentProps) {
         description: "Jump to the terminal panel (if open)",
         keybind: "ctrl+3",
         global: true,
-        onSelect: () => {
+        passive: true,
+        onSelect: (e) => {
           if (isDialogOpen() || command.paletteOpen() || command.shortcutRefOpen()) return;
-          if (terminal.opened()) focusPanel("terminal");
+          if (terminal.opened() && focusPanel("terminal")) e?.preventDefault();
         },
       },
       {
@@ -758,9 +767,10 @@ export function Layout(props: ParentProps) {
         description: "Jump to the review panel (if open)",
         keybind: "ctrl+4",
         global: true,
-        onSelect: () => {
+        passive: true,
+        onSelect: (e) => {
           if (isDialogOpen() || command.paletteOpen() || command.shortcutRefOpen()) return;
-          if (layout.review.opened()) focusPanel("review");
+          if (layout.review.opened() && focusPanel("review")) e?.preventDefault();
         },
       },
       {
@@ -1682,8 +1692,9 @@ export function Layout(props: ParentProps) {
                                       onClick={(e) => {
                                         e.preventDefault();
                                         e.stopPropagation();
-                                        setMenuOpenId(menuOpenId() === session.id ? null : session.id);
-                                        setMenuFocusIndex(0);
+                                        const opening = menuOpenId() !== session.id;
+                                        setMenuOpenId(opening ? session.id : null);
+                                        setMenuFocusIndex(opening ? 0 : -1);
                                       }}
                                       class="p-1 rounded transition-colors"
                                       style={{ color: "var(--icon-weak)" }}
