@@ -2148,7 +2148,7 @@ export function Session() {
                     : "";
                   navigate(`/${dirSlug()}/session/${forkedId}`);
                   // Restore the message text into the new session's input after navigation
-                  if (restoredText && inputRef) {
+                  if (inputRef) {
                     requestAnimationFrame(() => {
                       applyInputAndAutogrow(inputRef!, restoredText);
                     });
