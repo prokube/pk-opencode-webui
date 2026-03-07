@@ -6,6 +6,7 @@ import { SyncProvider } from "../context/sync"
 import { ProviderProvider } from "../context/providers"
 import { MCPProvider } from "../context/mcp"
 import { TerminalProvider } from "../context/terminal"
+import { ConfigProvider } from "../context/config"
 import { PermissionProvider } from "../context/permission"
 import { FileProvider } from "../context/file"
 import { LayoutProvider } from "../context/layout"
@@ -57,21 +58,23 @@ export function DirectoryLayout(props: ParentProps) {
       {(dir: string) => (
         <SDKProvider directory={dir}>
           <EventProvider>
-            <SyncProvider>
-              <FileProvider>
-                <PermissionProvider>
-                  <ProviderProvider>
-                    <MCPProvider>
-                      <TerminalProvider>
-                        <LayoutProvider>
-                          <Layout>{props.children}</Layout>
-                        </LayoutProvider>
-                      </TerminalProvider>
-                    </MCPProvider>
-                  </ProviderProvider>
-                </PermissionProvider>
-              </FileProvider>
-            </SyncProvider>
+            <ConfigProvider>
+              <SyncProvider>
+                <FileProvider>
+                  <PermissionProvider>
+                    <ProviderProvider>
+                      <MCPProvider>
+                        <TerminalProvider>
+                          <LayoutProvider>
+                            <Layout>{props.children}</Layout>
+                          </LayoutProvider>
+                        </TerminalProvider>
+                      </MCPProvider>
+                    </ProviderProvider>
+                  </PermissionProvider>
+                </FileProvider>
+              </SyncProvider>
+            </ConfigProvider>
           </EventProvider>
         </SDKProvider>
       )}

@@ -21,6 +21,7 @@ import { useLayout } from "../context/layout";
 import { useBranding } from "../context/branding";
 import { useSavedPrompts } from "../context/saved-prompts";
 import { useTerminal } from "../context/terminal";
+import { useConfig } from "../context/config";
 import { MessageTimeline } from "../components/message-timeline";
 import { MCPDialog } from "../components/mcp-dialog";
 import { MCPAddDialog } from "../components/mcp-add-dialog";
@@ -81,6 +82,7 @@ export function Session() {
   const branding = useBranding();
   const savedPrompts = useSavedPrompts();
   const terminal = useTerminal();
+  const appConfig = useConfig();
 
   // Unified toast system — only one toast visible at a time
   const [toastMessage, setToastMessage] = createSignal<string | null>(null);
@@ -575,11 +577,9 @@ export function Session() {
       });
     }
 
-    // /share — requires an active session, not already shared
-    // TODO: hide /share and /unshare when server config has share === "disabled".
-    // The config is available via client.global.config.get() but is not currently
-    // exposed as a reactive context. Adding a ConfigContext would allow gating here.
-    if (id && !sess?.share?.url) {
+    // /share — requires an active session, not already shared, and sharing not disabled
+    const shareDisabled = appConfig.project.share === "disabled" || appConfig.global.share === "disabled"
+    if (id && !sess?.share?.url && !shareDisabled) {
       commands.push({
         id: "session.share",
         title: "Share Session",
@@ -609,7 +609,7 @@ export function Session() {
     }
 
     // /share — already shared: copy existing link
-    if (id && sess?.share?.url) {
+    if (id && sess?.share?.url && !shareDisabled) {
       commands.push({
         id: "session.share",
         title: "Copy Share Link",
@@ -628,7 +628,7 @@ export function Session() {
     }
 
     // /unshare — only when session is already shared
-    if (id && sess?.share?.url) {
+    if (id && sess?.share?.url && !shareDisabled) {
       commands.push({
         id: "session.unshare",
         title: "Unshare Session",
