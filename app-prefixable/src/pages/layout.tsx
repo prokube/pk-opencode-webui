@@ -231,6 +231,7 @@ export function Layout(props: ParentProps) {
   const [searchQuery, setSearchQuery] = createSignal("");
   const [searchResults, setSearchResults] = createSignal<Session[]>([]);
   const [searching, setSearching] = createSignal(false);
+  const [searchFocusIdx, setSearchFocusIdx] = createSignal(-1);
   const searchTimer = { id: undefined as ReturnType<typeof setTimeout> | undefined };
 
   // Keyboard navigation state for session list
@@ -423,13 +424,63 @@ export function Layout(props: ParentProps) {
   // Keyboard handler for session list navigation
   function handleSessionListKeyDown(e: KeyboardEvent) {
     // Don't hijack keyboard events from actual input controls inside the sidebar
-    // (e.g. rename inputs, dropdowns, etc.)
+    // (e.g. rename inputs, dropdowns, etc.) — but allow nav keys through when
+    // the search input is focused so arrow/enter can navigate search results.
     const target = e.target as HTMLElement;
     const tag = target.tagName;
-    if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || target.isContentEditable) return;
+    const isSearchNav = searchQuery().trim() && (
+      e.key === "ArrowDown" || e.key === "ArrowUp" ||
+      e.key === "Home" || e.key === "End" || e.key === "Enter"
+    );
+    if ((tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || target.isContentEditable) && !isSearchNav) return;
 
-    // When search is active, don't intercept keys that should go to search results
-    if (searchQuery().trim()) return;
+    // When search is active, provide keyboard navigation for search results
+    if (searchQuery().trim()) {
+      const results = searchResults();
+      if (!results.length) return;
+
+      if (e.key === "ArrowDown") {
+        e.preventDefault();
+        const next = searchFocusIdx() < results.length - 1 ? searchFocusIdx() + 1 : 0;
+        setSearchFocusIdx(next);
+        setFocusedId(results[next].id);
+        scrollFocusedIntoView(results[next].id);
+        return;
+      }
+      if (e.key === "ArrowUp") {
+        e.preventDefault();
+        const prev = searchFocusIdx() > 0 ? searchFocusIdx() - 1 : results.length - 1;
+        setSearchFocusIdx(prev);
+        setFocusedId(results[prev].id);
+        scrollFocusedIntoView(results[prev].id);
+        return;
+      }
+      if (e.key === "Home") {
+        e.preventDefault();
+        setSearchFocusIdx(0);
+        setFocusedId(results[0].id);
+        scrollFocusedIntoView(results[0].id);
+        return;
+      }
+      if (e.key === "End") {
+        e.preventDefault();
+        const last = results.length - 1;
+        setSearchFocusIdx(last);
+        setFocusedId(results[last].id);
+        scrollFocusedIntoView(results[last].id);
+        return;
+      }
+      if (e.key === "Enter") {
+        e.preventDefault();
+        const idx = searchFocusIdx();
+        if (idx >= 0 && idx < results.length) {
+          clearSearch();
+          navigate(`/${dirSlug()}/session/${results[idx].id}`);
+        }
+        return;
+      }
+      return;
+    }
 
     const ids = flatSessionIds();
     if (!ids.length) return;
@@ -568,6 +619,10 @@ export function Layout(props: ParentProps) {
       clearSearch();
       return;
     }
+    // Clear grouped-session focusedId so aria-activedescendant doesn't
+    // reference DOM elements that are unmounted during search.
+    setFocusedId(null);
+    setSearchFocusIdx(-1);
     setSearching(true);
     searchTimer.id = setTimeout(() => {
       setSearchResults([]);
@@ -596,6 +651,7 @@ export function Layout(props: ParentProps) {
     setSearchQuery("");
     setSearchResults([]);
     setSearching(false);
+    setSearchFocusIdx(-1);
     setMenuOpenId(null);
     setMenuFocusIndex(-1);
     setFocusedId(null);
@@ -1560,19 +1616,28 @@ export function Layout(props: ParentProps) {
                 class="flex-1 min-w-0 bg-transparent outline-none text-sm"
                 style={{ color: "var(--text-base)" }}
               />
-              <Show when={searchQuery()}>
-                <button
-                  onClick={clearSearch}
-                  class="p-0.5 rounded transition-colors shrink-0"
-                  style={{ color: "var(--icon-weak)" }}
-                  onMouseEnter={(e) => (e.currentTarget.style.color = "var(--icon-base)")}
-                  onMouseLeave={(e) => (e.currentTarget.style.color = "var(--icon-weak)")}
-                  aria-label="Clear search"
-                  title="Clear search"
-                >
-                  <X class="w-3.5 h-3.5" />
-                </button>
-              </Show>
+              <button
+                onClick={() => {
+                  clearSearch();
+                  // Move focus back to the search input after clearing
+                  const input = document.querySelector<HTMLInputElement>('input[aria-label="Search sessions"]');
+                  if (input) input.focus();
+                }}
+                class="p-0.5 rounded transition-colors shrink-0"
+                style={{
+                  color: "var(--icon-weak)",
+                  opacity: searchQuery() ? 1 : 0,
+                  "pointer-events": searchQuery() ? "auto" : "none",
+                }}
+                disabled={!searchQuery()}
+                tabIndex={searchQuery() ? 0 : -1}
+                onMouseEnter={(e) => (e.currentTarget.style.color = "var(--icon-base)")}
+                onMouseLeave={(e) => (e.currentTarget.style.color = "var(--icon-weak)")}
+                aria-label="Clear search"
+                title="Clear search"
+              >
+                <X class="w-3.5 h-3.5" />
+              </button>
             </div>
           </div>
 
@@ -1604,45 +1669,51 @@ export function Layout(props: ParentProps) {
                 fallback={
                   <div class="space-y-0.5">
                     <For each={searchResults()}>
-                      {(session) => (
-                        <A
-                          href={`/${dirSlug()}/session/${session.id}`}
-                          onClick={() => clearSearch()}
-                          role="option"
-                          id={`session-${session.id}`}
-                          aria-selected={isActive(session.id)}
-                          class="flex items-center gap-2 px-2.5 py-2 rounded-md text-sm transition-colors"
-                          style={{
-                            color: isActive(session.id)
-                              ? "var(--text-interactive-base)"
-                              : session.time?.archived
-                                ? "var(--text-weak)"
-                                : "var(--text-base)",
-                            background: isActive(session.id)
-                              ? "var(--surface-inset)"
-                              : "transparent",
-                            opacity: session.time?.archived && !isActive(session.id) ? 0.7 : 1,
-                          }}
-                          onMouseEnter={(e) => {
-                            if (!isActive(session.id)) e.currentTarget.style.background = "var(--surface-inset)";
-                          }}
-                          onMouseLeave={(e) => {
-                            if (!isActive(session.id)) e.currentTarget.style.background = "transparent";
-                          }}
-                        >
-                          <span class="shrink-0" style={{ color: "var(--icon-weak)" }}>
-                            <Show
-                              when={session.time?.archived}
-                              fallback={<MessageCircle class="w-4 h-4" />}
-                            >
-                              <Archive class="w-4 h-4" />
-                            </Show>
-                          </span>
-                          <span class="min-w-0 flex-1 truncate">
-                            {session.title || "Untitled"}
-                          </span>
-                        </A>
-                      )}
+                      {(session, idx) => {
+                        const focused = () => searchFocusIdx() === idx();
+                        return (
+                          <A
+                            href={`/${dirSlug()}/session/${session.id}`}
+                            onClick={() => clearSearch()}
+                            role="option"
+                            id={`session-${session.id}`}
+                            aria-selected={isActive(session.id)}
+                            tabIndex={-1}
+                            class="flex items-center gap-2 px-2.5 py-2 rounded-md text-sm transition-colors"
+                            style={{
+                              color: isActive(session.id) || focused()
+                                ? "var(--text-interactive-base)"
+                                : session.time?.archived
+                                  ? "var(--text-weak)"
+                                  : "var(--text-base)",
+                              background: isActive(session.id) || focused()
+                                ? "var(--surface-inset)"
+                                : "transparent",
+                              opacity: session.time?.archived && !isActive(session.id) ? 0.7 : 1,
+                              outline: focused() ? "2px solid var(--border-focus)" : "none",
+                              "outline-offset": "-2px",
+                            }}
+                            onMouseEnter={(e) => {
+                              if (!isActive(session.id) && !focused()) e.currentTarget.style.background = "var(--surface-inset)";
+                            }}
+                            onMouseLeave={(e) => {
+                              if (!isActive(session.id) && !focused()) e.currentTarget.style.background = "transparent";
+                            }}
+                          >
+                            <span class="shrink-0" style={{ color: "var(--icon-weak)" }}>
+                              <Show
+                                when={session.time?.archived}
+                                fallback={<MessageCircle class="w-4 h-4" />}
+                              >
+                                <Archive class="w-4 h-4" />
+                              </Show>
+                            </span>
+                            <span class="min-w-0 flex-1 truncate">
+                              {session.title || "Untitled"}
+                            </span>
+                          </A>
+                        );
+                      }}
                     </For>
                   </div>
                 }
