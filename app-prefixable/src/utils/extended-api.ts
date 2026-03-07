@@ -45,3 +45,19 @@ export async function listDirs(
     return []
   }
 }
+
+/**
+ * Write content to a file (creates parent directories if needed)
+ */
+export async function writeFile(serverUrl: string, path: string, content: string): Promise<boolean> {
+  const res = await fetch(`${serverUrl}/api/ext/file`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ path, content }),
+  }).catch(() => null)
+  if (!res?.ok) {
+    console.error("[extended-api] writeFile failed:", res?.status)
+    return false
+  }
+  return true
+}

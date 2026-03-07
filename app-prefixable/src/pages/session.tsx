@@ -33,7 +33,7 @@ import { SessionHeader } from "../components/session-header";
 import { ResizeHandle } from "../components/resize-handle";
 import { base64Encode, base64Decode } from "../utils/path";
 import type { Part, QuestionRequest } from "../sdk/client";
-import { Plus, Settings, Paperclip, Upload, Bookmark } from "lucide-solid";
+import { Plus, Settings, Paperclip, Upload, Bookmark, BookOpen } from "lucide-solid";
 import { Portal } from "solid-js/web";
 import { ContextItems, type FileContext } from "../components/context-items";
 import { FilePickerDialog } from "../components/file-picker-dialog";
@@ -79,6 +79,18 @@ export function Session() {
   const layout = useLayout();
   const branding = useBranding();
   const savedPrompts = useSavedPrompts();
+
+  // Instructions active state
+  const [instructionsActive, setInstructionsActive] = createSignal(false);
+  onMount(() => {
+    client.global.config
+      .get()
+      .then((res) => {
+        const cfg = res.data as { instructions?: string[] } | undefined;
+        setInstructionsActive((cfg?.instructions ?? []).length > 0);
+      })
+      .catch(() => {});
+  });
 
   // Helper to get the current directory slug
   const dirSlug = createMemo(() =>
@@ -1285,6 +1297,31 @@ export function Session() {
             </Button>
           </div>
 
+          {/* Instructions active indicator */}
+          <Show when={instructionsActive()}>
+            <button
+              type="button"
+              onClick={() => navigate(`/${dirSlug()}/settings#instructions`)}
+              class="mt-4 flex items-center gap-2 px-3 py-2 rounded-md text-sm transition-colors mx-auto"
+              style={{
+                border: "1px solid var(--border-base)",
+                color: "var(--text-base)",
+                background: "transparent",
+              }}
+              onMouseEnter={(e) => {
+                e.currentTarget.style.background = "var(--surface-inset)";
+                e.currentTarget.style.borderColor = "var(--interactive-base)";
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.background = "transparent";
+                e.currentTarget.style.borderColor = "var(--border-base)";
+              }}
+            >
+              <BookOpen class="w-4 h-4" style={{ color: "var(--icon-success-base)" }} />
+              <span>Project instructions active</span>
+            </button>
+          </Show>
+
           {/* Saved Prompts */}
           <Show when={savedPrompts.prompts().length > 0}>
             <div class="mt-8 w-full max-w-2xl">
@@ -1360,6 +1397,8 @@ export function Session() {
           notifyEnabled={notifyEnabled()}
           notifyDenied={notifyDenied()}
           onToggleNotify={toggleNotify}
+          instructionsActive={instructionsActive()}
+          onOpenInstructions={() => navigate(`/${dirSlug()}/settings#instructions`)}
         />
 
         {/* Messages - using rich message timeline with lazy rendering */}
