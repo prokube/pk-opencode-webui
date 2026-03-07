@@ -299,12 +299,17 @@ export async function handleExtendedEndpoint(
 
     console.log("[ExtAPI] file write:", validatedPath)
 
-    // Create parent directories if needed
-    const parentDir = nodePath.dirname(validatedPath)
-    await fs.promises.mkdir(parentDir, { recursive: true }).catch(() => {})
+    try {
+      // Create parent directories if needed
+      const parentDir = nodePath.dirname(validatedPath)
+      await fs.promises.mkdir(parentDir, { recursive: true })
 
-    await fs.promises.writeFile(validatedPath, body.content, "utf-8")
-    return Response.json({ success: true })
+      await fs.promises.writeFile(validatedPath, body.content, "utf-8")
+      return Response.json({ success: true })
+    } catch (e) {
+      console.error("[ExtAPI] file write error:", e)
+      return Response.json({ error: String(e) }, { status: 500 })
+    }
   }
 
   // Not an extended endpoint

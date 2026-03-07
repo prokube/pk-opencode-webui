@@ -386,11 +386,18 @@ These instructions are automatically included in every session.
 Add your project-specific instructions here.
 `
     const agentsPath = `${directory.replace(/\/$/, "")}/AGENTS.md`
-    const ok = await writeFile(basePath.serverUrl, agentsPath, template)
-    if (!ok) {
-      setInstructionError("Failed to create AGENTS.md")
-      setInstructionCreating(false)
-      return
+
+    // Check if AGENTS.md already exists before writing to avoid overwriting user content
+    const existingAgents = await client.file.read({ path: "AGENTS.md", directory }).catch(() => null)
+    const agentsData = existingAgents?.data as { content?: string } | undefined
+    if (!agentsData?.content) {
+      // File doesn't exist — write the template
+      const ok = await writeFile(basePath.serverUrl, agentsPath, template)
+      if (!ok) {
+        setInstructionError("Failed to create AGENTS.md")
+        setInstructionCreating(false)
+        return
+      }
     }
 
     // Update opencode.json to include the instructions field
@@ -403,7 +410,12 @@ Add your project-specific instructions here.
       try { return JSON.parse(existingData.content) } catch { return {} }
     })()
     const updated = { ...existing, instructions: [...(existing.instructions ?? []), "AGENTS.md"] }
-    await writeFile(basePath.serverUrl, configPath, JSON.stringify(updated, null, 2))
+    const configOk = await writeFile(basePath.serverUrl, configPath, JSON.stringify(updated, null, 2))
+    if (!configOk) {
+      setInstructionError("Failed to update opencode.json")
+      setInstructionCreating(false)
+      return
+    }
 
     setInstructionCreating(false)
     // Reload instructions
