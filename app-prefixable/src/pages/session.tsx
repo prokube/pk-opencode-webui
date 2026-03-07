@@ -578,7 +578,8 @@ export function Session() {
     }
 
     // /share — requires an active session, not already shared, and sharing not disabled
-    const shareDisabled = appConfig.project.share === "disabled" || appConfig.global.share === "disabled"
+    // Default to disabled while config is still loading to avoid briefly showing commands
+    const shareDisabled = appConfig.loading() || appConfig.project.share === "disabled" || appConfig.global.share === "disabled"
     if (id && !sess?.share?.url && !shareDisabled) {
       commands.push({
         id: "session.share",
