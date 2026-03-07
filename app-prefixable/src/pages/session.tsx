@@ -88,11 +88,17 @@ export function Session() {
   const toastMsgTimer = { id: 0 as ReturnType<typeof setTimeout> };
   onCleanup(() => clearTimeout(toastMsgTimer.id));
 
+  function hideToast() {
+    clearTimeout(toastMsgTimer.id);
+    toastMsgTimer.id = undefined as unknown as ReturnType<typeof setTimeout>;
+    setToastMessage(null);
+  }
+
   function showToast(msg: string, duration = 2500, variant: "default" | "hint" = "default") {
     clearTimeout(toastMsgTimer.id);
     setToastMessage(msg);
     setToastVariant(variant);
-    toastMsgTimer.id = setTimeout(() => setToastMessage(null), duration);
+    toastMsgTimer.id = setTimeout(() => hideToast(), duration);
   }
 
   // Helper to get the current directory slug
@@ -382,10 +388,14 @@ export function Session() {
         slash: "new",
         onSelect: async () => {
           console.log("[Command] New session - creating...");
-          const res = await client.session.create({});
-          if (res.data) {
-            console.log("[Command] Created session:", res.data.id);
-            navigate(`/${dirSlug()}/session/${res.data.id}`);
+          try {
+            const res = await client.session.create({});
+            if (res.data) {
+              console.log("[Command] Created session:", res.data.id);
+              navigate(`/${dirSlug()}/session/${res.data.id}`);
+            }
+          } catch (err) {
+            showToast(`Failed to create session: ${err instanceof Error ? err.message : String(err)}`);
           }
         },
       },
@@ -488,6 +498,9 @@ export function Session() {
     }
 
     // /share — requires an active session, not already shared
+    // TODO: hide /share and /unshare when server config has share === "disabled".
+    // The config is available via client.global.config.get() but is not currently
+    // exposed as a reactive context. Adding a ConfigContext would allow gating here.
     if (id && !sess?.share?.url) {
       commands.push({
         id: "session.share",
@@ -567,10 +580,9 @@ export function Session() {
         onSelect: async () => {
           if (!id || !lastUserMsg) return;
           try {
-            // If processing, abort first
+            // If processing, abort first (clears pendingQuestion too)
             if (processing()) {
-              await client.session.abort({ sessionID: id, directory });
-              setProcessing(false);
+              await handleAbort();
             }
             await client.session.revert({
               sessionID: id,
@@ -750,7 +762,7 @@ export function Session() {
     if (now - lastEsc.ts < 500) {
       e.preventDefault();
       lastEsc.ts = 0;
-      setToastMessage(null);
+      hideToast();
       handleAbort();
       return;
     }
