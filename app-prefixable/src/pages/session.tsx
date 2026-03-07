@@ -539,6 +539,7 @@ export function Session() {
   function handleGlobalKeyDown(e: KeyboardEvent) {
     if (e.key !== "Escape") return;
     if (e.repeat) return; // Ignore held-key auto-repeat
+    if (e.defaultPrevented) return; // Already handled by another component
     // Let dialogs/popovers handle their own Escape
     if (
       showSlashPopover() ||
