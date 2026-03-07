@@ -45,7 +45,9 @@ function discoverTargets(): HTMLElement[] {
 
 function buildHints(targets: HTMLElement[]): Hint[] {
   const labels = generateLabels(targets.length)
-  return targets.map((element, i) => ({
+  // Cap to the number of labels generated (avoids undefined labels for >234 targets)
+  const capped = targets.slice(0, labels.length)
+  return capped.map((element, i) => ({
     label: labels[i],
     rect: element.getBoundingClientRect(),
     element,

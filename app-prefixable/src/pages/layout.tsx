@@ -726,7 +726,7 @@ export function Layout(props: ParentProps) {
         global: true,
         onSelect: () => {
           if (isDialogOpen() || command.paletteOpen() || command.shortcutRefOpen()) return;
-          if (!sidebarExpanded()) return; // Don't focus collapsed sidebar
+          if (!showSidebar()) return; // Don't focus collapsed/hidden sidebar
           focusPanel("sidebar");
         },
       },
