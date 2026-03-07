@@ -20,6 +20,7 @@ import { usePermission } from "../context/permission";
 import { useLayout } from "../context/layout";
 import { useBranding } from "../context/branding";
 import { useSavedPrompts } from "../context/saved-prompts";
+import { useTerminal } from "../context/terminal";
 import { MessageTimeline } from "../components/message-timeline";
 import { MCPDialog } from "../components/mcp-dialog";
 import { MCPAddDialog } from "../components/mcp-add-dialog";
@@ -79,6 +80,26 @@ export function Session() {
   const layout = useLayout();
   const branding = useBranding();
   const savedPrompts = useSavedPrompts();
+  const terminal = useTerminal();
+
+  // Unified toast system — only one toast visible at a time
+  const [toastMessage, setToastMessage] = createSignal<string | null>(null);
+  const [toastVariant, setToastVariant] = createSignal<"default" | "hint">("default");
+  const toastMsgTimer: { id: ReturnType<typeof setTimeout> | null } = { id: null };
+  onCleanup(() => { if (toastMsgTimer.id !== null) clearTimeout(toastMsgTimer.id); });
+
+  function hideToast() {
+    if (toastMsgTimer.id !== null) clearTimeout(toastMsgTimer.id);
+    toastMsgTimer.id = null;
+    setToastMessage(null);
+  }
+
+  function showToast(msg: string, duration = 2500, variant: "default" | "hint" = "default") {
+    if (toastMsgTimer.id !== null) clearTimeout(toastMsgTimer.id);
+    setToastMessage(msg);
+    setToastVariant(variant);
+    toastMsgTimer.id = setTimeout(() => hideToast(), duration);
+  }
 
   // Helper to get the current directory slug
   const dirSlug = createMemo(() =>
@@ -114,7 +135,7 @@ export function Session() {
   const [showSavePrompt, setShowSavePrompt] = createSignal(false);
   const [savePromptTitle, setSavePromptTitle] = createSignal("");
   const [savePromptBody, setSavePromptBody] = createSignal("");
-  const [savePromptSuccess, setSavePromptSuccess] = createSignal(false);
+
   const [fileContext, setFileContext] = createSignal<FileContext[]>([]);
   const [imageAttachments, setImageAttachments] = createSignal<
     ImageAttachment[]
@@ -125,14 +146,10 @@ export function Session() {
   const [pendingUserMessageText, setPendingUserMessageText] = createSignal<
     string | null
   >(null);
-  const toastTimer = { id: 0 as ReturnType<typeof setTimeout> };
-  onCleanup(() => clearTimeout(toastTimer.id));
+
 
   // Double-Escape to abort: track last Escape press timestamp
   const lastEsc = { ts: 0 };
-  const [escHint, setEscHint] = createSignal(false);
-  const escHintTimer = { id: 0 as ReturnType<typeof setTimeout> };
-  onCleanup(() => clearTimeout(escHintTimer.id));
 
   // --- Notification toggle (per-session, persisted in localStorage) ---
   const [notifyEnabled, setNotifyEnabled] = createSignal(
@@ -349,92 +366,282 @@ export function Session() {
   let slashPopoverRef: HTMLDivElement | undefined;
   let fileInputRef: HTMLInputElement | undefined;
 
-  // Base slash commands (static ones)
-  const baseSlashCommands: Command[] = [
-    {
-      id: "session.new",
-      title: "New Session",
-      description: "Create a new chat session",
-      slash: "new",
-      onSelect: async () => {
-        console.log("[Command] New session - creating...");
-        try {
-          const res = await client.session.create({});
-          if (res.data) {
-            console.log("[Command] Created session:", res.data.id);
-            navigate(`/${dirSlug()}/session/${res.data.id}`);
+  // Slash commands — computed so state-dependent commands update reactively
+  const baseSlashCommands = createMemo<Command[]>(() => {
+    const id = sessionId();
+    const sess = session();
+    const msgs = syncMessages();
+    const hasMessages = msgs.length > 0;
+    const isProcessing = processing();
+    const lastUserMsg = (() => {
+      for (let i = msgs.length - 1; i >= 0; i--) {
+        if (msgs[i].role === "user") return msgs[i];
+      }
+      return undefined;
+    })();
+
+    const commands: Command[] = [
+      {
+        id: "session.new",
+        title: "New Session",
+        description: "Create a new chat session",
+        slash: "new",
+        onSelect: async () => {
+          console.log("[Command] New session - creating...");
+          try {
+            const res = await client.session.create({});
+            if (res.data) {
+              console.log("[Command] Created session:", res.data.id);
+              navigate(`/${dirSlug()}/session/${res.data.id}`);
+            }
+          } catch (err) {
+            showToast(`Failed to create session: ${err instanceof Error ? err.message : String(err)}`);
           }
-        } catch (e) {
-          console.error("[Command] Failed to create session:", e);
-        }
+        },
       },
-    },
-    {
-      id: "settings.open",
-      title: "Settings",
-      description: "Open settings page",
-      slash: "settings",
-      onSelect: () => {
-        console.log("[Command] Settings");
-        navigate(`/${dirSlug()}/settings`);
+      {
+        id: "settings.open",
+        title: "Settings",
+        description: "Open settings page",
+        slash: "settings",
+        onSelect: () => {
+          console.log("[Command] Settings");
+          navigate(`/${dirSlug()}/settings`);
+        },
       },
-    },
-    {
-      id: "provider.connect",
-      title: "Connect Provider",
-      description: "Add an AI provider",
-      slash: "connect",
-      onSelect: () => {
-        console.log("[Command] Connect");
-        navigate(`/${dirSlug()}/settings`);
+      {
+        id: "provider.connect",
+        title: "Connect Provider",
+        description: "Add an AI provider",
+        slash: "connect",
+        onSelect: () => {
+          console.log("[Command] Connect");
+          navigate(`/${dirSlug()}/settings`);
+        },
       },
-    },
-    {
-      id: "model.choose",
-      title: "Choose Model",
-      description: "Select the AI model to use",
-      slash: "model",
-      onSelect: () => {
-        setShowModelPicker(true);
+      {
+        id: "model.choose",
+        title: "Choose Model",
+        description: "Select the AI model to use",
+        slash: "model",
+        onSelect: () => {
+          setShowModelPicker(true);
+        },
       },
-    },
-    {
-      id: "agent.choose",
-      title: "Choose Agent",
-      description: "Select the agent to use",
-      slash: "agent",
-      onSelect: () => {
-        setShowAgentPicker(true);
+      {
+        id: "agent.choose",
+        title: "Choose Agent",
+        description: "Select the agent to use",
+        slash: "agent",
+        onSelect: () => {
+          setShowAgentPicker(true);
+        },
       },
-    },
-    {
-      id: "mcp.manage",
-      title: "MCP Servers",
-      description: "Manage MCP server connections",
-      slash: "mcp",
-      onSelect: () => {
-        console.log("[Command] MCP dialog");
-        setShowMCPDialog(true);
+      {
+        id: "mcp.manage",
+        title: "MCP Servers",
+        description: "Manage MCP server connections",
+        slash: "mcp",
+        onSelect: () => {
+          console.log("[Command] MCP dialog");
+          setShowMCPDialog(true);
+        },
       },
-    },
-    {
-      id: "prompt.pick",
-      title: "Insert Saved Prompt",
-      description: "Insert a saved prompt into the input",
-      slash: "prompt",
-      onSelect: () => {
-        setPromptPickerFilter("");
-        setShowPromptPicker(true);
+      {
+        id: "prompt.pick",
+        title: "Insert Saved Prompt",
+        description: "Insert a saved prompt into the input",
+        slash: "prompt",
+        onSelect: () => {
+          setPromptPickerFilter("");
+          setShowPromptPicker(true);
+        },
       },
-    },
-  ];
+      {
+        id: "terminal.toggle",
+        title: "Toggle Terminal",
+        description: "Open or close the terminal panel",
+        slash: "terminal",
+        onSelect: () => {
+          terminal.toggle(directory);
+        },
+      },
+    ];
+
+    // /compact — requires a session with messages and a selected model
+    if (id && hasMessages && !isProcessing && providers.selectedModel) {
+      commands.push({
+        id: "session.compact",
+        title: "Compact Session",
+        description: "Summarize conversation to free up context space",
+        slash: "compact",
+        onSelect: async () => {
+          if (!id) return;
+          const model = providers.selectedModel;
+          if (!model) {
+            showToast("Select a model before compacting");
+            return;
+          }
+          showToast("Compacting session...", 10000);
+          try {
+            await client.session.summarize({
+              sessionID: id,
+              providerID: model.providerID,
+              modelID: model.modelID,
+            });
+            showToast("Session compacted");
+          } catch (err) {
+            showToast(`Failed to compact session: ${err instanceof Error ? err.message : String(err)}`);
+          }
+        },
+      });
+    }
+
+    // /share — requires an active session, not already shared
+    // TODO: hide /share and /unshare when server config has share === "disabled".
+    // The config is available via client.global.config.get() but is not currently
+    // exposed as a reactive context. Adding a ConfigContext would allow gating here.
+    if (id && !sess?.share?.url) {
+      commands.push({
+        id: "session.share",
+        title: "Share Session",
+        description: "Generate a shareable link and copy to clipboard",
+        slash: "share",
+        onSelect: async () => {
+          if (!id) return;
+          try {
+            const res = await client.session.share({ sessionID: id });
+            const url = res.data?.share?.url;
+            if (!url) {
+              showToast("Failed to share session: no URL returned");
+              return;
+            }
+            try {
+              await navigator.clipboard.writeText(url);
+              showToast("Share link copied to clipboard");
+            } catch {
+              showToast(`Share link: ${url}`, 8000);
+            }
+            refetchSession();
+          } catch (err) {
+            showToast(`Failed to share session: ${err instanceof Error ? err.message : String(err)}`);
+          }
+        },
+      });
+    }
+
+    // /share — already shared: copy existing link
+    if (id && sess?.share?.url) {
+      commands.push({
+        id: "session.share",
+        title: "Copy Share Link",
+        description: "Copy the existing share link to clipboard",
+        slash: "share",
+        onSelect: async () => {
+          const url = sess!.share!.url;
+          try {
+            await navigator.clipboard.writeText(url);
+            showToast("Share link copied to clipboard");
+          } catch {
+            showToast(`Share link: ${url}`, 8000);
+          }
+        },
+      });
+    }
+
+    // /unshare — only when session is already shared
+    if (id && sess?.share?.url) {
+      commands.push({
+        id: "session.unshare",
+        title: "Unshare Session",
+        description: "Remove the shared link and make session private",
+        slash: "unshare",
+        onSelect: async () => {
+          if (!id) return;
+          try {
+            await client.session.unshare({ sessionID: id });
+            showToast("Session unshared");
+            refetchSession();
+          } catch (err) {
+            showToast(`Failed to unshare session: ${err instanceof Error ? err.message : String(err)}`);
+          }
+        },
+      });
+    }
+
+    // /undo — requires a session with at least one user message
+    // Allowed during processing so abort-then-revert flow works
+    if (id && lastUserMsg) {
+      commands.push({
+        id: "session.undo",
+        title: "Undo Last Message",
+        description: "Revert the last user message and restore its text",
+        slash: "undo",
+        onSelect: async () => {
+          if (!id || !lastUserMsg) return;
+          try {
+            // If processing, abort first (clears pendingQuestion too)
+            if (processing()) {
+              await handleAbort();
+            }
+            await client.session.revert({
+              sessionID: id,
+              messageID: lastUserMsg.id,
+            });
+            // Restore the reverted message text into the input field
+            const textPart = lastUserMsg.parts.find((p) => p.type === "text") as
+              | { type: "text"; text?: string }
+              | undefined;
+            if (textPart?.text) {
+              setInput(textPart.text);
+              requestAnimationFrame(() => {
+                if (inputRef) {
+                  inputRef.style.height = "auto";
+                  inputRef.style.height = Math.min(inputRef.scrollHeight, 200) + "px";
+                  inputRef.focus();
+                }
+              });
+            }
+            showToast("Message undone");
+            refetchSession();
+          } catch (err) {
+            showToast(`Failed to undo message: ${err instanceof Error ? err.message : String(err)}`);
+          }
+        },
+      });
+    }
+
+    // /redo — only when session is in a reverted state
+    if (id && sess?.revert?.messageID) {
+      commands.push({
+        id: "session.redo",
+        title: "Redo Message",
+        description: "Restore previously reverted messages",
+        slash: "redo",
+        onSelect: async () => {
+          if (!id) return;
+          try {
+            await client.session.unrevert({ sessionID: id });
+            setInput("");
+            showToast("Messages restored");
+            refetchSession();
+          } catch (err) {
+            showToast(`Failed to redo messages: ${err instanceof Error ? err.message : String(err)}`);
+          }
+        },
+      });
+    }
+
+    return commands;
+  });
 
   // Filtered slash commands based on query
   const filteredSlashCommands = createMemo(() => {
+    const cmds = baseSlashCommands();
     const q = slashQuery().toLowerCase();
-    if (!q) return baseSlashCommands;
+    if (!q) return cmds;
 
-    return baseSlashCommands.filter(
+    return cmds.filter(
       (c) =>
         c.slash?.toLowerCase().startsWith(q) ||
         c.title.toLowerCase().includes(q) ||
@@ -530,8 +737,6 @@ export function Session() {
   createEffect(() => {
     if (!processing()) {
       lastEsc.ts = 0;
-      setEscHint(false);
-      clearTimeout(escHintTimer.id);
     }
   });
 
@@ -557,15 +762,12 @@ export function Session() {
     if (now - lastEsc.ts < 500) {
       e.preventDefault();
       lastEsc.ts = 0;
-      setEscHint(false);
-      clearTimeout(escHintTimer.id);
+      hideToast();
       handleAbort();
       return;
     }
     lastEsc.ts = now;
-    setEscHint(true);
-    clearTimeout(escHintTimer.id);
-    escHintTimer.id = setTimeout(() => setEscHint(false), 1500);
+    showToast("Press Esc again to stop", 1500, "hint");
   }
 
   onMount(() => {
@@ -1840,38 +2042,28 @@ export function Session() {
               if (!title || !body) return;
               savedPrompts.add(title, body);
               setShowSavePrompt(false);
-              setSavePromptSuccess(true);
-              clearTimeout(toastTimer.id);
-              toastTimer.id = setTimeout(() => setSavePromptSuccess(false), 2000);
+              showToast("Prompt saved");
             }}
             onClose={() => setShowSavePrompt(false)}
           />
         </Show>
 
-        {/* Save Prompt Success Toast */}
-        <Show when={savePromptSuccess()}>
+        {/* Unified toast — only one visible at a time */}
+        <Show when={toastMessage()}>
           <div
             class="fixed bottom-20 left-1/2 -translate-x-1/2 z-[100] px-4 py-2 rounded-lg shadow-lg text-sm font-medium"
-            style={{
-              background: "var(--interactive-base)",
-              color: "white",
-            }}
+            style={toastVariant() === "hint"
+              ? {
+                  background: "var(--surface-inset)",
+                  color: "var(--text-strong)",
+                  border: "1px solid var(--border-base)",
+                }
+              : {
+                  background: "var(--interactive-base)",
+                  color: "white",
+                }}
           >
-            Prompt saved
-          </div>
-        </Show>
-
-        {/* Double-Escape hint toast */}
-        <Show when={escHint()}>
-          <div
-            class="fixed bottom-20 left-1/2 -translate-x-1/2 z-[100] px-4 py-2 rounded-lg shadow-lg text-sm font-medium"
-            style={{
-              background: "var(--surface-inset)",
-              color: "var(--text-strong)",
-              border: "1px solid var(--border-base)",
-            }}
-          >
-            Press Esc again to stop
+            {toastMessage()}
           </div>
         </Show>
       </div>
