@@ -51,8 +51,12 @@ import { useSync } from "../context/sync";
 import { usePermission } from "../context/permission";
 import { useGlobalEvents } from "../context/global-events";
 import { useSavedPrompts } from "../context/saved-prompts";
+import { useCommand, isDialogOpen } from "../context/command";
 import { ResizeHandle } from "../components/resize-handle";
 import { ConfirmDialog } from "../components/confirm-dialog";
+import { ShortcutReference } from "../components/shortcut-reference";
+import { CommandPalette } from "../components/command-palette";
+import { HintMode } from "../components/hint-mode";
 import { suggestSessionTitle } from "../utils/ai-rename";
 
 import { readNotifyMap, cleanupNotifyState, NOTIFY_STORAGE_KEY } from "../utils/notify";
@@ -195,6 +199,7 @@ export function Layout(props: ParentProps) {
   const permission = usePermission();
   const globalEvents = useGlobalEvents();
   const savedPrompts = useSavedPrompts();
+  const command = useCommand();
   const location = useLocation();
   const navigate = useNavigate();
 
@@ -219,6 +224,11 @@ export function Layout(props: ParentProps) {
   const [deleteError, setDeleteError] = createSignal<string | null>(null);
   const [promptDropdownOpen, setPromptDropdownOpen] = createSignal(false);
   const [promptDropdownIndex, setPromptDropdownIndex] = createSignal(0);
+  const [confirmArchiveSession, setConfirmArchiveSession] = createSignal<Session | null>(null);
+
+  // Keyboard navigation state for session list
+  const [focusedId, setFocusedId] = createSignal<string | null>(null);
+  const [menuFocusIndex, setMenuFocusIndex] = createSignal(-1);
 
   // Responsive breakpoint - collapse sidebar below 900px
   const COLLAPSE_BREAKPOINT = 900;
@@ -377,6 +387,148 @@ export function Layout(props: ParentProps) {
     groupSessionsByDate(projectSessions(), now()),
   );
 
+  // Flat ordered list of session IDs for keyboard navigation (skips group headers)
+  const flatSessionIds = createMemo(() =>
+    groupedSessions().flatMap((g) => g.sessions.map((s) => s.id)),
+  );
+
+  // When focus enters the sidebar from outside, highlight the currently active session
+  function handleSidebarFocus(e: FocusEvent) {
+    // Ignore focus moves within the sidebar — only act when focus enters from outside
+    const container = e.currentTarget as HTMLElement | null;
+    if (container && e.relatedTarget instanceof Node && container.contains(e.relatedTarget)) return;
+    // Skip if focusedId is already set (e.g. focusPanel already initialized it)
+    if (focusedId()) return;
+    const current = currentSessionId();
+    const ids = flatSessionIds();
+    if (current && ids.includes(current)) {
+      setFocusedId(current);
+      scrollFocusedIntoView(current);
+      return;
+    }
+    // Default to first session if none active
+    if (ids.length) {
+      setFocusedId(ids[0]);
+      scrollFocusedIntoView(ids[0]);
+    }
+  }
+
+  // Keyboard handler for session list navigation
+  function handleSessionListKeyDown(e: KeyboardEvent) {
+    // Don't hijack keyboard events from actual input controls inside the sidebar
+    // (e.g. rename inputs, dropdowns, etc.)
+    const target = e.target as HTMLElement;
+    const tag = target.tagName;
+    if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || target.isContentEditable) return;
+
+    const ids = flatSessionIds();
+    if (!ids.length) return;
+
+    // If context menu is open, delegate to menu keyboard handler
+    if (menuOpenId()) {
+      handleMenuKeyDown(e);
+      return;
+    }
+
+    if (e.key === "ArrowDown") {
+      e.preventDefault();
+      const idx = focusedId() ? ids.indexOf(focusedId()!) : -1;
+      const next = idx < ids.length - 1 ? idx + 1 : 0;
+      setFocusedId(ids[next]);
+      scrollFocusedIntoView(ids[next]);
+      return;
+    }
+
+    if (e.key === "ArrowUp") {
+      e.preventDefault();
+      const idx = focusedId() ? ids.indexOf(focusedId()!) : ids.length;
+      const prev = idx > 0 ? idx - 1 : ids.length - 1;
+      setFocusedId(ids[prev]);
+      scrollFocusedIntoView(ids[prev]);
+      return;
+    }
+
+    if (e.key === "Home") {
+      e.preventDefault();
+      setFocusedId(ids[0]);
+      scrollFocusedIntoView(ids[0]);
+      return;
+    }
+
+    if (e.key === "End") {
+      e.preventDefault();
+      setFocusedId(ids[ids.length - 1]);
+      scrollFocusedIntoView(ids[ids.length - 1]);
+      return;
+    }
+
+    if (e.key === "Enter") {
+      e.preventDefault();
+      const focused = focusedId();
+      if (focused) navigate(`/${dirSlug()}/session/${focused}`);
+      return;
+    }
+
+    // Open context menu: Shift+F10, ContextMenu key, or 'm' key
+    if (
+      (e.key === "F10" && e.shiftKey) ||
+      e.key === "ContextMenu" ||
+      (e.key === "m" && !e.ctrlKey && !e.metaKey && !e.altKey)
+    ) {
+      e.preventDefault();
+      const focused = focusedId();
+      if (focused) {
+        setMenuOpenId(focused);
+        setMenuFocusIndex(0);
+      }
+      return;
+    }
+  }
+
+  // Keyboard handler for context menu navigation
+  function handleMenuKeyDown(e: KeyboardEvent) {
+    // Dynamically count menu items from the DOM (active sessions have 4, archived have 2)
+    const menu = document.querySelector("[data-sidebar-menu-dropdown]") as HTMLElement | null;
+    const menuItems = menu ? menu.querySelectorAll("[data-menu-item]") : [];
+    const count = menuItems.length || 1;
+
+    if (e.key === "Escape") {
+      e.preventDefault();
+      e.stopPropagation();
+      setMenuOpenId(null);
+      setMenuFocusIndex(-1);
+      return;
+    }
+
+    if (e.key === "ArrowDown") {
+      e.preventDefault();
+      setMenuFocusIndex((prev) => (prev < count - 1 ? prev + 1 : 0));
+      return;
+    }
+
+    if (e.key === "ArrowUp") {
+      e.preventDefault();
+      setMenuFocusIndex((prev) => (prev > 0 ? prev - 1 : count - 1));
+      return;
+    }
+
+    if (e.key === "Enter") {
+      e.preventDefault();
+      const item = menuItems[menuFocusIndex()] as HTMLButtonElement | undefined;
+      if (item) item.click();
+      setMenuFocusIndex(-1);
+      return;
+    }
+  }
+
+  // Scroll the focused session into view
+  function scrollFocusedIntoView(id: string) {
+    queueMicrotask(() => {
+      const el = document.getElementById(`session-${id}`);
+      if (el) el.scrollIntoView({ block: "nearest" });
+    });
+  }
+
   async function loadSessions() {
     try {
       const res = await client.session.list({ roots: true });
@@ -398,6 +550,283 @@ export function Layout(props: ParentProps) {
     }
   }
 
+  // Focus a panel by data-panel attribute. Returns true if focus was set.
+  function focusPanel(name: string): boolean {
+    const el = document.querySelector(`[data-panel="${name}"]`) as HTMLElement | null;
+    if (!el) return false;
+    // For chat panel, focus the textarea inside it
+    if (name === "chat") {
+      const textarea = el.querySelector("textarea") as HTMLTextAreaElement | null;
+      if (textarea) { textarea.focus(); return true; }
+    }
+    // For terminal, find and focus the xterm instance
+    if (name === "terminal") {
+      const xterm = el.querySelector(".xterm-helper-textarea") as HTMLTextAreaElement | null;
+      if (xterm) { xterm.focus(); return true; }
+      el.focus();
+      return true;
+    }
+    // For sidebar, focus the inner listbox so aria-activedescendant applies immediately
+    if (name === "sidebar") {
+      const listbox = el.querySelector('[role="listbox"]') as HTMLElement | null;
+      if (listbox) {
+        listbox.focus();
+        // Initialize focus state so the active session is highlighted
+        const ids = flatSessionIds();
+        const current = currentSessionId();
+        if (current && ids.includes(current)) {
+          setFocusedId(current);
+          scrollFocusedIntoView(current);
+        } else if (ids.length) {
+          setFocusedId(ids[0]);
+          scrollFocusedIntoView(ids[0]);
+        }
+        return true;
+      }
+    }
+    // For review and other panels, focus the container itself
+    el.focus();
+    return true;
+  }
+
+  // Helper: find the current session ID from the URL
+  function currentSessionId(): string | undefined {
+    const match = location.pathname.match(/\/session\/([^/]+)/);
+    return match ? match[1] : undefined;
+  }
+
+  // Navigate to session by index in the sidebar list (0-based)
+  function navigateToSessionIndex(index: number) {
+    const list = projectSessions();
+    if (!list.length) return;
+    const clamped = Math.max(0, Math.min(index, list.length - 1));
+    navigate(`/${dirSlug()}/session/${list[clamped].id}`);
+  }
+
+  // Navigate to next/previous session with wrap-around
+  function navigateSessionDelta(delta: number) {
+    const list = projectSessions();
+    if (!list.length) return;
+    const current = currentSessionId();
+    const idx = current ? list.findIndex((s) => s.id === current) : -1;
+    // If no current session, go to first
+    if (idx === -1) {
+      navigate(`/${dirSlug()}/session/${list[0].id}`);
+      return;
+    }
+    const next = (idx + delta + list.length) % list.length;
+    navigate(`/${dirSlug()}/session/${list[next].id}`);
+  }
+
+  // Archive the current session (with confirmation if busy)
+  function archiveCurrentSession() {
+    const id = currentSessionId();
+    if (!id) return;
+    const list = projectSessions();
+    const session = list.find((s) => s.id === id);
+    if (!session) return;
+    const status = events.status[id]?.type;
+    if (status === "busy" || status === "retry") {
+      // Show confirmation dialog for busy sessions
+      setConfirmArchiveSession(session);
+      return;
+    }
+    archiveAndNavigate(session);
+  }
+
+  // Register keyboard shortcuts via CommandProvider
+  onMount(() => {
+    command.register([
+      {
+        id: "palette.open",
+        title: "Command Palette",
+        description: "Open the command palette",
+        keybind: "mod+k",
+        global: true,
+        passive: true,
+        onSelect: (e) => {
+          // Don't open palette from terminal (Cmd+K is used there for clearing)
+          if (e?.target instanceof HTMLElement && e.target.closest(".xterm")) return;
+          e?.preventDefault();
+          command.setPaletteOpen(!command.paletteOpen());
+        },
+      },
+      {
+        id: "session.new",
+        title: "New Session",
+        description: "Create a new chat session",
+        keybind: "mod+n",
+        onSelect: createNewSession,
+      },
+      {
+        id: "session.archive",
+        title: "Archive Session",
+        description: "Archive the current session",
+        keybind: "mod+w",
+        onSelect: archiveCurrentSession,
+      },
+      {
+        id: "session.next",
+        title: "Next Session",
+        description: "Switch to the next session in the list",
+        keybind: "alt+ArrowDown",
+        onSelect: () => navigateSessionDelta(1),
+      },
+      {
+        id: "session.prev",
+        title: "Previous Session",
+        description: "Switch to the previous session in the list",
+        keybind: "alt+ArrowUp",
+        onSelect: () => navigateSessionDelta(-1),
+      },
+      // Alt+1 through Alt+9: jump to session by position
+      // Alt+1 is visible in the cheat sheet as representative; Alt+2-9 are hidden
+      ...Array.from({ length: 9 }, (_, i) => ({
+        id: `session.jump.${i + 1}`,
+        title: i === 0 ? "Jump to Session 1–9" : `Go to Session ${i + 1}`,
+        description: i === 0 ? "Switch to a session by its sidebar position" : undefined,
+        keybind: `alt+${i + 1}`,
+        hidden: i > 0,
+        onSelect: () => navigateToSessionIndex(i),
+      })),
+      {
+        id: "palette.projects",
+        title: "Switch Project",
+        description: "Open command palette filtered to projects",
+        keybind: "mod+shift+k",
+        onSelect: () => {
+          command.setPaletteFilter("# ");
+          command.setPaletteOpen(true);
+        },
+      },
+      {
+        id: "settings.open",
+        title: "Open Settings",
+        description: "Navigate to settings page",
+        onSelect: () => navigate(`/${dirSlug()}/settings`),
+      },
+      {
+        id: "terminal.toggle",
+        title: "Toggle Terminal",
+        keybind: "ctrl+`",
+        onSelect: () => terminal.toggle(directory),
+      },
+      {
+        id: "sidebar.toggle",
+        title: "Toggle Sidebar",
+        keybind: "ctrl+b",
+        onSelect: toggleSidebar,
+      },
+      {
+        id: "review.toggle",
+        title: "Toggle Review Panel",
+        keybind: "mod+shift+r",
+        onSelect: () => layout.review.toggle(),
+      },
+      {
+        id: "info.toggle",
+        title: "Toggle Info Panel",
+        keybind: "mod+shift+i",
+        onSelect: () => layout.info.toggle(),
+      },
+      // Panel focus shortcuts — passive so we only preventDefault when we actually handle the key
+      {
+        id: "focus.sidebar",
+        title: "Focus Sidebar",
+        description: "Jump to session list sidebar",
+        keybind: "ctrl+1",
+        global: true,
+        passive: true,
+        onSelect: (e) => {
+          if (isDialogOpen() || command.paletteOpen() || command.shortcutRefOpen()) return;
+          if (!showSidebar()) return;
+          if (focusPanel("sidebar")) e?.preventDefault();
+        },
+      },
+      {
+        id: "focus.chat",
+        title: "Focus Chat Input",
+        description: "Jump to the chat input area",
+        keybind: "ctrl+2",
+        global: true,
+        passive: true,
+        onSelect: (e) => {
+          if (isDialogOpen() || command.paletteOpen() || command.shortcutRefOpen()) return;
+          if (focusPanel("chat")) e?.preventDefault();
+        },
+      },
+      {
+        id: "focus.terminal",
+        title: "Focus Terminal",
+        description: "Jump to the terminal panel (if open)",
+        keybind: "ctrl+3",
+        global: true,
+        passive: true,
+        onSelect: (e) => {
+          if (isDialogOpen() || command.paletteOpen() || command.shortcutRefOpen()) return;
+          if (terminal.opened() && focusPanel("terminal")) e?.preventDefault();
+        },
+      },
+      {
+        id: "focus.review",
+        title: "Focus Review Panel",
+        description: "Jump to the review panel (if open)",
+        keybind: "ctrl+4",
+        global: true,
+        passive: true,
+        onSelect: (e) => {
+          if (isDialogOpen() || command.paletteOpen() || command.shortcutRefOpen()) return;
+          if (layout.review.opened() && focusPanel("review")) e?.preventDefault();
+        },
+      },
+      {
+        id: "focus.escape",
+        title: "Return to Chat Input",
+        description: "Press Escape to return focus to chat input",
+        keybind: "Escape",
+        global: true,
+        passive: true,
+        onSelect: (e) => {
+          // Don't steal Escape from open dialogs/modals
+          if (isDialogOpen()) return;
+          // Don't steal Escape from the shortcut reference overlay
+          if (command.shortcutRefOpen()) return;
+          // Don't steal Escape from the command palette
+          if (command.paletteOpen()) return;
+          // Don't steal Escape from handlers that already consumed it
+          if (e?.defaultPrevented) return;
+          // Don't steal Escape from the terminal (Escape is heavily used there)
+          const target = e?.target;
+          if (target instanceof HTMLElement && target.closest(".xterm")) return;
+          // Only preventDefault when we actually move focus (e.g. skip on settings page)
+          if (focusPanel("chat")) e?.preventDefault();
+        },
+      },
+    ]);
+
+    onCleanup(() => {
+      command.unregister([
+        "palette.open",
+        "session.new",
+        "session.archive",
+        "session.next",
+        "session.prev",
+        ...Array.from({ length: 9 }, (_, i) => `session.jump.${i + 1}`),
+        "palette.projects",
+        "settings.open",
+        "terminal.toggle",
+        "sidebar.toggle",
+        "review.toggle",
+        "info.toggle",
+        "focus.sidebar",
+        "focus.chat",
+        "focus.terminal",
+        "focus.review",
+        "focus.escape",
+      ]);
+    });
+  });
+
   onMount(() => {
     loadSessions();
 
@@ -414,42 +843,7 @@ export function Layout(props: ParentProps) {
       }
     });
 
-    function handleKeyDown(e: KeyboardEvent) {
-      // Terminal toggle: Ctrl+`
-      if (e.ctrlKey && e.key === "`") {
-        e.preventDefault();
-        terminal.toggle(directory);
-      }
-      // Sidebar toggle: Ctrl+B
-      if (e.ctrlKey && e.key === "b") {
-        e.preventDefault();
-        toggleSidebar();
-      }
-      // Review panel toggle: Cmd+Shift+R (Mac) or Ctrl+Shift+R
-      if (
-        (e.metaKey || e.ctrlKey) &&
-        e.shiftKey &&
-        e.key.toLowerCase() === "r"
-      ) {
-        e.preventDefault();
-        layout.review.toggle();
-      }
-      // Info panel toggle: Cmd+Shift+I (Mac) or Ctrl+Shift+I
-      if (
-        (e.metaKey || e.ctrlKey) &&
-        e.shiftKey &&
-        e.key.toLowerCase() === "i"
-      ) {
-        e.preventDefault();
-        layout.info.toggle();
-      }
-    }
-    window.addEventListener("keydown", handleKeyDown);
-
-    onCleanup(() => {
-      unsub();
-      window.removeEventListener("keydown", handleKeyDown);
-    });
+    onCleanup(unsub);
   });
 
   // --- Global alarm monitoring for ALL sessions with bell enabled ---
@@ -806,7 +1200,10 @@ export function Layout(props: ParentProps) {
     const handler = (e: MouseEvent) => {
       const target = e.target;
       if (!(target instanceof Element)) return;
-      if (!target.closest("[data-sidebar-menu]")) setMenuOpenId(null);
+      if (!target.closest("[data-sidebar-menu]")) {
+        setMenuOpenId(null);
+        setMenuFocusIndex(-1);
+      }
     };
     document.addEventListener("click", handler, { capture: true });
     onCleanup(() => document.removeEventListener("click", handler, { capture: true }));
@@ -876,6 +1273,7 @@ export function Layout(props: ParentProps) {
           <For each={projects()}>
             {(project) => (
               <div
+                data-hint-target
                 onClick={() => navigateToProject(project.worktree)}
                 class="group relative cursor-pointer"
                 title={project.name || getFilename(project.worktree)}
@@ -914,6 +1312,7 @@ export function Layout(props: ParentProps) {
 
           {/* Add project button */}
           <button
+            data-hint-target
             onClick={() => setProjectDialogOpen(true)}
             class="w-10 h-10 rounded-lg flex items-center justify-center transition-colors"
             style={{
@@ -938,6 +1337,7 @@ export function Layout(props: ParentProps) {
           style={{ "border-top": "1px solid var(--border-base)" }}
         >
           <button
+            data-hint-target
             onClick={() => terminal.toggle(directory)}
             class="w-10 h-10 rounded-lg flex items-center justify-center transition-colors"
             style={{
@@ -953,6 +1353,7 @@ export function Layout(props: ParentProps) {
             <SquareTerminal class="w-5 h-5" />
           </button>
           <button
+            data-hint-target
             onClick={() => navigate(`/${dirSlug()}/settings`)}
             class="w-10 h-10 rounded-lg flex items-center justify-center transition-colors"
             style={{
@@ -971,8 +1372,23 @@ export function Layout(props: ParentProps) {
       </div>
 
       {/* Sessions Panel (collapsible) */}
-      <div
-        class={`shrink-0 flex flex-col ${sidebarDragging() ? "" : "transition-all duration-200"}`}
+      <nav
+        data-panel="sidebar"
+        tabIndex={-1}
+        aria-label="Session list"
+        onFocus={handleSidebarFocus}
+        onBlur={(e) => {
+          // Clear focus indicator when focus leaves the sidebar entirely
+          if (!e.currentTarget.contains(e.relatedTarget as Node)) {
+            setFocusedId(null);
+            if (menuOpenId()) {
+              setMenuOpenId(null);
+              setMenuFocusIndex(-1);
+            }
+          }
+        }}
+        onKeyDown={handleSessionListKeyDown}
+        class={`shrink-0 flex flex-col focus-visible:outline-2 focus-visible:outline-[var(--interactive-base)] focus-visible:outline-offset-[-2px] ${sidebarDragging() ? "" : "transition-all duration-200"}`}
         style={{
           width: showSidebar() ? `${layout.sidebar.width()}px` : "0px",
           overflow: "hidden",
@@ -1019,6 +1435,7 @@ export function Layout(props: ParentProps) {
           <div class="px-3 py-2 relative">
             <div class="flex w-full">
               <Button
+                data-hint-target
                 onClick={createNewSession}
                 variant="ghost"
                 class={`flex-1 justify-start ${savedPrompts.prompts().length > 0 ? "rounded-r-none" : ""}`}
@@ -1055,7 +1472,13 @@ export function Layout(props: ParentProps) {
           </div>
 
           {/* Sessions List */}
-          <div class="flex-1 overflow-y-auto px-2">
+          <div
+            class="flex-1 overflow-y-auto px-2"
+            role="listbox"
+            aria-label="Sessions"
+            aria-activedescendant={focusedId() ? `session-${focusedId()}` : undefined}
+            tabIndex={0}
+          >
             <Show when={loading()}>
               <div
                 class="flex flex-col items-center justify-center py-8 gap-2"
@@ -1089,6 +1512,7 @@ export function Layout(props: ParentProps) {
                   {(group) => (
                     <div class="pb-2">
                       <h3
+                        role="presentation"
                         class="px-2.5 pt-2 pb-1 font-semibold uppercase text-[0.65rem] tracking-[0.06em]"
                         style={{ color: "var(--text-weak)" }}
                       >
@@ -1097,20 +1521,36 @@ export function Layout(props: ParentProps) {
                       <div class="space-y-0.5">
                         <For each={group.sessions}>
                           {(session) => (
-                            <div class="group relative">
+                            <div
+                              id={`session-${session.id}`}
+                              class="group relative"
+                              role="option"
+                              aria-selected={isActive(session.id)}
+                            >
                               <Show
                                 when={renamingId() === session.id}
                                 fallback={
                                   <A
+                                    data-hint-target
                                     href={`/${dirSlug()}/session/${session.id}`}
+                                    tabIndex={isActive(session.id) ? 0 : -1}
                                     class="flex items-center gap-2 px-2.5 py-2 rounded-md text-sm transition-colors"
                                     style={{
                                       color: isActive(session.id)
                                         ? "var(--text-interactive-base)"
-                                        : "var(--text-base)",
+                                        : focusedId() === session.id
+                                          ? "var(--text-interactive-base)"
+                                          : "var(--text-base)",
                                       background: isActive(session.id)
                                         ? "var(--surface-inset)"
-                                        : "transparent",
+                                        : focusedId() === session.id
+                                          ? "var(--surface-inset)"
+                                          : "transparent",
+                                      outline: focusedId() === session.id
+                                        ? "2px solid var(--interactive-base)"
+                                        : "none",
+                                      "outline-offset": "-2px",
+                                      "border-radius": "0.375rem",
                                     }}
                                     onMouseEnter={(e) => {
                                       if (!isActive(session.id))
@@ -1118,7 +1558,7 @@ export function Layout(props: ParentProps) {
                                           "var(--surface-inset)";
                                     }}
                                     onMouseLeave={(e) => {
-                                      if (!isActive(session.id))
+                                      if (!isActive(session.id) && focusedId() !== session.id)
                                         e.currentTarget.style.background =
                                           "transparent";
                                     }}
@@ -1238,20 +1678,20 @@ export function Layout(props: ParentProps) {
                               </Show>
                               <Show when={renamingId() !== session.id}>
                                 <div
-                                  class={`absolute right-0 top-0 bottom-0 items-center rounded-r-md ${menuOpenId() === session.id ? "flex" : "hidden group-hover:flex group-focus-within:flex"}`}
+                                  class={`absolute right-0 top-0 bottom-0 items-center rounded-r-md ${menuOpenId() === session.id || focusedId() === session.id ? "flex" : "hidden group-hover:flex group-focus-within:flex"}`}
                                   style={{ "pointer-events": "none" }}
                                 >
                                    <div
                                     class="w-6 h-full"
                                     style={{
-                                      background: `linear-gradient(to right, transparent, var(${isActive(session.id) ? "--surface-inset" : "--background-stronger"}))`,
+                                      background: `linear-gradient(to right, transparent, var(${isActive(session.id) || focusedId() === session.id ? "--surface-inset" : "--background-stronger"}))`,
                                     }}
                                   />
                                   <div
                                     class="flex items-center pr-1.5 relative"
                                     style={{
                                       "pointer-events": "auto",
-                                      background: isActive(session.id) ? "var(--surface-inset)" : "var(--background-stronger)",
+                                      background: isActive(session.id) || focusedId() === session.id ? "var(--surface-inset)" : "var(--background-stronger)",
                                     }}
                                     data-sidebar-menu
                                   >
@@ -1259,7 +1699,9 @@ export function Layout(props: ParentProps) {
                                       onClick={(e) => {
                                         e.preventDefault();
                                         e.stopPropagation();
-                                        setMenuOpenId(menuOpenId() === session.id ? null : session.id);
+                                        const opening = menuOpenId() !== session.id;
+                                        setMenuOpenId(opening ? session.id : null);
+                                        setMenuFocusIndex(opening ? 0 : -1);
                                       }}
                                       class="p-1 rounded transition-colors"
                                       style={{ color: "var(--icon-weak)" }}
@@ -1287,18 +1729,28 @@ export function Layout(props: ParentProps) {
                                           background: "var(--background-base)",
                                           border: "1px solid var(--border-base)",
                                         }}
+                                        role="menu"
+                                        aria-label="Session options"
                                         data-sidebar-menu
+                                        data-sidebar-menu-dropdown
                                       >
                                         {/* Rename */}
                                         <button
+                                          data-menu-item
                                           class="w-full flex items-center gap-2 px-3 py-1.5 text-sm text-left transition-colors"
-                                          style={{ color: "var(--text-base)" }}
-                                          onMouseEnter={(e) => (e.currentTarget.style.background = "var(--surface-inset)")}
-                                          onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
+                                          style={{
+                                            color: "var(--text-base)",
+                                            background: menuFocusIndex() === 0 ? "var(--surface-inset)" : "transparent",
+                                          }}
+                                          role="menuitem"
+                                          onMouseEnter={() => setMenuFocusIndex(0)}
+                                          onFocus={() => setMenuFocusIndex(0)}
+                                          onMouseLeave={(e) => { if (menuFocusIndex() !== 0) e.currentTarget.style.background = "transparent" }}
                                           onClick={(e) => {
                                             e.preventDefault();
                                             e.stopPropagation();
                                             setMenuOpenId(null);
+                                            setMenuFocusIndex(-1);
                                             setEditTitle(session.title || "");
                                             setRenamingId(session.id);
                                           }}
@@ -1309,18 +1761,24 @@ export function Layout(props: ParentProps) {
 
                                         {/* Rename with AI — disabled when already renaming */}
                                         <button
+                                          data-menu-item
                                           class="w-full flex items-center gap-2 px-3 py-1.5 text-sm text-left transition-colors"
                                           disabled={!!aiRenamingId()}
                                           style={{
                                             color: "var(--text-base)",
                                             opacity: aiRenamingId() ? 0.6 : 1,
                                             cursor: aiRenamingId() ? "not-allowed" : "pointer",
+                                            background: menuFocusIndex() === 1 ? "var(--surface-inset)" : "transparent",
                                           }}
-                                          onMouseEnter={(e) => { if (!aiRenamingId()) e.currentTarget.style.background = "var(--surface-inset)" }}
-                                          onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
+                                          role="menuitem"
+                                          onMouseEnter={() => setMenuFocusIndex(1)}
+                                          onFocus={() => setMenuFocusIndex(1)}
+                                          onMouseLeave={(e) => { if (menuFocusIndex() !== 1) e.currentTarget.style.background = "transparent" }}
                                           onClick={(e) => {
                                             e.preventDefault();
                                             e.stopPropagation();
+                                            setMenuOpenId(null);
+                                            setMenuFocusIndex(-1);
                                             handleAiRename(session);
                                           }}
                                           title={aiRenamingId() ? "AI rename in progress" : "Suggests a title based on conversation"}
@@ -1331,14 +1789,21 @@ export function Layout(props: ParentProps) {
 
                                         {/* Archive */}
                                         <button
+                                          data-menu-item
                                           class="w-full flex items-center gap-2 px-3 py-1.5 text-sm text-left transition-colors"
-                                          style={{ color: "var(--text-base)" }}
-                                          onMouseEnter={(e) => (e.currentTarget.style.background = "var(--surface-inset)")}
-                                          onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
+                                          style={{
+                                            color: "var(--text-base)",
+                                            background: menuFocusIndex() === 2 ? "var(--surface-inset)" : "transparent",
+                                          }}
+                                          role="menuitem"
+                                          onMouseEnter={() => setMenuFocusIndex(2)}
+                                          onFocus={() => setMenuFocusIndex(2)}
+                                          onMouseLeave={(e) => { if (menuFocusIndex() !== 2) e.currentTarget.style.background = "transparent" }}
                                           onClick={(e) => {
                                             e.preventDefault();
                                             e.stopPropagation();
                                             setMenuOpenId(null);
+                                            setMenuFocusIndex(-1);
                                             archiveAndNavigate(session);
                                           }}
                                         >
@@ -1347,18 +1812,25 @@ export function Layout(props: ParentProps) {
                                         </button>
 
                                         {/* Separator */}
-                                        <div class="my-1" style={{ "border-top": "1px solid var(--border-base)" }} />
+                                        <div class="my-1" role="separator" style={{ "border-top": "1px solid var(--border-base)" }} />
 
                                         {/* Delete */}
                                         <button
+                                          data-menu-item
                                           class="w-full flex items-center gap-2 px-3 py-1.5 text-sm text-left transition-colors"
-                                          style={{ color: "var(--text-critical-base)" }}
-                                          onMouseEnter={(e) => (e.currentTarget.style.background = "var(--surface-inset)")}
-                                          onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
+                                          style={{
+                                            color: "var(--text-critical-base)",
+                                            background: menuFocusIndex() === 3 ? "var(--surface-inset)" : "transparent",
+                                          }}
+                                          role="menuitem"
+                                          onMouseEnter={() => setMenuFocusIndex(3)}
+                                          onFocus={() => setMenuFocusIndex(3)}
+                                          onMouseLeave={(e) => { if (menuFocusIndex() !== 3) e.currentTarget.style.background = "transparent" }}
                                           onClick={(e) => {
                                             e.preventDefault();
                                             e.stopPropagation();
                                             setMenuOpenId(null);
+                                            setMenuFocusIndex(-1);
                                             setDeleteError(null);
                                             setConfirmDeleteSession(session);
                                           }}
@@ -1467,7 +1939,9 @@ export function Layout(props: ParentProps) {
                                   onClick={(e) => {
                                     e.preventDefault();
                                     e.stopPropagation();
-                                    setMenuOpenId(menuOpenId() === session.id ? null : session.id);
+                                    const opening = menuOpenId() !== session.id;
+                                    setMenuOpenId(opening ? session.id : null);
+                                    setMenuFocusIndex(opening ? 0 : -1);
                                   }}
                                   class="p-1 rounded transition-colors"
                                   style={{ color: "var(--icon-weak)" }}
@@ -1495,14 +1969,21 @@ export function Layout(props: ParentProps) {
                                       background: "var(--background-base)",
                                       border: "1px solid var(--border-base)",
                                     }}
-                                    data-sidebar-menu
+                                    data-sidebar-menu-dropdown
+                                    role="menu"
                                   >
                                     {/* Restore */}
                                     <button
+                                      data-menu-item
+                                      role="menuitem"
                                       class="w-full flex items-center gap-2 px-3 py-1.5 text-sm text-left transition-colors"
-                                      style={{ color: "var(--text-base)" }}
-                                      onMouseEnter={(e) => (e.currentTarget.style.background = "var(--surface-inset)")}
-                                      onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
+                                      style={{
+                                        color: "var(--text-base)",
+                                        background: menuFocusIndex() === 0 ? "var(--surface-inset)" : "transparent",
+                                      }}
+                                      onMouseEnter={() => setMenuFocusIndex(0)}
+                                      onFocus={() => setMenuFocusIndex(0)}
+                                      onMouseLeave={(e) => { if (menuFocusIndex() !== 0) e.currentTarget.style.background = "transparent" }}
                                       onClick={(e) => {
                                         e.preventDefault();
                                         e.stopPropagation();
@@ -1515,14 +1996,20 @@ export function Layout(props: ParentProps) {
                                     </button>
 
                                     {/* Separator */}
-                                    <div class="my-1" style={{ "border-top": "1px solid var(--border-base)" }} />
+                                    <div class="my-1" role="separator" style={{ "border-top": "1px solid var(--border-base)" }} />
 
                                     {/* Delete */}
                                     <button
+                                      data-menu-item
+                                      role="menuitem"
                                       class="w-full flex items-center gap-2 px-3 py-1.5 text-sm text-left transition-colors"
-                                      style={{ color: "var(--text-critical-base)" }}
-                                      onMouseEnter={(e) => (e.currentTarget.style.background = "var(--surface-inset)")}
-                                      onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
+                                      style={{
+                                        color: "var(--text-critical-base)",
+                                        background: menuFocusIndex() === 1 ? "var(--surface-inset)" : "transparent",
+                                      }}
+                                      onMouseEnter={() => setMenuFocusIndex(1)}
+                                      onFocus={() => setMenuFocusIndex(1)}
+                                      onMouseLeave={(e) => { if (menuFocusIndex() !== 1) e.currentTarget.style.background = "transparent" }}
                                       onClick={(e) => {
                                         e.preventDefault();
                                         e.stopPropagation();
@@ -1572,7 +2059,7 @@ export function Layout(props: ParentProps) {
             </div>
           </div>
         </div>
-      </div>
+      </nav>
 
       {/* Sidebar resize handle */}
       <Show when={showSidebar()}>
@@ -1635,6 +2122,8 @@ export function Layout(props: ParentProps) {
           }
         >
           <div
+            data-panel="terminal"
+            tabIndex={-1}
             class="flex flex-col relative"
             style={{
               height:
@@ -1830,6 +2319,31 @@ export function Layout(props: ParentProps) {
           setConfirmDeleteSession(null);
         }}
       />
+
+      {/* Archive confirmation dialog for busy sessions (Cmd+W) */}
+      <ConfirmDialog
+        open={!!confirmArchiveSession()}
+        title="Archive busy session?"
+        message={`"${confirmArchiveSession()?.title || "This session"}" is currently running. Archive it anyway?`}
+        confirmLabel="Archive"
+        cancelLabel="Cancel"
+        variant="warning"
+        onConfirm={() => {
+          const session = confirmArchiveSession();
+          setConfirmArchiveSession(null);
+          if (session) archiveAndNavigate(session);
+        }}
+        onCancel={() => setConfirmArchiveSession(null)}
+      />
+
+      {/* Keyboard shortcut reference overlay */}
+      <ShortcutReference />
+
+      {/* Command palette overlay */}
+      <CommandPalette />
+
+      {/* Vimium-style hint mode overlay */}
+      <HintMode />
     </div>
   );
 }
