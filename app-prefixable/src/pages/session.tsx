@@ -135,6 +135,15 @@ export function Session() {
   const [loadingHistory, setLoadingHistory] = createSignal(false);
   const [sessionId, setSessionId] = createSignal(params.id);
 
+  // Extract text content from message parts with optional separator and truncation
+  function textFromParts(parts: Part[], separator = " ", maxLen?: number) {
+    const text = parts
+      .filter((p): p is TextPart => p.type === "text")
+      .map((p) => p.text)
+      .join(separator);
+    return maxLen ? text.slice(0, maxLen) : text;
+  }
+
   // Fork picker items: user messages in reverse chronological order
   const forkPickerItems = createMemo(() => {
     const id = sessionId();
@@ -143,10 +152,7 @@ export function Session() {
     return msgs
       .filter((m) => m.info.role === "user")
       .map((m) => {
-        const textParts = m.parts
-          .filter((p): p is TextPart => p.type === "text")
-          .map((p) => p.text)
-          .join(" ");
+        const textParts = textFromParts(m.parts);
         const preview = textParts.length > 80 ? textParts.slice(0, 80) + "..." : textParts;
         const date = new Date(m.info.time.created);
         const timestamp = date.toLocaleString(undefined, {
@@ -2133,10 +2139,7 @@ export function Session() {
                   const msgs = sync.messages(id);
                   const selected = msgs.find((m) => m.info.id === item.id);
                   const restoredText = selected
-                    ? selected.parts
-                        .filter((p): p is TextPart => p.type === "text")
-                        .map((p) => p.text)
-                        .join("\n")
+                    ? textFromParts(selected.parts, "\n")
                     : "";
                   navigate(`/${dirSlug()}/session/${forkedId}`);
                   // Restore the message text into the new session's input after navigation
