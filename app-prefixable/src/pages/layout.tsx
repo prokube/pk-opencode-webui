@@ -1023,6 +1023,7 @@ export function Layout(props: ParentProps) {
     setSearchFocusIdx(-1);
     setSearching(true);
     searchTimer.id = setTimeout(() => {
+      searchTimer.id = undefined;
       setSearchResults([]);
       client.session.list({ search: trimmed, directory, roots: true })
         .then((res) => {
@@ -1046,6 +1047,7 @@ export function Layout(props: ParentProps) {
 
   function clearSearch() {
     if (searchTimer.id !== undefined) clearTimeout(searchTimer.id);
+    searchTimer.id = undefined;
     setSearchQuery("");
     setSearchResults([]);
     setSearching(false);
@@ -1080,15 +1082,19 @@ export function Layout(props: ParentProps) {
       const listbox = el.querySelector('[role="listbox"]') as HTMLElement | null;
       if (listbox) {
         listbox.focus();
-        // Initialize focus state so the active session is highlighted
-        const ids = flatSessionIds();
-        const current = currentSessionId();
-        if (current && ids.includes(current)) {
-          setFocusedId(current);
-          scrollFocusedIntoView(current);
-        } else if (ids.length) {
-          setFocusedId(ids[0]);
-          scrollFocusedIntoView(ids[0]);
+        // During search, don't initialize focusedId from the grouped session list —
+        // those DOM elements are unmounted and aria-activedescendant would dangle.
+        if (!searchQuery().trim()) {
+          // Initialize focus state so the active session is highlighted
+          const ids = flatSessionIds();
+          const current = currentSessionId();
+          if (current && ids.includes(current)) {
+            setFocusedId(current);
+            scrollFocusedIntoView(current);
+          } else if (ids.length) {
+            setFocusedId(ids[0]);
+            scrollFocusedIntoView(ids[0]);
+          }
         }
         return true;
       }
