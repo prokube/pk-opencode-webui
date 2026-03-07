@@ -26,17 +26,26 @@ export function readSoundSettings(): SoundSettings {
   if (typeof window === "undefined") return { ...DEFAULTS }
   const raw = window.localStorage.getItem(SOUND_STORAGE_KEY)
   if (!raw) return { ...DEFAULTS }
-  const parsed = JSON.parse(raw) as Partial<SoundSettings>
-  return {
-    enabled: typeof parsed.enabled === "boolean" ? parsed.enabled : DEFAULTS.enabled,
-    sound: typeof parsed.sound === "string" ? parsed.sound : DEFAULTS.sound,
+  try {
+    const parsed = JSON.parse(raw) as Partial<SoundSettings>
+    return {
+      enabled: typeof parsed.enabled === "boolean" ? parsed.enabled : DEFAULTS.enabled,
+      sound: typeof parsed.sound === "string" ? parsed.sound : DEFAULTS.sound,
+    }
+  } catch {
+    window.localStorage.removeItem(SOUND_STORAGE_KEY)
+    return { ...DEFAULTS }
   }
 }
 
 export function writeSoundSettings(settings: SoundSettings) {
   if (typeof window === "undefined") return
   const value = JSON.stringify(settings)
-  window.localStorage.setItem(SOUND_STORAGE_KEY, value)
+  try {
+    window.localStorage.setItem(SOUND_STORAGE_KEY, value)
+  } catch {
+    return
+  }
   dispatchStorageEvent(SOUND_STORAGE_KEY, value)
 }
 
@@ -61,11 +70,13 @@ function playTones(tones: [number, number, number][], gain = 0.25) {
   const ctx = getAudioContext()
   if (!ctx) return
   // Resume context if suspended (autoplay policy)
-  if (ctx.state === "suspended") ctx.resume()
+  if (ctx.state === "suspended") void ctx.resume().catch(() => {})
 
   const master = ctx.createGain()
   master.gain.value = gain
   master.connect(ctx.destination)
+
+  const latestStop = tones.reduce((max, [, start, dur]) => Math.max(max, start + dur + 0.05), 0)
 
   for (const [freq, start, dur] of tones) {
     const osc = ctx.createOscillator()
@@ -79,6 +90,8 @@ function playTones(tones: [number, number, number][], gain = 0.25) {
     osc.start(ctx.currentTime + start)
     osc.stop(ctx.currentTime + start + dur + 0.05)
   }
+
+  setTimeout(() => master.disconnect(), latestStop * 1000)
 }
 
 // ---------------------------------------------------------------------------

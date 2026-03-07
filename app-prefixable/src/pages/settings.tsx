@@ -1973,10 +1973,6 @@ Add your project-specific instructions here.
                                 type="radio"
                                 name="sound"
                                 checked={soundSettings().sound === option.id}
-                                onChange={() => {
-                                  updateSoundSettings({ sound: option.id })
-                                  playSound(option.id)
-                                }}
                                 class="accent-[var(--interactive-base)]"
                               />
                               <span class="text-sm" style={{ color: "var(--text-base)" }}>{option.label}</span>
