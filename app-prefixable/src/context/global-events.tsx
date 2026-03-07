@@ -55,6 +55,10 @@ export function GlobalEventsProvider(props: ParentProps & {
   // Pending reconnect timers, tracked separately from connections but cleared by disconnectDirectory
   const reconnectTimers = new Map<string, ReturnType<typeof setTimeout>>()
 
+  // Debounce timers for permission reseeds — prevents multiple rapid permission.replied
+  // events from spawning overlapping fetch requests that race each other
+  const permReseedTimers = new Map<string, ReturnType<typeof setTimeout>>()
+
   // Per-directory tracking sets for deduplication
   const perDir = new Map<string, {
     permissionSessions: Set<string>
@@ -138,9 +142,14 @@ export function GlobalEventsProvider(props: ParentProps & {
       }
 
       if (event.type === "permission.replied") {
-        // A permission was answered — re-seed to get accurate count
-        // (we don't know if the session has more pending permissions)
-        seedPermissions(dir)
+        // A permission was answered — debounce reseed to avoid overlapping
+        // fetches when multiple permission.replied events arrive quickly
+        const existing = permReseedTimers.get(dir)
+        if (existing) clearTimeout(existing)
+        permReseedTimers.set(dir, setTimeout(() => {
+          permReseedTimers.delete(dir)
+          seedPermissions(dir)
+        }, 300))
         return
       }
 
@@ -217,6 +226,11 @@ export function GlobalEventsProvider(props: ParentProps & {
     if (timer) {
       clearTimeout(timer)
       reconnectTimers.delete(dir)
+    }
+    const reseed = permReseedTimers.get(dir)
+    if (reseed) {
+      clearTimeout(reseed)
+      permReseedTimers.delete(dir)
     }
     perDir.delete(dir)
     setAlerts(produce((draft) => { delete draft[dir] }))
@@ -321,10 +335,14 @@ export function GlobalEventsProvider(props: ParentProps & {
       disconnectDirectory(dir)
     }
     // Cancel any orphaned reconnect timers (directory already disconnected but timer pending)
-    for (const [dir, timer] of reconnectTimers) {
+    for (const [, timer] of reconnectTimers) {
       clearTimeout(timer)
     }
     reconnectTimers.clear()
+    for (const [, timer] of permReseedTimers) {
+      clearTimeout(timer)
+    }
+    permReseedTimers.clear()
   })
 
   function badge(directory: string) {
