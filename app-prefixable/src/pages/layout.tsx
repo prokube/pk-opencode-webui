@@ -1489,14 +1489,13 @@ export function Layout(props: ParentProps) {
     // Clean up notification toggle state
     cleanupNotifyState(session.id);
 
-    // Unpin if pinned
-    unpinSession(session.id);
-
     client.session.update({
       sessionID: session.id,
       time: { archived: Date.now() },
     })
       .then(() => {
+        // Unpin only after successful archive
+        unpinSession(session.id);
         // Navigate only after successful archive
         if (isActive(session.id)) {
           navigate(neighbor ? `/${dirSlug()}/session/${neighbor.id}` : `/${dirSlug()}/session`);
