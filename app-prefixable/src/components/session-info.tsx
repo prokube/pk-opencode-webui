@@ -189,7 +189,7 @@ export function SessionInfo(props: SessionInfoProps) {
             }}
             onMouseEnter={(e) => (e.currentTarget.style.background = "var(--surface-critical-subtle)")}
             onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
-            title="Stop generation (Esc)"
+            title="Stop generation (Esc Esc)"
           >
             <Square class="w-3 h-3" />
             <span>Stop</span>
