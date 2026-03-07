@@ -34,7 +34,7 @@ export function ConfigProvider(props: ParentProps) {
     try {
       const [projRes, globalRes] = await Promise.all([
         sdk.client.config.get().catch(() => null),
-        sdk.global.config.get().catch(() => null),
+        sdk.client.global.config.get().catch(() => null),
       ])
       if (projRes?.data) setProject(reconcile(projRes.data as Config))
       if (globalRes?.data) setGlobal(reconcile(globalRes.data as Config))
@@ -66,7 +66,7 @@ export function ConfigProvider(props: ParentProps) {
   async function updateGlobal(patch: Config): Promise<Config | null> {
     setError(null)
     try {
-      const res = await sdk.global.config.update({ config: patch })
+      const res = await sdk.client.global.config.update({ config: patch })
       const data = res.data as Config | undefined
       if (data) {
         setGlobal(reconcile(data))
