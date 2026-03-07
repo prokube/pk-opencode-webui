@@ -46,6 +46,7 @@ import {
   MoreHorizontal,
   Trash2,
   Sparkles,
+  Search,
 } from "lucide-solid";
 import { useSync } from "../context/sync";
 import { usePermission } from "../context/permission";
@@ -225,6 +226,12 @@ export function Layout(props: ParentProps) {
   const [promptDropdownOpen, setPromptDropdownOpen] = createSignal(false);
   const [promptDropdownIndex, setPromptDropdownIndex] = createSignal(0);
   const [confirmArchiveSession, setConfirmArchiveSession] = createSignal<Session | null>(null);
+
+  // Search state
+  const [searchQuery, setSearchQuery] = createSignal("");
+  const [searchResults, setSearchResults] = createSignal<Session[]>([]);
+  const [searching, setSearching] = createSignal(false);
+  const searchTimer = { id: undefined as ReturnType<typeof setTimeout> | undefined };
 
   // Keyboard navigation state for session list
   const [focusedId, setFocusedId] = createSignal<string | null>(null);
@@ -549,6 +556,47 @@ export function Layout(props: ParentProps) {
       setLoading(false);
     }
   }
+
+  function handleSearchInput(query: string) {
+    setSearchQuery(query);
+    if (searchTimer.id !== undefined) clearTimeout(searchTimer.id);
+    if (!query.trim()) {
+      setSearchResults([]);
+      setSearching(false);
+      return;
+    }
+    setSearching(true);
+    searchTimer.id = setTimeout(() => {
+      client.session.list({ search: query.trim(), directory, roots: true })
+        .then((res) => {
+          // Only update if query hasn't changed while waiting
+          if (searchQuery() !== query) return;
+          const data = res.data;
+          const valid = Array.isArray(data)
+            ? data.filter((s): s is Session => s && typeof s === "object" && typeof s.id === "string")
+            : [];
+          setSearchResults(valid);
+        })
+        .catch((err: unknown) => {
+          console.error("Session search failed:", err);
+          if (searchQuery() === query) setSearchResults([]);
+        })
+        .finally(() => {
+          if (searchQuery() === query) setSearching(false);
+        });
+    }, 300);
+  }
+
+  function clearSearch() {
+    if (searchTimer.id !== undefined) clearTimeout(searchTimer.id);
+    setSearchQuery("");
+    setSearchResults([]);
+    setSearching(false);
+  }
+
+  onCleanup(() => {
+    if (searchTimer.id !== undefined) clearTimeout(searchTimer.id);
+  });
 
   // Focus a panel by data-panel attribute. Returns true if focus was set.
   function focusPanel(name: string): boolean {
@@ -1471,6 +1519,54 @@ export function Layout(props: ParentProps) {
             </Show>
           </div>
 
+          {/* Session Search */}
+          <div class="px-3 pb-2">
+            <div
+              class="flex items-center gap-2 px-2.5 py-1.5 rounded-md text-sm"
+              style={{
+                background: "var(--surface-inset)",
+                border: "1px solid var(--border-base)",
+              }}
+            >
+              <Show
+                when={!searching()}
+                fallback={
+                  <Loader2 class="w-3.5 h-3.5 shrink-0 animate-spin" style={{ color: "var(--icon-weak)" }} />
+                }
+              >
+                <Search class="w-3.5 h-3.5 shrink-0" style={{ color: "var(--icon-weak)" }} />
+              </Show>
+              <input
+                type="text"
+                placeholder="Search sessions..."
+                value={searchQuery()}
+                onInput={(e) => handleSearchInput(e.currentTarget.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Escape") {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    clearSearch();
+                    e.currentTarget.blur();
+                  }
+                }}
+                class="flex-1 min-w-0 bg-transparent outline-none text-sm"
+                style={{ color: "var(--text-base)" }}
+              />
+              <Show when={searchQuery()}>
+                <button
+                  onClick={clearSearch}
+                  class="p-0.5 rounded transition-colors shrink-0"
+                  style={{ color: "var(--icon-weak)" }}
+                  onMouseEnter={(e) => (e.currentTarget.style.color = "var(--icon-base)")}
+                  onMouseLeave={(e) => (e.currentTarget.style.color = "var(--icon-weak)")}
+                  title="Clear search"
+                >
+                  <X class="w-3.5 h-3.5" />
+                </button>
+              </Show>
+            </div>
+          </div>
+
           {/* Sessions List */}
           <div
             class="flex-1 overflow-y-auto px-2"
@@ -1492,7 +1588,65 @@ export function Layout(props: ParentProps) {
               </div>
             </Show>
 
-            <Show when={!loading()}>
+            {/* Search Results */}
+            <Show when={!loading() && searchQuery().trim()}>
+              <Show
+                when={!searching() && searchResults().length === 0}
+                fallback={
+                  <div class="space-y-0.5">
+                    <For each={searchResults()}>
+                      {(session) => (
+                        <A
+                          href={`/${dirSlug()}/session/${session.id}`}
+                          onClick={() => clearSearch()}
+                          class="flex items-center gap-2 px-2.5 py-2 rounded-md text-sm transition-colors"
+                          style={{
+                            color: isActive(session.id)
+                              ? "var(--text-interactive-base)"
+                              : session.time?.archived
+                                ? "var(--text-weak)"
+                                : "var(--text-base)",
+                            background: isActive(session.id)
+                              ? "var(--surface-inset)"
+                              : "transparent",
+                            opacity: session.time?.archived && !isActive(session.id) ? 0.7 : 1,
+                          }}
+                          onMouseEnter={(e) => {
+                            if (!isActive(session.id)) e.currentTarget.style.background = "var(--surface-inset)";
+                          }}
+                          onMouseLeave={(e) => {
+                            if (!isActive(session.id)) e.currentTarget.style.background = "transparent";
+                          }}
+                        >
+                          <span class="shrink-0" style={{ color: "var(--icon-weak)" }}>
+                            <Show
+                              when={session.time?.archived}
+                              fallback={<MessageCircle class="w-4 h-4" />}
+                            >
+                              <Archive class="w-4 h-4" />
+                            </Show>
+                          </span>
+                          <span class="min-w-0 flex-1 truncate">
+                            {session.title || "Untitled"}
+                          </span>
+                        </A>
+                      )}
+                    </For>
+                  </div>
+                }
+              >
+                <div
+                  class="py-6 text-center"
+                  style={{ color: "var(--text-weak)" }}
+                >
+                  <p class="text-sm">No results</p>
+                  <p class="text-xs mt-1">Try a different search term</p>
+                </div>
+              </Show>
+            </Show>
+
+            {/* Normal Session List */}
+            <Show when={!loading() && !searchQuery().trim()}>
               <Show
                 when={
                   projectSessions().length > 0 || archivedSessions().length > 0
