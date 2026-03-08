@@ -100,7 +100,7 @@ export function SessionInfo(props: SessionInfoProps) {
   const dirSlug = createMemo(() => params.dir)
 
   return (
-    <div class="flex items-center gap-3 px-4 py-1.5 text-xs flex-wrap" style={{ color: "var(--text-weak)" }}>
+    <div class="flex items-center gap-3 px-4 py-1.5 text-xs overflow-hidden" style={{ color: "var(--text-weak)" }}>
       {/* Agent */}
       <Show when={providers.selectedAgent}>
         <button
@@ -118,9 +118,9 @@ export function SessionInfo(props: SessionInfoProps) {
       {/* Model */}
       <Show when={providers.selectedModel}>
         {(model) => (
-          <span class="flex items-center gap-1 shrink-0">
-            <span class="opacity-60">Model:</span>
-            <span style={{ color: "var(--text-base)" }}>{model().modelID}</span>
+          <span class="flex items-center gap-1 min-w-0">
+            <span class="opacity-60 shrink-0">Model:</span>
+            <span class="truncate" style={{ color: "var(--text-base)" }}>{model().modelID}</span>
           </span>
         )}
       </Show>
@@ -165,7 +165,7 @@ export function SessionInfo(props: SessionInfoProps) {
       </Show>
 
       {/* Enter hint / Stop button - pushed to right */}
-      <div class="ml-auto flex items-center">
+      <div class="ml-auto flex items-center shrink-0">
         <Show
           when={props.processing()}
           fallback={
