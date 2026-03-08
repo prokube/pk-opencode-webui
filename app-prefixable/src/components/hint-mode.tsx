@@ -200,10 +200,12 @@ export function HintMode() {
               <div
                 class="fixed z-[101] pointer-events-none flex items-center justify-center"
                 style={{
-                  // Position to the left of the element, vertically centered
+                  // Position to the left of the element when there's room, otherwise overlay the top-left corner
                   top: `${hint.rect.top + hint.rect.height / 2 - 10}px`,
-                  left: `${Math.max(2, hint.rect.left - 4)}px`,
-                  transform: "translate(-100%, 0)",
+                  left: hint.rect.left >= 28
+                    ? `${hint.rect.left - 4}px`
+                    : `${hint.rect.left + 2}px`,
+                  transform: hint.rect.left >= 28 ? "translate(-100%, 0)" : "none",
                   animation: "hint-fade-in 100ms ease-out",
                 }}
               >
@@ -231,8 +233,8 @@ export function HintMode() {
         {/* Inject keyframe animation */}
         <style>{`
           @keyframes hint-fade-in {
-            from { opacity: 0; transform: translate(-100%, 0) scale(0.8); }
-            to { opacity: 1; transform: translate(-100%, 0) scale(1); }
+            from { opacity: 0; scale: 0.8; }
+            to { opacity: 1; scale: 1; }
           }
         `}</style>
       </Portal>
