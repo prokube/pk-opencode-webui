@@ -1054,7 +1054,15 @@ export function Layout(props: ParentProps) {
     setSearchFocusIdx(-1);
     setMenuOpenId(null);
     setMenuFocusIndex(-1);
-    setFocusedId(null);
+    // Restore focusedId to the current session (or first session) so
+    // keyboard/AT navigation remains consistent after the grouped list re-mounts.
+    const ids = flatSessionIds();
+    const current = currentSessionId();
+    const target = (current && ids.includes(current)) ? current : (ids[0] ?? null);
+    setFocusedId(target);
+    if (target) {
+      scrollFocusedIntoView(target);
+    }
   }
 
   onCleanup(() => {
