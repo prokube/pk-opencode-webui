@@ -8,7 +8,6 @@ import {
   createMemo,
   onCleanup,
   createEffect,
-  type Accessor,
 } from "solid-js";
 import { A, useLocation, useNavigate, useParams } from "@solidjs/router";
 import { useBasePath } from "../context/base-path";
@@ -210,7 +209,6 @@ function PromptDropdown(props: {
 function SortablePinnedSession(props: {
   session: Session;
   render: (session: Session) => import("solid-js").JSX.Element;
-  dragging: Accessor<boolean>;
 }) {
   const sortable = createSortable(props.session.id);
   return (
@@ -414,16 +412,13 @@ export function Layout(props: ParentProps) {
     savePinnedIds(pinnedIds().filter((pid) => pid !== id));
   }
 
-  const [pinDragging, setPinDragging] = createSignal(false);
   const [pinDragId, setPinDragId] = createSignal<string | null>(null);
 
   function handlePinDragStart(event: SolidDragEvent) {
-    setPinDragging(true);
     setPinDragId(event.draggable ? String(event.draggable.id) : null);
   }
 
   function handlePinDragEnd(event: SolidDragEvent) {
-    setPinDragging(false);
     setPinDragId(null);
     const { draggable, droppable } = event;
     if (!draggable || !droppable) return;
@@ -2334,13 +2329,12 @@ export function Layout(props: ParentProps) {
                       <DragDropSensors />
                       <ConstrainDragXAxis />
                       <div class="space-y-0.5">
-                        <SortableProvider ids={pinnedIds()}>
+                        <SortableProvider ids={pinnedSessions().map((s) => s.id)}>
                           <For each={pinnedSessions()}>
                             {(session) => (
                               <SortablePinnedSession
                                 session={session}
                                 render={(s) => renderSessionItem(s, true)}
-                                dragging={pinDragging}
                               />
                             )}
                           </For>
