@@ -447,6 +447,7 @@ export function Layout(props: ParentProps) {
                 "outline-offset": "-2px",
                 "border-radius": "0.375rem",
               }}
+              onClick={(e) => { setFocusedId(null); e.currentTarget.blur(); }}
               onMouseEnter={(e) => {
                 if (!isActive(session.id))
                   e.currentTarget.style.background =
@@ -499,9 +500,12 @@ export function Layout(props: ParentProps) {
                   e.currentTarget.dataset.committed = "true";
                   renameSession(session, editTitle());
                   setRenamingId(null);
+                  queueMicrotask(() => { focusPanel("sidebar"); setFocusedId(session.id); });
                 } else if (e.key === "Escape") {
+                  e.stopPropagation();
                   e.currentTarget.dataset.cancelRename = "true";
                   setRenamingId(null);
+                  queueMicrotask(() => { focusPanel("sidebar"); setFocusedId(session.id); });
                 }
               }}
               onBlur={(e) => {
@@ -515,20 +519,20 @@ export function Layout(props: ParentProps) {
         </Show>
         <Show when={renamingId() !== session.id}>
           <div
-            class={`absolute right-0 top-0 bottom-0 items-center rounded-r-md ${menuOpenId() === session.id || focusedId() === session.id ? "flex" : "hidden group-hover:flex group-focus-within:flex"}`}
+            class={`absolute right-0 top-0 bottom-0 items-center rounded-r-md ${menuOpenId() === session.id ? "flex" : focusedId() === session.id ? "hidden" : "hidden group-hover:flex group-focus-within:flex"}`}
             style={{ "pointer-events": "none" }}
           >
              <div
               class="w-6 h-full"
               style={{
-                background: `linear-gradient(to right, transparent, var(${isActive(session.id) || focusedId() === session.id ? "--surface-inset" : "--background-stronger"}))`,
+                background: `linear-gradient(to right, transparent, var(${isActive(session.id) ? "--surface-inset" : "--background-stronger"}))`,
               }}
             />
             <div
               class="flex items-center pr-1.5 relative"
               style={{
                 "pointer-events": "auto",
-                background: isActive(session.id) || focusedId() === session.id ? "var(--surface-inset)" : "var(--background-stronger)",
+                background: isActive(session.id) ? "var(--surface-inset)" : "var(--background-stronger)",
               }}
               data-sidebar-menu
             >
@@ -1114,6 +1118,8 @@ export function Layout(props: ParentProps) {
   function focusPanel(name: string): boolean {
     const el = document.querySelector(`[data-panel="${name}"]`) as HTMLElement | null;
     if (!el) return false;
+    // Clear sidebar keyboard focus when switching to another panel
+    if (name !== "sidebar") setFocusedId(null);
     // For chat panel, focus the textarea inside it
     if (name === "chat") {
       const textarea = el.querySelector("textarea") as HTMLTextAreaElement | null;
@@ -1219,14 +1225,12 @@ export function Layout(props: ParentProps) {
         id: "session.new",
         title: "New Session",
         description: "Create a new chat session",
-        keybind: "mod+n",
         onSelect: createNewSession,
       },
       {
         id: "session.archive",
         title: "Archive Session",
         description: "Archive the current session",
-        keybind: "mod+w",
         onSelect: archiveCurrentSession,
       },
       {
@@ -1234,6 +1238,7 @@ export function Layout(props: ParentProps) {
         title: "Next Session",
         description: "Switch to the next session in the list",
         keybind: "alt+ArrowDown",
+        global: true,
         onSelect: () => navigateSessionDelta(1),
       },
       {
@@ -1241,6 +1246,7 @@ export function Layout(props: ParentProps) {
         title: "Previous Session",
         description: "Switch to the previous session in the list",
         keybind: "alt+ArrowUp",
+        global: true,
         onSelect: () => navigateSessionDelta(-1),
       },
       // Alt+1 through Alt+9: jump to session by position
@@ -1250,6 +1256,7 @@ export function Layout(props: ParentProps) {
         title: i === 0 ? "Jump to Session 1–9" : `Go to Session ${i + 1}`,
         description: i === 0 ? "Switch to a session by its sidebar position" : undefined,
         keybind: `alt+${i + 1}`,
+        global: true,
         hidden: i > 0,
         onSelect: () => navigateToSessionIndex(i),
       })),
@@ -1258,6 +1265,7 @@ export function Layout(props: ParentProps) {
         title: "Switch Project",
         description: "Open command palette filtered to projects",
         keybind: "mod+shift+k",
+        global: true,
         onSelect: () => {
           command.setPaletteFilter("# ");
           command.setPaletteOpen(true);
@@ -1272,25 +1280,29 @@ export function Layout(props: ParentProps) {
       {
         id: "terminal.toggle",
         title: "Toggle Terminal",
-        keybind: "ctrl+`",
+        keybind: "mod+shift+x",
+        global: true,
         onSelect: () => terminal.toggle(directory),
       },
       {
         id: "sidebar.toggle",
         title: "Toggle Sidebar",
         keybind: "ctrl+b",
+        global: true,
         onSelect: toggleSidebar,
       },
       {
         id: "review.toggle",
         title: "Toggle Review Panel",
         keybind: "mod+shift+r",
+        global: true,
         onSelect: () => layout.review.toggle(),
       },
       {
         id: "info.toggle",
         title: "Toggle Info Panel",
         keybind: "mod+shift+i",
+        global: true,
         onSelect: () => layout.info.toggle(),
       },
       // Panel focus shortcuts — passive so we only preventDefault when we actually handle the key
@@ -1969,7 +1981,8 @@ export function Layout(props: ParentProps) {
         onFocus={handleSidebarFocus}
         onBlur={(e) => {
           // Clear focus indicator when focus leaves the sidebar entirely
-          if (!e.currentTarget.contains(e.relatedTarget as Node)) {
+          // relatedTarget is null when focus moves to browser chrome or is lost
+          if (!e.relatedTarget || !e.currentTarget.contains(e.relatedTarget as Node)) {
             setFocusedId(null);
             if (menuOpenId()) {
               setMenuOpenId(null);
