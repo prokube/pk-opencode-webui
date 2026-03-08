@@ -634,16 +634,22 @@ Add your project-specific instructions here.
     setPromptToDelete(null)
   }
 
-  const tabs: Array<{ id: string; label: string; icon: () => JSX.Element }> = [
-    { id: "providers", label: "Providers", icon: () => <Plug class="w-4 h-4" /> },
-    { id: "git", label: "Git", icon: () => <GitBranch class="w-4 h-4" /> },
-    { id: "mcp", label: "MCP Servers", icon: () => <Server class="w-4 h-4" /> },
-    { id: "prompts", label: "Prompts", icon: () => <BookmarkPlus class="w-4 h-4" /> },
-    { id: "instructions", label: "Instructions", icon: () => <BookOpen class="w-4 h-4" /> },
-    { id: "config", label: "Project Config", icon: () => <Settings2 class="w-4 h-4" /> },
-    { id: "appearance", label: "Appearance", icon: () => <Palette class="w-4 h-4" /> },
-    { id: "sounds", label: "Sounds", icon: () => <Volume2 class="w-4 h-4" /> },
-  ]
+  const tabs = createMemo(() => {
+    const base: Array<{ id: string; label: string; icon: () => JSX.Element }> = [
+      { id: "providers", label: "Providers", icon: () => <Plug class="w-4 h-4" /> },
+      { id: "git", label: "Git", icon: () => <GitBranch class="w-4 h-4" /> },
+      { id: "mcp", label: "MCP Servers", icon: () => <Server class="w-4 h-4" /> },
+      { id: "prompts", label: "Prompts", icon: () => <BookmarkPlus class="w-4 h-4" /> },
+      { id: "instructions", label: "Instructions", icon: () => <BookOpen class="w-4 h-4" /> },
+    ]
+    // Only show Project Config tab when a project directory is selected
+    if (directory) {
+      base.push({ id: "config", label: "Project Config", icon: () => <Settings2 class="w-4 h-4" /> })
+    }
+    base.push({ id: "appearance", label: "Appearance", icon: () => <Palette class="w-4 h-4" /> })
+    base.push({ id: "sounds", label: "Sounds", icon: () => <Volume2 class="w-4 h-4" /> })
+    return base
+  })
 
   return (
     <div class="h-full flex" style={{ background: "var(--background-stronger)" }}>
@@ -659,7 +665,7 @@ Add your project-specific instructions here.
           Settings
         </div>
         <div class="space-y-0.5">
-          <For each={tabs}>
+          <For each={tabs()}>
             {(tab) => (
               <button
                 onClick={() => onTabChange(tab.id)}
@@ -2140,12 +2146,16 @@ function ProjectConfigTab() {
   const [newPatternValue, setNewPatternValue] = createSignal("")
   const [newPatternAction, setNewPatternAction] = createSignal<PermissionActionConfig>("deny")
 
-  // Sync JSON text from config when switching to JSON view
+  // Sync JSON text from config only when switching into JSON view,
+  // not on every reactive config update (which would overwrite in-progress edits)
+  let prevView: "form" | "json" = "form"
   createEffect(() => {
-    if (view() === "json") {
+    const current = view()
+    if (prevView !== "json" && current === "json") {
       setJsonText(JSON.stringify(config.project, null, 2))
       setJsonError(null)
     }
+    prevView = current
   })
 
   function showSaved() {

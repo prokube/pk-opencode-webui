@@ -134,12 +134,15 @@ export function ProviderProvider(props: ParentProps) {
     const data = providerData()
     if (!data) return
 
-    // Resolve default agent from config or fallback
+    // Resolve default agent from config or fallback, validating against known agents
     const configAgent = cfg.project.default_agent
-    const defaultAgent = configAgent || FALLBACK_AGENT
+    const agents = agentsData()
+    const agentNames = agents ? agents.map((a) => a.name) : []
+    const validConfigAgent = configAgent && agentNames.length > 0 && agentNames.includes(configAgent)
+    const defaultAgent = validConfigAgent ? configAgent : FALLBACK_AGENT
 
-    // Set selected agent if still on fallback and config specifies something different
-    if (configAgent && store.selectedAgent === FALLBACK_AGENT && configAgent !== FALLBACK_AGENT) {
+    // Set selected agent if config specifies a valid agent and we're still on fallback
+    if (validConfigAgent && store.selectedAgent === FALLBACK_AGENT && configAgent !== FALLBACK_AGENT) {
       setStore("selectedAgent", configAgent)
     }
 
