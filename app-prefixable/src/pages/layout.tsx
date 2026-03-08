@@ -1045,16 +1045,12 @@ export function Layout(props: ParentProps) {
         id: "session.new",
         title: "New Session",
         description: "Create a new chat session",
-        keybind: "mod+n",
-        global: true,
         onSelect: createNewSession,
       },
       {
         id: "session.archive",
         title: "Archive Session",
         description: "Archive the current session",
-        keybind: "mod+w",
-        global: true,
         onSelect: archiveCurrentSession,
       },
       {
