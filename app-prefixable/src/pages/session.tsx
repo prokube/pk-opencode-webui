@@ -579,9 +579,9 @@ export function Session() {
 
     // /share — requires an active session, not already shared, and sharing not disabled.
     // Project config overrides global for conflicting keys (merge semantics).
-    // Default to disabled while config is still loading to avoid briefly showing commands.
+    // Default to disabled while config is loading or errored to avoid showing commands prematurely.
     const effectiveShare = appConfig.project.share ?? appConfig.global.share
-    const shareDisabled = appConfig.loading() || effectiveShare === "disabled"
+    const shareDisabled = appConfig.loading() || !!appConfig.error() || effectiveShare === "disabled"
     if (id && !sess?.share?.url && !shareDisabled) {
       commands.push({
         id: "session.share",

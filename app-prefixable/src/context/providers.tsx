@@ -134,8 +134,9 @@ export function ProviderProvider(props: ParentProps) {
     const data = providerData()
     if (!data) return
 
-    // Resolve default agent from config or fallback, validating against known agents
-    const configAgent = cfg.project.default_agent
+    // Resolve default agent from config (project overrides global) or fallback,
+    // validating against known agents
+    const configAgent = cfg.project.default_agent || cfg.global.default_agent
     const agents = agentsData()
     const agentNames = agents ? agents.map((a) => a.name) : []
     const validConfigAgent = configAgent && agentNames.length > 0 && agentNames.includes(configAgent)
@@ -146,8 +147,8 @@ export function ProviderProvider(props: ParentProps) {
       setStore("selectedAgent", configAgent)
     }
 
-    // Resolve default model from config. Config format is "provider/model".
-    const configModel = cfg.project.model
+    // Resolve default model from config (project overrides global). Config format is "provider/model".
+    const configModel = cfg.project.model || cfg.global.model
     const validConfigModel = configModel && configModel.includes("/") && configModel.split("/")[0] && configModel.split("/").slice(1).join("/")
     const targetProvider = validConfigModel ? configModel.split("/")[0] : FALLBACK_PROVIDER
     const targetModel = validConfigModel ? configModel.split("/").slice(1).join("/") : FALLBACK_MODEL
