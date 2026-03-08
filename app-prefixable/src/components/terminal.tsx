@@ -211,9 +211,10 @@ export function Terminal(props: TerminalProps) {
     term.open(container)
     console.log("[Terminal] Terminal opened in container")
 
-    // Let Ctrl+1-4 pass through to the browser for panel focus shortcuts
+    // Let plain Ctrl+1-4 pass through to the browser for panel focus shortcuts
+    // Exclude AltGr (reports as Ctrl+Alt) to avoid breaking locale-specific input
     term.attachCustomKeyEventHandler((event) => {
-      if (event.ctrlKey && ["1", "2", "3", "4"].includes(event.key))
+      if (event.ctrlKey && !event.altKey && !event.metaKey && ["1", "2", "3", "4"].includes(event.key))
         return false
       return true
     })
