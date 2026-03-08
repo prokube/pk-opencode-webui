@@ -155,24 +155,25 @@ export function CommandProvider(props: ParentProps) {
       }
     }
 
-    // Shortcut reference: ? (only when not in input) and $mod+/
-    bindings["?"] = (e) => {
-      if (shouldSuppressShortcut(e)) return
-      // Allow toggling the shortcut reference closed via its own shortcut
-      if (isDialogOpen() && !shortcutRefOpen()) return
-      e.preventDefault()
-      setShortcutRefOpen((v) => !v)
-    }
-    bindings["$mod+/"] = (e) => {
-      if (shouldSuppressShortcut(e)) return
-      // Allow toggling the shortcut reference closed via its own shortcut
-      if (isDialogOpen() && !shortcutRefOpen()) return
-      e.preventDefault()
-      setShortcutRefOpen((v) => !v)
-    }
-
     const unsub = tinykeys(window, bindings)
-    onCleanup(unsub)
+
+    // Shortcut reference: ? — handled via direct keydown listener instead of
+    // tinykeys because alternative keyboard layouts (e.g. Neo2 on macOS) produce
+    // "?" with unexpected modifier flags (altKey) that tinykeys rejects.
+    function onQuestionMark(e: KeyboardEvent) {
+      if (e.key !== "?") return
+      if (e.metaKey || e.ctrlKey) return
+      if (shouldSuppressShortcut(e)) return
+      if (isDialogOpen() && !shortcutRefOpen()) return
+      e.preventDefault()
+      setShortcutRefOpen((v) => !v)
+    }
+    window.addEventListener("keydown", onQuestionMark)
+
+    onCleanup(() => {
+      unsub()
+      window.removeEventListener("keydown", onQuestionMark)
+    })
   })
 
   const value: CommandContextValue = {

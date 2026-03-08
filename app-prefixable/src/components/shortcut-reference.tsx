@@ -131,22 +131,6 @@ export function ShortcutReference() {
                 >
                   ?
                 </kbd>
-                <span
-                  class="text-xs"
-                  style={{ color: "var(--text-weak)" }}
-                >
-                  or
-                </span>
-                <kbd
-                  class="inline-flex items-center px-2 py-1 text-xs font-mono rounded"
-                  style={{
-                    background: "var(--surface-inset)",
-                    color: "var(--text-strong)",
-                    border: "1px solid var(--border-base)",
-                  }}
-                >
-                  {formatKeybind("mod+/")}
-                </kbd>
               </div>
             </div>
           </div>
