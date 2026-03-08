@@ -437,6 +437,7 @@ export function Layout(props: ParentProps) {
                 "outline-offset": "-2px",
                 "border-radius": "0.375rem",
               }}
+              onClick={() => setFocusedId(null)}
               onMouseEnter={(e) => {
                 if (!isActive(session.id))
                   e.currentTarget.style.background =
@@ -944,6 +945,8 @@ export function Layout(props: ParentProps) {
   function focusPanel(name: string): boolean {
     const el = document.querySelector(`[data-panel="${name}"]`) as HTMLElement | null;
     if (!el) return false;
+    // Clear sidebar keyboard focus when switching to another panel
+    if (name !== "sidebar") setFocusedId(null);
     // For chat panel, focus the textarea inside it
     if (name === "chat") {
       const textarea = el.querySelector("textarea") as HTMLTextAreaElement | null;
