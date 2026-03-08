@@ -9,7 +9,7 @@ import { MCPAddDialog } from "../components/mcp-add-dialog"
 import { ConfirmDialog } from "../components/confirm-dialog"
 import { Button } from "../components/ui/button"
 import { Check, Copy, Plug, GitBranch, Server, ExternalLink, Key, Search, X, Trash2, BookmarkPlus, Pencil, Palette, Sun, Moon, Monitor, BookOpen, Plus, Save, Volume2, Play } from "lucide-solid"
-import { SOUND_OPTIONS, readSoundSettings, writeSoundSettings, playSound, SOUND_STORAGE_KEY, type SoundSettings } from "../utils/sound"
+import { SOUND_OPTIONS, readSoundSettings, writeSoundSettings, playSound, primeAudioContext, SOUND_STORAGE_KEY, type SoundSettings } from "../utils/sound"
 import { useSavedPrompts } from "../context/saved-prompts"
 import { useTheme } from "../context/theme"
 import { writeFile } from "../utils/extended-api"
@@ -1920,7 +1920,11 @@ Add your project-specific instructions here.
                     Enable Sound
                   </h2>
                   <button
-                    onClick={() => updateSoundSettings({ enabled: !soundSettings().enabled })}
+                    onClick={() => {
+                      const enabling = !soundSettings().enabled
+                      updateSoundSettings({ enabled: enabling })
+                      if (enabling) primeAudioContext()
+                    }}
                     class="relative w-10 h-5 rounded-full transition-colors"
                     style={{
                       background: soundSettings().enabled ? "var(--interactive-base)" : "var(--surface-inset)",

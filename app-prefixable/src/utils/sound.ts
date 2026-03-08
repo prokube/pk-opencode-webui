@@ -67,6 +67,13 @@ function getAudioContext(): AudioContext | undefined {
   return win.__ocAudioCtx
 }
 
+/** Prime the AudioContext so it's ready for the first notification.
+ *  Must be called from a user-gesture handler (click/tap). */
+export function primeAudioContext() {
+  const ctx = getAudioContext()
+  if (ctx && ctx.state === "suspended") void ctx.resume().catch(() => {})
+}
+
 /** Schedule and connect oscillator nodes for a set of tones. */
 function scheduleTones(ctx: AudioContext, tones: [number, number, number][], gain: number) {
   const master = ctx.createGain()
