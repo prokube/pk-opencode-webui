@@ -1782,7 +1782,8 @@ export function Layout(props: ParentProps) {
         onFocus={handleSidebarFocus}
         onBlur={(e) => {
           // Clear focus indicator when focus leaves the sidebar entirely
-          if (!e.currentTarget.contains(e.relatedTarget as Node)) {
+          // relatedTarget is null when focus moves to browser chrome or is lost
+          if (!e.relatedTarget || !e.currentTarget.contains(e.relatedTarget as Node)) {
             setFocusedId(null);
             if (menuOpenId()) {
               setMenuOpenId(null);
