@@ -1972,8 +1972,15 @@ Add your project-specific instructions here.
                               <input
                                 type="radio"
                                 name="sound"
+                                value={option.id}
                                 checked={soundSettings().sound === option.id}
                                 class="accent-[var(--interactive-base)]"
+                                onChange={(e) => {
+                                  e.stopPropagation()
+                                  updateSoundSettings({ sound: option.id })
+                                  playSound(option.id)
+                                }}
+                                onClick={(e) => e.stopPropagation()}
                               />
                               <span class="text-sm" style={{ color: "var(--text-base)" }}>{option.label}</span>
                             </div>
