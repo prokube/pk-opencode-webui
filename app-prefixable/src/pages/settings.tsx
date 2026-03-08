@@ -2273,7 +2273,7 @@ function ProjectConfigTab() {
     }
     // To clear model, write the full config file without the key.
     // The PATCH API only does deep-merge and cannot delete keys.
-    const full = structuredClone(config.project)
+    const full = JSON.parse(JSON.stringify(config.project)) as Config
     delete full.model
     await clearConfigKey(full)
   }
@@ -2286,7 +2286,7 @@ function ProjectConfigTab() {
       if (result) showSaved()
       return
     }
-    const full = structuredClone(config.project)
+    const full = JSON.parse(JSON.stringify(config.project)) as Config
     delete full.default_agent
     await clearConfigKey(full)
   }
