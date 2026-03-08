@@ -100,72 +100,75 @@ export function SessionInfo(props: SessionInfoProps) {
   const dirSlug = createMemo(() => params.dir)
 
   return (
-    <div class="flex items-center gap-3 px-4 py-1.5 text-xs overflow-hidden" style={{ color: "var(--text-weak)" }}>
-      {/* Agent */}
-      <Show when={providers.selectedAgent}>
-        <button
-          type="button"
-          class="flex items-center gap-1 shrink-0 hover:opacity-80 cursor-pointer"
-          onClick={() => props.onAgentClick()}
-        >
-          <span class="opacity-60">Agent:</span>
-          <span class="capitalize" style={{ color: "var(--text-base)" }}>
-            {providers.selectedAgent}
-          </span>
-        </button>
-      </Show>
-
-      {/* Model */}
-      <Show when={providers.selectedModel}>
-        {(model) => (
-          <span class="flex items-center gap-1 min-w-0">
-            <span class="opacity-60 shrink-0">Model:</span>
-            <span class="truncate" style={{ color: "var(--text-base)" }}>{model().modelID}</span>
-          </span>
-        )}
-      </Show>
-
-      {/* Token Usage */}
-      <Show when={stats()}>
-        {(s) => (
-          <>
-            <span class="flex items-center gap-1.5 shrink-0">
-              <Zap class="w-3 h-3" />
-              <span style={{ color: "var(--text-base)" }}>{s().tokens}</span>
-              <span class="opacity-60">tokens</span>
-              <Show when={s().usage !== null}>
-                <span
-                  class="px-1 py-0.5 rounded text-[10px] font-medium"
-                  style={{
-                    background: s().usage! > 80 ? "var(--surface-critical-subtle)" : "var(--surface-inset)",
-                    color: s().usage! > 80 ? "var(--text-critical-base)" : "var(--text-weak)",
-                  }}
-                >
-                  {s().usage}%
-                </span>
-              </Show>
+    <div class="flex items-center px-4 py-1.5 text-xs" style={{ color: "var(--text-weak)" }}>
+      {/* Left group - info text, truncatable */}
+      <div class="flex flex-1 items-center gap-3 min-w-0 overflow-hidden whitespace-nowrap">
+        {/* Agent */}
+        <Show when={providers.selectedAgent}>
+          <button
+            type="button"
+            class="flex items-center gap-1 shrink-0 hover:opacity-80 cursor-pointer"
+            onClick={() => props.onAgentClick()}
+          >
+            <span class="opacity-60">Agent:</span>
+            <span class="capitalize" style={{ color: "var(--text-base)" }}>
+              {providers.selectedAgent}
             </span>
-            <span class="flex items-center gap-1.5 shrink-0">
-              <span class="opacity-60">Cost:</span>
-              <span style={{ color: "var(--text-base)" }}>{s().cost}</span>
+          </button>
+        </Show>
+
+        {/* Model */}
+        <Show when={providers.selectedModel}>
+          {(model) => (
+            <span class="flex items-center gap-1 min-w-0">
+              <span class="opacity-60 shrink-0">Model:</span>
+              <span class="truncate" style={{ color: "var(--text-base)" }}>{model().modelID}</span>
             </span>
-          </>
-        )}
-      </Show>
+          )}
+        </Show>
 
-      {/* No provider warning */}
-      <Show when={!providers.selectedModel && providers.connected.length === 0}>
-        <a href={`/${dirSlug()}/settings`} style={{ color: "var(--text-interactive-base)" }} class="hover:underline">
-          Connect a provider to start
-        </a>
-      </Show>
+        {/* Token Usage */}
+        <Show when={stats()}>
+          {(s) => (
+            <>
+              <span class="flex items-center gap-1.5 shrink-0">
+                <Zap class="w-3 h-3" />
+                <span style={{ color: "var(--text-base)" }}>{s().tokens}</span>
+                <span class="opacity-60">tokens</span>
+                <Show when={s().usage !== null}>
+                  <span
+                    class="px-1 py-0.5 rounded text-[10px] font-medium"
+                    style={{
+                      background: s().usage! > 80 ? "var(--surface-critical-subtle)" : "var(--surface-inset)",
+                      color: s().usage! > 80 ? "var(--text-critical-base)" : "var(--text-weak)",
+                    }}
+                  >
+                    {s().usage}%
+                  </span>
+                </Show>
+              </span>
+              <span class="flex items-center gap-1.5 shrink-0">
+                <span class="opacity-60">Cost:</span>
+                <span style={{ color: "var(--text-base)" }}>{s().cost}</span>
+              </span>
+            </>
+          )}
+        </Show>
 
-      <Show when={!providers.selectedModel && providers.connected.length > 0}>
-        <span style={{ color: "var(--status-warning-text)" }}>No model selected</span>
-      </Show>
+        {/* No provider warning */}
+        <Show when={!providers.selectedModel && providers.connected.length === 0}>
+          <a href={`/${dirSlug()}/settings`} style={{ color: "var(--text-interactive-base)" }} class="hover:underline">
+            Connect a provider to start
+          </a>
+        </Show>
 
-      {/* Enter hint / Stop button - pushed to right */}
-      <div class="ml-auto flex items-center shrink-0">
+        <Show when={!providers.selectedModel && providers.connected.length > 0}>
+          <span style={{ color: "var(--status-warning-text)" }}>No model selected</span>
+        </Show>
+      </div>
+
+      {/* Right group - action controls, always visible */}
+      <div class="ml-3 flex items-center shrink-0">
         <Show
           when={props.processing()}
           fallback={
