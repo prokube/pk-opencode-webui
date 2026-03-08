@@ -1958,10 +1958,6 @@ Add your project-specific instructions here.
                               background: soundSettings().sound === option.id ? "var(--surface-inset)" : "transparent",
                               border: soundSettings().sound === option.id ? "1px solid var(--interactive-base)" : "1px solid transparent",
                             }}
-                            onClick={() => {
-                              updateSoundSettings({ sound: option.id })
-                              playSound(option.id)
-                            }}
                             onMouseEnter={(e) => {
                               if (soundSettings().sound !== option.id) e.currentTarget.style.background = "var(--surface-inset)"
                             }}
