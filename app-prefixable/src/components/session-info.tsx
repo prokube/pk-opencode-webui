@@ -40,16 +40,11 @@ export function SessionInfo(props: SessionInfoProps) {
     const msgs = messages()
     if (!msgs.length) return null
 
-    // Calculate cumulative cost and totals across all assistant messages
+    // Calculate cumulative cost across all assistant messages
     let totalCost = 0
-    let totalOutput = 0
-    let totalReasoning = 0
     for (const msg of msgs) {
       if (msg.info?.role === "assistant") {
         totalCost += (msg.info as { cost?: number }).cost || 0
-        const tokens = (msg.info as { tokens?: { output?: number; reasoning?: number } }).tokens
-        totalOutput += tokens?.output || 0
-        totalReasoning += tokens?.reasoning || 0
       }
     }
 
@@ -179,7 +174,8 @@ export function SessionInfo(props: SessionInfoProps) {
     }
     if (triggerRef) {
       const rect = triggerRef.getBoundingClientRect()
-      setPopoverPos({ top: rect.top - 8, left: rect.left })
+      const maxLeft = window.innerWidth - 272
+      setPopoverPos({ top: rect.top - 8, left: Math.max(0, Math.min(rect.left, maxLeft)) })
     }
     setShowTokenPopover(true)
   }
