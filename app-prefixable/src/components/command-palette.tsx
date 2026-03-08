@@ -203,8 +203,6 @@ export function CommandPalette() {
   createEffect(() => {
     if (command.paletteOpen()) {
       previousFocus = document.activeElement as HTMLElement | null
-      // Read the filter outside the reactive scope to avoid re-triggering
-      // when we clear it below
       const initial = untrack(() => command.paletteFilter())
       setFilter(initial)
       command.setPaletteFilter("")
