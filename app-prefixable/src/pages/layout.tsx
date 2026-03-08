@@ -48,6 +48,7 @@ import {
   Sparkles,
   Pin,
   PinOff,
+  Search,
 } from "lucide-solid";
 import { useSync } from "../context/sync";
 import { usePermission } from "../context/permission";
@@ -230,6 +231,14 @@ export function Layout(props: ParentProps) {
   const [promptDropdownIndex, setPromptDropdownIndex] = createSignal(0);
   const [confirmArchiveSession, setConfirmArchiveSession] = createSignal<Session | null>(null);
   const [pinnedIds, setPinnedIds] = createSignal<string[]>([]);
+
+  // Search state
+  const [searchQuery, setSearchQuery] = createSignal("");
+  const [searchResults, setSearchResults] = createSignal<Session[]>([]);
+  const [searching, setSearching] = createSignal(false);
+  const [searchFocusIdx, setSearchFocusIdx] = createSignal(-1);
+  const searchTimer = { id: undefined as ReturnType<typeof setTimeout> | undefined };
+  let searchInputRef: HTMLInputElement | undefined;
 
   // Keyboard navigation state for session list
   const [focusedId, setFocusedId] = createSignal<string | null>(null);
@@ -789,6 +798,9 @@ export function Layout(props: ParentProps) {
     if (container && e.relatedTarget instanceof Node && container.contains(e.relatedTarget)) return;
     // Skip if focusedId is already set (e.g. focusPanel already initialized it)
     if (focusedId()) return;
+    // During search, don't initialize focusedId from the grouped session list —
+    // those DOM elements are unmounted and aria-activedescendant would dangle.
+    if (searchQuery().trim()) return;
     const current = currentSessionId();
     const ids = flatSessionIds();
     if (current && ids.includes(current)) {
@@ -806,10 +818,102 @@ export function Layout(props: ParentProps) {
   // Keyboard handler for session list navigation
   function handleSessionListKeyDown(e: KeyboardEvent) {
     // Don't hijack keyboard events from actual input controls inside the sidebar
-    // (e.g. rename inputs, dropdowns, etc.)
+    // (e.g. rename inputs, dropdowns, etc.) — but allow ArrowDown/Enter through
+    // when the search input is focused so the user can move focus to the listbox
+    // or activate the focused result. Other nav keys (Home/End/ArrowUp) pass
+    // through to the input for native text-editing behaviour.
     const target = e.target as HTMLElement;
     const tag = target.tagName;
-    if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || target.isContentEditable) return;
+    const isSearchInput = target === searchInputRef;
+    const isSearchNav = searchQuery().trim() && (isSearchInput
+      ? (e.key === "ArrowDown" || e.key === "Enter")
+      : (e.key === "ArrowDown" || e.key === "ArrowUp" ||
+         e.key === "Home" || e.key === "End" || e.key === "Enter"));
+    if ((tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || target.isContentEditable) && !isSearchNav) return;
+
+    // When search is active, provide keyboard navigation for search results
+    if (searchQuery().trim()) {
+      // Only intercept keys when focus is within the search input or sessions list
+      const inSearchArea = isSearchInput || !!target.closest('[aria-label="Sessions"]');
+      if (!inSearchArea) return;
+
+      const results = searchResults();
+      if (!results.length) return;
+
+      // When the search input has focus, only ArrowDown (move focus to listbox)
+      // and Enter (activate focused result) are captured. All other keys pass
+      // through so Home/End/ArrowUp work for text editing.
+      if (isSearchInput) {
+        if (e.key === "ArrowDown") {
+          e.preventDefault();
+          setSearchFocusIdx(0);
+          if (results.length) {
+            setFocusedId(results[0].id);
+            scrollFocusedIntoView(results[0].id);
+          }
+          // Move focus to the listbox so subsequent arrow keys navigate results
+          const listbox = (e.currentTarget as HTMLElement).querySelector('[role="listbox"][aria-label="Sessions"]') as HTMLElement | null;
+          if (listbox) listbox.focus();
+          return;
+        }
+        if (e.key === "Enter") {
+          e.preventDefault();
+          const idx = searchFocusIdx();
+          const i = idx >= 0 && idx < results.length ? idx : 0;
+          clearSearch(results[i].id);
+          navigate(`/${dirSlug()}/session/${results[i].id}`);
+          return;
+        }
+        return;
+      }
+
+      if (e.key === "Escape") {
+        e.preventDefault();
+        clearSearch();
+        searchInputRef?.focus();
+        return;
+      }
+      if (e.key === "ArrowDown") {
+        e.preventDefault();
+        const next = searchFocusIdx() < results.length - 1 ? searchFocusIdx() + 1 : 0;
+        setSearchFocusIdx(next);
+        setFocusedId(results[next].id);
+        scrollFocusedIntoView(results[next].id);
+        return;
+      }
+      if (e.key === "ArrowUp") {
+        e.preventDefault();
+        const prev = searchFocusIdx() > 0 ? searchFocusIdx() - 1 : results.length - 1;
+        setSearchFocusIdx(prev);
+        setFocusedId(results[prev].id);
+        scrollFocusedIntoView(results[prev].id);
+        return;
+      }
+      if (e.key === "Home") {
+        e.preventDefault();
+        setSearchFocusIdx(0);
+        setFocusedId(results[0].id);
+        scrollFocusedIntoView(results[0].id);
+        return;
+      }
+      if (e.key === "End") {
+        e.preventDefault();
+        const last = results.length - 1;
+        setSearchFocusIdx(last);
+        setFocusedId(results[last].id);
+        scrollFocusedIntoView(results[last].id);
+        return;
+      }
+      if (e.key === "Enter") {
+        e.preventDefault();
+        const idx = searchFocusIdx();
+        const i = idx >= 0 && idx < results.length ? idx : 0;
+        clearSearch(results[i].id);
+        navigate(`/${dirSlug()}/session/${results[i].id}`);
+        return;
+      }
+      return;
+    }
 
     const ids = flatSessionIds();
     if (!ids.length) return;
@@ -940,6 +1044,71 @@ export function Layout(props: ParentProps) {
     }
   }
 
+  function handleSearchInput(query: string) {
+    const trimmed = query.trim();
+    setSearchQuery(query);
+    if (searchTimer.id !== undefined) clearTimeout(searchTimer.id);
+    if (!trimmed) {
+      clearSearch();
+      return;
+    }
+    // Clear grouped-session focusedId so aria-activedescendant doesn't
+    // reference DOM elements that are unmounted during search.
+    setFocusedId(null);
+    setSearchFocusIdx(-1);
+    // Clear previous results immediately to avoid showing stale matches
+    // while waiting for the debounced search to fire.
+    setSearchResults([]);
+    setSearching(true);
+    searchTimer.id = setTimeout(() => {
+      searchTimer.id = undefined;
+      client.session.list({ search: trimmed, directory, roots: true })
+        .then((res) => {
+          // Only update if query hasn't changed while waiting
+          if (searchQuery().trim() !== trimmed) return;
+          const data = res.data;
+          const valid = Array.isArray(data)
+            ? data.filter((s): s is Session => s && typeof s === "object" && typeof s.id === "string")
+            : [];
+          setSearchResults(valid);
+        })
+        .catch((err: unknown) => {
+          console.error("Session search failed:", err);
+          if (searchQuery().trim() === trimmed) setSearchResults([]);
+        })
+        .finally(() => {
+          if (searchQuery().trim() === trimmed) setSearching(false);
+        });
+    }, 300);
+  }
+
+  function clearSearch(nextSessionId?: string) {
+    if (searchTimer.id !== undefined) clearTimeout(searchTimer.id);
+    searchTimer.id = undefined;
+    setSearchQuery("");
+    setSearchResults([]);
+    setSearching(false);
+    setSearchFocusIdx(-1);
+    setMenuOpenId(null);
+    setMenuFocusIndex(-1);
+    // Restore focusedId to the destination session (if navigating) or the
+    // current session. If the preferred session isn't in the focusable list
+    // (e.g. archived), clear focus rather than pointing at an unrelated session.
+    const ids = flatSessionIds();
+    const preferred = nextSessionId ?? currentSessionId();
+    const target = preferred
+      ? (ids.includes(preferred) ? preferred : null)
+      : (ids[0] ?? null);
+    setFocusedId(target);
+    if (target) {
+      scrollFocusedIntoView(target);
+    }
+  }
+
+  onCleanup(() => {
+    if (searchTimer.id !== undefined) clearTimeout(searchTimer.id);
+  });
+
   // Focus a panel by data-panel attribute. Returns true if focus was set.
   function focusPanel(name: string): boolean {
     const el = document.querySelector(`[data-panel="${name}"]`) as HTMLElement | null;
@@ -958,18 +1127,22 @@ export function Layout(props: ParentProps) {
     }
     // For sidebar, focus the inner listbox so aria-activedescendant applies immediately
     if (name === "sidebar") {
-      const listbox = el.querySelector('[role="listbox"]') as HTMLElement | null;
+      const listbox = el.querySelector('[role="listbox"][aria-label="Sessions"]') as HTMLElement | null;
       if (listbox) {
         listbox.focus();
-        // Initialize focus state so the active session is highlighted
-        const ids = flatSessionIds();
-        const current = currentSessionId();
-        if (current && ids.includes(current)) {
-          setFocusedId(current);
-          scrollFocusedIntoView(current);
-        } else if (ids.length) {
-          setFocusedId(ids[0]);
-          scrollFocusedIntoView(ids[0]);
+        // During search, don't initialize focusedId from the grouped session list —
+        // those DOM elements are unmounted and aria-activedescendant would dangle.
+        if (!searchQuery().trim()) {
+          // Initialize focus state so the active session is highlighted
+          const ids = flatSessionIds();
+          const current = currentSessionId();
+          if (current && ids.includes(current)) {
+            setFocusedId(current);
+            scrollFocusedIntoView(current);
+          } else if (ids.length) {
+            setFocusedId(ids[0]);
+            scrollFocusedIntoView(ids[0]);
+          }
         }
         return true;
       }
@@ -1865,6 +2038,63 @@ export function Layout(props: ParentProps) {
             </Show>
           </div>
 
+          {/* Session Search */}
+          <div class="px-3 pb-2">
+            <div
+              class="flex items-center gap-2 px-2.5 py-1.5 rounded-md text-sm"
+              style={{
+                background: "var(--surface-inset)",
+                border: "1px solid var(--border-base)",
+              }}
+            >
+              <Show
+                when={!searching()}
+                fallback={
+                  <Loader2 class="w-3.5 h-3.5 shrink-0 animate-spin" style={{ color: "var(--icon-weak)" }} />
+                }
+              >
+                <Search class="w-3.5 h-3.5 shrink-0" style={{ color: "var(--icon-weak)" }} />
+              </Show>
+              <input
+                ref={el => searchInputRef = el}
+                type="text"
+                placeholder="Search sessions..."
+                aria-label="Search sessions"
+                value={searchQuery()}
+                onInput={(e) => handleSearchInput(e.currentTarget.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Escape") {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    clearSearch();
+                  }
+                }}
+                class="flex-1 min-w-0 bg-transparent outline-none text-sm"
+                style={{ color: "var(--text-base)" }}
+              />
+              <button
+                onClick={() => {
+                  clearSearch();
+                  searchInputRef?.focus();
+                }}
+                class="p-0.5 rounded transition-colors shrink-0"
+                style={{
+                  color: "var(--icon-weak)",
+                  opacity: searchQuery().trim() ? 1 : 0,
+                  "pointer-events": searchQuery().trim() ? "auto" : "none",
+                }}
+                disabled={!searchQuery().trim()}
+                tabIndex={searchQuery().trim() ? 0 : -1}
+                onMouseEnter={(e) => (e.currentTarget.style.color = "var(--icon-base)")}
+                onMouseLeave={(e) => (e.currentTarget.style.color = "var(--icon-weak)")}
+                aria-label="Clear search"
+                title="Clear search"
+              >
+                <X class="w-3.5 h-3.5" />
+              </button>
+            </div>
+          </div>
+
           {/* Sessions List */}
           <div
             class="flex-1 overflow-y-auto px-2"
@@ -1873,7 +2103,7 @@ export function Layout(props: ParentProps) {
             aria-activedescendant={focusedId() ? `session-${focusedId()}` : undefined}
             tabIndex={0}
           >
-            <Show when={loading()}>
+            <Show when={loading() && !searchQuery().trim()}>
               <div
                 class="flex flex-col items-center justify-center py-8 gap-2"
                 style={{ color: "var(--text-weak)" }}
@@ -1886,7 +2116,74 @@ export function Layout(props: ParentProps) {
               </div>
             </Show>
 
-            <Show when={!loading()}>
+            {/* Search Results */}
+            <Show when={searchQuery().trim()}>
+              <Show
+                when={!searching() && searchResults().length === 0}
+                fallback={
+                  <div class="space-y-0.5">
+                    <For each={searchResults()}>
+                      {(session, idx) => {
+                        const focused = () => searchFocusIdx() === idx();
+                        return (
+                          <A
+                            href={`/${dirSlug()}/session/${session.id}`}
+                            onClick={() => clearSearch(session.id)}
+                            role="option"
+                            id={`session-${session.id}`}
+                            aria-selected={isActive(session.id)}
+                            tabIndex={-1}
+                            class="flex items-center gap-2 px-2.5 py-2 rounded-md text-sm transition-colors"
+                            style={{
+                              color: isActive(session.id) || focused()
+                                ? "var(--text-interactive-base)"
+                                : session.time?.archived
+                                  ? "var(--text-weak)"
+                                  : "var(--text-base)",
+                              background: isActive(session.id) || focused()
+                                ? "var(--surface-inset)"
+                                : "transparent",
+                              opacity: session.time?.archived && !isActive(session.id) ? 0.7 : 1,
+                              outline: focused() ? "2px solid var(--border-focus, var(--interactive-base))" : "none",
+                              "outline-offset": "-2px",
+                            }}
+                            onMouseEnter={(e) => {
+                              if (!isActive(session.id) && !focused()) e.currentTarget.style.background = "var(--surface-inset)";
+                            }}
+                            onMouseLeave={(e) => {
+                              if (!isActive(session.id) && !focused()) e.currentTarget.style.background = "transparent";
+                            }}
+                          >
+                            <span class="shrink-0" style={{ color: "var(--icon-weak)" }}>
+                              <Show
+                                when={session.time?.archived}
+                                fallback={<MessageCircle class="w-4 h-4" />}
+                              >
+                                <Archive class="w-4 h-4" />
+                              </Show>
+                            </span>
+                            <span class="min-w-0 flex-1 truncate">
+                              {session.title || "Untitled"}
+                            </span>
+                          </A>
+                        );
+                      }}
+                    </For>
+                  </div>
+                }
+              >
+                <div
+                  class="py-6 text-center"
+                  style={{ color: "var(--text-weak)" }}
+                >
+                  <p class="text-sm">No results</p>
+                  <p class="text-xs mt-1">Try a different search term</p>
+                </div>
+              </Show>
+            </Show>
+
+            {/* Normal Session List */}
+            <Show when={!loading() && !searchQuery().trim()}>
               <Show
                 when={
                   projectSessions().length > 0 || archivedSessions().length > 0
