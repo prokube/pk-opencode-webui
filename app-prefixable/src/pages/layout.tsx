@@ -874,13 +874,13 @@ export function Layout(props: ParentProps) {
     const ids = flatSessionIds();
     if (current && ids.includes(current)) {
       setFocusedId(current);
-      scrollFocusedIntoView(current);
+      scrollSessionIntoView(current);
       return;
     }
     // Default to first session if none active
     if (ids.length) {
       setFocusedId(ids[0]);
-      scrollFocusedIntoView(ids[0]);
+      scrollSessionIntoView(ids[0]);
     }
   }
 
@@ -918,7 +918,7 @@ export function Layout(props: ParentProps) {
           setSearchFocusIdx(0);
           if (results.length) {
             setFocusedId(results[0].id);
-            scrollFocusedIntoView(results[0].id);
+            scrollSessionIntoView(results[0].id);
           }
           // Move focus to the listbox so subsequent arrow keys navigate results
           const listbox = (e.currentTarget as HTMLElement).querySelector('[role="listbox"][aria-label="Sessions"]') as HTMLElement | null;
@@ -947,7 +947,7 @@ export function Layout(props: ParentProps) {
         const next = searchFocusIdx() < results.length - 1 ? searchFocusIdx() + 1 : 0;
         setSearchFocusIdx(next);
         setFocusedId(results[next].id);
-        scrollFocusedIntoView(results[next].id);
+        scrollSessionIntoView(results[next].id);
         return;
       }
       if (e.key === "ArrowUp") {
@@ -955,14 +955,14 @@ export function Layout(props: ParentProps) {
         const prev = searchFocusIdx() > 0 ? searchFocusIdx() - 1 : results.length - 1;
         setSearchFocusIdx(prev);
         setFocusedId(results[prev].id);
-        scrollFocusedIntoView(results[prev].id);
+        scrollSessionIntoView(results[prev].id);
         return;
       }
       if (e.key === "Home") {
         e.preventDefault();
         setSearchFocusIdx(0);
         setFocusedId(results[0].id);
-        scrollFocusedIntoView(results[0].id);
+        scrollSessionIntoView(results[0].id);
         return;
       }
       if (e.key === "End") {
@@ -970,7 +970,7 @@ export function Layout(props: ParentProps) {
         const last = results.length - 1;
         setSearchFocusIdx(last);
         setFocusedId(results[last].id);
-        scrollFocusedIntoView(results[last].id);
+        scrollSessionIntoView(results[last].id);
         return;
       }
       if (e.key === "Enter") {
@@ -998,7 +998,7 @@ export function Layout(props: ParentProps) {
       const idx = focusedId() ? ids.indexOf(focusedId()!) : -1;
       const next = idx < ids.length - 1 ? idx + 1 : 0;
       setFocusedId(ids[next]);
-      scrollFocusedIntoView(ids[next]);
+      scrollSessionIntoView(ids[next]);
       return;
     }
 
@@ -1007,21 +1007,21 @@ export function Layout(props: ParentProps) {
       const idx = focusedId() ? ids.indexOf(focusedId()!) : ids.length;
       const prev = idx > 0 ? idx - 1 : ids.length - 1;
       setFocusedId(ids[prev]);
-      scrollFocusedIntoView(ids[prev]);
+      scrollSessionIntoView(ids[prev]);
       return;
     }
 
     if (e.key === "Home") {
       e.preventDefault();
       setFocusedId(ids[0]);
-      scrollFocusedIntoView(ids[0]);
+      scrollSessionIntoView(ids[0]);
       return;
     }
 
     if (e.key === "End") {
       e.preventDefault();
       setFocusedId(ids[ids.length - 1]);
-      scrollFocusedIntoView(ids[ids.length - 1]);
+      scrollSessionIntoView(ids[ids.length - 1]);
       return;
     }
 
@@ -1084,11 +1084,20 @@ export function Layout(props: ParentProps) {
     }
   }
 
-  // Scroll the focused session into view
-  function scrollFocusedIntoView(id: string) {
+  // Scroll a session element into view (accepts optional ScrollIntoViewOptions)
+  const prefersReducedMotion =
+    typeof window !== "undefined" && typeof window.matchMedia === "function"
+      ? window.matchMedia("(prefers-reduced-motion: reduce)")
+      : ({ matches: false } as MediaQueryList);
+
+  function scrollSessionIntoView(id: string, options: ScrollIntoViewOptions = { block: "nearest" }) {
     queueMicrotask(() => {
       const el = document.getElementById(`session-${id}`);
-      if (el) el.scrollIntoView({ block: "nearest" });
+      if (!el) return;
+      const resolved = options.behavior === "smooth" && prefersReducedMotion.matches
+        ? { ...options, behavior: "auto" as const }
+        : options;
+      el.scrollIntoView(resolved);
     });
   }
 
@@ -1170,7 +1179,7 @@ export function Layout(props: ParentProps) {
       : (ids[0] ?? null);
     setFocusedId(target);
     if (target) {
-      scrollFocusedIntoView(target);
+      scrollSessionIntoView(target);
     }
   }
 
@@ -1209,10 +1218,10 @@ export function Layout(props: ParentProps) {
           const current = currentSessionId();
           if (current && ids.includes(current)) {
             setFocusedId(current);
-            scrollFocusedIntoView(current);
+            scrollSessionIntoView(current);
           } else if (ids.length) {
             setFocusedId(ids[0]);
-            scrollFocusedIntoView(ids[0]);
+            scrollSessionIntoView(ids[0]);
           }
         }
         return true;
@@ -1237,12 +1246,16 @@ export function Layout(props: ParentProps) {
     navigate(`/${dirSlug()}/session/${list[clamped].id}`);
   }
 
+  // Flag: next session scroll should use smooth behavior (set by Alt+Arrow navigation)
+  let smoothNextScroll = false;
+
   // Navigate to next/previous session with wrap-around
   function navigateSessionDelta(delta: number) {
     const list = projectSessions();
     if (!list.length) return;
     const current = currentSessionId();
     const idx = current ? list.findIndex((s) => s.id === current) : -1;
+    smoothNextScroll = true;
     // If no current session, go to first
     if (idx === -1) {
       navigate(`/${dirSlug()}/session/${list[0].id}`);
@@ -1517,12 +1530,17 @@ export function Layout(props: ParentProps) {
   // When the active session changes (navigation, new session creation, etc.),
   // scroll it into view in the sidebar. Uses `on()` with defer so it only fires
   // on actual changes, not on initial mount or unrelated re-renders.
+  // The smoothNextScroll flag is set by Alt+Arrow navigation for smooth scrolling.
   createEffect(
     on(
       () => currentSessionId(),
       (id) => {
         if (!id) return;
-        scrollFocusedIntoView(id);
+        const options: ScrollIntoViewOptions = smoothNextScroll
+          ? { block: "nearest", behavior: "smooth" }
+          : { block: "nearest" };
+        smoothNextScroll = false;
+        scrollSessionIntoView(id, options);
       },
       { defer: true },
     ),
