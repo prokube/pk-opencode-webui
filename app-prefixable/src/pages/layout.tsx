@@ -1022,7 +1022,10 @@ export function Layout(props: ParentProps) {
   }
 
   // Scroll a session element into view (accepts optional ScrollIntoViewOptions)
-  const prefersReducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
+  const prefersReducedMotion =
+    typeof window !== "undefined" && typeof window.matchMedia === "function"
+      ? window.matchMedia("(prefers-reduced-motion: reduce)")
+      : ({ matches: false } as MediaQueryList);
 
   function scrollSessionIntoView(id: string, options: ScrollIntoViewOptions = { block: "nearest" }) {
     queueMicrotask(() => {
@@ -1180,21 +1183,23 @@ export function Layout(props: ParentProps) {
     navigate(`/${dirSlug()}/session/${list[clamped].id}`);
   }
 
+  // Flag: next session scroll should use smooth behavior (set by Alt+Arrow navigation)
+  let smoothNextScroll = false;
+
   // Navigate to next/previous session with wrap-around
   function navigateSessionDelta(delta: number) {
     const list = projectSessions();
     if (!list.length) return;
     const current = currentSessionId();
     const idx = current ? list.findIndex((s) => s.id === current) : -1;
+    smoothNextScroll = true;
     // If no current session, go to first
     if (idx === -1) {
       navigate(`/${dirSlug()}/session/${list[0].id}`);
-      if (showSidebar()) scrollSessionIntoView(list[0].id, { block: "nearest", behavior: "smooth" });
       return;
     }
     const next = (idx + delta + list.length) % list.length;
     navigate(`/${dirSlug()}/session/${list[next].id}`);
-    if (showSidebar()) scrollSessionIntoView(list[next].id, { block: "nearest", behavior: "smooth" });
   }
 
   // Archive the current session (with confirmation if busy)
@@ -1434,12 +1439,17 @@ export function Layout(props: ParentProps) {
   // When the active session changes (navigation, new session creation, etc.),
   // scroll it into view in the sidebar. Uses `on()` with defer so it only fires
   // on actual changes, not on initial mount or unrelated re-renders.
+  // The smoothNextScroll flag is set by Alt+Arrow navigation for smooth scrolling.
   createEffect(
     on(
       () => currentSessionId(),
       (id) => {
         if (!id) return;
-        scrollSessionIntoView(id);
+        const options: ScrollIntoViewOptions = smoothNextScroll
+          ? { block: "nearest", behavior: "smooth" }
+          : { block: "nearest" };
+        smoothNextScroll = false;
+        scrollSessionIntoView(id, options);
       },
       { defer: true },
     ),
