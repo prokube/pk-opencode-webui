@@ -102,7 +102,7 @@ export function CommandPalette() {
         title: cmd.title,
         description: cmd.description,
         category: "command",
-        keybind: cmd.keybind,
+        keybind: cmd.keybindDisplay ?? cmd.keybind,
         icon: "command",
         onSelect: cmd.onSelect,
       })

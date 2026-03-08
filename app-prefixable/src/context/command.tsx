@@ -7,6 +7,8 @@ export interface Command {
   description?: string
   slash?: string
   keybind?: string
+  /** Display-only keybind shown in shortcut reference but not registered with tinykeys */
+  keybindDisplay?: string
   /** When true, the shortcut fires even from inputs, textareas, and terminals */
   global?: boolean
   /** When true, preventDefault is NOT called automatically — the handler receives the event */
@@ -131,7 +133,7 @@ export function CommandProvider(props: ParentProps) {
   }
 
   function getKeyboardShortcuts() {
-    return commands().filter((c) => c.keybind && !c.hidden)
+    return commands().filter((c) => (c.keybind || c.keybindDisplay) && !c.hidden)
   }
 
   // Reactively bind shortcuts via tinykeys whenever commands change
