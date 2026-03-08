@@ -102,7 +102,7 @@ export function SessionInfo(props: SessionInfoProps) {
   return (
     <div class="flex items-center px-4 py-1.5 text-xs" style={{ color: "var(--text-weak)" }}>
       {/* Left group - info text, truncatable */}
-      <div class="flex flex-1 items-center gap-3 min-w-0 overflow-hidden whitespace-nowrap">
+      <div class="flex flex-1 items-center gap-3 min-w-0 overflow-hidden whitespace-nowrap [&_button:focus-visible]:outline-offset-[-2px] [&_a:focus-visible]:outline-offset-[-2px]">
         {/* Agent */}
         <Show when={providers.selectedAgent}>
           <button
