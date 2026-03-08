@@ -811,13 +811,13 @@ export function Layout(props: ParentProps) {
     const ids = flatSessionIds();
     if (current && ids.includes(current)) {
       setFocusedId(current);
-      scrollFocusedIntoView(current);
+      scrollSessionIntoView(current);
       return;
     }
     // Default to first session if none active
     if (ids.length) {
       setFocusedId(ids[0]);
-      scrollFocusedIntoView(ids[0]);
+      scrollSessionIntoView(ids[0]);
     }
   }
 
@@ -855,7 +855,7 @@ export function Layout(props: ParentProps) {
           setSearchFocusIdx(0);
           if (results.length) {
             setFocusedId(results[0].id);
-            scrollFocusedIntoView(results[0].id);
+            scrollSessionIntoView(results[0].id);
           }
           // Move focus to the listbox so subsequent arrow keys navigate results
           const listbox = (e.currentTarget as HTMLElement).querySelector('[role="listbox"][aria-label="Sessions"]') as HTMLElement | null;
@@ -884,7 +884,7 @@ export function Layout(props: ParentProps) {
         const next = searchFocusIdx() < results.length - 1 ? searchFocusIdx() + 1 : 0;
         setSearchFocusIdx(next);
         setFocusedId(results[next].id);
-        scrollFocusedIntoView(results[next].id);
+        scrollSessionIntoView(results[next].id);
         return;
       }
       if (e.key === "ArrowUp") {
@@ -892,14 +892,14 @@ export function Layout(props: ParentProps) {
         const prev = searchFocusIdx() > 0 ? searchFocusIdx() - 1 : results.length - 1;
         setSearchFocusIdx(prev);
         setFocusedId(results[prev].id);
-        scrollFocusedIntoView(results[prev].id);
+        scrollSessionIntoView(results[prev].id);
         return;
       }
       if (e.key === "Home") {
         e.preventDefault();
         setSearchFocusIdx(0);
         setFocusedId(results[0].id);
-        scrollFocusedIntoView(results[0].id);
+        scrollSessionIntoView(results[0].id);
         return;
       }
       if (e.key === "End") {
@@ -907,7 +907,7 @@ export function Layout(props: ParentProps) {
         const last = results.length - 1;
         setSearchFocusIdx(last);
         setFocusedId(results[last].id);
-        scrollFocusedIntoView(results[last].id);
+        scrollSessionIntoView(results[last].id);
         return;
       }
       if (e.key === "Enter") {
@@ -935,7 +935,7 @@ export function Layout(props: ParentProps) {
       const idx = focusedId() ? ids.indexOf(focusedId()!) : -1;
       const next = idx < ids.length - 1 ? idx + 1 : 0;
       setFocusedId(ids[next]);
-      scrollFocusedIntoView(ids[next]);
+      scrollSessionIntoView(ids[next]);
       return;
     }
 
@@ -944,21 +944,21 @@ export function Layout(props: ParentProps) {
       const idx = focusedId() ? ids.indexOf(focusedId()!) : ids.length;
       const prev = idx > 0 ? idx - 1 : ids.length - 1;
       setFocusedId(ids[prev]);
-      scrollFocusedIntoView(ids[prev]);
+      scrollSessionIntoView(ids[prev]);
       return;
     }
 
     if (e.key === "Home") {
       e.preventDefault();
       setFocusedId(ids[0]);
-      scrollFocusedIntoView(ids[0]);
+      scrollSessionIntoView(ids[0]);
       return;
     }
 
     if (e.key === "End") {
       e.preventDefault();
       setFocusedId(ids[ids.length - 1]);
-      scrollFocusedIntoView(ids[ids.length - 1]);
+      scrollSessionIntoView(ids[ids.length - 1]);
       return;
     }
 
@@ -1021,11 +1021,11 @@ export function Layout(props: ParentProps) {
     }
   }
 
-  // Scroll the focused session into view
-  function scrollFocusedIntoView(id: string) {
+  // Scroll a session element into view (accepts optional ScrollIntoViewOptions)
+  function scrollSessionIntoView(id: string, options: ScrollIntoViewOptions = { block: "nearest" }) {
     queueMicrotask(() => {
       const el = document.getElementById(`session-${id}`);
-      if (el) el.scrollIntoView({ block: "nearest" });
+      if (el) el.scrollIntoView(options);
     });
   }
 
@@ -1107,7 +1107,7 @@ export function Layout(props: ParentProps) {
       : (ids[0] ?? null);
     setFocusedId(target);
     if (target) {
-      scrollFocusedIntoView(target);
+      scrollSessionIntoView(target);
     }
   }
 
@@ -1146,10 +1146,10 @@ export function Layout(props: ParentProps) {
           const current = currentSessionId();
           if (current && ids.includes(current)) {
             setFocusedId(current);
-            scrollFocusedIntoView(current);
+            scrollSessionIntoView(current);
           } else if (ids.length) {
             setFocusedId(ids[0]);
-            scrollFocusedIntoView(ids[0]);
+            scrollSessionIntoView(ids[0]);
           }
         }
         return true;
@@ -1183,20 +1183,12 @@ export function Layout(props: ParentProps) {
     // If no current session, go to first
     if (idx === -1) {
       navigate(`/${dirSlug()}/session/${list[0].id}`);
-      scrollSessionIntoView(list[0].id);
+      scrollSessionIntoView(list[0].id, { block: "nearest", behavior: "smooth" });
       return;
     }
     const next = (idx + delta + list.length) % list.length;
     navigate(`/${dirSlug()}/session/${list[next].id}`);
-    scrollSessionIntoView(list[next].id);
-  }
-
-  // Scroll a session element into view with smooth scrolling (used by Alt+Arrow navigation)
-  function scrollSessionIntoView(id: string) {
-    queueMicrotask(() => {
-      const el = document.getElementById(`session-${id}`);
-      if (el) el.scrollIntoView({ block: "nearest", behavior: "smooth" });
-    });
+    scrollSessionIntoView(list[next].id, { block: "nearest", behavior: "smooth" });
   }
 
   // Archive the current session (with confirmation if busy)
