@@ -212,7 +212,7 @@ function SortablePinnedSession(props: {
 }) {
   const sortable = createSortable(props.session.id);
   return (
-    <div use:sortable class="group/drag relative" classList={{ "opacity-30": sortable.isActiveDraggable }}>
+    <div use:sortable={sortable} class="group/drag relative" classList={{ "opacity-30": sortable.isActiveDraggable }}>
       <button
         type="button"
         aria-label="Reorder pinned session"
