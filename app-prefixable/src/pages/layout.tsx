@@ -214,8 +214,10 @@ function SortablePinnedSession(props: {
   return (
     // @ts-ignore — solid-dnd directive
     <div use:sortable class="group/drag relative" classList={{ "opacity-30": sortable.isActiveDraggable }}>
-      <div
-        class="absolute left-0 top-0 bottom-0 flex items-center z-10 cursor-grab active:cursor-grabbing opacity-0 group-hover/drag:opacity-100 transition-opacity"
+      <button
+        type="button"
+        aria-label="Reorder pinned session"
+        class="absolute left-0 top-0 bottom-0 flex items-center z-10 cursor-grab active:cursor-grabbing opacity-0 group-hover/drag:opacity-100 transition-opacity border-0 bg-transparent p-0"
         style={{
           width: "18px",
           "padding-left": "2px",
@@ -223,7 +225,7 @@ function SortablePinnedSession(props: {
         {...sortable.dragActivators}
       >
         <GripVertical class="w-3 h-3" style={{ color: "var(--icon-weak)" }} />
-      </div>
+      </button>
       {props.render(props.session)}
     </div>
   );
@@ -2327,6 +2329,7 @@ export function Layout(props: ParentProps) {
                       collisionDetector={closestCenter}
                     >
                       <DragDropSensors />
+                      {/* Constrains drag to vertical axis only (zeroes out X transform) */}
                       <ConstrainDragXAxis />
                       <div class="space-y-0.5">
                         <SortableProvider ids={pinnedSessions().map((s) => s.id)}>
