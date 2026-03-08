@@ -1,4 +1,5 @@
 import { createMemo, createSignal, createEffect, Show, onCleanup } from "solid-js"
+import { Portal } from "solid-js/web"
 import { useParams } from "@solidjs/router"
 import { useSync } from "../context/sync"
 import { useProviders } from "../context/providers"
@@ -66,6 +67,8 @@ export function SessionInfo(props: SessionInfoProps) {
       modelID?: string
       providerID?: string
       input: number
+      output: number
+      reasoning: number
       cacheRead: number
       cacheWrite: number
     } | null = null
@@ -80,6 +83,8 @@ export function SessionInfo(props: SessionInfoProps) {
           modelID: info.modelID,
           providerID: info.providerID,
           input: info.tokens?.input || 0,
+          output: info.tokens?.output || 0,
+          reasoning: info.tokens?.reasoning || 0,
           cacheRead: info.tokens?.cache?.read || 0,
           cacheWrite: info.tokens?.cache?.write || 0,
         }
@@ -121,8 +126,8 @@ export function SessionInfo(props: SessionInfoProps) {
       cacheRead: lastAssistant.cacheRead,
       cacheWrite: lastAssistant.cacheWrite,
       cacheTotal: lastAssistant.cacheRead + lastAssistant.cacheWrite,
-      output: totalOutput,
-      reasoning: totalReasoning,
+      output: lastAssistant.output,
+      reasoning: lastAssistant.reasoning,
       totalCost,
     }
   })
@@ -138,6 +143,8 @@ export function SessionInfo(props: SessionInfoProps) {
 
   // Token popover state
   const [showTokenPopover, setShowTokenPopover] = createSignal(false)
+  const [popoverPos, setPopoverPos] = createSignal({ top: 0, left: 0 })
+  let triggerRef: HTMLButtonElement | undefined
   let popoverRef: HTMLDivElement | undefined
 
   // Dismiss token popover on click outside or Escape
@@ -145,7 +152,8 @@ export function SessionInfo(props: SessionInfoProps) {
     if (!showTokenPopover()) return
 
     function handleClick(e: MouseEvent) {
-      if (popoverRef && !popoverRef.contains(e.target as Node)) {
+      if (popoverRef && !popoverRef.contains(e.target as Node) &&
+          triggerRef && !triggerRef.contains(e.target as Node)) {
         setShowTokenPopover(false)
       }
     }
@@ -163,6 +171,18 @@ export function SessionInfo(props: SessionInfoProps) {
       document.removeEventListener("keydown", handleKey)
     })
   })
+
+  function togglePopover() {
+    if (showTokenPopover()) {
+      setShowTokenPopover(false)
+      return
+    }
+    if (triggerRef) {
+      const rect = triggerRef.getBoundingClientRect()
+      setPopoverPos({ top: rect.top - 8, left: rect.left })
+    }
+    setShowTokenPopover(true)
+  }
 
   const dirSlug = createMemo(() => params.dir)
 
@@ -201,11 +221,12 @@ export function SessionInfo(props: SessionInfoProps) {
         {/* Token Usage */}
         <Show when={stats()}>
           {(s) => (
-            <div class="relative flex items-center gap-3" ref={popoverRef}>
+            <div class="flex items-center gap-3">
               <button
+                ref={triggerRef}
                 type="button"
                 class="flex items-center gap-3 hover:opacity-80 cursor-pointer"
-                onClick={() => setShowTokenPopover(!showTokenPopover())}
+                onClick={togglePopover}
               >
                 <span class="flex items-center gap-1.5 shrink-0">
                   <Zap class="w-3 h-3" />
@@ -229,82 +250,91 @@ export function SessionInfo(props: SessionInfoProps) {
                 </span>
               </button>
 
-              {/* Token breakdown popover */}
+              {/* Token breakdown popover - portalled to escape overflow-hidden */}
               <Show when={showTokenPopover()}>
-                <div
-                  class="absolute bottom-full left-0 mb-2 w-64 rounded-lg shadow-lg z-20 text-xs"
-                  style={{
-                    background: "var(--background-base)",
-                    border: "1px solid var(--border-base)",
-                  }}
-                >
+                <Portal>
                   <div
-                    class="px-3 py-2 font-medium"
+                    ref={popoverRef}
+                    class="w-64 rounded-lg shadow-lg text-xs"
                     style={{
-                      color: "var(--text-strong)",
-                      "border-bottom": "1px solid var(--border-base)",
-                      background: "var(--surface-inset)",
+                      position: "fixed",
+                      top: `${popoverPos().top}px`,
+                      left: `${popoverPos().left}px`,
+                      transform: "translateY(-100%)",
+                      "z-index": "9999",
+                      background: "var(--background-base)",
+                      border: "1px solid var(--border-base)",
                     }}
                   >
-                    Token Breakdown
-                  </div>
-                  <div class="px-3 py-2 space-y-1.5 font-mono" style={{ color: "var(--text-base)" }}>
-                    {/* Context */}
-                    <div class="flex justify-between">
-                      <span>Context:</span>
-                      <span>
-                        {fmt(s().contextTokens)}
-                        <Show when={s().contextLimit > 0}>
-                          <span class="opacity-60"> / {fmt(s().contextLimit)}</span>
-                        </Show>
-                        <Show when={s().usage !== null}>
-                          <span class="opacity-60"> ({s().usage}%)</span>
-                        </Show>
-                      </span>
-                    </div>
-
-                    {/* Input */}
-                    <div class="flex justify-between pl-3" style={{ color: "var(--text-weak)" }}>
-                      <span>Input:</span>
-                      <span>{fmt(s().input)}</span>
-                    </div>
-
-                    {/* Cache */}
-                    <div class="flex justify-between pl-3" style={{ color: "var(--text-weak)" }}>
-                      <span>Cache:</span>
-                      <span>{fmt(s().cacheTotal)}</span>
-                    </div>
-                    <Show when={s().cacheRead > 0 || s().cacheWrite > 0}>
-                      <div class="flex justify-between pl-6" style={{ color: "var(--text-weak)", opacity: 0.8 }}>
-                        <span>read / write:</span>
-                        <span>{fmt(s().cacheRead)} / {fmt(s().cacheWrite)}</span>
-                      </div>
-                    </Show>
-
-                    {/* Output */}
-                    <div class="flex justify-between">
-                      <span>Output:</span>
-                      <span>{fmt(s().output)}</span>
-                    </div>
-
-                    {/* Reasoning */}
-                    <Show when={s().reasoning > 0}>
-                      <div class="flex justify-between">
-                        <span>Reasoning:</span>
-                        <span>{fmt(s().reasoning)}</span>
-                      </div>
-                    </Show>
-
-                    {/* Cost */}
                     <div
-                      class="flex justify-between pt-1.5 mt-1"
-                      style={{ "border-top": "1px solid var(--border-base)" }}
+                      class="px-3 py-2 font-medium"
+                      style={{
+                        color: "var(--text-strong)",
+                        "border-bottom": "1px solid var(--border-base)",
+                        background: "var(--surface-inset)",
+                        "border-radius": "0.5rem 0.5rem 0 0",
+                      }}
                     >
-                      <span>Cost:</span>
-                      <span>{s().cost} <span class="opacity-60" style={{ "font-family": "inherit" }}>(session)</span></span>
+                      Token Breakdown
+                    </div>
+                    <div class="px-3 py-2 space-y-1.5 font-mono" style={{ color: "var(--text-base)" }}>
+                      {/* Context */}
+                      <div class="flex justify-between">
+                        <span>Context:</span>
+                        <span>
+                          {fmt(s().contextTokens)}
+                          <Show when={s().contextLimit > 0}>
+                            <span class="opacity-60"> / {fmt(s().contextLimit)}</span>
+                          </Show>
+                          <Show when={s().usage !== null}>
+                            <span class="opacity-60"> ({s().usage}%)</span>
+                          </Show>
+                        </span>
+                      </div>
+
+                      {/* Input */}
+                      <div class="flex justify-between pl-3" style={{ color: "var(--text-weak)" }}>
+                        <span>Input:</span>
+                        <span>{fmt(s().input)}</span>
+                      </div>
+
+                      {/* Cache */}
+                      <div class="flex justify-between pl-3" style={{ color: "var(--text-weak)" }}>
+                        <span>Cache:</span>
+                        <span>{fmt(s().cacheTotal)}</span>
+                      </div>
+                      <Show when={s().cacheRead > 0 || s().cacheWrite > 0}>
+                        <div class="flex justify-between pl-6" style={{ color: "var(--text-weak)", opacity: 0.8 }}>
+                          <span>read / write:</span>
+                          <span>{fmt(s().cacheRead)} / {fmt(s().cacheWrite)}</span>
+                        </div>
+                      </Show>
+
+                      {/* Output */}
+                      <div class="flex justify-between">
+                        <span>Output:</span>
+                        <span>{fmt(s().output)}</span>
+                      </div>
+
+                      {/* Reasoning */}
+                      <Show when={s().reasoning > 0}>
+                        <div class="flex justify-between">
+                          <span>Reasoning:</span>
+                          <span>{fmt(s().reasoning)}</span>
+                        </div>
+                      </Show>
+
+                      {/* Cost */}
+                      <div
+                        class="flex justify-between pt-1.5 mt-1"
+                        style={{ "border-top": "1px solid var(--border-base)" }}
+                      >
+                        <span>Cost:</span>
+                        <span>{s().cost} <span class="opacity-60" style={{ "font-family": "inherit" }}>(session)</span></span>
+                      </div>
                     </div>
                   </div>
-                </div>
+                </Portal>
               </Show>
             </div>
           )}
