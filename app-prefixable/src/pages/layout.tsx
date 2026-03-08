@@ -1022,10 +1022,16 @@ export function Layout(props: ParentProps) {
   }
 
   // Scroll a session element into view (accepts optional ScrollIntoViewOptions)
+  const prefersReducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
+
   function scrollSessionIntoView(id: string, options: ScrollIntoViewOptions = { block: "nearest" }) {
     queueMicrotask(() => {
       const el = document.getElementById(`session-${id}`);
-      if (el) el.scrollIntoView(options);
+      if (!el) return;
+      const resolved = options.behavior === "smooth" && prefersReducedMotion.matches
+        ? { ...options, behavior: "auto" as const }
+        : options;
+      el.scrollIntoView(resolved);
     });
   }
 
@@ -1433,7 +1439,7 @@ export function Layout(props: ParentProps) {
       () => currentSessionId(),
       (id) => {
         if (!id) return;
-        scrollFocusedIntoView(id);
+        scrollSessionIntoView(id);
       },
       { defer: true },
     ),
