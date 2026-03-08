@@ -24,16 +24,18 @@ const DEFAULTS: SoundSettings = { enabled: false, sound: "chime" }
 
 export function readSoundSettings(): SoundSettings {
   if (typeof window === "undefined") return { ...DEFAULTS }
-  const raw = window.localStorage.getItem(SOUND_STORAGE_KEY)
-  if (!raw) return { ...DEFAULTS }
   try {
-    const parsed = JSON.parse(raw) as Partial<SoundSettings>
+    const raw = window.localStorage.getItem(SOUND_STORAGE_KEY)
+    if (!raw) return { ...DEFAULTS }
+    const parsed = JSON.parse(raw) as unknown
+    if (!parsed || typeof parsed !== "object") return { ...DEFAULTS }
+    const settings = parsed as Partial<SoundSettings>
     return {
-      enabled: typeof parsed.enabled === "boolean" ? parsed.enabled : DEFAULTS.enabled,
-      sound: typeof parsed.sound === "string" ? parsed.sound : DEFAULTS.sound,
+      enabled: typeof settings.enabled === "boolean" ? settings.enabled : DEFAULTS.enabled,
+      sound: typeof settings.sound === "string" ? settings.sound : DEFAULTS.sound,
     }
   } catch {
-    window.localStorage.removeItem(SOUND_STORAGE_KEY)
+    try { window.localStorage.removeItem(SOUND_STORAGE_KEY) } catch { /* ignore */ }
     return { ...DEFAULTS }
   }
 }
