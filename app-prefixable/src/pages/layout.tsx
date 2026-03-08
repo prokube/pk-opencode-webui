@@ -50,6 +50,7 @@ import {
   Pin,
   PinOff,
   Search,
+  GripVertical,
 } from "lucide-solid";
 import { useSync } from "../context/sync";
 import { usePermission } from "../context/permission";
@@ -62,6 +63,16 @@ import { ShortcutReference } from "../components/shortcut-reference";
 import { CommandPalette } from "../components/command-palette";
 import { HintMode } from "../components/hint-mode";
 import { suggestSessionTitle } from "../utils/ai-rename";
+import {
+  DragDropProvider,
+  DragDropSensors,
+  DragOverlay,
+  SortableProvider,
+  closestCenter,
+  createSortable,
+} from "@thisbeyond/solid-dnd";
+import type { DragEvent as SolidDragEvent } from "@thisbeyond/solid-dnd";
+import { ConstrainDragXAxis } from "../utils/solid-dnd";
 
 import { readNotifyMap, cleanupNotifyState, NOTIFY_STORAGE_KEY } from "../utils/notify";
 import { readSoundSettings, playSound, primeAudioContext, SOUND_STORAGE_KEY } from "../utils/sound";
@@ -191,6 +202,30 @@ function PromptDropdown(props: {
           )}
         </For>
       </div>
+    </div>
+  );
+}
+
+function SortablePinnedSession(props: {
+  session: Session;
+  render: (session: Session) => import("solid-js").JSX.Element;
+}) {
+  const sortable = createSortable(props.session.id);
+  return (
+    <div use:sortable={sortable} class="group/drag relative" classList={{ "opacity-30": sortable.isActiveDraggable }}>
+      <button
+        type="button"
+        aria-label="Reorder pinned session"
+        class="absolute left-0 top-0 bottom-0 flex items-center z-10 cursor-grab active:cursor-grabbing opacity-0 group-hover/drag:opacity-100 transition-opacity border-0 bg-transparent p-0"
+        style={{
+          width: "18px",
+          "padding-left": "2px",
+        }}
+        {...sortable.dragActivators}
+      >
+        <GripVertical class="w-3 h-3" style={{ color: "var(--icon-weak)" }} />
+      </button>
+      {props.render(props.session)}
     </div>
   );
 }
@@ -378,6 +413,28 @@ export function Layout(props: ParentProps) {
     savePinnedIds(pinnedIds().filter((pid) => pid !== id));
   }
 
+  const [pinDragId, setPinDragId] = createSignal<string | null>(null);
+
+  function handlePinDragStart(event: SolidDragEvent) {
+    setPinDragId(event.draggable ? String(event.draggable.id) : null);
+  }
+
+  function handlePinDragEnd(event: SolidDragEvent) {
+    setPinDragId(null);
+    const { draggable, droppable } = event;
+    if (!draggable || !droppable) return;
+    const from = draggable.id as string;
+    const to = droppable.id as string;
+    if (from === to) return;
+    const ids = [...pinnedIds()];
+    const fromIdx = ids.indexOf(from);
+    const toIdx = ids.indexOf(to);
+    if (fromIdx === -1 || toIdx === -1) return;
+    ids.splice(fromIdx, 1);
+    ids.splice(toIdx, 0, from);
+    savePinnedIds(ids);
+  }
+
   function renderSessionItem(session: Session, pinned: boolean) {
     const showPinItem = () => pinned || pinnedIds().length < MAX_PINNED;
     const idx = (n: number) => showPinItem() ? n : n - 1;
@@ -430,8 +487,10 @@ export function Layout(props: ParentProps) {
               data-hint-target
               href={`/${dirSlug()}/session/${session.id}`}
               tabIndex={isActive(session.id) ? 0 : -1}
-              class="flex items-center gap-2 px-2.5 py-2 rounded-md text-sm transition-colors"
+              class="flex items-center gap-2 py-2 rounded-md text-sm transition-colors"
               style={{
+                "padding-left": pinned ? "18px" : "10px",
+                "padding-right": "10px",
                 color: isActive(session.id)
                   ? "var(--text-interactive-base)"
                   : focusedId() === session.id
@@ -480,8 +539,12 @@ export function Layout(props: ParentProps) {
           }
         >
           <div
-            class="flex items-center gap-2 px-2.5 py-1.5 rounded-md"
-            style={{ background: "var(--surface-inset)" }}
+            class="flex items-center gap-2 py-1.5 rounded-md"
+            style={{
+              background: "var(--surface-inset)",
+              "padding-left": pinned ? "18px" : "10px",
+              "padding-right": "10px",
+            }}
           >
             <span
               class="shrink-0"
@@ -2277,7 +2340,7 @@ export function Layout(props: ParentProps) {
                   </div>
                 }
               >
-                {/* Pinned Sessions */}
+                {/* Pinned Sessions (drag-and-drop reorderable) */}
                 <Show when={pinnedSessions().length > 0}>
                   <div class="pb-2">
                     <h3
@@ -2287,11 +2350,49 @@ export function Layout(props: ParentProps) {
                     >
                       Pinned
                     </h3>
-                    <div class="space-y-0.5">
-                      <For each={pinnedSessions()}>
-                        {(session) => renderSessionItem(session, true)}
-                      </For>
-                    </div>
+                    <DragDropProvider
+                      onDragStart={handlePinDragStart}
+                      onDragEnd={handlePinDragEnd}
+                      collisionDetector={closestCenter}
+                    >
+                      <DragDropSensors />
+                      {/* Constrains drag to vertical axis only (zeroes out X transform) */}
+                      <ConstrainDragXAxis />
+                      <div class="space-y-0.5">
+                        <SortableProvider ids={pinnedSessions().map((s) => s.id)}>
+                          <For each={pinnedSessions()}>
+                            {(session) => (
+                              <SortablePinnedSession
+                                session={session}
+                                render={(s) => renderSessionItem(s, true)}
+                              />
+                            )}
+                          </For>
+                        </SortableProvider>
+                      </div>
+                      <DragOverlay>
+                        <Show when={pinDragId()}>
+                          {(id) => {
+                            const dragged = () => pinnedSessions().find((s) => s.id === id());
+                            return (
+                              <div
+                                class="flex items-center gap-2 rounded-md px-2.5 py-2 text-sm"
+                                style={{
+                                  background: "var(--surface-inset)",
+                                  color: "var(--text-interactive-base)",
+                                  "box-shadow": "0 4px 12px rgba(0,0,0,0.15)",
+                                  "min-width": "120px",
+                                }}
+                              >
+                                <GripVertical class="w-3 h-3 shrink-0" style={{ color: "var(--icon-weak)" }} />
+                                <Pin class="w-4 h-4 shrink-0" style={{ color: "var(--icon-weak)" }} />
+                                <span class="truncate">{dragged()?.title || "Untitled"}</span>
+                              </div>
+                            );
+                          }}
+                        </Show>
+                      </DragOverlay>
+                    </DragDropProvider>
                   </div>
                 </Show>
 
