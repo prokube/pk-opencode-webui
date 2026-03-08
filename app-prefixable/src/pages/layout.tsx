@@ -1046,6 +1046,7 @@ export function Layout(props: ParentProps) {
         title: "New Session",
         description: "Create a new chat session",
         keybind: "mod+n",
+        global: true,
         onSelect: createNewSession,
       },
       {
@@ -1053,6 +1054,7 @@ export function Layout(props: ParentProps) {
         title: "Archive Session",
         description: "Archive the current session",
         keybind: "mod+w",
+        global: true,
         onSelect: archiveCurrentSession,
       },
       {
@@ -1060,6 +1062,7 @@ export function Layout(props: ParentProps) {
         title: "Next Session",
         description: "Switch to the next session in the list",
         keybind: "alt+ArrowDown",
+        global: true,
         onSelect: () => navigateSessionDelta(1),
       },
       {
@@ -1067,6 +1070,7 @@ export function Layout(props: ParentProps) {
         title: "Previous Session",
         description: "Switch to the previous session in the list",
         keybind: "alt+ArrowUp",
+        global: true,
         onSelect: () => navigateSessionDelta(-1),
       },
       // Alt+1 through Alt+9: jump to session by position
@@ -1076,6 +1080,7 @@ export function Layout(props: ParentProps) {
         title: i === 0 ? "Jump to Session 1–9" : `Go to Session ${i + 1}`,
         description: i === 0 ? "Switch to a session by its sidebar position" : undefined,
         keybind: `alt+${i + 1}`,
+        global: true,
         hidden: i > 0,
         onSelect: () => navigateToSessionIndex(i),
       })),
@@ -1084,6 +1089,7 @@ export function Layout(props: ParentProps) {
         title: "Switch Project",
         description: "Open command palette filtered to projects",
         keybind: "mod+shift+k",
+        global: true,
         onSelect: () => {
           command.setPaletteFilter("# ");
           command.setPaletteOpen(true);
@@ -1099,24 +1105,28 @@ export function Layout(props: ParentProps) {
         id: "terminal.toggle",
         title: "Toggle Terminal",
         keybind: "ctrl+`",
+        global: true,
         onSelect: () => terminal.toggle(directory),
       },
       {
         id: "sidebar.toggle",
         title: "Toggle Sidebar",
         keybind: "ctrl+b",
+        global: true,
         onSelect: toggleSidebar,
       },
       {
         id: "review.toggle",
         title: "Toggle Review Panel",
         keybind: "mod+shift+r",
+        global: true,
         onSelect: () => layout.review.toggle(),
       },
       {
         id: "info.toggle",
         title: "Toggle Info Panel",
         keybind: "mod+shift+i",
+        global: true,
         onSelect: () => layout.info.toggle(),
       },
       // Panel focus shortcuts — passive so we only preventDefault when we actually handle the key
