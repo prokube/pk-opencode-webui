@@ -2138,6 +2138,7 @@ function ProjectConfigTab() {
   const config = useConfig()
   const providers = useProviders()
   const { directory } = useSDK()
+  const basePath = useBasePath()
   const [view, setView] = createSignal<"form" | "json">("form")
   const [jsonText, setJsonText] = createSignal("")
   const [jsonError, setJsonError] = createSignal<string | null>(null)
@@ -2167,10 +2168,24 @@ function ProjectConfigTab() {
 
   // ── Permission handlers ──
 
+  // When permission is a global string (e.g. "ask"), normalize to object
+  // preserving the default for all tools so per-tool edits don't drop it
+  function getPermissionObject(): Record<string, unknown> {
+    const perm = config.project.permission
+    if (typeof perm === "string") {
+      // Convert global string to per-tool entries
+      const obj: Record<string, unknown> = {}
+      for (const t of PERMISSION_TOOLS) obj[t.key] = perm
+      return obj
+    }
+    if (typeof perm === "object" && perm !== null) return perm as Record<string, unknown>
+    return {}
+  }
+
   async function setPermissionDefault(tool: string, action: PermissionActionConfig) {
     setSaving(true)
-    const current = config.project.permission
-    const currentRule = typeof current === "object" && current !== null ? (current as Record<string, unknown>)[tool] : undefined
+    const permObj = getPermissionObject()
+    const currentRule = permObj[tool]
     const patterns = getPermissionPatterns(currentRule)
 
     // Build the new rule: if there are patterns, keep them. Otherwise just use the action string.
@@ -2179,19 +2194,21 @@ function ProjectConfigTab() {
       : action
 
     const patch: Config = {
-      permission: { [tool]: newRule } as Config["permission"],
+      permission: { ...permObj, [tool]: newRule } as Config["permission"],
     }
     const result = await config.updateProject(patch)
     setSaving(false)
     if (result) showSaved()
   }
 
+  const RESERVED_PATTERN_KEYS = new Set(["*", "__originalKeys"])
+
   async function addPermissionPattern(tool: string, pattern: string, action: PermissionActionConfig) {
     const trimmed = pattern.trim()
-    if (!trimmed) return
+    if (!trimmed || RESERVED_PATTERN_KEYS.has(trimmed)) return
     setSaving(true)
-    const current = config.project.permission
-    const currentRule = typeof current === "object" && current !== null ? (current as Record<string, unknown>)[tool] : undefined
+    const permObj = getPermissionObject()
+    const currentRule = permObj[tool]
     const defaultAction = getPermissionAction(currentRule)
     const existingPatterns = getPermissionPatterns(currentRule)
 
@@ -2202,7 +2219,7 @@ function ProjectConfigTab() {
     }
 
     const patch: Config = {
-      permission: { [tool]: newRule } as Config["permission"],
+      permission: { ...permObj, [tool]: newRule } as Config["permission"],
     }
     const result = await config.updateProject(patch)
     setSaving(false)
@@ -2216,8 +2233,8 @@ function ProjectConfigTab() {
 
   async function removePermissionPattern(tool: string, pattern: string) {
     setSaving(true)
-    const current = config.project.permission
-    const currentRule = typeof current === "object" && current !== null ? (current as Record<string, unknown>)[tool] : undefined
+    const permObj = getPermissionObject()
+    const currentRule = permObj[tool]
     const defaultAction = getPermissionAction(currentRule)
     const existingPatterns = getPermissionPatterns(currentRule).filter((p) => p.pattern !== pattern)
 
@@ -2226,7 +2243,7 @@ function ProjectConfigTab() {
       : defaultAction
 
     const patch: Config = {
-      permission: { [tool]: newRule } as Config["permission"],
+      permission: { ...permObj, [tool]: newRule } as Config["permission"],
     }
     const result = await config.updateProject(patch)
     setSaving(false)
@@ -2248,20 +2265,46 @@ function ProjectConfigTab() {
 
   async function setDefaultModel(value: string) {
     setSaving(true)
-    // Send empty string to clear (undefined would be omitted in deep merge)
-    const patch: Config = { model: value || "" }
-    const result = await config.updateProject(patch)
-    setSaving(false)
-    if (result) showSaved()
+    if (value) {
+      const result = await config.updateProject({ model: value })
+      setSaving(false)
+      if (result) showSaved()
+      return
+    }
+    // To clear model, write the full config file without the key.
+    // The PATCH API only does deep-merge and cannot delete keys.
+    const full = structuredClone(config.project)
+    delete full.model
+    await clearConfigKey(full)
   }
 
   async function setDefaultAgent(value: string) {
     setSaving(true)
-    // Send empty string to clear (undefined would be omitted in deep merge)
-    const patch: Config = { default_agent: value || "" }
-    const result = await config.updateProject(patch)
+    if (value) {
+      const result = await config.updateProject({ default_agent: value })
+      setSaving(false)
+      if (result) showSaved()
+      return
+    }
+    const full = structuredClone(config.project)
+    delete full.default_agent
+    await clearConfigKey(full)
+  }
+
+  // Write the full config to opencode.json directly (used when clearing keys,
+  // since the PATCH API cannot delete keys via deep-merge)
+  async function clearConfigKey(fullConfig: Config) {
+    if (!directory) {
+      setSaving(false)
+      return
+    }
+    const path = `${directory.replace(/\/$/, "")}/opencode.json`
+    const ok = await writeFile(basePath.serverUrl, path, JSON.stringify(fullConfig, null, 2))
     setSaving(false)
-    if (result) showSaved()
+    if (ok) {
+      await config.refresh()
+      showSaved()
+    }
   }
 
   // ── Tool toggle handlers ──
