@@ -2038,6 +2038,7 @@ export function Session() {
                       processing={processing}
                       onAbort={handleAbort}
                       onAgentClick={() => setShowAgentPicker(true)}
+                      onModelClick={() => setShowModelPicker(true)}
                     />
                   </div>
                 </div>
