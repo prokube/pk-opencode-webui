@@ -490,9 +490,12 @@ export function Layout(props: ParentProps) {
                   e.currentTarget.dataset.committed = "true";
                   renameSession(session, editTitle());
                   setRenamingId(null);
+                  queueMicrotask(() => { focusPanel("sidebar"); setFocusedId(session.id); });
                 } else if (e.key === "Escape") {
+                  e.stopPropagation();
                   e.currentTarget.dataset.cancelRename = "true";
                   setRenamingId(null);
+                  queueMicrotask(() => { focusPanel("sidebar"); setFocusedId(session.id); });
                 }
               }}
               onBlur={(e) => {
