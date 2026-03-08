@@ -204,40 +204,46 @@ See [examples/](examples/) for nginx and Traefik configurations.
 ## Architecture
 
 ```
-+-------------------------------------------------------------------+
-| This Project                                                      |
-|                                                                   |
-|  +-------------------------------------------------------------+ |
-|  |                        Browser                               | |
-|  |  +-------------------------------------------------------+  | |
-|  |  |                   SolidJS Frontend                     |  | |
-|  |  |  - Multi-project session management                    |  | |
-|  |  |  - Chat interface with streaming                       |  | |
-|  |  |  - Review panel (git diffs)                            |  | |
-|  |  |  - Terminal emulator                                   |  | |
-|  |  |  - MCP server management                               |  | |
-|  |  |  - Command palette, hint mode, saved prompts           |  | |
-|  |  |  - Sound & desktop notifications                       |  | |
-|  |  +-------------------------------------------------------+  | |
-|  +-------------------------------------------------------------+ |
-|                               |                                   |
-|                   HTTP / SSE / WebSocket                           |
-|                               v                                   |
-|  +-------------------------------------------------------------+ |
-|  |                     UI Server (Bun)                          | |
-|  |  - Serves static files with correct base path               | |
-|  |  - Proxies API requests to OpenCode server                  | |
-|  |  - Extended endpoints (/api/ext/mkdir, list-dirs, file, mcp)| |
-|  |  - WebSocket proxy for PTY (terminal) sessions              | |
-|  +-------------------------------------------------------------+ |
-+-------------------------------------------------------------------+
-                                |
-                                v
-+-------------------------------------------------------------------+
-|         Upstream OpenCode Server (`opencode serve`)               |
++------------------------------------------------------------------+
+|  This Project                                                    |
+|                                                                  |
+|  +------------------------------------------------------------+  |
+|  |  Browser                                                   |  |
+|  |                                                            |  |
+|  |  +------------------------------------------------------+  |  |
+|  |  |  SolidJS Frontend                                    |  |  |
+|  |  |                                                      |  |  |
+|  |  |  - Multi-project session management                  |  |  |
+|  |  |  - Chat interface with streaming                     |  |  |
+|  |  |  - Review panel (git diffs)                          |  |  |
+|  |  |  - Terminal emulator                                 |  |  |
+|  |  |  - MCP server management                             |  |  |
+|  |  |  - Command palette, hint mode, saved prompts         |  |  |
+|  |  |  - Sound & desktop notifications                     |  |  |
+|  |  +------------------------------------------------------+  |  |
+|  |                                                            |  |
+|  +------------------------------------------------------------+  |
+|                              |                                   |
+|                  HTTP / SSE / WebSocket                          |
+|                              v                                   |
+|  +------------------------------------------------------------+  |
+|  |  UI Server (Bun)                                           |  |
+|  |                                                            |  |
+|  |  - Serves static files with correct base path              |  |
+|  |  - Proxies API requests to OpenCode server                 |  |
+|  |  - Extended endpoints (/api/ext/mkdir, list-dirs, mcp)     |  |
+|  |  - WebSocket proxy for PTY (terminal) sessions             |  |
+|  +------------------------------------------------------------+  |
+|                                                                  |
++------------------------------------------------------------------+
+                               |
+                               v
++------------------------------------------------------------------+
+|  Upstream OpenCode Server (opencode serve)                       |
+|                                                                  |
 |  - Session management          - LLM provider communication      |
 |  - Tool execution              - Terminal (PTY) management       |
-+-------------------------------------------------------------------+
++------------------------------------------------------------------+
 ```
 
 ## Building
