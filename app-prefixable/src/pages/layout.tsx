@@ -852,7 +852,7 @@ export function Layout(props: ParentProps) {
             scrollFocusedIntoView(results[0].id);
           }
           // Move focus to the listbox so subsequent arrow keys navigate results
-          const listbox = (e.currentTarget as HTMLElement).querySelector('[role="listbox"]') as HTMLElement | null;
+          const listbox = (e.currentTarget as HTMLElement).querySelector('[role="listbox"][aria-label="Sessions"]') as HTMLElement | null;
           if (listbox) listbox.focus();
           return;
         }
@@ -1117,7 +1117,7 @@ export function Layout(props: ParentProps) {
     }
     // For sidebar, focus the inner listbox so aria-activedescendant applies immediately
     if (name === "sidebar") {
-      const listbox = el.querySelector('[role="listbox"]') as HTMLElement | null;
+      const listbox = el.querySelector('[role="listbox"][aria-label="Sessions"]') as HTMLElement | null;
       if (listbox) {
         listbox.focus();
         // During search, don't initialize focusedId from the grouped session list —
@@ -2094,7 +2094,7 @@ export function Layout(props: ParentProps) {
             aria-activedescendant={focusedId() ? `session-${focusedId()}` : undefined}
             tabIndex={0}
           >
-            <Show when={loading()}>
+            <Show when={loading() && !searchQuery().trim()}>
               <div
                 class="flex flex-col items-center justify-center py-8 gap-2"
                 style={{ color: "var(--text-weak)" }}
@@ -2108,7 +2108,7 @@ export function Layout(props: ParentProps) {
             </Show>
 
             {/* Search Results */}
-            <Show when={!loading() && searchQuery().trim()}>
+            <Show when={searchQuery().trim()}>
               <Show
                 when={!searching() && searchResults().length === 0}
                 fallback={
