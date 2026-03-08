@@ -212,7 +212,6 @@ function SortablePinnedSession(props: {
 }) {
   const sortable = createSortable(props.session.id);
   return (
-    // @ts-ignore — solid-dnd directive
     <div use:sortable class="group/drag relative" classList={{ "opacity-30": sortable.isActiveDraggable }}>
       <button
         type="button"
