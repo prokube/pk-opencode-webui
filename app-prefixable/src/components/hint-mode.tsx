@@ -37,11 +37,13 @@ function isElementVisible(el: HTMLElement): boolean {
   // Check if element is actually visible (not behind overflow:hidden parent)
   const style = getComputedStyle(el)
   if (style.visibility === "hidden" || style.display === "none") return false
-  // Check if the element's center point is reachable (not clipped by an ancestor)
-  const cx = rect.left + rect.width / 2
-  const cy = rect.top + rect.height / 2
+  // Check if the element's center point is reachable (not clipped by an ancestor).
+  // Clamp to viewport bounds so partially-visible elements are still probed correctly.
+  const cx = Math.min(Math.max(rect.left + rect.width / 2, 0), window.innerWidth - 1)
+  const cy = Math.min(Math.max(rect.top + rect.height / 2, 0), window.innerHeight - 1)
   const topEl = document.elementFromPoint(cx, cy)
-  if (topEl && !el.contains(topEl) && !topEl.contains(el)) return false
+  if (!topEl) return false
+  if (!el.contains(topEl) && !topEl.contains(el)) return false
   return true
 }
 

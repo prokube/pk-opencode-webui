@@ -437,7 +437,7 @@ export function Layout(props: ParentProps) {
                 "outline-offset": "-2px",
                 "border-radius": "0.375rem",
               }}
-              onClick={() => setFocusedId(null)}
+              onClick={(e) => { setFocusedId(null); e.currentTarget.blur(); }}
               onMouseEnter={(e) => {
                 if (!isActive(session.id))
                   e.currentTarget.style.background =
