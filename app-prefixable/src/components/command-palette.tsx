@@ -1,4 +1,4 @@
-import { createSignal, createEffect, createMemo, Show, For, onMount, onCleanup } from "solid-js"
+import { createSignal, createEffect, createMemo, Show, For, onMount, onCleanup, untrack } from "solid-js"
 import { Portal } from "solid-js/web"
 import { useNavigate } from "@solidjs/router"
 import fuzzysort from "fuzzysort"
@@ -201,7 +201,9 @@ export function CommandPalette() {
   // Focus input when opened; apply initial filter if set
   createEffect(() => {
     if (command.paletteOpen()) {
-      const initial = command.paletteFilter()
+      // Read the filter outside the reactive scope to avoid re-triggering
+      // when we clear it below
+      const initial = untrack(() => command.paletteFilter())
       setFilter(initial)
       command.setPaletteFilter("")
       setActiveIndex(0)
