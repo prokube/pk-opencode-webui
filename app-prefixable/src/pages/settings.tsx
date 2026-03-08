@@ -1989,6 +1989,7 @@ Add your project-specific instructions here.
                             <button
                               type="button"
                               onClick={(e) => {
+                                e.preventDefault()
                                 e.stopPropagation()
                                 playSound(option.id)
                               }}
