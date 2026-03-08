@@ -101,7 +101,7 @@ export function ShortcutReference() {
                       border: "1px solid var(--border-base)",
                     }}
                   >
-                    {formatKeybind(command.keybind!)}
+                    {formatKeybind(command.keybindDisplay ?? command.keybind!)}
                   </kbd>
                 </div>
               )}

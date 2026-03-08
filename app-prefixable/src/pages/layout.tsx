@@ -1251,15 +1251,22 @@ export function Layout(props: ParentProps) {
         onSelect: () => navigateSessionDelta(-1),
       },
       // Alt+1 through Alt+9: jump to session by position
-      // Alt+1 is visible in the cheat sheet as representative; Alt+2-9 are hidden
-      ...Array.from({ length: 9 }, (_, i) => ({
-        id: `session.jump.${i + 1}`,
-        title: i === 0 ? "Jump to Session 1–9" : `Go to Session ${i + 1}`,
-        description: i === 0 ? "Switch to a session by its sidebar position" : undefined,
-        keybind: `alt+${i + 1}`,
-        global: true,
-        hidden: i > 0,
-        onSelect: () => navigateToSessionIndex(i),
+      // Handled via custom keydown listener (not tinykeys) because macOS Option+number
+      // produces special characters (e.g. ¡, ™) and tinykeys matches on event.key.
+      // Only Alt+1 is visible in the cheat sheet as representative; Alt+2-9 are hidden.
+      {
+        id: "session.jump.1",
+        title: "Jump to Session 1–9",
+        description: "Switch to a session by its sidebar position",
+        keybindDisplay: "alt+1",
+        hidden: false,
+        onSelect: () => navigateToSessionIndex(0),
+      },
+      ...Array.from({ length: 8 }, (_, i) => ({
+        id: `session.jump.${i + 2}`,
+        title: `Go to Session ${i + 2}`,
+        hidden: true,
+        onSelect: () => navigateToSessionIndex(i + 1),
       })),
       {
         id: "palette.projects",
@@ -1381,7 +1388,28 @@ export function Layout(props: ParentProps) {
       },
     ]);
 
+    // Alt+1-9: custom keydown handler using event.code so it works on macOS
+    // (Option+number produces special characters, making tinykeys's event.key matching fail)
+    function handleAltDigit(e: KeyboardEvent) {
+      if (!e.altKey || e.ctrlKey || e.metaKey || e.shiftKey) return;
+      const match = e.code.match(/^Digit([1-9])$/);
+      if (!match) return;
+      // Suppress in text inputs, textareas, contenteditable, and terminal
+      const target = e.target;
+      if (target instanceof HTMLElement) {
+        const tag = target.tagName;
+        if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
+        if (target.isContentEditable) return;
+        if (target.closest(".xterm")) return;
+      }
+      if (isDialogOpen()) return;
+      e.preventDefault();
+      navigateToSessionIndex(Number(match[1]) - 1);
+    }
+    window.addEventListener("keydown", handleAltDigit);
+
     onCleanup(() => {
+      window.removeEventListener("keydown", handleAltDigit);
       command.unregister([
         "palette.open",
         "session.new",
