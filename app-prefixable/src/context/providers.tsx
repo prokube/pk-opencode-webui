@@ -210,11 +210,16 @@ export function ProviderProvider(props: ParentProps) {
 
   function setSelectedAgent(agent: string) {
     if (!store.modelsByAgent[agent]) {
-      const defaultAgent = cfg.project.default_agent || FALLBACK_AGENT
+      // Resolve effective default agent consistently: project -> global -> fallback
+      const configAgent = cfg.project.default_agent || cfg.global.default_agent
+      const agents = agentsData()
+      const agentNames = agents ? agents.map((a) => a.name) : []
+      const effectiveDefault = configAgent && agentNames.includes(configAgent) ? configAgent : FALLBACK_AGENT
+
       const source = store.modelsByAgent[store.selectedAgent]
         ? store.selectedAgent
-        : store.modelsByAgent[defaultAgent]
-          ? defaultAgent
+        : store.modelsByAgent[effectiveDefault]
+          ? effectiveDefault
           : null
 
       if (source) {
