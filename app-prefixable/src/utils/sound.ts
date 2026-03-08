@@ -78,7 +78,7 @@ function playTones(tones: [number, number, number][], gain = 0.25) {
   master.gain.value = gain
   master.connect(ctx.destination)
 
-  const latestStop = tones.reduce((max, [, start, dur]) => Math.max(max, start + dur + 0.05), 0)
+  let remaining = tones.length
 
   for (const [freq, start, dur] of tones) {
     const osc = ctx.createOscillator()
@@ -94,10 +94,10 @@ function playTones(tones: [number, number, number][], gain = 0.25) {
     osc.onended = () => {
       osc.disconnect()
       env.disconnect()
+      remaining--
+      if (remaining === 0) master.disconnect()
     }
   }
-
-  setTimeout(() => master.disconnect(), latestStop * 1000)
 }
 
 // ---------------------------------------------------------------------------
