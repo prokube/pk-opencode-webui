@@ -206,6 +206,8 @@ export function Session() {
     string | null
   >(null);
 
+  const pendingPermissions = createMemo(() => permission.pendingForSession(sessionId() ?? ""));
+  const inputBlocked = createMemo(() => !!pendingQuestion() || pendingPermissions().length > 0);
 
   // Double-Escape to abort: track last Escape press timestamp
   const lastEsc = { ts: 0 };
@@ -1179,6 +1181,7 @@ export function Session() {
   function handleDragEnter(e: DragEvent) {
     e.preventDefault();
     e.stopPropagation();
+    if (inputBlocked()) return;
     // Only track drag events that include files
     if (!e.dataTransfer?.types.includes("Files")) return;
     dragCounter++;
@@ -1202,6 +1205,7 @@ export function Session() {
   function handleDragOver(e: DragEvent) {
     e.preventDefault();
     e.stopPropagation();
+    if (inputBlocked()) return;
   }
 
   function handleDrop(e: DragEvent) {
@@ -1209,6 +1213,8 @@ export function Session() {
     e.stopPropagation();
     dragCounter = 0;
     setIsDragging(false);
+
+    if (inputBlocked()) return;
 
     const files = e.dataTransfer?.files;
     if (!files) return;
@@ -1223,7 +1229,7 @@ export function Session() {
     const text = input().trim();
     const files = fileContext();
     const images = imageAttachments();
-    if ((!text && files.length === 0 && images.length === 0) || loading())
+    if ((!text && files.length === 0 && images.length === 0) || loading() || inputBlocked())
       return;
 
     // Require explicit model selection to avoid OpenCode auto-selecting a broken provider
@@ -1645,7 +1651,15 @@ export function Session() {
 
   // Chat view component
   function ChatView() {
-    const pendingPermissions = createMemo(() => permission.pendingForSession(sessionId() ?? ""))
+    // Re-focus main input when prompts are resolved
+    let wasBlocked = false;
+    createEffect(() => {
+      const blocked = inputBlocked();
+      if (wasBlocked && !blocked) {
+        requestAnimationFrame(() => inputRef?.focus());
+      }
+      wasBlocked = blocked;
+    });
 
     return (
       <div class="flex flex-col h-full">
@@ -1836,9 +1850,11 @@ export function Session() {
               onDragLeave={handleDragLeave}
               onDragOver={handleDragOver}
               onDrop={handleDrop}
+              style={{ cursor: inputBlocked() ? "not-allowed" : "auto" }}
             >
               <div
                 class="relative flex flex-col rounded-lg focus-within:ring-2 transition-all"
+                inert={inputBlocked() || undefined}
                 style={
                   {
                     background: "var(--background-base)",
@@ -1846,6 +1862,7 @@ export function Session() {
                       ? "2px dashed var(--interactive-base)"
                       : "1px solid var(--border-base)",
                     "--tw-ring-color": "var(--interactive-base)",
+                    opacity: inputBlocked() ? "0.5" : "1",
                   } as any
                 }
               >
@@ -1891,6 +1908,7 @@ export function Session() {
                 <textarea
                   ref={inputRef}
                   value={input()}
+                  disabled={inputBlocked()}
                   onPaste={handlePaste}
                   onInput={(e) => {
                     handleInputChange(e.currentTarget.value);
@@ -1927,7 +1945,7 @@ export function Session() {
                       if (form) form.requestSubmit();
                     }
                   }}
-                  placeholder="Type a message... (Tab to switch agent, / for commands)"
+                  placeholder={inputBlocked() ? "Respond to the prompt above to continue..." : "Type a message... (Tab to switch agent, / for commands)"}
                   rows={1}
                   class="w-full px-4 pt-3 pb-2 focus:outline-none resize-none bg-transparent"
                   style={{
