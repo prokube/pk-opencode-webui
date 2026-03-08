@@ -62,7 +62,7 @@ import { HintMode } from "../components/hint-mode";
 import { suggestSessionTitle } from "../utils/ai-rename";
 
 import { readNotifyMap, cleanupNotifyState, NOTIFY_STORAGE_KEY } from "../utils/notify";
-import { readSoundSettings, playSound, SOUND_STORAGE_KEY } from "../utils/sound";
+import { readSoundSettings, playSound, primeAudioContext, SOUND_STORAGE_KEY } from "../utils/sound";
 import { dispatchStorageEvent } from "../utils/storage";
 
 // Storage keys
@@ -1258,6 +1258,21 @@ export function Layout(props: ParentProps) {
     }
     window.addEventListener("storage", handleStorage);
     onCleanup(() => window.removeEventListener("storage", handleStorage));
+
+    // Prime AudioContext on the first user gesture so notification sounds
+    // work reliably even if the user enabled sound in a previous session
+    // and reloaded the page without visiting Settings.
+    function primeOnGesture() {
+      if (soundCache().enabled) primeAudioContext();
+      window.removeEventListener("pointerdown", primeOnGesture);
+      window.removeEventListener("keydown", primeOnGesture);
+    }
+    window.addEventListener("pointerdown", primeOnGesture);
+    window.addEventListener("keydown", primeOnGesture);
+    onCleanup(() => {
+      window.removeEventListener("pointerdown", primeOnGesture);
+      window.removeEventListener("keydown", primeOnGesture);
+    });
   });
 
   // Tab title flash (works for any alarming session)
