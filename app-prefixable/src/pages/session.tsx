@@ -33,7 +33,7 @@ import { ReviewPanel } from "../components/review-panel";
 import { SessionHeader } from "../components/session-header";
 import { ResizeHandle } from "../components/resize-handle";
 import { base64Encode, base64Decode } from "../utils/path";
-import type { Part, QuestionRequest } from "../sdk/client";
+import type { Part, QuestionRequest, TextPart } from "../sdk/client";
 import { Plus, Settings, Paperclip, Upload, Bookmark, BookOpen } from "lucide-solid";
 import { Portal } from "solid-js/web";
 import { ContextItems, type FileContext } from "../components/context-items";
@@ -134,6 +134,52 @@ export function Session() {
   const [processing, setProcessing] = createSignal(false);
   const [loadingHistory, setLoadingHistory] = createSignal(false);
   const [sessionId, setSessionId] = createSignal(params.id);
+
+  // Extract text content from message parts with optional separator and truncation
+  function textFromParts(parts: Part[], separator = " ", maxLen?: number) {
+    const text = parts
+      .filter((p): p is TextPart => p.type === "text")
+      .map((p) => p.text)
+      .join(separator);
+    if (maxLen && text.length > maxLen) return text.slice(0, maxLen) + "...";
+    return text;
+  }
+
+  // Set textarea value, trigger auto-grow, and focus — bypasses input handler
+  // to avoid slash-command detection when restored text starts with "/"
+  function applyInputAndAutogrow(el: HTMLTextAreaElement, text: string) {
+    setInput(text);
+    const nativeSet = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")?.set;
+    nativeSet?.call(el, text);
+    el.style.height = "auto";
+    el.style.height = `${Math.min(el.scrollHeight, 200)}px`;
+    requestAnimationFrame(() => el.focus());
+  }
+
+  // Fork picker items: user messages in reverse chronological order
+  const forkPickerItems = createMemo(() => {
+    const id = sessionId();
+    if (!id) return [];
+    const msgs = sync.messages(id);
+    return msgs
+      .filter((m) => m.info.role === "user")
+      .sort((a, b) => b.info.time.created - a.info.time.created)
+      .map((m) => {
+        const preview = textFromParts(m.parts, " ", 80);
+        const date = new Date(m.info.time.created);
+        const timestamp = date.toLocaleString(undefined, {
+          month: "short",
+          day: "numeric",
+          hour: "2-digit",
+          minute: "2-digit",
+        });
+        return {
+          id: m.info.id,
+          title: preview || (m.parts && m.parts.length > 0 ? "(attachments)" : "(empty message)"),
+          description: timestamp,
+        };
+      });
+  });
   const [showSlashPopover, setShowSlashPopover] = createSignal(false);
   const [slashQuery, setSlashQuery] = createSignal("");
   const [slashIndex, setSlashIndex] = createSignal(0);
@@ -144,6 +190,7 @@ export function Session() {
   const [showPromptPicker, setShowPromptPicker] = createSignal(false);
   const [promptPickerFilter, setPromptPickerFilter] = createSignal("");
   const [showFilePicker, setShowFilePicker] = createSignal(false);
+  const [showForkPicker, setShowForkPicker] = createSignal(false);
   const [showSavePrompt, setShowSavePrompt] = createSignal(false);
   const [savePromptTitle, setSavePromptTitle] = createSignal("");
   const [savePromptBody, setSavePromptBody] = createSignal("");
@@ -485,6 +532,16 @@ export function Session() {
           terminal.toggle(directory);
         },
       },
+      {
+        id: "session.fork",
+        title: "Fork Session",
+        description: "Branch from a previous message",
+        slash: "fork",
+        onSelect: () => {
+          if (!sessionId() || forkPickerItems().length === 0) return;
+          setShowForkPicker(true);
+        },
+      },
     ];
 
     // /compact — requires a session with messages and a selected model
@@ -773,6 +830,7 @@ export function Session() {
       showAgentPicker() ||
       showPromptPicker() ||
       showFilePicker() ||
+      showForkPicker() ||
       showSavePrompt()
     ) return;
     if (!processing()) return;
@@ -2046,15 +2104,7 @@ export function Session() {
             onSelect={(item) => {
               const found = savedPrompts.prompts().find((p) => p.id === item.id);
               if (!found) return;
-              setInput(found.text);
-              // Auto-grow textarea after DOM updates with new value
-              requestAnimationFrame(() => {
-                if (inputRef) {
-                  inputRef.style.height = "auto";
-                  inputRef.style.height = Math.min(inputRef.scrollHeight, 200) + "px";
-                  inputRef.focus();
-                }
-              });
+              if (inputRef) applyInputAndAutogrow(inputRef, found.text);
             }}
             onClose={() => setShowPromptPicker(false)}
           />
@@ -2067,6 +2117,50 @@ export function Session() {
             placeholder="Search files..."
             onSelect={addFileToContext}
             onClose={() => setShowFilePicker(false)}
+          />
+        </Show>
+
+        {/* Fork Picker Dialog */}
+        <Show when={showForkPicker()}>
+          <PickerDialog
+            title="Fork from Message"
+            placeholder="Search messages..."
+            emptyMessage="No user messages in this session."
+            items={forkPickerItems()}
+            onSelect={(item) => {
+              const id = sessionId();
+              if (!id) return;
+              setError(null);
+              client.session
+                .fork({ sessionID: id, messageID: item.id })
+                .then((res) => {
+                  if (!res.data) {
+                    setError("Failed to fork session");
+                    return;
+                  }
+                  setError(null);
+                  const forkedId = res.data.id;
+                  // Find the selected message text to restore in the new session's input
+                  const msgs = sync.messages(id);
+                  const selected = msgs.find((m) => m.info.id === item.id);
+                  const restoredText = selected
+                    ? textFromParts(selected.parts, "\n")
+                    : "";
+                  navigate(`/${dirSlug()}/session/${forkedId}`);
+                  // Restore the message text into the new session's input after navigation
+                  if (inputRef) {
+                    requestAnimationFrame(() => {
+                      applyInputAndAutogrow(inputRef!, restoredText);
+                    });
+                  }
+                })
+                .catch((err: unknown) => {
+                  setError(
+                    `Failed to fork session: ${err instanceof Error ? err.message : String(err)}`,
+                  );
+                });
+            }}
+            onClose={() => setShowForkPicker(false)}
           />
         </Show>
 
