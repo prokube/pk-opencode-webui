@@ -101,7 +101,8 @@ export function HintMode() {
       id: "hints.toggle",
       title: "Hint Mode",
       description: "Show letter hints to navigate by keyboard",
-      keybind: "alt+w",
+      keybind: "mod+shift+h",
+      global: true,
       onSelect: () => {
         if (active()) {
           exit()
