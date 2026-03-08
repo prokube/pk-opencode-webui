@@ -1179,6 +1179,7 @@ export function Session() {
   function handleDragEnter(e: DragEvent) {
     e.preventDefault();
     e.stopPropagation();
+    if (pendingQuestion() || permission.pendingForSession(sessionId() ?? "").length > 0) return;
     // Only track drag events that include files
     if (!e.dataTransfer?.types.includes("Files")) return;
     dragCounter++;
@@ -1202,6 +1203,7 @@ export function Session() {
   function handleDragOver(e: DragEvent) {
     e.preventDefault();
     e.stopPropagation();
+    if (pendingQuestion() || permission.pendingForSession(sessionId() ?? "").length > 0) return;
   }
 
   function handleDrop(e: DragEvent) {
@@ -1209,6 +1211,8 @@ export function Session() {
     e.stopPropagation();
     dragCounter = 0;
     setIsDragging(false);
+
+    if (pendingQuestion() || permission.pendingForSession(sessionId() ?? "").length > 0) return;
 
     const files = e.dataTransfer?.files;
     if (!files) return;
@@ -1223,7 +1227,7 @@ export function Session() {
     const text = input().trim();
     const files = fileContext();
     const images = imageAttachments();
-    if ((!text && files.length === 0 && images.length === 0) || loading() || pendingQuestion())
+    if ((!text && files.length === 0 && images.length === 0) || loading() || pendingQuestion() || permission.pendingForSession(sessionId() ?? "").length > 0)
       return;
 
     // Require explicit model selection to avoid OpenCode auto-selecting a broken provider
@@ -1645,18 +1649,18 @@ export function Session() {
 
   // Chat view component
   function ChatView() {
-    const pendingPermissions = createMemo(() => permission.pendingForSession(sessionId() ?? ""))
-    const inputBlocked = createMemo(() => !!pendingQuestion() || pendingPermissions().length > 0)
+    const pendingPermissions = createMemo(() => permission.pendingForSession(sessionId() ?? ""));
+    const inputBlocked = createMemo(() => !!pendingQuestion() || pendingPermissions().length > 0);
 
     // Re-focus main input when prompts are resolved
-    let wasBlocked = false
+    let wasBlocked = false;
     createEffect(() => {
-      const blocked = inputBlocked()
+      const blocked = inputBlocked();
       if (wasBlocked && !blocked) {
-        requestAnimationFrame(() => inputRef?.focus())
+        requestAnimationFrame(() => inputRef?.focus());
       }
-      wasBlocked = blocked
-    })
+      wasBlocked = blocked;
+    });
 
     return (
       <div class="flex flex-col h-full">
@@ -1858,7 +1862,6 @@ export function Session() {
                       : "1px solid var(--border-base)",
                     "--tw-ring-color": "var(--interactive-base)",
                     opacity: inputBlocked() ? "0.5" : "1",
-                    "pointer-events": inputBlocked() ? "none" : "auto",
                   } as any
                 }
               >
@@ -1941,7 +1944,7 @@ export function Session() {
                       if (form) form.requestSubmit();
                     }
                   }}
-                  placeholder={inputBlocked() ? "Answer the prompt above to continue..." : "Type a message... (Tab to switch agent, / for commands)"}
+                  placeholder={inputBlocked() ? "Respond to the prompt above to continue..." : "Type a message... (Tab to switch agent, / for commands)"}
                   rows={1}
                   class="w-full px-4 pt-3 pb-2 focus:outline-none resize-none bg-transparent"
                   style={{
@@ -1949,7 +1952,6 @@ export function Session() {
                     "min-height": "48px",
                     "max-height": "200px",
                     "overflow-y": "auto",
-                    cursor: inputBlocked() ? "not-allowed" : "text",
                   }}
                 />
 
