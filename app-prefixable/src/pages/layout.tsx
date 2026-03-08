@@ -901,10 +901,9 @@ export function Layout(props: ParentProps) {
       if (e.key === "Enter") {
         e.preventDefault();
         const idx = searchFocusIdx();
-        if (idx >= 0 && idx < results.length) {
-          clearSearch(results[idx].id);
-          navigate(`/${dirSlug()}/session/${results[idx].id}`);
-        }
+        const i = idx >= 0 && idx < results.length ? idx : 0;
+        clearSearch(results[i].id);
+        navigate(`/${dirSlug()}/session/${results[i].id}`);
         return;
       }
       return;
@@ -1051,10 +1050,12 @@ export function Layout(props: ParentProps) {
     // reference DOM elements that are unmounted during search.
     setFocusedId(null);
     setSearchFocusIdx(-1);
+    // Clear previous results immediately to avoid showing stale matches
+    // while waiting for the debounced search to fire.
+    setSearchResults([]);
     setSearching(true);
     searchTimer.id = setTimeout(() => {
       searchTimer.id = undefined;
-      setSearchResults([]);
       client.session.list({ search: trimmed, directory, roots: true })
         .then((res) => {
           // Only update if query hasn't changed while waiting
