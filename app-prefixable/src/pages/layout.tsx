@@ -1183,10 +1183,20 @@ export function Layout(props: ParentProps) {
     // If no current session, go to first
     if (idx === -1) {
       navigate(`/${dirSlug()}/session/${list[0].id}`);
+      scrollSessionIntoView(list[0].id);
       return;
     }
     const next = (idx + delta + list.length) % list.length;
     navigate(`/${dirSlug()}/session/${list[next].id}`);
+    scrollSessionIntoView(list[next].id);
+  }
+
+  // Scroll a session element into view with smooth scrolling (used by Alt+Arrow navigation)
+  function scrollSessionIntoView(id: string) {
+    queueMicrotask(() => {
+      const el = document.getElementById(`session-${id}`);
+      if (el) el.scrollIntoView({ block: "nearest", behavior: "smooth" });
+    });
   }
 
   // Archive the current session (with confirmation if busy)
