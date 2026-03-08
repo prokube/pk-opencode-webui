@@ -174,7 +174,8 @@ export function SessionInfo(props: SessionInfoProps) {
     }
     if (triggerRef) {
       const rect = triggerRef.getBoundingClientRect()
-      const maxLeft = window.innerWidth - 272
+      const POPOVER_WIDTH = 256
+      const maxLeft = window.innerWidth - POPOVER_WIDTH - 16
       setPopoverPos({ top: rect.top - 8, left: Math.max(0, Math.min(rect.left, maxLeft)) })
     }
     setShowTokenPopover(true)
@@ -223,6 +224,8 @@ export function SessionInfo(props: SessionInfoProps) {
                 type="button"
                 class="flex items-center gap-3 hover:opacity-80 cursor-pointer"
                 onClick={togglePopover}
+                aria-haspopup="true"
+                aria-expanded={showTokenPopover()}
               >
                 <span class="flex items-center gap-1.5 shrink-0">
                   <Zap class="w-3 h-3" />
