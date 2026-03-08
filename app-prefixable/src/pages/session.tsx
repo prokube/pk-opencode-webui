@@ -1854,6 +1854,7 @@ export function Session() {
             >
               <div
                 class="relative flex flex-col rounded-lg focus-within:ring-2 transition-all"
+                inert={inputBlocked() || undefined}
                 style={
                   {
                     background: "var(--background-base)",
@@ -1862,7 +1863,6 @@ export function Session() {
                       : "1px solid var(--border-base)",
                     "--tw-ring-color": "var(--interactive-base)",
                     opacity: inputBlocked() ? "0.5" : "1",
-                    "pointer-events": inputBlocked() ? "none" : "auto",
                   } as any
                 }
               >
