@@ -63,6 +63,7 @@ import { HintMode } from "../components/hint-mode";
 import { suggestSessionTitle } from "../utils/ai-rename";
 
 import { readNotifyMap, cleanupNotifyState, NOTIFY_STORAGE_KEY } from "../utils/notify";
+import { readSoundSettings, playSound, primeAudioContext, SOUND_STORAGE_KEY } from "../utils/sound";
 import { dispatchStorageEvent } from "../utils/storage";
 
 // Storage keys
@@ -1422,12 +1423,30 @@ export function Layout(props: ParentProps) {
   // Cached notify map — avoids repeated localStorage reads + JSON.parse on every SSE event.
   // Updated via storage events (including synthetic same-tab events dispatched by writeNotifyMap).
   const [notifyCache, setNotifyCache] = createSignal(readNotifyMap());
+  const [soundCache, setSoundCache] = createSignal(readSoundSettings());
   onMount(() => {
     function handleStorage(e: StorageEvent) {
       if (e.key === NOTIFY_STORAGE_KEY) setNotifyCache(readNotifyMap());
+      if (e.key === SOUND_STORAGE_KEY) setSoundCache(readSoundSettings());
     }
     window.addEventListener("storage", handleStorage);
     onCleanup(() => window.removeEventListener("storage", handleStorage));
+
+    // Prime AudioContext on the first user gesture (when sound is enabled)
+    // so notification sounds work reliably after page reload. Listeners stay
+    // attached until priming succeeds so that enabling sound later still works.
+    function primeOnGesture() {
+      if (!soundCache().enabled) return;
+      primeAudioContext();
+      window.removeEventListener("pointerdown", primeOnGesture);
+      window.removeEventListener("keydown", primeOnGesture);
+    }
+    window.addEventListener("pointerdown", primeOnGesture);
+    window.addEventListener("keydown", primeOnGesture);
+    onCleanup(() => {
+      window.removeEventListener("pointerdown", primeOnGesture);
+      window.removeEventListener("keydown", primeOnGesture);
+    });
   });
 
   // Tab title flash (works for any alarming session)
@@ -1463,6 +1482,10 @@ export function Layout(props: ParentProps) {
   function fireNotification(sessionID: string, title: string, body: string, tag: string) {
     // Flash the tab title when the page is in the background, regardless of Notification permission
     if (typeof document !== "undefined" && document.hidden) flashTitle();
+
+    // Play sound if enabled in settings
+    const sound = soundCache();
+    if (sound.enabled) playSound(sound.sound);
 
     if (typeof window === "undefined" || !("Notification" in window)) return;
     if (Notification.permission !== "granted") return;
