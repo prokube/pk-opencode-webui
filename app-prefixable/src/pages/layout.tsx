@@ -1084,12 +1084,14 @@ export function Layout(props: ParentProps) {
     setSearchFocusIdx(-1);
     setMenuOpenId(null);
     setMenuFocusIndex(-1);
-    // Restore focusedId to the destination session (if navigating), the
-    // current session, or the first session so keyboard/AT navigation
-    // remains consistent after the grouped list re-mounts.
+    // Restore focusedId to the destination session (if navigating) or the
+    // current session. If the preferred session isn't in the focusable list
+    // (e.g. archived), clear focus rather than pointing at an unrelated session.
     const ids = flatSessionIds();
     const preferred = nextSessionId ?? currentSessionId();
-    const target = (preferred && ids.includes(preferred)) ? preferred : (ids[0] ?? null);
+    const target = preferred
+      ? (ids.includes(preferred) ? preferred : null)
+      : (ids[0] ?? null);
     setFocusedId(target);
     if (target) {
       scrollFocusedIntoView(target);
