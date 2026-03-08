@@ -1100,7 +1100,7 @@ export function Layout(props: ParentProps) {
       {
         id: "terminal.toggle",
         title: "Toggle Terminal",
-        keybind: "ctrl+`",
+        keybind: "mod+shift+x",
         global: true,
         onSelect: () => terminal.toggle(directory),
       },
