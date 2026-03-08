@@ -2072,22 +2072,24 @@ Add your project-specific instructions here.
 }
 
 // ── Known permission tools with human-friendly labels ──
+// supportsPatterns: true for PermissionRuleConfig tools (allow pattern-specific rules),
+// false for PermissionActionConfig-only tools (only allow/ask/deny globally)
 const PERMISSION_TOOLS = [
-  { key: "read", label: "Read Files" },
-  { key: "edit", label: "Edit Files" },
-  { key: "bash", label: "Bash Commands" },
-  { key: "glob", label: "Glob Search" },
-  { key: "grep", label: "Grep Search" },
-  { key: "list", label: "List Files" },
-  { key: "webfetch", label: "Web Fetch" },
-  { key: "task", label: "Task (Sub-agent)" },
-  { key: "todowrite", label: "Todo Write" },
-  { key: "todoread", label: "Todo Read" },
-  { key: "question", label: "Question" },
-  { key: "websearch", label: "Web Search" },
-  { key: "codesearch", label: "Code Search" },
-  { key: "lsp", label: "LSP" },
-  { key: "skill", label: "Skill" },
+  { key: "read", label: "Read Files", supportsPatterns: true },
+  { key: "edit", label: "Edit Files", supportsPatterns: true },
+  { key: "bash", label: "Bash Commands", supportsPatterns: true },
+  { key: "glob", label: "Glob Search", supportsPatterns: true },
+  { key: "grep", label: "Grep Search", supportsPatterns: true },
+  { key: "list", label: "List Files", supportsPatterns: true },
+  { key: "webfetch", label: "Web Fetch", supportsPatterns: false },
+  { key: "task", label: "Task (Sub-agent)", supportsPatterns: true },
+  { key: "todowrite", label: "Todo Write", supportsPatterns: false },
+  { key: "todoread", label: "Todo Read", supportsPatterns: false },
+  { key: "question", label: "Question", supportsPatterns: false },
+  { key: "websearch", label: "Web Search", supportsPatterns: false },
+  { key: "codesearch", label: "Code Search", supportsPatterns: false },
+  { key: "lsp", label: "LSP", supportsPatterns: true },
+  { key: "skill", label: "Skill", supportsPatterns: true },
 ] as const
 
 // Known tools that can be toggled on/off
@@ -2450,7 +2452,8 @@ function ProjectConfigTab() {
                             {(opt) => (
                               <button
                                 onClick={() => setPermissionDefault(tool.key, opt)}
-                                class="px-2.5 py-1 rounded text-xs font-medium transition-colors capitalize"
+                                disabled={saving()}
+                                class="px-2.5 py-1 rounded text-xs font-medium transition-colors capitalize disabled:opacity-50"
                                 style={{
                                   background: action() === opt ? actionColor(opt) : "transparent",
                                   color: action() === opt ? "white" : "var(--text-weak)",
@@ -2463,8 +2466,8 @@ function ProjectConfigTab() {
                         </div>
                       </div>
 
-                      {/* Expanded: show patterns */}
-                      <Show when={expanded()}>
+                      {/* Expanded: show patterns (only for tools that support pattern rules) */}
+                      <Show when={expanded() && tool.supportsPatterns}>
                         <div class="mt-3 ml-5 space-y-2">
                           <Show when={patterns().length > 0}>
                             <div class="space-y-1">
@@ -2594,7 +2597,8 @@ function ProjectConfigTab() {
                 <select
                   value={config.project.model ?? ""}
                   onChange={(e) => setDefaultModel(e.currentTarget.value)}
-                  class="w-full px-3 py-2 rounded-md text-sm"
+                  disabled={saving()}
+                  class="w-full px-3 py-2 rounded-md text-sm disabled:opacity-50"
                   style={{
                     background: "var(--background-base)",
                     border: "1px solid var(--border-base)",
@@ -2622,7 +2626,8 @@ function ProjectConfigTab() {
                 <select
                   value={config.project.default_agent ?? ""}
                   onChange={(e) => setDefaultAgent(e.currentTarget.value)}
-                  class="w-full px-3 py-2 rounded-md text-sm"
+                  disabled={saving()}
+                  class="w-full px-3 py-2 rounded-md text-sm disabled:opacity-50"
                   style={{
                     background: "var(--background-base)",
                     border: "1px solid var(--border-base)",
@@ -2664,7 +2669,8 @@ function ProjectConfigTab() {
                       <span class="text-sm" style={{ color: "var(--text-base)" }}>{tool.label}</span>
                       <button
                         onClick={() => toggleTool(tool.key, !enabled())}
-                        class="relative w-10 h-5 rounded-full transition-colors"
+                        disabled={saving()}
+                        class="relative w-10 h-5 rounded-full transition-colors disabled:opacity-50"
                         role="switch"
                         aria-checked={enabled()}
                         aria-label={`Toggle ${tool.label} access`}
