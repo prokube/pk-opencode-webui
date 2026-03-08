@@ -20,6 +20,7 @@ export interface SoundSettings {
   sound: string
 }
 
+const VALID_SOUND_IDS = ["chime", "ping", "duo", "alert", "gentle"] as const
 const DEFAULTS: SoundSettings = { enabled: false, sound: "chime" }
 
 export function readSoundSettings(): SoundSettings {
@@ -32,7 +33,7 @@ export function readSoundSettings(): SoundSettings {
     const settings = parsed as Partial<SoundSettings>
     return {
       enabled: typeof settings.enabled === "boolean" ? settings.enabled : DEFAULTS.enabled,
-      sound: typeof settings.sound === "string" ? settings.sound : DEFAULTS.sound,
+      sound: typeof settings.sound === "string" && (VALID_SOUND_IDS as readonly string[]).includes(settings.sound) ? settings.sound : DEFAULTS.sound,
     }
   } catch {
     try { window.localStorage.removeItem(SOUND_STORAGE_KEY) } catch { /* ignore */ }
@@ -76,6 +77,7 @@ export function primeAudioContext() {
 
 /** Schedule and connect oscillator nodes for a set of tones. */
 function scheduleTones(ctx: AudioContext, tones: [number, number, number][], gain: number) {
+  if (!tones.length) return
   const master = ctx.createGain()
   master.gain.value = gain
   master.connect(ctx.destination)

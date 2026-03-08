@@ -1259,10 +1259,11 @@ export function Layout(props: ParentProps) {
     window.addEventListener("storage", handleStorage);
     onCleanup(() => window.removeEventListener("storage", handleStorage));
 
-    // Prime AudioContext on the first user gesture so notification sounds
-    // work reliably even if the user enabled sound in a previous session
-    // and reloaded the page without visiting Settings.
+    // Prime AudioContext on the first user gesture (when sound is enabled)
+    // so notification sounds work reliably after page reload. Listeners stay
+    // attached until priming succeeds so that enabling sound later still works.
     function primeOnGesture() {
+      if (!soundCache().enabled) return;
       primeAudioContext();
       window.removeEventListener("pointerdown", primeOnGesture);
       window.removeEventListener("keydown", primeOnGesture);
