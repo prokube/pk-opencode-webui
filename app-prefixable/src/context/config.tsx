@@ -30,20 +30,27 @@ export function ConfigProvider(props: ParentProps) {
   const [error, setError] = createSignal<string | null>(null)
 
   async function refresh() {
+    setLoading(true)
     setError(null)
+    const errors: string[] = []
     try {
-      const [projRes, globalRes] = await Promise.all([
-        sdk.client.config.get().catch(() => null),
-        sdk.client.global.config.get().catch(() => null),
-      ])
+      const projRes = await sdk.client.config.get()
       if (projRes?.data) setProject(reconcile(projRes.data as Config))
+    } catch (e) {
+      console.error("[Config] Failed to fetch project config:", e)
+      errors.push("project")
+    }
+    try {
+      const globalRes = await sdk.client.global.config.get()
       if (globalRes?.data) setGlobal(reconcile(globalRes.data as Config))
     } catch (e) {
-      console.error("[Config] Failed to fetch config:", e)
-      setError("Failed to load configuration")
-    } finally {
-      setLoading(false)
+      console.error("[Config] Failed to fetch global config:", e)
+      errors.push("global")
     }
+    if (errors.length > 0) {
+      setError(`Failed to load ${errors.join(" and ")} configuration`)
+    }
+    setLoading(false)
   }
 
   async function updateProject(patch: Config): Promise<Config | null> {
