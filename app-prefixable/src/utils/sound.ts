@@ -91,6 +91,10 @@ function playTones(tones: [number, number, number][], gain = 0.25) {
     env.connect(master)
     osc.start(ctx.currentTime + start)
     osc.stop(ctx.currentTime + start + dur + 0.05)
+    osc.onended = () => {
+      osc.disconnect()
+      env.disconnect()
+    }
   }
 
   setTimeout(() => master.disconnect(), latestStop * 1000)

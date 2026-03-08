@@ -1951,7 +1951,8 @@ Add your project-specific instructions here.
                     <div class="space-y-1">
                       <For each={SOUND_OPTIONS}>
                         {(option) => (
-                          <div
+                          <label
+                            for={`sound-option-${option.id}`}
                             class="flex items-center justify-between px-3 py-2 rounded-md transition-colors cursor-pointer"
                             style={{
                               background: soundSettings().sound === option.id ? "var(--surface-inset)" : "transparent",
@@ -1970,6 +1971,7 @@ Add your project-specific instructions here.
                           >
                             <div class="flex items-center gap-3">
                               <input
+                                id={`sound-option-${option.id}`}
                                 type="radio"
                                 name="sound"
                                 value={option.id}
@@ -1999,7 +2001,7 @@ Add your project-specific instructions here.
                             >
                               <Play class="w-4 h-4" />
                             </button>
-                          </div>
+                          </label>
                         )}
                       </For>
                     </div>
