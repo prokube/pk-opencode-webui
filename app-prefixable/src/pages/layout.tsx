@@ -1183,12 +1183,12 @@ export function Layout(props: ParentProps) {
     // If no current session, go to first
     if (idx === -1) {
       navigate(`/${dirSlug()}/session/${list[0].id}`);
-      scrollSessionIntoView(list[0].id, { block: "nearest", behavior: "smooth" });
+      if (showSidebar()) scrollSessionIntoView(list[0].id, { block: "nearest", behavior: "smooth" });
       return;
     }
     const next = (idx + delta + list.length) % list.length;
     navigate(`/${dirSlug()}/session/${list[next].id}`);
-    scrollSessionIntoView(list[next].id, { block: "nearest", behavior: "smooth" });
+    if (showSidebar()) scrollSessionIntoView(list[next].id, { block: "nearest", behavior: "smooth" });
   }
 
   // Archive the current session (with confirmation if busy)
