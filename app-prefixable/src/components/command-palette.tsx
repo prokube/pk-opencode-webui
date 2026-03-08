@@ -45,7 +45,7 @@ export function CommandPalette() {
     const result: PaletteItem[] = []
 
     // Sessions from current project
-    const sessions = sync.sessions().filter((s) => s.directory === directory && !s.time?.archived)
+    const sessions = sync.sessions().filter((s) => s.directory === directory && !s.time?.archived && !s.parentID)
     const dirSlug = directory ? base64Encode(directory) : ""
 
     for (const s of sessions) {
