@@ -206,6 +206,8 @@ export function Session() {
     string | null
   >(null);
 
+  const pendingPermissions = createMemo(() => permission.pendingForSession(sessionId() ?? ""));
+  const inputBlocked = createMemo(() => !!pendingQuestion() || pendingPermissions().length > 0);
 
   // Double-Escape to abort: track last Escape press timestamp
   const lastEsc = { ts: 0 };
@@ -1179,7 +1181,7 @@ export function Session() {
   function handleDragEnter(e: DragEvent) {
     e.preventDefault();
     e.stopPropagation();
-    if (pendingQuestion() || permission.pendingForSession(sessionId() ?? "").length > 0) return;
+    if (inputBlocked()) return;
     // Only track drag events that include files
     if (!e.dataTransfer?.types.includes("Files")) return;
     dragCounter++;
@@ -1203,7 +1205,7 @@ export function Session() {
   function handleDragOver(e: DragEvent) {
     e.preventDefault();
     e.stopPropagation();
-    if (pendingQuestion() || permission.pendingForSession(sessionId() ?? "").length > 0) return;
+    if (inputBlocked()) return;
   }
 
   function handleDrop(e: DragEvent) {
@@ -1212,7 +1214,7 @@ export function Session() {
     dragCounter = 0;
     setIsDragging(false);
 
-    if (pendingQuestion() || permission.pendingForSession(sessionId() ?? "").length > 0) return;
+    if (inputBlocked()) return;
 
     const files = e.dataTransfer?.files;
     if (!files) return;
@@ -1227,7 +1229,7 @@ export function Session() {
     const text = input().trim();
     const files = fileContext();
     const images = imageAttachments();
-    if ((!text && files.length === 0 && images.length === 0) || loading() || pendingQuestion() || permission.pendingForSession(sessionId() ?? "").length > 0)
+    if ((!text && files.length === 0 && images.length === 0) || loading() || inputBlocked())
       return;
 
     // Require explicit model selection to avoid OpenCode auto-selecting a broken provider
@@ -1649,9 +1651,6 @@ export function Session() {
 
   // Chat view component
   function ChatView() {
-    const pendingPermissions = createMemo(() => permission.pendingForSession(sessionId() ?? ""));
-    const inputBlocked = createMemo(() => !!pendingQuestion() || pendingPermissions().length > 0);
-
     // Re-focus main input when prompts are resolved
     let wasBlocked = false;
     createEffect(() => {
@@ -1851,6 +1850,7 @@ export function Session() {
               onDragLeave={handleDragLeave}
               onDragOver={handleDragOver}
               onDrop={handleDrop}
+              style={{ cursor: inputBlocked() ? "not-allowed" : "auto" }}
             >
               <div
                 class="relative flex flex-col rounded-lg focus-within:ring-2 transition-all"
@@ -1862,6 +1862,7 @@ export function Session() {
                       : "1px solid var(--border-base)",
                     "--tw-ring-color": "var(--interactive-base)",
                     opacity: inputBlocked() ? "0.5" : "1",
+                    "pointer-events": inputBlocked() ? "none" : "auto",
                   } as any
                 }
               >
