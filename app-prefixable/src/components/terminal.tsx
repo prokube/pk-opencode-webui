@@ -211,6 +211,13 @@ export function Terminal(props: TerminalProps) {
     term.open(container)
     console.log("[Terminal] Terminal opened in container")
 
+    // Let Ctrl+1-4 pass through to the browser for panel focus shortcuts
+    term.attachCustomKeyEventHandler((event) => {
+      if (event.ctrlKey && ["1", "2", "3", "4"].includes(event.key))
+        return false
+      return true
+    })
+
     // Show initializing message
     writeStatus("Initializing terminal...", "info")
 
