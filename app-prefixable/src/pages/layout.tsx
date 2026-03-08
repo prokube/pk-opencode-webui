@@ -860,7 +860,7 @@ export function Layout(props: ParentProps) {
           e.preventDefault();
           const idx = searchFocusIdx();
           const i = idx >= 0 && idx < results.length ? idx : 0;
-          clearSearch();
+          clearSearch(results[i].id);
           navigate(`/${dirSlug()}/session/${results[i].id}`);
           return;
         }
@@ -902,7 +902,7 @@ export function Layout(props: ParentProps) {
         e.preventDefault();
         const idx = searchFocusIdx();
         if (idx >= 0 && idx < results.length) {
-          clearSearch();
+          clearSearch(results[idx].id);
           navigate(`/${dirSlug()}/session/${results[idx].id}`);
         }
         return;
@@ -1075,7 +1075,7 @@ export function Layout(props: ParentProps) {
     }, 300);
   }
 
-  function clearSearch() {
+  function clearSearch(nextSessionId?: string) {
     if (searchTimer.id !== undefined) clearTimeout(searchTimer.id);
     searchTimer.id = undefined;
     setSearchQuery("");
@@ -1084,11 +1084,12 @@ export function Layout(props: ParentProps) {
     setSearchFocusIdx(-1);
     setMenuOpenId(null);
     setMenuFocusIndex(-1);
-    // Restore focusedId to the current session (or first session) so
-    // keyboard/AT navigation remains consistent after the grouped list re-mounts.
+    // Restore focusedId to the destination session (if navigating), the
+    // current session, or the first session so keyboard/AT navigation
+    // remains consistent after the grouped list re-mounts.
     const ids = flatSessionIds();
-    const current = currentSessionId();
-    const target = (current && ids.includes(current)) ? current : (ids[0] ?? null);
+    const preferred = nextSessionId ?? currentSessionId();
+    const target = (preferred && ids.includes(preferred)) ? preferred : (ids[0] ?? null);
     setFocusedId(target);
     if (target) {
       scrollFocusedIntoView(target);
@@ -2118,7 +2119,7 @@ export function Layout(props: ParentProps) {
                         return (
                           <A
                             href={`/${dirSlug()}/session/${session.id}`}
-                            onClick={() => clearSearch()}
+                            onClick={() => clearSearch(session.id)}
                             role="option"
                             id={`session-${session.id}`}
                             aria-selected={isActive(session.id)}
