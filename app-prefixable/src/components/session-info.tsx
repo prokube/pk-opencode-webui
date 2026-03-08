@@ -136,8 +136,12 @@ export function SessionInfo(props: SessionInfoProps) {
     return model?.name || selected.modelID
   })
 
-  // Token popover state
+  // Token popover state — reset when session changes
   const [showTokenPopover, setShowTokenPopover] = createSignal(false)
+  createEffect(() => {
+    params.id // track session ID
+    setShowTokenPopover(false)
+  })
   const [popoverPos, setPopoverPos] = createSignal({ top: 0, left: 0 })
   let triggerRef: HTMLButtonElement | undefined
   let popoverRef: HTMLDivElement | undefined
@@ -155,6 +159,7 @@ export function SessionInfo(props: SessionInfoProps) {
     function handleKey(e: KeyboardEvent) {
       if (e.key === "Escape") {
         e.preventDefault()
+        e.stopPropagation()
         setShowTokenPopover(false)
       }
     }
