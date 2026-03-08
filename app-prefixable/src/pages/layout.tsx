@@ -2057,7 +2057,6 @@ export function Layout(props: ParentProps) {
                     e.preventDefault();
                     e.stopPropagation();
                     clearSearch();
-                    e.currentTarget.blur();
                   }
                 }}
                 class="flex-1 min-w-0 bg-transparent outline-none text-sm"
@@ -2135,7 +2134,7 @@ export function Layout(props: ParentProps) {
                                 ? "var(--surface-inset)"
                                 : "transparent",
                               opacity: session.time?.archived && !isActive(session.id) ? 0.7 : 1,
-                              outline: focused() ? "2px solid var(--border-focus)" : "none",
+                              outline: focused() ? "2px solid var(--border-focus, var(--interactive-base))" : "none",
                               "outline-offset": "-2px",
                             }}
                             onMouseEnter={(e) => {
