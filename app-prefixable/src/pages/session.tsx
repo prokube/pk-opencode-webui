@@ -163,6 +163,7 @@ export function Session() {
     const msgs = sync.messages(id);
     return msgs
       .filter((m) => m.info.role === "user")
+      .sort((a, b) => b.info.time.created - a.info.time.created)
       .map((m) => {
         const preview = textFromParts(m.parts, " ", 80);
         const date = new Date(m.info.time.created);
@@ -177,8 +178,7 @@ export function Session() {
           title: preview || (m.parts && m.parts.length > 0 ? "(attachments)" : "(empty message)"),
           description: timestamp,
         };
-      })
-      .reverse();
+      });
   });
   const [showSlashPopover, setShowSlashPopover] = createSignal(false);
   const [slashQuery, setSlashQuery] = createSignal("");
