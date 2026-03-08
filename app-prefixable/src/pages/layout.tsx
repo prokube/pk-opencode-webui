@@ -3,6 +3,7 @@ import {
   createSignal,
   For,
   Show,
+  on,
   onMount,
   createMemo,
   onCleanup,
@@ -1409,6 +1410,20 @@ export function Layout(props: ParentProps) {
 
     onCleanup(unsub);
   });
+
+  // When the active session changes (navigation, new session creation, etc.),
+  // scroll it into view in the sidebar. Uses `on()` with defer so it only fires
+  // on actual changes, not on initial mount or unrelated re-renders.
+  createEffect(
+    on(
+      () => currentSessionId(),
+      (id) => {
+        if (!id) return;
+        scrollFocusedIntoView(id);
+      },
+      { defer: true },
+    ),
+  );
 
   // --- Global alarm monitoring for ALL sessions with bell enabled ---
   // NOTE: Currently scoped to the active directory's SSE stream (EventProvider connects
