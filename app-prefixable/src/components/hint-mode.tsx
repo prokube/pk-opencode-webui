@@ -28,17 +28,44 @@ function generateLabels(count: number): string[] {
   return labels
 }
 
+function isElementVisible(el: HTMLElement): boolean {
+  const rect = el.getBoundingClientRect()
+  // Skip hidden/offscreen elements
+  if (rect.width === 0 || rect.height === 0) return false
+  if (rect.bottom < 0 || rect.top > window.innerHeight) return false
+  if (rect.right < 0 || rect.left > window.innerWidth) return false
+  // Check if element is actually visible (not behind overflow:hidden parent)
+  const style = getComputedStyle(el)
+  if (style.visibility === "hidden" || style.display === "none") return false
+  // Check if the element's center point is reachable (not clipped by an ancestor)
+  const cx = rect.left + rect.width / 2
+  const cy = rect.top + rect.height / 2
+  const topEl = document.elementFromPoint(cx, cy)
+  if (topEl && !el.contains(topEl) && !topEl.contains(el)) return false
+  return true
+}
+
 function discoverTargets(): HTMLElement[] {
-  const elements = document.querySelectorAll("[data-hint-target]")
+  // First collect explicitly marked hint targets
+  const explicit = document.querySelectorAll("[data-hint-target]")
   const visible: HTMLElement[] = []
-  for (const el of elements) {
+  const seen = new Set<HTMLElement>()
+  for (const el of explicit) {
     if (!(el instanceof HTMLElement)) continue
-    const rect = el.getBoundingClientRect()
-    // Skip hidden/offscreen elements
-    if (rect.width === 0 || rect.height === 0) continue
-    if (rect.bottom < 0 || rect.top > window.innerHeight) continue
-    if (rect.right < 0 || rect.left > window.innerWidth) continue
+    if (!isElementVisible(el)) continue
     visible.push(el)
+    seen.add(el)
+  }
+  // Also discover interactive elements (buttons, links) that aren't explicitly marked
+  const interactive = document.querySelectorAll('a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])')
+  for (const el of interactive) {
+    if (!(el instanceof HTMLElement)) continue
+    if (seen.has(el)) continue
+    // Skip elements inside hint-mode overlay itself
+    if (el.closest("[data-hint-overlay]")) continue
+    if (!isElementVisible(el)) continue
+    visible.push(el)
+    seen.add(el)
   }
   return visible
 }
@@ -184,6 +211,7 @@ export function HintMode() {
       <Portal>
         {/* Transparent backdrop to catch clicks and exit */}
         <div
+          data-hint-overlay
           class="fixed inset-0 z-[100]"
           onClick={(e) => {
             e.preventDefault()
