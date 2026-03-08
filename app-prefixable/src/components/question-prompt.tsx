@@ -127,6 +127,12 @@ export function QuestionPrompt(props: Props) {
   }
 
   function handleKeyDown(e: KeyboardEvent) {
+    // Ignore when focus is on input elements
+    const target = e.target as HTMLElement
+    if (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable) {
+      return
+    }
+
     if (editing()) {
       if (e.key === "Escape") {
         e.preventDefault()
