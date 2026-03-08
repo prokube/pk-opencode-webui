@@ -38,6 +38,7 @@ export function CommandPalette() {
   const [activeIndex, setActiveIndex] = createSignal(0)
   let inputRef: HTMLInputElement | undefined
   let listRef: HTMLDivElement | undefined
+  let previousFocus: HTMLElement | null = null
 
   // Build palette items from all sources
   const items = createMemo((): PaletteItem[] => {
@@ -198,9 +199,10 @@ export function CommandPalette() {
     setTimeout(() => item.onSelect(), 0)
   }
 
-  // Focus input when opened; apply initial filter if set
+  // Focus input when opened; restore focus when closed
   createEffect(() => {
     if (command.paletteOpen()) {
+      previousFocus = document.activeElement as HTMLElement | null
       // Read the filter outside the reactive scope to avoid re-triggering
       // when we clear it below
       const initial = untrack(() => command.paletteFilter())
@@ -209,6 +211,9 @@ export function CommandPalette() {
       setActiveIndex(0)
       // Focus after the portal renders
       requestAnimationFrame(() => inputRef?.focus())
+    } else if (previousFocus) {
+      previousFocus.focus()
+      previousFocus = null
     }
   })
 
