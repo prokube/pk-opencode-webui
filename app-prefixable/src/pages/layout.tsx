@@ -1263,7 +1263,7 @@ export function Layout(props: ParentProps) {
     // work reliably even if the user enabled sound in a previous session
     // and reloaded the page without visiting Settings.
     function primeOnGesture() {
-      if (soundCache().enabled) primeAudioContext();
+      primeAudioContext();
       window.removeEventListener("pointerdown", primeOnGesture);
       window.removeEventListener("keydown", primeOnGesture);
     }
