@@ -818,24 +818,54 @@ export function Layout(props: ParentProps) {
   // Keyboard handler for session list navigation
   function handleSessionListKeyDown(e: KeyboardEvent) {
     // Don't hijack keyboard events from actual input controls inside the sidebar
-    // (e.g. rename inputs, dropdowns, etc.) — but allow nav keys through when
-    // the search input is focused so arrow/enter can navigate search results.
+    // (e.g. rename inputs, dropdowns, etc.) — but allow ArrowDown/Enter through
+    // when the search input is focused so the user can move focus to the listbox
+    // or activate the focused result. Other nav keys (Home/End/ArrowUp) pass
+    // through to the input for native text-editing behaviour.
     const target = e.target as HTMLElement;
     const tag = target.tagName;
-    const isSearchNav = searchQuery().trim() && (
-      e.key === "ArrowDown" || e.key === "ArrowUp" ||
-      e.key === "Home" || e.key === "End" || e.key === "Enter"
-    );
+    const isSearchInput = target === searchInputRef;
+    const isSearchNav = searchQuery().trim() && (isSearchInput
+      ? (e.key === "ArrowDown" || e.key === "Enter")
+      : (e.key === "ArrowDown" || e.key === "ArrowUp" ||
+         e.key === "Home" || e.key === "End" || e.key === "Enter"));
     if ((tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || target.isContentEditable) && !isSearchNav) return;
 
     // When search is active, provide keyboard navigation for search results
     if (searchQuery().trim()) {
       // Only intercept keys when focus is within the search input or sessions list
-      const inSearchArea = target === searchInputRef || !!target.closest('[aria-label="Sessions"]');
+      const inSearchArea = isSearchInput || !!target.closest('[aria-label="Sessions"]');
       if (!inSearchArea) return;
 
       const results = searchResults();
       if (!results.length) return;
+
+      // When the search input has focus, only ArrowDown (move focus to listbox)
+      // and Enter (activate focused result) are captured. All other keys pass
+      // through so Home/End/ArrowUp work for text editing.
+      if (isSearchInput) {
+        if (e.key === "ArrowDown") {
+          e.preventDefault();
+          setSearchFocusIdx(0);
+          if (results.length) {
+            setFocusedId(results[0].id);
+            scrollFocusedIntoView(results[0].id);
+          }
+          // Move focus to the listbox so subsequent arrow keys navigate results
+          const listbox = (e.currentTarget as HTMLElement).querySelector('[role="listbox"]') as HTMLElement | null;
+          if (listbox) listbox.focus();
+          return;
+        }
+        if (e.key === "Enter") {
+          e.preventDefault();
+          const idx = searchFocusIdx();
+          const i = idx >= 0 && idx < results.length ? idx : 0;
+          clearSearch();
+          navigate(`/${dirSlug()}/session/${results[i].id}`);
+          return;
+        }
+        return;
+      }
 
       if (e.key === "ArrowDown") {
         e.preventDefault();
