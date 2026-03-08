@@ -10,6 +10,7 @@ import type { ITheme } from "@xterm/xterm"
 type TerminalColorScheme = "auto" | "light" | "dark"
 
 const TERMINAL_THEME_KEY = "opencode.terminal-theme"
+const PANEL_FOCUS_KEYS = new Set(["1", "2", "3", "4"])
 
 const lightTheme: ITheme = {
   background: "#ffffff",
@@ -210,6 +211,14 @@ export function Terminal(props: TerminalProps) {
     // Open terminal in container
     term.open(container)
     console.log("[Terminal] Terminal opened in container")
+
+    // Let plain Ctrl+1-4 pass through to the browser for panel focus shortcuts
+    // Exclude AltGr (reports as Ctrl+Alt) to avoid breaking locale-specific input
+    term.attachCustomKeyEventHandler((event) => {
+      if (event.ctrlKey && !event.altKey && !event.metaKey && PANEL_FOCUS_KEYS.has(event.key))
+        return false
+      return true
+    })
 
     // Show initializing message
     writeStatus("Initializing terminal...", "info")
