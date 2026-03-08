@@ -505,20 +505,20 @@ export function Layout(props: ParentProps) {
         </Show>
         <Show when={renamingId() !== session.id}>
           <div
-            class={`absolute right-0 top-0 bottom-0 items-center rounded-r-md ${menuOpenId() === session.id || focusedId() === session.id ? "flex" : "hidden group-hover:flex group-focus-within:flex"}`}
+            class={`absolute right-0 top-0 bottom-0 items-center rounded-r-md ${menuOpenId() === session.id ? "flex" : focusedId() === session.id ? "hidden" : "hidden group-hover:flex group-focus-within:flex"}`}
             style={{ "pointer-events": "none" }}
           >
              <div
               class="w-6 h-full"
               style={{
-                background: `linear-gradient(to right, transparent, var(${isActive(session.id) || focusedId() === session.id ? "--surface-inset" : "--background-stronger"}))`,
+                background: `linear-gradient(to right, transparent, var(${isActive(session.id) ? "--surface-inset" : "--background-stronger"}))`,
               }}
             />
             <div
               class="flex items-center pr-1.5 relative"
               style={{
                 "pointer-events": "auto",
-                background: isActive(session.id) || focusedId() === session.id ? "var(--surface-inset)" : "var(--background-stronger)",
+                background: isActive(session.id) ? "var(--surface-inset)" : "var(--background-stronger)",
               }}
               data-sidebar-menu
             >
