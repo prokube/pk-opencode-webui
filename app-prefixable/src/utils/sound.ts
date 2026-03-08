@@ -67,13 +67,8 @@ function getAudioContext(): AudioContext | undefined {
   return win.__ocAudioCtx
 }
 
-/** Play a sequence of tones described by [frequency, startSec, durationSec] tuples. */
-function playTones(tones: [number, number, number][], gain = 0.25) {
-  const ctx = getAudioContext()
-  if (!ctx) return
-  // Resume context if suspended (autoplay policy)
-  if (ctx.state === "suspended") void ctx.resume().catch(() => {})
-
+/** Schedule and connect oscillator nodes for a set of tones. */
+function scheduleTones(ctx: AudioContext, tones: [number, number, number][], gain: number) {
   const master = ctx.createGain()
   master.gain.value = gain
   master.connect(ctx.destination)
@@ -97,6 +92,23 @@ function playTones(tones: [number, number, number][], gain = 0.25) {
       remaining--
       if (remaining === 0) master.disconnect()
     }
+  }
+}
+
+/** Play a sequence of tones described by [frequency, startSec, durationSec] tuples. */
+function playTones(tones: [number, number, number][], gain = 0.25) {
+  const ctx = getAudioContext()
+  if (!ctx) return
+
+  if (ctx.state === "running") {
+    scheduleTones(ctx, tones, gain)
+    return
+  }
+
+  if (ctx.state === "suspended") {
+    void ctx.resume().then(() => {
+      if (ctx.state === "running") scheduleTones(ctx, tones, gain)
+    }).catch(() => {})
   }
 }
 
