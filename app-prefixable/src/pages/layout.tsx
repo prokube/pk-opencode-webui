@@ -867,6 +867,12 @@ export function Layout(props: ParentProps) {
         return;
       }
 
+      if (e.key === "Escape") {
+        e.preventDefault();
+        clearSearch();
+        searchInputRef?.focus();
+        return;
+      }
       if (e.key === "ArrowDown") {
         e.preventDefault();
         const next = searchFocusIdx() < results.length - 1 ? searchFocusIdx() + 1 : 0;
