@@ -258,8 +258,10 @@ export function MCPProvider(props: ParentProps) {
     }
   }
 
-  /** Reset a project override back to enabled (since deep-merge can't delete keys,
-   *  we write { enabled: true } which is functionally identical to no override). */
+  /** Reset a project override back to enabled. Since the backend config API uses
+   *  deep-merge and cannot delete keys, we write { enabled: true } to neutralize
+   *  a prior disable. parseOverrides() ignores enabled:true entries so the UI
+   *  treats this as no-override. The residual key in opencode.json is harmless. */
   async function resetProjectOverride(name: string) {
     if (!sdk.directory) {
       console.warn("[MCP] Cannot reset project override without an active directory")
