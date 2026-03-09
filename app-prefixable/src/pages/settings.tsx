@@ -1518,6 +1518,9 @@ Add your project-specific instructions here.
                                 }}
                                 disabled={mcpLoading() === name || mcpDeleting() === name || disabledByProject()}
                                 title={disabledByProject() ? "Disabled for this project via Project Overrides" : undefined}
+                                role="switch"
+                                aria-checked={isConnected()}
+                                aria-label={`Toggle ${name} connection`}
                                 class="relative w-10 h-5 rounded-full transition-colors disabled:opacity-50"
                                 style={{
                                   background: isConnected() && !disabledByProject() ? "var(--interactive-base)" : "var(--surface-inset)",

@@ -100,40 +100,54 @@ export function MCPProvider(props: ParentProps) {
     return overrides
   }
 
-  async function refresh() {
+  /** Refresh MCP server status only (lightweight, called on mcp.* events) */
+  async function refreshStatus() {
     const seq = ++refreshSeq
     setLoading(true)
-
     try {
-      // Fetch MCP status and project overrides in parallel
-      const statusPromise = client.mcp.status().catch((e) => {
+      const res = await client.mcp.status().catch((e) => {
         console.error("[MCP] Failed to fetch status:", e)
         return null
       })
-      const overridesPromise = sdk.directory
-        ? client.config.get().catch((e) => {
-            console.error("[MCP] Failed to fetch project config for overrides:", e)
-            return null
-          })
-        : Promise.resolve(null)
-
-      const [statusRes, configRes] = await Promise.all([statusPromise, overridesPromise])
-
-      // Discard stale results if a newer refresh was started
       if (seq !== refreshSeq) return
-
-      if (statusRes?.data) {
-        setServers(reconcile(statusRes.data as Record<string, MCPStatus>))
-      }
-      // Only update overrides when we got a valid response; keep previous
-      // state on transient failures to avoid flipping toggles
-      if (!sdk.directory) {
-        setProjectOverrides({})
-      } else if (configRes?.data) {
-        setProjectOverrides(parseOverrides(configRes.data as Record<string, unknown>))
+      if (res?.data) {
+        setServers(reconcile(res.data as Record<string, MCPStatus>))
       }
     } finally {
-      // Only update loading if this is still the latest refresh
+      if (seq === refreshSeq) setLoading(false)
+    }
+  }
+
+  /** Refresh project-level MCP overrides from project config */
+  async function refreshOverrides() {
+    if (!sdk.directory) {
+      setProjectOverrides({})
+      return
+    }
+    try {
+      const res = await client.config.get().catch((e) => {
+        console.error("[MCP] Failed to fetch project config for overrides:", e)
+        return null
+      })
+      // Only update when we got a valid response; keep previous state on failure
+      if (res?.data) {
+        setProjectOverrides(parseOverrides(res.data as Record<string, unknown>))
+      }
+    } catch {
+      // Keep previous overrides on failure
+    }
+  }
+
+  /** Full refresh: status + overrides in parallel (used on mount and server reconnect) */
+  async function refresh() {
+    const seq = ++refreshSeq
+    setLoading(true)
+    try {
+      await Promise.all([
+        refreshStatus(),
+        refreshOverrides(),
+      ])
+    } finally {
       if (seq === refreshSeq) setLoading(false)
     }
   }
@@ -272,8 +286,8 @@ export function MCPProvider(props: ParentProps) {
       } else {
         setProjectOverrides((prev) => ({ ...prev, [name]: { enabled } }))
       }
-      // Refresh to sync MCP status with the updated config
-      await refresh()
+      // Only refresh status — overrides are already updated locally
+      await refreshStatus()
     } catch (e) {
       console.error("[MCP] Failed to set project override:", name, e)
     } finally {
@@ -303,8 +317,8 @@ export function MCPProvider(props: ParentProps) {
         delete next[name]
         return next
       })
-      // Refresh to sync MCP status with the updated config
-      await refresh()
+      // Only refresh status — overrides are already updated locally
+      await refreshStatus()
     } catch (e) {
       console.error("[MCP] Failed to reset project override:", name, e)
     } finally {
@@ -335,12 +349,11 @@ export function MCPProvider(props: ParentProps) {
 
     // Listen for MCP-related events and server restarts
     const unsub = events.subscribe((event) => {
-      // Refresh on any mcp-related event type
+      // Only refresh status (not overrides) on mcp events to reduce churn
       if (event.type.startsWith("mcp.")) {
-        refresh()
+        refreshStatus()
       }
-      // Also refresh when server reconnects (after config change causes restart)
-      // Small delay to ensure backend has fully initialized
+      // Full refresh (status + overrides) on server reconnect since config may have changed
       if (event.type === "server.connected") {
         setTimeout(() => refresh(), 500)
       }
