@@ -111,7 +111,10 @@ export function MCPProvider(props: ParentProps) {
         return null
       })
       const overridesPromise = sdk.directory
-        ? client.config.get().catch(() => null)
+        ? client.config.get().catch((e) => {
+            console.error("[MCP] Failed to fetch project config for overrides:", e)
+            return null
+          })
         : Promise.resolve(null)
 
       const [statusRes, configRes] = await Promise.all([statusPromise, overridesPromise])

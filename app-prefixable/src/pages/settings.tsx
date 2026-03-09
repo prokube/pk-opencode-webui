@@ -642,8 +642,8 @@ Add your project-specific instructions here.
       { id: "providers", label: "Providers", icon: () => <Plug class="w-4 h-4" />, scope: "Global" },
       { id: "git", label: "Git", icon: () => <GitBranch class="w-4 h-4" />, scope: "Global" },
       { id: "mcp", label: "MCP Servers", icon: () => <Server class="w-4 h-4" />, scope: "Global + Project" },
-      { id: "prompts", label: "Prompts", icon: () => <BookmarkPlus class="w-4 h-4" />, scope: "Project" },
-      { id: "instructions", label: "Instructions", icon: () => <BookOpen class="w-4 h-4" />, scope: "Project" },
+      { id: "prompts", label: "Prompts", icon: () => <BookmarkPlus class="w-4 h-4" />, scope: directory ? "Project" : null },
+      { id: "instructions", label: "Instructions", icon: () => <BookOpen class="w-4 h-4" />, scope: directory ? "Project" : null },
     ]
     // Only show Project Config tab when a project directory is selected
     if (directory) {
@@ -1441,6 +1441,7 @@ Add your project-specific instructions here.
                         const isFailed = () => status.status === "failed"
                         const needsAuth = () => status.status === "needs_auth"
                         const errorMsg = () => (status.status === "failed" ? (status as any).error : undefined)
+                        const disabledByProject = () => mcp.projectOverrides()[name]?.enabled === false
 
                         return (
                           <div class="px-4 py-3 flex items-center justify-between gap-4">
@@ -1515,10 +1516,11 @@ Add your project-specific instructions here.
                                   }
                                   setMcpLoading(null)
                                 }}
-                                disabled={mcpLoading() === name || mcpDeleting() === name}
+                                disabled={mcpLoading() === name || mcpDeleting() === name || disabledByProject()}
+                                title={disabledByProject() ? "Disabled for this project via Project Overrides" : undefined}
                                 class="relative w-10 h-5 rounded-full transition-colors disabled:opacity-50"
                                 style={{
-                                  background: isConnected() ? "var(--interactive-base)" : "var(--surface-inset)",
+                                  background: isConnected() && !disabledByProject() ? "var(--interactive-base)" : "var(--surface-inset)",
                                 }}
                               >
                                 <div
@@ -1797,6 +1799,23 @@ Add your project-specific instructions here.
                   Persistent instructions that are automatically included in every session for this project
                 </p>
               </header>
+
+              <Show when={!directory}>
+                <section
+                  class="rounded-lg overflow-hidden"
+                  style={{
+                    background: "var(--background-base)",
+                    border: "1px solid var(--border-base)",
+                  }}
+                >
+                  <div class="p-6 text-center space-y-2">
+                    <BookOpen class="w-10 h-10 mx-auto" style={{ color: "var(--text-weak)", opacity: "0.5" }} />
+                    <p class="text-sm" style={{ color: "var(--text-weak)" }}>
+                      Select a project to view and edit instructions.
+                    </p>
+                  </div>
+                </section>
+              </Show>
 
               <Show when={instructionError()}>
                 <div
