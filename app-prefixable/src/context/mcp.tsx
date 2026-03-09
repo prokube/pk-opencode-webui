@@ -86,9 +86,11 @@ export function MCPProvider(props: ParentProps) {
     const overrides: Record<string, McpProjectOverride> = {}
     for (const [k, v] of Object.entries(mcpSection)) {
       if (isPlainObject(v) && "enabled" in v && Object.keys(v).length === 1) {
-        const enabled = !!(v as { enabled: boolean }).enabled
+        const raw = (v as { enabled: unknown }).enabled
+        // Only accept boolean values; ignore non-boolean (e.g. string "false")
+        if (typeof raw !== "boolean") continue
         // Only track explicit disables as overrides; enabled:true = default
-        if (!enabled) overrides[k] = { enabled }
+        if (!raw) overrides[k] = { enabled: false }
       }
     }
     return overrides
