@@ -1578,7 +1578,7 @@ Add your project-specific instructions here.
                         const override = () => mcp.projectOverrides()[name]
                         const isEnabled = () => override()?.enabled ?? true
                         const hasOverride = () => override() !== undefined
-                        const isUpdating = () => mcp.overrideLoading() === name
+                        const isUpdating = () => mcp.isOverrideLoading(name)
 
                         return (
                           <div class="px-4 py-3 flex items-center justify-between gap-4">
@@ -1621,7 +1621,13 @@ Add your project-specific instructions here.
                             </div>
                             <button
                               onClick={async () => {
-                                await mcp.setProjectOverride(name, !isEnabled())
+                                if (isEnabled()) {
+                                  // Currently enabled: set an explicit override to disable
+                                  await mcp.setProjectOverride(name, false)
+                                } else {
+                                  // Currently disabled via override: reset to default (enabled) state
+                                  await mcp.resetProjectOverride(name)
+                                }
                               }}
                               disabled={isUpdating()}
                               class="relative w-10 h-5 rounded-full transition-colors disabled:opacity-50"

@@ -58,8 +58,8 @@ interface MCPContextValue {
   setProjectOverride: (name: string, enabled: boolean) => Promise<void>
   /** Reset project-level override back to enabled (effectively removing the override) */
   resetProjectOverride: (name: string) => Promise<void>
-  /** Name of the server currently being updated at project level, or null */
-  overrideLoading: () => string | null
+  /** Check if a specific server override is currently being updated */
+  isOverrideLoading: (name: string) => boolean
 }
 
 const MCPContext = createContext<MCPContextValue>()
@@ -71,20 +71,24 @@ export function MCPProvider(props: ParentProps) {
   const [servers, setServers] = createStore<Record<string, MCPStatus>>({})
   const [loading, setLoading] = createSignal(true)
   const [projectOverrides, setProjectOverrides] = createSignal<Record<string, McpProjectOverride>>({})
-  const [overrideLoading, setOverrideLoading] = createSignal<string | null>(null)
+  const [overrideLoadingSet, setOverrideLoadingSet] = createSignal<Set<string>>(new Set())
 
   function isPlainObject(v: unknown): v is Record<string, unknown> {
     return typeof v === "object" && v !== null && !Array.isArray(v)
   }
 
-  /** Parse project config MCP section into override records */
+  /** Parse project config MCP section into override records.
+   *  Only entries with { enabled: false } are treated as overrides;
+   *  { enabled: true } is the default state and is ignored. */
   function parseOverrides(cfg: Record<string, unknown> | undefined): Record<string, McpProjectOverride> {
     const mcpSection = cfg?.mcp
     if (!isPlainObject(mcpSection)) return {}
     const overrides: Record<string, McpProjectOverride> = {}
     for (const [k, v] of Object.entries(mcpSection)) {
       if (isPlainObject(v) && "enabled" in v && Object.keys(v).length === 1) {
-        overrides[k] = { enabled: !!(v as { enabled: boolean }).enabled }
+        const enabled = !!(v as { enabled: boolean }).enabled
+        // Only track explicit disables as overrides; enabled:true = default
+        if (!enabled) overrides[k] = { enabled }
       }
     }
     return overrides
@@ -212,12 +216,23 @@ export function MCPProvider(props: ParentProps) {
     }
   }
 
+  function addLoading(name: string) {
+    setOverrideLoadingSet((prev) => new Set([...prev, name]))
+  }
+  function removeLoading(name: string) {
+    setOverrideLoadingSet((prev) => {
+      const next = new Set(prev)
+      next.delete(name)
+      return next
+    })
+  }
+
   async function setProjectOverride(name: string, enabled: boolean) {
     if (!sdk.directory) {
       console.warn("[MCP] Cannot set project override without an active directory")
       return
     }
-    setOverrideLoading(name)
+    addLoading(name)
     try {
       // Deep merge is sufficient — just patch the mcp section with the override.
       // If the project config doesn't exist yet, the backend creates it.
@@ -226,11 +241,20 @@ export function MCPProvider(props: ParentProps) {
           mcp: { [name]: { enabled } },
         },
       })
-      setProjectOverrides((prev) => ({ ...prev, [name]: { enabled } }))
+      if (enabled) {
+        // enabled:true = default, remove from overrides
+        setProjectOverrides((prev) => {
+          const next = { ...prev }
+          delete next[name]
+          return next
+        })
+      } else {
+        setProjectOverrides((prev) => ({ ...prev, [name]: { enabled } }))
+      }
     } catch (e) {
       console.error("[MCP] Failed to set project override:", name, e)
     } finally {
-      setOverrideLoading(null)
+      removeLoading(name)
     }
   }
 
@@ -241,7 +265,7 @@ export function MCPProvider(props: ParentProps) {
       console.warn("[MCP] Cannot reset project override without an active directory")
       return
     }
-    setOverrideLoading(name)
+    addLoading(name)
     try {
       await client.config.update({
         config: {
@@ -257,7 +281,7 @@ export function MCPProvider(props: ParentProps) {
     } catch (e) {
       console.error("[MCP] Failed to reset project override:", name, e)
     } finally {
-      setOverrideLoading(null)
+      removeLoading(name)
     }
   }
 
@@ -313,7 +337,7 @@ export function MCPProvider(props: ParentProps) {
         projectOverrides,
         setProjectOverride,
         resetProjectOverride,
-        overrideLoading,
+        isOverrideLoading: (name: string) => overrideLoadingSet().has(name),
       }}
     >
       {props.children}
