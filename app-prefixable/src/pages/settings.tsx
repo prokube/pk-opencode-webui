@@ -1442,6 +1442,7 @@ Add your project-specific instructions here.
                         const needsAuth = () => status.status === "needs_auth"
                         const errorMsg = () => (status.status === "failed" ? (status as any).error : undefined)
                         const disabledByProject = () => mcp.projectOverrides()[name]?.enabled === false
+                        const isActive = () => isConnected() && !disabledByProject()
 
                         return (
                           <div class="px-4 py-3 flex items-center justify-between gap-4">
@@ -1519,18 +1520,18 @@ Add your project-specific instructions here.
                                 disabled={mcpLoading() === name || mcpDeleting() === name || disabledByProject()}
                                 title={disabledByProject() ? "Disabled for this project via Project Overrides" : undefined}
                                 role="switch"
-                                aria-checked={isConnected()}
+                                aria-checked={isActive()}
                                 aria-label={`Toggle ${name} connection`}
                                 class="relative w-10 h-5 rounded-full transition-colors disabled:opacity-50"
                                 style={{
-                                  background: isConnected() && !disabledByProject() ? "var(--interactive-base)" : "var(--surface-inset)",
+                                  background: isActive() ? "var(--interactive-base)" : "var(--surface-inset)",
                                 }}
                               >
                                 <div
                                   class="absolute top-0.5 w-4 h-4 rounded-full transition-all"
                                   style={{
                                     background: "var(--background-base)",
-                                    left: isConnected() ? "calc(100% - 18px)" : "2px",
+                                    left: isActive() ? "calc(100% - 18px)" : "2px",
                                   }}
                                 />
                               </button>
