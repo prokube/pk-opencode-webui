@@ -79,50 +79,58 @@ export function MCPProvider(props: ParentProps) {
   }
 
   /** Parse project config MCP section into override records.
-   *  Only entries with { enabled: false } are treated as overrides;
-   *  { enabled: true } is the default state and is ignored. */
+   *  Only entries with a boolean `enabled` field (and no `type` field, which
+   *  would indicate a full server config rather than an override) are treated
+   *  as overrides. { enabled: true } is the default state and is ignored. */
   function parseOverrides(cfg: Record<string, unknown> | undefined): Record<string, McpProjectOverride> {
     const mcpSection = cfg?.mcp
     if (!isPlainObject(mcpSection)) return {}
     const overrides: Record<string, McpProjectOverride> = {}
     for (const [k, v] of Object.entries(mcpSection)) {
-      if (isPlainObject(v) && "enabled" in v && Object.keys(v).length === 1) {
-        const raw = (v as { enabled: unknown }).enabled
-        // Only accept boolean values; ignore non-boolean (e.g. string "false")
-        if (typeof raw !== "boolean") continue
-        // Only track explicit disables as overrides; enabled:true = default
-        if (!raw) overrides[k] = { enabled: false }
-      }
+      if (!isPlainObject(v)) continue
+      // Skip full server configs (they have a `type` field like "local" or "remote")
+      if ("type" in v) continue
+      if (!("enabled" in v)) continue
+      const raw = (v as { enabled: unknown }).enabled
+      // Only accept boolean values; ignore non-boolean (e.g. string "false")
+      if (typeof raw !== "boolean") continue
+      // Only track explicit disables as overrides; enabled:true = default
+      if (!raw) overrides[k] = { enabled: false }
     }
     return overrides
   }
 
   async function refresh() {
     const seq = ++refreshSeq
+    setLoading(true)
 
-    // Fetch MCP status and project overrides in parallel
-    const statusPromise = client.mcp.status().catch((e) => {
-      console.error("[MCP] Failed to fetch status:", e)
-      return null
-    })
-    const overridesPromise = sdk.directory
-      ? client.config.get().catch(() => null)
-      : Promise.resolve(null)
+    try {
+      // Fetch MCP status and project overrides in parallel
+      const statusPromise = client.mcp.status().catch((e) => {
+        console.error("[MCP] Failed to fetch status:", e)
+        return null
+      })
+      const overridesPromise = sdk.directory
+        ? client.config.get().catch(() => null)
+        : Promise.resolve(null)
 
-    const [statusRes, configRes] = await Promise.all([statusPromise, overridesPromise])
+      const [statusRes, configRes] = await Promise.all([statusPromise, overridesPromise])
 
-    // Discard stale results if a newer refresh was started
-    if (seq !== refreshSeq) return
+      // Discard stale results if a newer refresh was started
+      if (seq !== refreshSeq) return
 
-    if (statusRes?.data) {
-      setServers(reconcile(statusRes.data as Record<string, MCPStatus>))
+      if (statusRes?.data) {
+        setServers(reconcile(statusRes.data as Record<string, MCPStatus>))
+      }
+      setProjectOverrides(
+        sdk.directory
+          ? parseOverrides(configRes?.data as Record<string, unknown> | undefined)
+          : {},
+      )
+    } finally {
+      // Only update loading if this is still the latest refresh
+      if (seq === refreshSeq) setLoading(false)
     }
-    setProjectOverrides(
-      sdk.directory
-        ? parseOverrides(configRes?.data as Record<string, unknown> | undefined)
-        : {},
-    )
-    setLoading(false)
   }
 
   async function connect(name: string) {
