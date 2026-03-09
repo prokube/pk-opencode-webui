@@ -206,7 +206,7 @@ export function Session() {
   // Use session tree walk to find pending questions from this session or any descendant.
   // This surfaces child/grandchild session questions in the parent session view.
   const pendingQuestion = createMemo(() =>
-    sessionQuestionRequest(sync.data.session, events.pendingQuestions, sessionId()) ?? null,
+    sessionQuestionRequest(sync.sessions(), events.pendingQuestions, sessionId()) ?? null,
   );
   const [pendingUserMessageText, setPendingUserMessageText] = createSignal<
     string | null
@@ -1014,7 +1014,7 @@ export function Session() {
       // Use the question's own requestID — may belong to a child session
       await client.question.reply({ requestID: q.id, answers, directory });
       // Optimistically clear so the UI unblocks without waiting for SSE
-      events.dismissQuestion(q.sessionID);
+      events.dismissQuestion(q.sessionID, q.id);
     } catch (e) {
       console.error("[Session] Failed to reply to question:", e);
     }
@@ -1026,7 +1026,7 @@ export function Session() {
 
     try {
       await client.question.reject({ requestID: q.id, directory });
-      events.dismissQuestion(q.sessionID);
+      events.dismissQuestion(q.sessionID, q.id);
     } catch (e) {
       console.error("[Session] Failed to reject question:", e);
     }
@@ -1043,7 +1043,7 @@ export function Session() {
       // Only dismiss the question if it belongs to this session — aborting is
       // scoped to the current session and does not affect descendant sessions.
       const q = pendingQuestion();
-      if (q && q.sessionID === id) events.dismissQuestion(q.sessionID);
+      if (q && q.sessionID === id) events.dismissQuestion(q.sessionID, q.id);
     } catch (e) {
       console.error("[Session] Failed to abort session:", e);
     }
