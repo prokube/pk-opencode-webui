@@ -1037,7 +1037,6 @@ export function Session() {
       console.log("[Session] Aborting session:", id);
       await client.session.abort({ sessionID: id, directory });
       setProcessing(false);
-      setPendingQuestion(null);
     } catch (e) {
       console.error("[Session] Failed to abort session:", e);
     }
