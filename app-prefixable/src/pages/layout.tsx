@@ -1723,9 +1723,9 @@ export function Layout(props: ParentProps) {
       }
 
       // Agent question alarms (keyed by request ID).
-      // For child sessions, check the parent session's bell state and suppress
-      // toasts when the user is already viewing the parent session (the question
-      // dock handles it).
+      // For child/grandchild sessions, walk the parentID chain to find the root
+      // ancestor and check its bell state. Notifications are suppressed when the
+      // user is already viewing an ancestor session (the question dock handles it).
       if (event.type === "question.asked") {
         const props = event.properties as { id?: string; sessionID?: string };
         const sid = props.sessionID;
@@ -1733,16 +1733,28 @@ export function Layout(props: ParentProps) {
         if (!sid || !rid) return;
         if (firedQuestion.has(rid)) return;
 
-        // Resolve bell state: for child sessions, inherit from parent
+        // Walk up the parentID chain to find the root ancestor for bell state
         const sess = sync.session.get(sid);
-        const bellSid = sess?.parentID ?? sid;
-        if (notifyCache()[bellSid] !== true) return;
+        const nc = notifyCache();
+        let bellSid = sid;
+        let walk = sess;
+        while (walk?.parentID) {
+          bellSid = walk.parentID;
+          walk = sync.session.get(walk.parentID);
+        }
+        if (nc[bellSid] !== true) return;
         firedQuestion.add(rid);
 
-        // Suppress toast if the user is viewing the parent session — the
-        // question dock already surfaces the child question inline.
+        // Suppress notification if the user is viewing any ancestor session —
+        // the question dock already surfaces the descendant question inline.
         const current = currentSessionId();
-        if (current && sess?.parentID === current) return;
+        if (current) {
+          let ancestor = sess;
+          while (ancestor?.parentID) {
+            if (ancestor.parentID === current) return;
+            ancestor = sync.session.get(ancestor.parentID);
+          }
+        }
 
         const title = sess?.title || "Question from agent";
         fireNotification(sid, title, "The agent has a question and is waiting for your response.", `session-question-${rid}`);
