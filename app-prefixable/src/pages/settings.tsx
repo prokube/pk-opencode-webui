@@ -2173,9 +2173,15 @@ function ProjectConfigTab() {
   function getPermissionObject(): Record<string, unknown> {
     const perm = config.project.permission
     if (typeof perm === "string") {
-      // Convert global string to per-tool entries
+      // Convert global string to per-tool object. Include all SDK-known tools
+      // (not just those in our UI) so tools like external_directory, doom_loop
+      // retain the global default when we patch a single tool.
+      const allKeys = [
+        ...PERMISSION_TOOLS.map((t) => t.key),
+        "external_directory", "doom_loop",
+      ]
       const obj: Record<string, unknown> = {}
-      for (const t of PERMISSION_TOOLS) obj[t.key] = perm
+      for (const k of allKeys) obj[k] = perm
       return obj
     }
     if (typeof perm === "object" && perm !== null) return perm as Record<string, unknown>
