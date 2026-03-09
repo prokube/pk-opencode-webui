@@ -19,7 +19,9 @@ const LEGACY_KEY = "opencode.savedPrompts"
 
 function storageKey(directory?: string): string {
   if (!directory) return LEGACY_KEY
-  return `opencode.savedPrompts.${directory}`
+  // Normalize trailing separators so "/path/to/project" and "/path/to/project/" share the same key
+  const normalized = directory.replace(/[\\/]+$/, "")
+  return `opencode.savedPrompts.${normalized}`
 }
 
 const SavedPromptsContext = createContext<SavedPromptsContextValue>()
