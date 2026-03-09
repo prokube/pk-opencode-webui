@@ -634,20 +634,23 @@ Add your project-specific instructions here.
     setPromptToDelete(null)
   }
 
+  // Scope badge type for each tab
+  type ScopeBadge = "Global" | "Project" | "Global + Project" | null
+
   const tabs = createMemo(() => {
-    const base: Array<{ id: string; label: string; icon: () => JSX.Element }> = [
-      { id: "providers", label: "Providers", icon: () => <Plug class="w-4 h-4" /> },
-      { id: "git", label: "Git", icon: () => <GitBranch class="w-4 h-4" /> },
-      { id: "mcp", label: "MCP Servers", icon: () => <Server class="w-4 h-4" /> },
-      { id: "prompts", label: "Prompts", icon: () => <BookmarkPlus class="w-4 h-4" /> },
-      { id: "instructions", label: "Instructions", icon: () => <BookOpen class="w-4 h-4" /> },
+    const base: Array<{ id: string; label: string; icon: () => JSX.Element; scope: ScopeBadge }> = [
+      { id: "providers", label: "Providers", icon: () => <Plug class="w-4 h-4" />, scope: "Global" },
+      { id: "git", label: "Git", icon: () => <GitBranch class="w-4 h-4" />, scope: "Global" },
+      { id: "mcp", label: "MCP Servers", icon: () => <Server class="w-4 h-4" />, scope: "Global + Project" },
+      { id: "prompts", label: "Prompts", icon: () => <BookmarkPlus class="w-4 h-4" />, scope: "Project" },
+      { id: "instructions", label: "Instructions", icon: () => <BookOpen class="w-4 h-4" />, scope: "Project" },
     ]
     // Only show Project Config tab when a project directory is selected
     if (directory) {
-      base.push({ id: "config", label: "Project Config", icon: () => <Settings2 class="w-4 h-4" /> })
+      base.push({ id: "config", label: "Project Config", icon: () => <Settings2 class="w-4 h-4" />, scope: "Project" })
     }
-    base.push({ id: "appearance", label: "Appearance", icon: () => <Palette class="w-4 h-4" /> })
-    base.push({ id: "sounds", label: "Sounds", icon: () => <Volume2 class="w-4 h-4" /> })
+    base.push({ id: "appearance", label: "Appearance", icon: () => <Palette class="w-4 h-4" />, scope: null })
+    base.push({ id: "sounds", label: "Sounds", icon: () => <Volume2 class="w-4 h-4" />, scope: null })
     return base
   })
 
@@ -655,7 +658,7 @@ Add your project-specific instructions here.
     <div class="h-full flex" style={{ background: "var(--background-stronger)" }}>
       {/* Tabs sidebar */}
       <div
-        class="w-48 shrink-0 flex flex-col py-3 px-2"
+        class="w-56 shrink-0 flex flex-col py-3 px-2"
         style={{
           background: "var(--background-base)",
           "border-right": "1px solid var(--border-base)",
@@ -664,6 +667,20 @@ Add your project-specific instructions here.
         <div class="text-xs font-medium uppercase tracking-wide px-3 py-2" style={{ color: "var(--text-weak)" }}>
           Settings
         </div>
+        {/* Project indicator */}
+        <Show when={directory}>
+          <div
+            class="mx-2 mb-2 px-2 py-1.5 rounded-md text-xs truncate"
+            style={{
+              background: "var(--surface-inset)",
+              color: "var(--text-weak)",
+              border: "1px solid var(--border-base)",
+            }}
+            title={directory}
+          >
+            <span style={{ color: "var(--text-base)" }}>{directory!.split("/").pop()}</span>
+          </div>
+        </Show>
         <div class="space-y-0.5">
           <For each={tabs()}>
             {(tab) => (
@@ -682,7 +699,18 @@ Add your project-specific instructions here.
                 }}
               >
                 {tab.icon()}
-                {tab.label}
+                <span class="flex-1 truncate">{tab.label}</span>
+                <Show when={tab.scope}>
+                  <span
+                    class="text-[10px] px-1 py-0.5 rounded shrink-0"
+                    style={{
+                      background: "var(--surface-inset)",
+                      color: "var(--text-weak)",
+                    }}
+                  >
+                    {tab.scope}
+                  </span>
+                </Show>
               </button>
             )}
           </For>
@@ -692,6 +720,23 @@ Add your project-specific instructions here.
       {/* Content */}
       <div class="flex-1 overflow-y-auto">
         <div class="max-w-2xl p-6 space-y-6">
+          {/* Project header banner */}
+          <Show when={directory}>
+            <div
+              class="flex items-center gap-2 px-3 py-2 rounded-md text-xs"
+              style={{
+                background: "var(--surface-inset)",
+                color: "var(--text-weak)",
+                border: "1px solid var(--border-base)",
+              }}
+            >
+              <Info class="w-3.5 h-3.5 shrink-0" />
+              <span>
+                Project: <span style={{ color: "var(--text-base)" }}>{directory}</span>
+              </span>
+            </div>
+          </Show>
+
           {/* Providers Tab */}
           <Show when={activeTab() === "providers"}>
             <div class="space-y-6">
