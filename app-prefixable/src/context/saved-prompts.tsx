@@ -1,4 +1,4 @@
-import { createContext, useContext, createSignal, type ParentProps } from "solid-js"
+import { createContext, useContext, createSignal, createEffect, type ParentProps, type Accessor } from "solid-js"
 
 interface SavedPrompt {
   id: string
@@ -15,13 +15,18 @@ interface SavedPromptsContextValue {
   reorder: (ids: string[]) => void
 }
 
-const STORAGE_KEY = "opencode.savedPrompts"
+const LEGACY_KEY = "opencode.savedPrompts"
+
+function storageKey(directory?: string): string {
+  if (!directory) return LEGACY_KEY
+  return `opencode.savedPrompts.${directory}`
+}
 
 const SavedPromptsContext = createContext<SavedPromptsContextValue>()
 
-function loadFromStorage(): SavedPrompt[] {
+function loadFromStorage(key: string): SavedPrompt[] {
   try {
-    const stored = localStorage.getItem(STORAGE_KEY)
+    const stored = localStorage.getItem(key)
     if (!stored) return []
     const parsed = JSON.parse(stored)
     if (!Array.isArray(parsed)) return []
@@ -37,17 +42,44 @@ function loadFromStorage(): SavedPrompt[] {
   }
 }
 
-function saveToStorage(prompts: SavedPrompt[]) {
+function saveToStorage(key: string, prompts: SavedPrompt[]) {
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(prompts))
+    localStorage.setItem(key, JSON.stringify(prompts))
   } catch {
     // Ignore storage errors
   }
 }
 
-export function SavedPromptsProvider(props: ParentProps) {
-  const stored = loadFromStorage().sort((a, b) => b.createdAt - a.createdAt)
-  const [prompts, setPrompts] = createSignal<SavedPrompt[]>(stored)
+/** Migrate legacy prompts to the project-scoped key (one-time, non-destructive). */
+function migrateIfNeeded(directory: string) {
+  const projectKey = storageKey(directory)
+  // Already has project-scoped data — no migration needed
+  if (localStorage.getItem(projectKey)) return
+  const legacy = localStorage.getItem(LEGACY_KEY)
+  if (!legacy) return
+  // Copy legacy data to project-scoped key; do NOT delete old key
+  localStorage.setItem(projectKey, legacy)
+}
+
+export function SavedPromptsProvider(props: ParentProps & { directory?: Accessor<string | undefined> }) {
+  const dir = () => props.directory?.()
+  const key = () => storageKey(dir())
+
+  // Run migration when a directory is available
+  createEffect(() => {
+    const d = dir()
+    if (d) migrateIfNeeded(d)
+  })
+
+  const [prompts, setPrompts] = createSignal<SavedPrompt[]>(
+    loadFromStorage(key()).sort((a, b) => b.createdAt - a.createdAt),
+  )
+
+  // Reload prompts when the directory (and thus the storage key) changes
+  createEffect(() => {
+    const k = key()
+    setPrompts(loadFromStorage(k).sort((a, b) => b.createdAt - a.createdAt))
+  })
 
   function add(title: string, text: string) {
     setPrompts((prev) => {
@@ -58,7 +90,7 @@ export function SavedPromptsProvider(props: ParentProps) {
         createdAt: Date.now(),
       }
       const updated = [prompt, ...prev]
-      saveToStorage(updated)
+      saveToStorage(key(), updated)
       return updated
     })
   }
@@ -66,7 +98,7 @@ export function SavedPromptsProvider(props: ParentProps) {
   function update(id: string, fields: Partial<Pick<SavedPrompt, "title" | "text">>) {
     setPrompts((prev) => {
       const updated = prev.map((p) => (p.id === id ? { ...p, ...fields } : p))
-      saveToStorage(updated)
+      saveToStorage(key(), updated)
       return updated
     })
   }
@@ -74,7 +106,7 @@ export function SavedPromptsProvider(props: ParentProps) {
   function remove(id: string) {
     setPrompts((prev) => {
       const filtered = prev.filter((p) => p.id !== id)
-      saveToStorage(filtered)
+      saveToStorage(key(), filtered)
       return filtered
     })
   }
@@ -86,7 +118,7 @@ export function SavedPromptsProvider(props: ParentProps) {
       // Append any prompts not in the ids list (shouldn't happen, but be safe)
       const remaining = prev.filter((p) => !ids.includes(p.id))
       const updated = [...reordered, ...remaining]
-      saveToStorage(updated)
+      saveToStorage(key(), updated)
       return updated
     })
   }

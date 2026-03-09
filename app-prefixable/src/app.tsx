@@ -156,7 +156,7 @@ export function App() {
       <ThemeProvider>
         <BrandingProvider>
           <RecentProjectsProvider>
-            <SavedPromptsProvider>
+            <SavedPromptsProvider directory={activeDirectory}>
               <GlobalEventsProvider projects={projects} activeDirectory={activeDirectory}>
                 <CommandProvider>
                   <AppRoutes />
