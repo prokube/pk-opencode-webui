@@ -1013,6 +1013,8 @@ export function Session() {
     try {
       // Use the question's own requestID — may belong to a child session
       await client.question.reply({ requestID: q.id, answers, directory });
+      // Optimistically clear so the UI unblocks without waiting for SSE
+      events.dismissQuestion(q.sessionID);
     } catch (e) {
       console.error("[Session] Failed to reply to question:", e);
     }
@@ -1024,6 +1026,7 @@ export function Session() {
 
     try {
       await client.question.reject({ requestID: q.id, directory });
+      events.dismissQuestion(q.sessionID);
     } catch (e) {
       console.error("[Session] Failed to reject question:", e);
     }
