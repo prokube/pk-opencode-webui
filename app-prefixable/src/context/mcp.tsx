@@ -100,41 +100,43 @@ export function MCPProvider(props: ParentProps) {
     return overrides
   }
 
+  /** Internal: fetch MCP server status */
+  async function fetchStatus(seq: number) {
+    const res = await client.mcp.status().catch((e) => {
+      console.error("[MCP] Failed to fetch status:", e)
+      return null
+    })
+    if (seq !== refreshSeq) return
+    if (res?.data) {
+      setServers(reconcile(res.data as Record<string, MCPStatus>))
+    }
+  }
+
+  /** Internal: fetch project-level MCP overrides */
+  async function fetchOverrides(seq: number) {
+    if (!sdk.directory) {
+      setProjectOverrides({})
+      return
+    }
+    const res = await client.config.get().catch((e) => {
+      console.error("[MCP] Failed to fetch project config for overrides:", e)
+      return null
+    })
+    if (seq !== refreshSeq) return
+    // Only update when we got a valid response; keep previous state on failure
+    if (res?.data) {
+      setProjectOverrides(parseOverrides(res.data as Record<string, unknown>))
+    }
+  }
+
   /** Refresh MCP server status only (lightweight, called on mcp.* events) */
   async function refreshStatus() {
     const seq = ++refreshSeq
     setLoading(true)
     try {
-      const res = await client.mcp.status().catch((e) => {
-        console.error("[MCP] Failed to fetch status:", e)
-        return null
-      })
-      if (seq !== refreshSeq) return
-      if (res?.data) {
-        setServers(reconcile(res.data as Record<string, MCPStatus>))
-      }
+      await fetchStatus(seq)
     } finally {
       if (seq === refreshSeq) setLoading(false)
-    }
-  }
-
-  /** Refresh project-level MCP overrides from project config */
-  async function refreshOverrides() {
-    if (!sdk.directory) {
-      setProjectOverrides({})
-      return
-    }
-    try {
-      const res = await client.config.get().catch((e) => {
-        console.error("[MCP] Failed to fetch project config for overrides:", e)
-        return null
-      })
-      // Only update when we got a valid response; keep previous state on failure
-      if (res?.data) {
-        setProjectOverrides(parseOverrides(res.data as Record<string, unknown>))
-      }
-    } catch {
-      // Keep previous overrides on failure
     }
   }
 
@@ -143,10 +145,7 @@ export function MCPProvider(props: ParentProps) {
     const seq = ++refreshSeq
     setLoading(true)
     try {
-      await Promise.all([
-        refreshStatus(),
-        refreshOverrides(),
-      ])
+      await Promise.all([fetchStatus(seq), fetchOverrides(seq)])
     } finally {
       if (seq === refreshSeq) setLoading(false)
     }
