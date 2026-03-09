@@ -29,7 +29,10 @@ export function ConfigProvider(props: ParentProps) {
   const [loading, setLoading] = createSignal(true)
   const [error, setError] = createSignal<string | null>(null)
 
+  let refreshSeq = 0
+
   async function refresh() {
+    const seq = ++refreshSeq
     setLoading(true)
     setError(null)
     const errors: string[] = []
@@ -37,9 +40,11 @@ export function ConfigProvider(props: ParentProps) {
     if (sdk.directory) {
       try {
         const projRes = await sdk.client.config.get()
+        if (seq !== refreshSeq) return // superseded by newer refresh
         setProject(reconcile((projRes?.data as Config) ?? {}))
       } catch (e) {
         console.error("[Config] Failed to fetch project config:", e)
+        if (seq !== refreshSeq) return
         setProject(reconcile({}))
         errors.push("project")
       }
@@ -48,9 +53,11 @@ export function ConfigProvider(props: ParentProps) {
     }
     try {
       const globalRes = await sdk.client.global.config.get()
+      if (seq !== refreshSeq) return
       setGlobal(reconcile((globalRes?.data as Config) ?? {}))
     } catch (e) {
       console.error("[Config] Failed to fetch global config:", e)
+      if (seq !== refreshSeq) return
       setGlobal(reconcile({}))
       errors.push("global")
     }
