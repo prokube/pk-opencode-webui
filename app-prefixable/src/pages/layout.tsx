@@ -1724,8 +1724,9 @@ export function Layout(props: ParentProps) {
 
       // Agent question alarms (keyed by request ID).
       // For child/grandchild sessions, walk the parentID chain to find the root
-      // ancestor and check its bell state. Notifications are suppressed when the
-      // user is already viewing an ancestor session (the question dock handles it).
+      // ancestor and check its bell state. Browser notifications always fire when
+      // the bell is enabled — the in-app question dock handles inline display
+      // separately without suppressing OS-level notifications.
       if (event.type === "question.asked") {
         const props = event.properties as { id?: string; sessionID?: string };
         const sid = props.sessionID;
@@ -1744,17 +1745,6 @@ export function Layout(props: ParentProps) {
         }
         if (nc[bellSid] !== true) return;
         firedQuestion.add(rid);
-
-        // Suppress notification if the user is viewing any ancestor session —
-        // the question dock already surfaces the descendant question inline.
-        const current = currentSessionId();
-        if (current) {
-          let ancestor = sess;
-          while (ancestor?.parentID) {
-            if (ancestor.parentID === current) return;
-            ancestor = sync.session.get(ancestor.parentID);
-          }
-        }
 
         const title = sess?.title || "Question from agent";
         fireNotification(sid, title, "The agent has a question and is waiting for your response.", `session-question-${rid}`);
