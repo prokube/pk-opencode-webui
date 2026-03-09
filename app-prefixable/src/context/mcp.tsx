@@ -56,8 +56,10 @@ interface MCPContextValue {
   projectOverrides: () => Record<string, McpProjectOverride>
   /** Set project-level enable/disable for an MCP server */
   setProjectOverride: (name: string, enabled: boolean) => Promise<void>
-  /** Remove project-level override (fall back to global) */
-  removeProjectOverride: (name: string) => Promise<void>
+  /** Reset project-level override back to enabled (effectively removing the override) */
+  resetProjectOverride: (name: string) => Promise<void>
+  /** Name of the server currently being updated at project level, or null */
+  overrideLoading: () => string | null
 }
 
 const MCPContext = createContext<MCPContextValue>()
@@ -69,46 +71,45 @@ export function MCPProvider(props: ParentProps) {
   const [servers, setServers] = createStore<Record<string, MCPStatus>>({})
   const [loading, setLoading] = createSignal(true)
   const [projectOverrides, setProjectOverrides] = createSignal<Record<string, McpProjectOverride>>({})
+  const [overrideLoading, setOverrideLoading] = createSignal<string | null>(null)
 
   function isPlainObject(v: unknown): v is Record<string, unknown> {
     return typeof v === "object" && v !== null && !Array.isArray(v)
   }
 
+  /** Parse project config MCP section into override records */
+  function parseOverrides(cfg: Record<string, unknown> | undefined): Record<string, McpProjectOverride> {
+    const mcpSection = cfg?.mcp
+    if (!isPlainObject(mcpSection)) return {}
+    const overrides: Record<string, McpProjectOverride> = {}
+    for (const [k, v] of Object.entries(mcpSection)) {
+      if (isPlainObject(v) && "enabled" in v && Object.keys(v).length === 1) {
+        overrides[k] = { enabled: !!(v as { enabled: boolean }).enabled }
+      }
+    }
+    return overrides
+  }
+
   async function refresh() {
-    try {
-      const res = await client.mcp.status()
-      if (res.data) {
-        // Use reconcile to properly handle deleted servers
-        // Without reconcile, removed keys would persist in the store
-        setServers(reconcile(res.data as Record<string, MCPStatus>))
-      }
-    } catch (e) {
+    // Fetch MCP status and project overrides in parallel
+    const statusPromise = client.mcp.status().catch((e) => {
       console.error("[MCP] Failed to fetch status:", e)
+      return null
+    })
+    const overridesPromise = sdk.directory
+      ? client.config.get().catch(() => null)
+      : Promise.resolve(null)
+
+    const [statusRes, configRes] = await Promise.all([statusPromise, overridesPromise])
+
+    if (statusRes?.data) {
+      setServers(reconcile(statusRes.data as Record<string, MCPStatus>))
     }
-    // Load project-level MCP overrides from project config (only when a directory is active)
-    if (sdk.directory) {
-      try {
-        const configRes = await client.config.get()
-        const cfg = configRes?.data as Record<string, unknown> | undefined
-        const mcpSection = cfg?.mcp
-        if (isPlainObject(mcpSection)) {
-          const overrides: Record<string, McpProjectOverride> = {}
-          for (const [k, v] of Object.entries(mcpSection)) {
-            if (isPlainObject(v) && "enabled" in v && Object.keys(v).length === 1) {
-              overrides[k] = { enabled: !!(v as { enabled: boolean }).enabled }
-            }
-          }
-          setProjectOverrides(overrides)
-        } else {
-          setProjectOverrides({})
-        }
-      } catch {
-        // Project config may not exist - that's fine
-        setProjectOverrides({})
-      }
-    } else {
-      setProjectOverrides({})
-    }
+    setProjectOverrides(
+      sdk.directory
+        ? parseOverrides(configRes?.data as Record<string, unknown> | undefined)
+        : {},
+    )
     setLoading(false)
   }
 
@@ -212,45 +213,51 @@ export function MCPProvider(props: ParentProps) {
   }
 
   async function setProjectOverride(name: string, enabled: boolean) {
+    if (!sdk.directory) {
+      console.warn("[MCP] Cannot set project override without an active directory")
+      return
+    }
+    setOverrideLoading(name)
     try {
-      // Read current project config mcp section
-      const configRes = await client.config.get()
-      const cfg = configRes?.data as Record<string, unknown> | undefined
-      const existingMcp = isPlainObject(cfg?.mcp) ? cfg.mcp : {}
+      // Deep merge is sufficient — just patch the mcp section with the override.
+      // If the project config doesn't exist yet, the backend creates it.
       await client.config.update({
         config: {
-          mcp: {
-            ...existingMcp,
-            [name]: { enabled },
-          },
+          mcp: { [name]: { enabled } },
         },
       })
       setProjectOverrides((prev) => ({ ...prev, [name]: { enabled } }))
     } catch (e) {
       console.error("[MCP] Failed to set project override:", name, e)
+    } finally {
+      setOverrideLoading(null)
     }
   }
 
-  async function removeProjectOverride(name: string) {
+  /** Reset a project override back to enabled (since deep-merge can't delete keys,
+   *  we write { enabled: true } which is functionally identical to no override). */
+  async function resetProjectOverride(name: string) {
+    if (!sdk.directory) {
+      console.warn("[MCP] Cannot reset project override without an active directory")
+      return
+    }
+    setOverrideLoading(name)
     try {
-      // To remove a key we need to write the full config without it
-      const configRes = await client.config.get()
-      const cfg = configRes?.data as Record<string, unknown> | undefined
-      const existingMcp = isPlainObject(cfg?.mcp) ? { ...cfg.mcp } : {}
-      delete existingMcp[name]
-      // We can't delete via deep merge, so write the full mcp section without this key
       await client.config.update({
         config: {
-          mcp: existingMcp,
+          mcp: { [name]: { enabled: true } },
         },
       })
+      // Remove from local state — enabled:true is the default / no-override state
       setProjectOverrides((prev) => {
         const next = { ...prev }
         delete next[name]
         return next
       })
     } catch (e) {
-      console.error("[MCP] Failed to remove project override:", name, e)
+      console.error("[MCP] Failed to reset project override:", name, e)
+    } finally {
+      setOverrideLoading(null)
     }
   }
 
@@ -305,7 +312,8 @@ export function MCPProvider(props: ParentProps) {
         stats,
         projectOverrides,
         setProjectOverride,
-        removeProjectOverride,
+        resetProjectOverride,
+        overrideLoading,
       }}
     >
       {props.children}

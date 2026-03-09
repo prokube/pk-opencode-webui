@@ -1578,6 +1578,7 @@ Add your project-specific instructions here.
                         const override = () => mcp.projectOverrides()[name]
                         const isEnabled = () => override()?.enabled ?? true
                         const hasOverride = () => override() !== undefined
+                        const isUpdating = () => mcp.overrideLoading() === name
 
                         return (
                           <div class="px-4 py-3 flex items-center justify-between gap-4">
@@ -1591,7 +1592,10 @@ Add your project-specific instructions here.
                                 >
                                   {name}
                                 </span>
-                                <Show when={!isEnabled()}>
+                                <Show when={isUpdating()}>
+                                  <Spinner class="w-3 h-3" />
+                                </Show>
+                                <Show when={!isEnabled() && !isUpdating()}>
                                   <span
                                     class="text-xs px-1.5 py-0.5 rounded"
                                     style={{
@@ -1602,7 +1606,7 @@ Add your project-specific instructions here.
                                     Disabled for this project
                                   </span>
                                 </Show>
-                                <Show when={hasOverride() && isEnabled()}>
+                                <Show when={hasOverride() && isEnabled() && !isUpdating()}>
                                   <span
                                     class="text-xs px-1.5 py-0.5 rounded"
                                     style={{
@@ -1619,7 +1623,8 @@ Add your project-specific instructions here.
                               onClick={async () => {
                                 await mcp.setProjectOverride(name, !isEnabled())
                               }}
-                              class="relative w-10 h-5 rounded-full transition-colors"
+                              disabled={isUpdating()}
+                              class="relative w-10 h-5 rounded-full transition-colors disabled:opacity-50"
                               style={{
                                 background: isEnabled() ? "var(--interactive-base)" : "var(--surface-inset)",
                               }}
