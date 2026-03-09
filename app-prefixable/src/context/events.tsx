@@ -10,7 +10,7 @@ interface EventContextValue {
   subscribe: (handler: EventHandler) => () => void
   status: Record<string, SessionStatus>
   pendingQuestions: Record<string, QuestionRequest | undefined>
-  dismissQuestion: (sessionID: string) => void
+  dismissQuestion: (sessionID: string, requestID: string) => void
 }
 
 const EventContext = createContext<EventContextValue>()
@@ -127,9 +127,13 @@ export function EventProvider(props: ParentProps) {
   }
 
   /** Optimistically remove a pending question so the UI unblocks immediately
-   *  without waiting for the SSE confirmation event. */
-  function dismissQuestion(sessionID: string) {
-    setPendingQuestions(produce((map) => { delete map[sessionID] }))
+   *  without waiting for the SSE confirmation event. Only deletes when the
+   *  currently stored request matches the given requestID to avoid clearing a
+   *  newer question that arrived in the meantime. */
+  function dismissQuestion(sessionID: string, requestID: string) {
+    setPendingQuestions(produce((map) => {
+      if (map[sessionID]?.id === requestID) delete map[sessionID]
+    }))
   }
 
   return <EventContext.Provider value={{ subscribe, status, pendingQuestions, dismissQuestion }}>{props.children}</EventContext.Provider>
