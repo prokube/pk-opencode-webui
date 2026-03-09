@@ -69,20 +69,19 @@ export function SavedPromptsProvider(props: ParentProps & { directory?: Accessor
   const dir = () => props.directory?.()
   const key = () => storageKey(dir())
 
-  // Run migration when a directory is available
-  createEffect(() => {
-    const d = dir()
-    if (d) migrateIfNeeded(d)
-  })
+  // Run migration synchronously before initial load so first render has data
+  const initialDir = dir()
+  if (initialDir) migrateIfNeeded(initialDir)
 
   const [prompts, setPrompts] = createSignal<SavedPrompt[]>(
     loadFromStorage(key()).sort((a, b) => b.createdAt - a.createdAt),
   )
 
-  // Reload prompts when the directory (and thus the storage key) changes
+  // Reload prompts (with migration) when the directory changes
   createEffect(() => {
-    const k = key()
-    setPrompts(loadFromStorage(k).sort((a, b) => b.createdAt - a.createdAt))
+    const d = dir()
+    if (d) migrateIfNeeded(d)
+    setPrompts(loadFromStorage(key()).sort((a, b) => b.createdAt - a.createdAt))
   })
 
   function add(title: string, text: string) {
