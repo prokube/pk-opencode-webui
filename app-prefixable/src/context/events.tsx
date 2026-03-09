@@ -63,14 +63,14 @@ export function EventProvider(props: ParentProps) {
         if (event.type === "question.asked") {
           const q = event.properties as QuestionRequest
           if (q?.sessionID) {
-            sseSeenQuestions.add(q.sessionID)
+            sseAskedQuestions.add(q.sessionID)
             setPendingQuestions(q.sessionID, q)
           }
         }
         if (event.type === "question.replied" || event.type === "question.rejected") {
           const q = event.properties as { sessionID?: string; requestID?: string }
           if (q?.sessionID) {
-            sseSeenQuestions.add(q.sessionID)
+            if (q.requestID) sseClearedRequests.add(q.requestID)
             // Only clear if the stored question matches this request to avoid
             // accidentally removing a newer question for the same session.
             setPendingQuestions(produce((map) => {
@@ -107,7 +107,12 @@ export function EventProvider(props: ParentProps) {
   // no events are missed during the HTTP flight. The HTTP seed only applies
   // entries for sessions that haven't already been touched by a live SSE event,
   // preventing stale HTTP snapshots from overwriting newer SSE updates.
-  const sseSeenQuestions = new Set<string>()
+  //
+  // sseAskedQuestions: sessions that received a question.asked via SSE (skip HTTP seed)
+  // sseClearedRequests: specific requestIDs cleared via SSE (skip that question in HTTP seed)
+  // sseSeenStatuses: sessions with a status update via SSE (skip HTTP seed)
+  const sseAskedQuestions = new Set<string>()
+  const sseClearedRequests = new Set<string>()
   const sseSeenStatuses = new Set<string>()
 
   onMount(() => {
@@ -117,7 +122,11 @@ export function EventProvider(props: ParentProps) {
       .then((res) => {
         const questions = Array.isArray(res.data) ? res.data : []
         for (const q of questions) {
-          if (!sseSeenQuestions.has(q.sessionID)) setPendingQuestions(q.sessionID, q)
+          // Skip if SSE already delivered a question.asked for this session
+          // or if this specific request was already cleared via SSE
+          if (sseAskedQuestions.has(q.sessionID)) continue
+          if (sseClearedRequests.has(q.id)) continue
+          setPendingQuestions(q.sessionID, q)
         }
       })
       .catch((err) => console.error("[Events] Failed to load questions:", err))
