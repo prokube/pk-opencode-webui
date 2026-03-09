@@ -1577,7 +1577,6 @@ Add your project-specific instructions here.
                       {([name]) => {
                         const override = () => mcp.projectOverrides()[name]
                         const isEnabled = () => override()?.enabled ?? true
-                        const hasOverride = () => override() !== undefined
                         const isUpdating = () => mcp.isOverrideLoading(name)
 
                         return (
@@ -1606,17 +1605,7 @@ Add your project-specific instructions here.
                                     Disabled for this project
                                   </span>
                                 </Show>
-                                <Show when={hasOverride() && isEnabled() && !isUpdating()}>
-                                  <span
-                                    class="text-xs px-1.5 py-0.5 rounded"
-                                    style={{
-                                      background: "var(--surface-inset)",
-                                      color: "var(--icon-success-base)",
-                                    }}
-                                  >
-                                    Enabled
-                                  </span>
-                                </Show>
+
                               </div>
                             </div>
                             <button
