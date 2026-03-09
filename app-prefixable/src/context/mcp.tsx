@@ -122,11 +122,13 @@ export function MCPProvider(props: ParentProps) {
       if (statusRes?.data) {
         setServers(reconcile(statusRes.data as Record<string, MCPStatus>))
       }
-      setProjectOverrides(
-        sdk.directory
-          ? parseOverrides(configRes?.data as Record<string, unknown> | undefined)
-          : {},
-      )
+      // Only update overrides when we got a valid response; keep previous
+      // state on transient failures to avoid flipping toggles
+      if (!sdk.directory) {
+        setProjectOverrides({})
+      } else if (configRes?.data) {
+        setProjectOverrides(parseOverrides(configRes.data as Record<string, unknown>))
+      }
     } finally {
       // Only update loading if this is still the latest refresh
       if (seq === refreshSeq) setLoading(false)
@@ -267,6 +269,8 @@ export function MCPProvider(props: ParentProps) {
       } else {
         setProjectOverrides((prev) => ({ ...prev, [name]: { enabled } }))
       }
+      // Refresh to sync MCP status with the updated config
+      await refresh()
     } catch (e) {
       console.error("[MCP] Failed to set project override:", name, e)
     } finally {
@@ -296,6 +300,8 @@ export function MCPProvider(props: ParentProps) {
         delete next[name]
         return next
       })
+      // Refresh to sync MCP status with the updated config
+      await refresh()
     } catch (e) {
       console.error("[MCP] Failed to reset project override:", name, e)
     } finally {
