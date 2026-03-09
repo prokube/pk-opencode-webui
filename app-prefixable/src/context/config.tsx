@@ -1,4 +1,4 @@
-import { createContext, useContext, createSignal, onMount, type ParentProps } from "solid-js"
+import { createContext, useContext, createSignal, onMount, onCleanup, type ParentProps } from "solid-js"
 import { createStore, reconcile } from "solid-js/store"
 import { useSDK } from "./sdk"
 import { useEvents } from "./events"
@@ -94,26 +94,26 @@ export function ConfigProvider(props: ParentProps) {
     }
   }
 
+  let refreshTimer: number | undefined
+
   onMount(() => {
     refresh()
+  })
 
-    let refreshTimer: number | undefined
-
-    // Refresh config when server reconnects (e.g. after config file changes)
-    const unsub = events.subscribe((event) => {
-      if (event.type === "server.connected") {
-        if (refreshTimer !== undefined) clearTimeout(refreshTimer)
-        refreshTimer = window.setTimeout(() => {
-          refreshTimer = undefined
-          refresh()
-        }, 500)
-      }
-    })
-
-    return () => {
-      unsub()
+  // Refresh config when server reconnects (e.g. after config file changes)
+  const unsub = events.subscribe((event) => {
+    if (event.type === "server.connected") {
       if (refreshTimer !== undefined) clearTimeout(refreshTimer)
+      refreshTimer = window.setTimeout(() => {
+        refreshTimer = undefined
+        refresh()
+      }, 500)
     }
+  })
+
+  onCleanup(() => {
+    unsub()
+    if (refreshTimer !== undefined) clearTimeout(refreshTimer)
   })
 
   return (

@@ -2164,11 +2164,16 @@ function ProjectConfigTab() {
     prevView = current
   })
 
+  let savedTimer: number | undefined
   function showSaved() {
     setSaveError(null)
     setSaved(true)
-    setTimeout(() => setSaved(false), 2000)
+    if (savedTimer !== undefined) clearTimeout(savedTimer)
+    savedTimer = window.setTimeout(() => setSaved(false), 2000)
   }
+  onCleanup(() => {
+    if (savedTimer !== undefined) clearTimeout(savedTimer)
+  })
 
   // ── Permission handlers ──
 
