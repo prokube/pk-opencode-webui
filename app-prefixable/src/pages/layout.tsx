@@ -1722,17 +1722,28 @@ export function Layout(props: ParentProps) {
         return;
       }
 
-      // Agent question alarms (keyed by request ID)
+      // Agent question alarms (keyed by request ID).
+      // For child sessions, check the parent session's bell state and suppress
+      // toasts when the user is already viewing the parent session (the question
+      // dock handles it).
       if (event.type === "question.asked") {
         const props = event.properties as { id?: string; sessionID?: string };
         const sid = props.sessionID;
         const rid = props.id;
         if (!sid || !rid) return;
-        if (notifyCache()[sid] !== true) return;
         if (firedQuestion.has(rid)) return;
+
+        // Resolve bell state: for child sessions, inherit from parent
+        const sess = sync.session.get(sid);
+        const bellSid = sess?.parentID ?? sid;
+        if (notifyCache()[bellSid] !== true) return;
         firedQuestion.add(rid);
 
-        const sess = sync.session.get(sid);
+        // Suppress toast if the user is viewing the parent session — the
+        // question dock already surfaces the child question inline.
+        const current = currentSessionId();
+        if (current && sess?.parentID === current) return;
+
         const title = sess?.title || "Question from agent";
         fireNotification(sid, title, "The agent has a question and is waiting for your response.", `session-question-${rid}`);
         return;
