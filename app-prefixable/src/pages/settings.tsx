@@ -2150,18 +2150,22 @@ function ProjectConfigTab() {
   const [newPatternAction, setNewPatternAction] = createSignal<PermissionActionConfig>("deny")
 
   // Sync JSON text from config only when switching into JSON view,
-  // not on every reactive config update (which would overwrite in-progress edits)
+  // not on every reactive config update (which would overwrite in-progress edits).
+  // Also clear errors on any view switch.
   let prevView: "form" | "json" = "form"
   createEffect(() => {
     const current = view()
-    if (prevView !== "json" && current === "json") {
-      setJsonText(JSON.stringify(config.project, null, 2))
+    if (current !== prevView) {
       setSaveError(null)
+      if (current === "json") {
+        setJsonText(JSON.stringify(config.project, null, 2))
+      }
     }
     prevView = current
   })
 
   function showSaved() {
+    setSaveError(null)
     setSaved(true)
     setTimeout(() => setSaved(false), 2000)
   }
@@ -2566,7 +2570,8 @@ function ProjectConfigTab() {
                                       </span>
                                       <button
                                         onClick={() => removePermissionPattern(tool.key, p.pattern)}
-                                        class="p-0.5 rounded transition-colors opacity-50 hover:opacity-100"
+                                        disabled={saving()}
+                                        class="p-0.5 rounded transition-colors opacity-50 hover:opacity-100 disabled:opacity-30"
                                         style={{ color: "var(--icon-critical-base)" }}
                                         title="Remove rule"
                                       >
@@ -2602,7 +2607,7 @@ function ProjectConfigTab() {
                                   color: "var(--text-base)",
                                 }}
                                 onKeyDown={(e) => {
-                                  if (e.key === "Enter") {
+                                  if (e.key === "Enter" && !saving()) {
                                     addPermissionPattern(tool.key, newPatternValue(), newPatternAction())
                                   }
                                   if (e.key === "Escape") {
@@ -2629,7 +2634,7 @@ function ProjectConfigTab() {
                                 onClick={() => addPermissionPattern(tool.key, newPatternValue(), newPatternAction())}
                                 variant="primary"
                                 size="sm"
-                                disabled={!newPatternValue().trim()}
+                                disabled={!newPatternValue().trim() || saving()}
                               >
                                 Add
                               </Button>
