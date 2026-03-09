@@ -1040,6 +1040,10 @@ export function Session() {
       console.log("[Session] Aborting session:", id);
       await client.session.abort({ sessionID: id, directory });
       setProcessing(false);
+      // Optimistically dismiss any pending question (own or descendant) so the
+      // composer unblocks immediately without waiting for SSE confirmation.
+      const q = pendingQuestion();
+      if (q) events.dismissQuestion(q.sessionID);
     } catch (e) {
       console.error("[Session] Failed to abort session:", e);
     }
