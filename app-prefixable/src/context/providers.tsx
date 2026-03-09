@@ -86,6 +86,9 @@ export function ProviderProvider(props: ParentProps) {
     selectedAgent: FALLBACK_AGENT,
   })
 
+  // Track whether the user has manually changed the agent via setSelectedAgent
+  let userChangedAgent = false
+
   // Load models from localStorage
   onMount(() => {
     try {
@@ -142,8 +145,9 @@ export function ProviderProvider(props: ParentProps) {
     const validConfigAgent = configAgent && agentNames.length > 0 && agentNames.includes(configAgent)
     const defaultAgent = validConfigAgent ? configAgent : FALLBACK_AGENT
 
-    // Set selected agent if config specifies a valid agent and we're still on fallback
-    if (validConfigAgent && store.selectedAgent === FALLBACK_AGENT && configAgent !== FALLBACK_AGENT) {
+    // Set selected agent if config specifies a valid agent, we're still on fallback,
+    // and the user hasn't manually chosen an agent
+    if (validConfigAgent && !userChangedAgent && store.selectedAgent === FALLBACK_AGENT && configAgent !== FALLBACK_AGENT) {
       setStore("selectedAgent", configAgent)
     }
 
@@ -236,6 +240,7 @@ export function ProviderProvider(props: ParentProps) {
         setStore("modelsByAgent", agent, store.modelsByAgent[source])
       }
     }
+    userChangedAgent = true
     setStore("selectedAgent", agent)
   }
 
