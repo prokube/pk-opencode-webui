@@ -144,7 +144,7 @@ export function Settings() {
       setSshKeyLoaded(true)
       loadSshKey()
     }
-    if (tabId === "instructions" && !instructionLoaded()) {
+    if (tabId === "instructions" && directory && !instructionLoaded()) {
       setInstructionLoaded(true)
       loadInstructions()
     }
@@ -156,7 +156,7 @@ export function Settings() {
       setSshKeyLoaded(true)
       loadSshKey()
     }
-    if (activeTab() === "instructions" && !instructionLoaded()) {
+    if (activeTab() === "instructions" && directory && !instructionLoaded()) {
       setInstructionLoaded(true)
       loadInstructions()
     }
@@ -1817,6 +1817,7 @@ Add your project-specific instructions here.
                 </section>
               </Show>
 
+              <Show when={directory}>
               <Show when={instructionError()}>
                 <div
                   class="p-3 rounded-md text-sm"
@@ -2012,6 +2013,7 @@ Add your project-specific instructions here.
                     Instruction files are defined in your project's <code class="px-1 py-0.5 rounded" style={{ background: "var(--background-base)" }}>opencode.json</code>. Changes take effect on the next session.
                   </p>
                 </section>
+              </Show>
               </Show>
             </div>
           </Show>
