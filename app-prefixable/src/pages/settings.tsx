@@ -678,7 +678,7 @@ Add your project-specific instructions here.
             }}
             title={directory}
           >
-            <span style={{ color: "var(--text-base)" }}>{directory!.split("/").pop()}</span>
+            <span style={{ color: "var(--text-base)" }}>{directory!.replace(/[\\/]+$/, "").split(/[\\/]/).pop()}</span>
           </div>
         </Show>
         <div class="space-y-0.5">
