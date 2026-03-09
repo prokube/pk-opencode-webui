@@ -52,13 +52,17 @@ function saveToStorage(key: string, prompts: SavedPrompt[]) {
 
 /** Migrate legacy prompts to the project-scoped key (one-time, non-destructive). */
 function migrateIfNeeded(directory: string) {
-  const projectKey = storageKey(directory)
-  // Already has project-scoped data — no migration needed
-  if (localStorage.getItem(projectKey)) return
-  const legacy = localStorage.getItem(LEGACY_KEY)
-  if (!legacy) return
-  // Copy legacy data to project-scoped key; do NOT delete old key
-  localStorage.setItem(projectKey, legacy)
+  try {
+    const projectKey = storageKey(directory)
+    // Already has project-scoped data — no migration needed
+    if (localStorage.getItem(projectKey)) return
+    const legacy = localStorage.getItem(LEGACY_KEY)
+    if (!legacy) return
+    // Copy legacy data to project-scoped key; do NOT delete old key
+    localStorage.setItem(projectKey, legacy)
+  } catch {
+    // Ignore storage errors during migration
+  }
 }
 
 export function SavedPromptsProvider(props: ParentProps & { directory?: Accessor<string | undefined> }) {
