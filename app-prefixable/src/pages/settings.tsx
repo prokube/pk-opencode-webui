@@ -2141,7 +2141,7 @@ function ProjectConfigTab() {
   const basePath = useBasePath()
   const [view, setView] = createSignal<"form" | "json">("form")
   const [jsonText, setJsonText] = createSignal("")
-  const [jsonError, setJsonError] = createSignal<string | null>(null)
+  const [saveError, setSaveError] = createSignal<string | null>(null)
   const [saving, setSaving] = createSignal(false)
   const [saved, setSaved] = createSignal(false)
   const [expandedPerms, setExpandedPerms] = createSignal<string | null>(null)
@@ -2156,7 +2156,7 @@ function ProjectConfigTab() {
     const current = view()
     if (prevView !== "json" && current === "json") {
       setJsonText(JSON.stringify(config.project, null, 2))
-      setJsonError(null)
+      setSaveError(null)
     }
     prevView = current
   })
@@ -2317,7 +2317,7 @@ function ProjectConfigTab() {
       showSaved()
       return true
     }
-    setJsonError("Failed to write opencode.json. Changes were not saved.")
+    setSaveError("Failed to write opencode.json. Changes were not saved.")
     return false
   }
 
@@ -2348,14 +2348,14 @@ function ProjectConfigTab() {
     try {
       parsed = JSON.parse(text)
     } catch (e) {
-      setJsonError(`Invalid JSON: ${e instanceof Error ? e.message : String(e)}`)
+      setSaveError(`Invalid JSON: ${e instanceof Error ? e.message : String(e)}`)
       return
     }
     if (parsed === null || Array.isArray(parsed) || typeof parsed !== "object") {
-      setJsonError("Config must be a JSON object at the top level.")
+      setSaveError("Config must be a JSON object at the top level.")
       return
     }
-    setJsonError(null)
+    setSaveError(null)
     setSaving(true)
     // Write the full file directly so removed keys are actually deleted
     await writeConfigFile(text)
@@ -2443,6 +2443,20 @@ function ProjectConfigTab() {
         </div>
       </Show>
 
+      <Show when={saveError()}>
+        <div
+          class="p-3 rounded-md text-sm"
+          style={{
+            background: "var(--surface-inset)",
+            border: "1px solid var(--border-base)",
+            "border-left": "3px solid var(--interactive-critical)",
+            color: "var(--interactive-critical)",
+          }}
+        >
+          {saveError()}
+        </div>
+      </Show>
+
       <Show when={config.loading()}>
         <div class="flex items-center gap-2" style={{ color: "var(--text-weak)" }}>
           <Spinner class="w-4 h-4" />
@@ -2484,24 +2498,30 @@ function ProjectConfigTab() {
                   return (
                     <div class="px-4 py-3">
                       <div class="flex items-center justify-between">
-                        <button
-                          class="flex items-center gap-2 text-sm font-medium"
-                          style={{ color: "var(--text-strong)" }}
-                          onClick={() => setExpandedPerms(expanded() ? null : tool.key)}
-                        >
-                          <Show when={expanded()} fallback={<ChevronRight class="w-3.5 h-3.5" style={{ color: "var(--text-weak)" }} />}>
-                            <ChevronDown class="w-3.5 h-3.5" style={{ color: "var(--text-weak)" }} />
-                          </Show>
-                          {tool.label}
-                          <Show when={patterns().length > 0}>
-                            <span
-                              class="text-xs px-1.5 py-0.5 rounded"
-                              style={{ background: "var(--surface-inset)", color: "var(--text-weak)" }}
-                            >
-                              {patterns().length} rule{patterns().length > 1 ? "s" : ""}
-                            </span>
-                          </Show>
-                        </button>
+                        <Show when={tool.supportsPatterns} fallback={
+                          <span class="flex items-center gap-2 text-sm font-medium" style={{ color: "var(--text-strong)" }}>
+                            {tool.label}
+                          </span>
+                        }>
+                          <button
+                            class="flex items-center gap-2 text-sm font-medium"
+                            style={{ color: "var(--text-strong)" }}
+                            onClick={() => setExpandedPerms(expanded() ? null : tool.key)}
+                          >
+                            <Show when={expanded()} fallback={<ChevronRight class="w-3.5 h-3.5" style={{ color: "var(--text-weak)" }} />}>
+                              <ChevronDown class="w-3.5 h-3.5" style={{ color: "var(--text-weak)" }} />
+                            </Show>
+                            {tool.label}
+                            <Show when={patterns().length > 0}>
+                              <span
+                                class="text-xs px-1.5 py-0.5 rounded"
+                                style={{ background: "var(--surface-inset)", color: "var(--text-weak)" }}
+                              >
+                                {patterns().length} rule{patterns().length > 1 ? "s" : ""}
+                              </span>
+                            </Show>
+                          </button>
+                        </Show>
                         {/* Default action segmented control */}
                         <div class="flex gap-0.5 p-0.5 rounded" style={{ background: "var(--surface-inset)" }}>
                           <For each={ACTION_OPTIONS}>
@@ -2789,26 +2809,12 @@ function ProjectConfigTab() {
             </Button>
           </div>
 
-          <Show when={jsonError()}>
-            <div
-              class="mx-4 mt-3 p-3 rounded-md text-sm"
-              style={{
-                background: "var(--surface-inset)",
-                border: "1px solid var(--border-base)",
-                "border-left": "3px solid var(--interactive-critical)",
-                color: "var(--interactive-critical)",
-              }}
-            >
-              {jsonError()}
-            </div>
-          </Show>
-
           <div class="p-4">
             <textarea
               value={jsonText()}
               onInput={(e) => {
                 setJsonText(e.currentTarget.value)
-                setJsonError(null)
+                setSaveError(null)
               }}
               rows={20}
               class="w-full px-3 py-2 rounded-md text-sm font-mono resize-y"
