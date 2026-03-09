@@ -1736,13 +1736,12 @@ export function Layout(props: ParentProps) {
 
         // Walk up the parentID chain to find the root ancestor for bell state.
         // If the session is not yet in the sync store (bootstrap still in
-        // progress), skip the bell check entirely and always fire the
-        // notification — better to over-notify than silently drop a child
-        // session question during early bootstrap.
+        // progress), fall back to checking the session's own bell entry which
+        // is a reasonable best-effort during the brief bootstrap window.
         const sess = sync.session.get(sid);
         const nc = notifyCache();
+        let bellSid = sid;
         if (sess) {
-          let bellSid = sid;
           let walk = sess;
           while (walk?.parentID) {
             const parent = sync.session.get(walk.parentID);
@@ -1750,8 +1749,8 @@ export function Layout(props: ParentProps) {
             bellSid = walk.parentID;
             walk = parent;
           }
-          if (nc[bellSid] !== true) return;
         }
+        if (nc[bellSid] !== true) return;
         firedQuestion.add(rid);
 
         const title = sess?.title || "Question from agent";
