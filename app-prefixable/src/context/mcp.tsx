@@ -37,6 +37,11 @@ export interface McpRemoteConfig {
 
 export type McpConfig = McpLocalConfig | McpRemoteConfig
 
+// Per-project MCP override: just { enabled: boolean }
+export interface McpProjectOverride {
+  enabled: boolean
+}
+
 interface MCPContextValue {
   servers: Record<string, MCPStatus>
   loading: () => boolean
@@ -47,6 +52,12 @@ interface MCPContextValue {
   remove: (name: string) => Promise<void>
   startAuth: (name: string) => Promise<{ authorizationUrl: string } | null>
   stats: () => { enabled: number; failed: boolean; total: number }
+  /** Per-project MCP overrides (read from project config) */
+  projectOverrides: () => Record<string, McpProjectOverride>
+  /** Set project-level enable/disable for an MCP server */
+  setProjectOverride: (name: string, enabled: boolean) => Promise<void>
+  /** Remove project-level override (fall back to global) */
+  removeProjectOverride: (name: string) => Promise<void>
 }
 
 const MCPContext = createContext<MCPContextValue>()
@@ -56,6 +67,7 @@ export function MCPProvider(props: ParentProps) {
   const events = useEvents()
   const [servers, setServers] = createStore<Record<string, MCPStatus>>({})
   const [loading, setLoading] = createSignal(true)
+  const [projectOverrides, setProjectOverrides] = createSignal<Record<string, McpProjectOverride>>({})
 
   async function refresh() {
     try {
@@ -67,9 +79,28 @@ export function MCPProvider(props: ParentProps) {
       }
     } catch (e) {
       console.error("[MCP] Failed to fetch status:", e)
-    } finally {
-      setLoading(false)
     }
+    // Load project-level MCP overrides from project config
+    try {
+      const configRes = await client.config.get()
+      const cfg = configRes?.data as Record<string, unknown> | undefined
+      const mcpSection = cfg?.mcp as Record<string, unknown> | undefined
+      if (mcpSection) {
+        const overrides: Record<string, McpProjectOverride> = {}
+        for (const [k, v] of Object.entries(mcpSection)) {
+          if (v && typeof v === "object" && "enabled" in v && Object.keys(v).length === 1) {
+            overrides[k] = { enabled: !!(v as { enabled: boolean }).enabled }
+          }
+        }
+        setProjectOverrides(overrides)
+      } else {
+        setProjectOverrides({})
+      }
+    } catch {
+      // Project config may not exist - that's fine
+      setProjectOverrides({})
+    }
+    setLoading(false)
   }
 
   async function connect(name: string) {
@@ -171,6 +202,50 @@ export function MCPProvider(props: ParentProps) {
     }
   }
 
+  async function setProjectOverride(name: string, enabled: boolean) {
+    try {
+      // Read current project config mcp section
+      const configRes = await client.config.get()
+      const cfg = configRes?.data as Record<string, unknown> | undefined
+      const existingMcp = (cfg?.mcp as Record<string, unknown>) || {}
+      await client.config.update({
+        config: {
+          mcp: {
+            ...existingMcp,
+            [name]: { enabled },
+          },
+        },
+      })
+      setProjectOverrides((prev) => ({ ...prev, [name]: { enabled } }))
+    } catch (e) {
+      console.error("[MCP] Failed to set project override:", name, e)
+    }
+  }
+
+  async function removeProjectOverride(name: string) {
+    try {
+      // To remove a key we need to write the full config without it
+      const configRes = await client.config.get()
+      const cfg = configRes?.data as Record<string, unknown> | undefined
+      const existingMcp = { ...((cfg?.mcp as Record<string, unknown>) || {}) }
+      delete existingMcp[name]
+      // We can't delete via deep merge, so set to the full mcp section
+      // This is a limitation — for now, setting enabled: true effectively "removes" the override
+      await client.config.update({
+        config: {
+          mcp: existingMcp,
+        },
+      })
+      setProjectOverrides((prev) => {
+        const next = { ...prev }
+        delete next[name]
+        return next
+      })
+    } catch (e) {
+      console.error("[MCP] Failed to remove project override:", name, e)
+    }
+  }
+
   async function startAuth(name: string): Promise<{ authorizationUrl: string } | null> {
     try {
       const res = await client.mcp.auth.start({ name })
@@ -220,6 +295,9 @@ export function MCPProvider(props: ParentProps) {
         remove,
         startAuth,
         stats,
+        projectOverrides,
+        setProjectOverride,
+        removeProjectOverride,
       }}
     >
       {props.children}

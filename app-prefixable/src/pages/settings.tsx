@@ -1552,6 +1552,112 @@ Add your project-specific instructions here.
                 </Show>
               </section>
 
+              {/* Project Overrides Section */}
+              <Show when={directory && Object.keys(mcp.servers).length > 0}>
+                <section
+                  class="rounded-lg overflow-hidden"
+                  style={{
+                    background: "var(--background-base)",
+                    border: "1px solid var(--border-base)",
+                  }}
+                >
+                  <div
+                    class="px-4 py-3"
+                    style={{ "border-bottom": "1px solid var(--border-base)" }}
+                  >
+                    <h2 class="text-sm font-medium" style={{ color: "var(--text-strong)" }}>
+                      Project Overrides
+                    </h2>
+                    <p class="text-xs mt-0.5" style={{ color: "var(--text-weak)" }}>
+                      Enable or disable globally configured servers for this project
+                    </p>
+                  </div>
+                  <div class="divide-y" style={{ "border-color": "var(--border-base)" }}>
+                    <For each={Object.entries(mcp.servers).sort((a, b) => a[0].localeCompare(b[0]))}>
+                      {([name]) => {
+                        const override = () => mcp.projectOverrides()[name]
+                        const isEnabled = () => override()?.enabled ?? true
+                        const hasOverride = () => override() !== undefined
+
+                        return (
+                          <div class="px-4 py-3 flex items-center justify-between gap-4">
+                            <div class="flex-1 min-w-0">
+                              <div class="flex items-center gap-2">
+                                <span
+                                  class="text-sm"
+                                  style={{
+                                    color: isEnabled() ? "var(--text-strong)" : "var(--text-weak)",
+                                  }}
+                                >
+                                  {name}
+                                </span>
+                                <Show when={!isEnabled()}>
+                                  <span
+                                    class="text-xs px-1.5 py-0.5 rounded"
+                                    style={{
+                                      background: "var(--surface-inset)",
+                                      color: "var(--text-weak)",
+                                    }}
+                                  >
+                                    Disabled for this project
+                                  </span>
+                                </Show>
+                                <Show when={hasOverride() && isEnabled()}>
+                                  <span
+                                    class="text-xs px-1.5 py-0.5 rounded"
+                                    style={{
+                                      background: "var(--surface-inset)",
+                                      color: "var(--icon-success-base)",
+                                    }}
+                                  >
+                                    Enabled
+                                  </span>
+                                </Show>
+                              </div>
+                            </div>
+                            <button
+                              onClick={async () => {
+                                await mcp.setProjectOverride(name, !isEnabled())
+                              }}
+                              class="relative w-10 h-5 rounded-full transition-colors"
+                              style={{
+                                background: isEnabled() ? "var(--interactive-base)" : "var(--surface-inset)",
+                              }}
+                              role="switch"
+                              aria-checked={isEnabled()}
+                              aria-label={`Toggle ${name} for this project`}
+                            >
+                              <div
+                                class="absolute top-0.5 w-4 h-4 rounded-full transition-all"
+                                style={{
+                                  background: "var(--background-base)",
+                                  left: isEnabled() ? "calc(100% - 18px)" : "2px",
+                                }}
+                              />
+                            </button>
+                          </div>
+                        )
+                      }}
+                    </For>
+                  </div>
+                </section>
+              </Show>
+
+              {/* No project message for overrides */}
+              <Show when={!directory}>
+                <section
+                  class="rounded-lg p-4"
+                  style={{
+                    background: "var(--surface-inset)",
+                    border: "1px solid var(--border-base)",
+                  }}
+                >
+                  <p class="text-xs" style={{ color: "var(--text-weak)" }}>
+                    Select a project to enable per-project MCP server overrides.
+                  </p>
+                </section>
+              </Show>
+
               {/* Info Section */}
               <section
                 class="rounded-lg p-4"
