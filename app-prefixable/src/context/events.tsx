@@ -20,7 +20,7 @@ export function EventProvider(props: ParentProps) {
   const { client, directory } = useSDK()
   const handlers = new Set<EventHandler>()
   const [status, setStatus] = createStore<Record<string, SessionStatus>>({})
-  const [pendingQuestions, setPendingQuestions] = createStore<Record<string, QuestionRequest>>({})
+  const [pendingQuestions, setPendingQuestions] = createStore<Record<string, QuestionRequest | undefined>>({})
 
   // Connect to SSE endpoint
   let eventSource: EventSource | null = null
@@ -68,10 +68,14 @@ export function EventProvider(props: ParentProps) {
           }
         }
         if (event.type === "question.replied" || event.type === "question.rejected") {
-          const q = event.properties as { sessionID?: string }
+          const q = event.properties as { sessionID?: string; requestID?: string }
           if (q?.sessionID) {
             sseSeenQuestions.add(q.sessionID)
-            setPendingQuestions(produce((map) => { delete map[q.sessionID!] }))
+            // Only clear if the stored question matches this request to avoid
+            // accidentally removing a newer question for the same session.
+            setPendingQuestions(produce((map) => {
+              if (!q.requestID || map[q.sessionID!]?.id === q.requestID) delete map[q.sessionID!]
+            }))
           }
         }
 
