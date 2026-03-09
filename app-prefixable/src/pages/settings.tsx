@@ -2197,9 +2197,26 @@ function ProjectConfigTab() {
     return {}
   }
 
+  const ACTION_ONLY_TOOLS: Set<string> = new Set(
+    PERMISSION_TOOLS.filter((t) => !t.supportsPatterns).map((t) => t.key),
+  )
+
   async function setPermissionDefault(tool: string, action: PermissionActionConfig) {
     setSaving(true)
     const permObj = getPermissionObject()
+
+    // Action-only tools (PermissionActionConfig) must always be a plain string;
+    // discard any pattern object that may exist from manual edits or older configs.
+    if (ACTION_ONLY_TOOLS.has(tool)) {
+      const patch: Config = {
+        permission: { ...permObj, [tool]: action } as Config["permission"],
+      }
+      const result = await config.updateProject(patch)
+      setSaving(false)
+      if (result) showSaved()
+      return
+    }
+
     const currentRule = permObj[tool]
     const patterns = getPermissionPatterns(currentRule)
 
