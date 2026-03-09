@@ -149,9 +149,12 @@ export function ProviderProvider(props: ParentProps) {
 
     // Resolve default model from config (project overrides global). Config format is "provider/model".
     const configModel = cfg.project.model || cfg.global.model
-    const validConfigModel = configModel && configModel.includes("/") && configModel.split("/")[0] && configModel.split("/").slice(1).join("/")
-    const targetProvider = validConfigModel ? configModel.split("/")[0] : FALLBACK_PROVIDER
-    const targetModel = validConfigModel ? configModel.split("/").slice(1).join("/") : FALLBACK_MODEL
+    const slashIdx = configModel ? configModel.indexOf("/") : -1
+    const parsedProvider = slashIdx > 0 ? configModel!.slice(0, slashIdx) : ""
+    const parsedModel = slashIdx > 0 ? configModel!.slice(slashIdx + 1) : ""
+    const hasValidConfigModel = !!(parsedProvider && parsedModel)
+    const targetProvider = hasValidConfigModel ? parsedProvider : FALLBACK_PROVIDER
+    const targetModel = hasValidConfigModel ? parsedModel : FALLBACK_MODEL
 
     if (data.connected.includes(targetProvider)) {
       const provider = data.all.find((p) => p.id === targetProvider)
@@ -164,7 +167,7 @@ export function ProviderProvider(props: ParentProps) {
     }
 
     // Fallback: if config model's provider isn't connected, try the hardcoded default
-    if (validConfigModel && !data.connected.includes(targetProvider)) {
+    if (hasValidConfigModel && !data.connected.includes(targetProvider)) {
       if (data.connected.includes(FALLBACK_PROVIDER)) {
         const provider = data.all.find((p) => p.id === FALLBACK_PROVIDER)
         if (provider && provider.models[FALLBACK_MODEL] && !store.modelsByAgent[defaultAgent]) {

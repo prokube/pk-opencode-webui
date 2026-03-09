@@ -33,12 +33,17 @@ export function ConfigProvider(props: ParentProps) {
     setLoading(true)
     setError(null)
     const errors: string[] = []
-    try {
-      const projRes = await sdk.client.config.get()
-      if (projRes?.data) setProject(reconcile(projRes.data as Config))
-    } catch (e) {
-      console.error("[Config] Failed to fetch project config:", e)
-      errors.push("project")
+    // Only fetch project config when a directory is set; otherwise treat as empty
+    if (sdk.directory) {
+      try {
+        const projRes = await sdk.client.config.get()
+        if (projRes?.data) setProject(reconcile(projRes.data as Config))
+      } catch (e) {
+        console.error("[Config] Failed to fetch project config:", e)
+        errors.push("project")
+      }
+    } else {
+      setProject(reconcile({}))
     }
     try {
       const globalRes = await sdk.client.global.config.get()

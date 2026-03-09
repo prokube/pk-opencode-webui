@@ -2275,7 +2275,7 @@ function ProjectConfigTab() {
     // The PATCH API only does deep-merge and cannot delete keys.
     const full = JSON.parse(JSON.stringify(config.project)) as Config
     delete full.model
-    await clearConfigKey(full)
+    await writeConfigFile(JSON.stringify(full, null, 2))
   }
 
   async function setDefaultAgent(value: string) {
@@ -2288,23 +2288,31 @@ function ProjectConfigTab() {
     }
     const full = JSON.parse(JSON.stringify(config.project)) as Config
     delete full.default_agent
-    await clearConfigKey(full)
+    await writeConfigFile(JSON.stringify(full, null, 2))
   }
 
-  // Write the full config to opencode.json directly (used when clearing keys,
-  // since the PATCH API cannot delete keys via deep-merge)
-  async function clearConfigKey(fullConfig: Config) {
-    if (!directory) {
+  function configFilePath() {
+    if (!directory) return null
+    return `${directory.replace(/\/$/, "")}/opencode.json`
+  }
+
+  // Write the full config to opencode.json directly (used when clearing keys
+  // or full-file saves, since the PATCH API cannot delete keys via deep-merge)
+  async function writeConfigFile(content: string): Promise<boolean> {
+    const path = configFilePath()
+    if (!path) {
       setSaving(false)
-      return
+      return false
     }
-    const path = `${directory.replace(/\/$/, "")}/opencode.json`
-    const ok = await writeFile(basePath.serverUrl, path, JSON.stringify(fullConfig, null, 2))
+    const ok = await writeFile(basePath.serverUrl, path, content)
     setSaving(false)
     if (ok) {
       await config.refresh()
       showSaved()
+      return true
     }
+    setJsonError("Failed to write opencode.json. Changes were not saved.")
+    return false
   }
 
   // ── Tool toggle handlers ──
@@ -2343,9 +2351,8 @@ function ProjectConfigTab() {
     }
     setJsonError(null)
     setSaving(true)
-    const result = await config.updateProject(parsed as Config)
-    setSaving(false)
-    if (result) showSaved()
+    // Write the full file directly so removed keys are actually deleted
+    await writeConfigFile(text)
   }
 
   return (
