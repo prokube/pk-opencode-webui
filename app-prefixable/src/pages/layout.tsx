@@ -1744,8 +1744,10 @@ export function Layout(props: ParentProps) {
         if (sess) {
           let walk = sess;
           while (walk?.parentID) {
+            const parent = sync.session.get(walk.parentID);
+            if (!parent) break; // stop if parent not in sync store yet
             bellSid = walk.parentID;
-            walk = sync.session.get(walk.parentID);
+            walk = parent;
           }
         }
         if (nc[bellSid] !== true) return;
