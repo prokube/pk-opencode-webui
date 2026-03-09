@@ -9,7 +9,7 @@ type EventHandler = (event: Event) => void
 interface EventContextValue {
   subscribe: (handler: EventHandler) => () => void
   status: Record<string, SessionStatus>
-  pendingQuestions: Record<string, QuestionRequest>
+  pendingQuestions: Record<string, QuestionRequest | undefined>
   dismissQuestion: (sessionID: string) => void
 }
 
