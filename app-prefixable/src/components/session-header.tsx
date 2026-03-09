@@ -245,8 +245,8 @@ export function SessionHeader(props: SessionHeaderProps) {
           <PanelBottom class="w-4 h-4" />
         </button>
 
-        {/* Notification toggle — hidden when Notification API is unsupported */}
-        <Show when={typeof window !== "undefined" && "Notification" in window}>
+        {/* Notification toggle — only for root sessions and hidden when Notification API is unsupported */}
+        <Show when={!parentId() && typeof window !== "undefined" && "Notification" in window}>
           <div class="relative">
             <button
               onClick={props.onToggleNotify}

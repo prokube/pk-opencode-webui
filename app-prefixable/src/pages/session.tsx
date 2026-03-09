@@ -43,7 +43,7 @@ import {
   ImageAttachments,
   type ImageAttachment,
 } from "../components/image-attachments";
-import { readNotifyMap, writeNotifyMap } from "../utils/notify";
+import { isSessionNotifyEnabled, setSessionNotifyEnabled } from "../utils/notify";
 
 const ACCEPTED_TYPES = [
   "image/png",
@@ -215,33 +215,24 @@ export function Session() {
   const lastEsc = { ts: 0 };
 
   // --- Notification toggle (per-session, persisted in localStorage) ---
-  const [notifyEnabled, setNotifyEnabled] = createSignal(
-    (() => {
-      const id = params.id;
-      if (!id) return false;
-      return readNotifyMap()[id] === true;
-    })(),
-  );
+  const [notifyEnabled, setNotifyEnabled] = createSignal(false);
   const [notifyDenied, setNotifyDenied] = createSignal(false);
   const deniedTimer = { id: null as ReturnType<typeof setTimeout> | null };
   onCleanup(() => { if (deniedTimer.id !== null) clearTimeout(deniedTimer.id) });
 
   // Re-read notification state when session changes
   createEffect(() => {
-    const id = params.id;
-    setNotifyEnabled(id ? readNotifyMap()[id] === true : false);
+    setNotifyEnabled(isSessionNotifyEnabled(session()));
     setNotifyDenied(false);
   });
 
   function toggleNotify() {
-    const id = sessionId();
-    if (!id) return;
+    const currentSession = session();
+    if (!currentSession) return;
 
     // Turning off
     if (notifyEnabled()) {
-      const map = readNotifyMap();
-      delete map[id];
-      writeNotifyMap(map);
+      setSessionNotifyEnabled(session(), false);
       setNotifyEnabled(false);
       setNotifyDenied(false);
       return;
@@ -252,9 +243,7 @@ export function Session() {
 
     const perm = Notification.permission;
     if (perm === "granted") {
-      const map = readNotifyMap();
-      map[id] = true;
-      writeNotifyMap(map);
+      setSessionNotifyEnabled(currentSession, true);
       setNotifyEnabled(true);
       return;
     }
@@ -267,9 +256,7 @@ export function Session() {
     // permission === "default" — request
     Notification.requestPermission().then((result) => {
       if (result === "granted") {
-        const map = readNotifyMap();
-        map[id] = true;
-        writeNotifyMap(map);
+        setSessionNotifyEnabled(session(), true);
         setNotifyEnabled(true);
         return;
       }
