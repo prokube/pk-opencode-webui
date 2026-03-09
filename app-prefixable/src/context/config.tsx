@@ -37,9 +37,10 @@ export function ConfigProvider(props: ParentProps) {
     if (sdk.directory) {
       try {
         const projRes = await sdk.client.config.get()
-        if (projRes?.data) setProject(reconcile(projRes.data as Config))
+        setProject(reconcile((projRes?.data as Config) ?? {}))
       } catch (e) {
         console.error("[Config] Failed to fetch project config:", e)
+        setProject(reconcile({}))
         errors.push("project")
       }
     } else {
@@ -47,9 +48,10 @@ export function ConfigProvider(props: ParentProps) {
     }
     try {
       const globalRes = await sdk.client.global.config.get()
-      if (globalRes?.data) setGlobal(reconcile(globalRes.data as Config))
+      setGlobal(reconcile((globalRes?.data as Config) ?? {}))
     } catch (e) {
       console.error("[Config] Failed to fetch global config:", e)
+      setGlobal(reconcile({}))
       errors.push("global")
     }
     if (errors.length > 0) {
@@ -95,14 +97,23 @@ export function ConfigProvider(props: ParentProps) {
   onMount(() => {
     refresh()
 
+    let refreshTimer: number | undefined
+
     // Refresh config when server reconnects (e.g. after config file changes)
     const unsub = events.subscribe((event) => {
       if (event.type === "server.connected") {
-        setTimeout(() => refresh(), 500)
+        if (refreshTimer !== undefined) clearTimeout(refreshTimer)
+        refreshTimer = window.setTimeout(() => {
+          refreshTimer = undefined
+          refresh()
+        }, 500)
       }
     })
 
-    return unsub
+    return () => {
+      unsub()
+      if (refreshTimer !== undefined) clearTimeout(refreshTimer)
+    }
   })
 
   return (

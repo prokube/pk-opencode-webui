@@ -156,12 +156,17 @@ export function ProviderProvider(props: ParentProps) {
     const targetProvider = hasValidConfigModel ? parsedProvider : FALLBACK_PROVIDER
     const targetModel = hasValidConfigModel ? parsedModel : FALLBACK_MODEL
 
+    const existing = store.modelsByAgent[defaultAgent]
+    const isFallback = existing
+      && existing.providerID === FALLBACK_PROVIDER
+      && existing.modelID === FALLBACK_MODEL
+
     let modelSet = false
     if (data.connected.includes(targetProvider)) {
       const provider = data.all.find((p) => p.id === targetProvider)
       if (provider && provider.models[targetModel]) {
-        // Only set default model if not already set (localStorage takes priority)
-        if (!store.modelsByAgent[defaultAgent]) {
+        // Set if not yet selected, or if config specifies a model and current is just the fallback
+        if (!existing || (hasValidConfigModel && isFallback)) {
           setStore("modelsByAgent", defaultAgent, { providerID: targetProvider, modelID: targetModel })
           modelSet = true
         }
@@ -169,7 +174,7 @@ export function ProviderProvider(props: ParentProps) {
     }
 
     // Fallback: if config model's provider isn't connected or model doesn't exist, try the hardcoded default
-    if (!modelSet && hasValidConfigModel && !store.modelsByAgent[defaultAgent]) {
+    if (!modelSet && hasValidConfigModel && (!existing || isFallback)) {
       if (data.connected.includes(FALLBACK_PROVIDER)) {
         const provider = data.all.find((p) => p.id === FALLBACK_PROVIDER)
         if (provider && provider.models[FALLBACK_MODEL]) {
