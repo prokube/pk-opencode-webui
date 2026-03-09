@@ -72,6 +72,7 @@ export function MCPProvider(props: ParentProps) {
   const [loading, setLoading] = createSignal(true)
   const [projectOverrides, setProjectOverrides] = createSignal<Record<string, McpProjectOverride>>({})
   const [overrideLoadingSet, setOverrideLoadingSet] = createSignal<Set<string>>(new Set())
+  let refreshSeq = 0
 
   function isPlainObject(v: unknown): v is Record<string, unknown> {
     return typeof v === "object" && v !== null && !Array.isArray(v)
@@ -97,6 +98,8 @@ export function MCPProvider(props: ParentProps) {
   }
 
   async function refresh() {
+    const seq = ++refreshSeq
+
     // Fetch MCP status and project overrides in parallel
     const statusPromise = client.mcp.status().catch((e) => {
       console.error("[MCP] Failed to fetch status:", e)
@@ -107,6 +110,9 @@ export function MCPProvider(props: ParentProps) {
       : Promise.resolve(null)
 
     const [statusRes, configRes] = await Promise.all([statusPromise, overridesPromise])
+
+    // Discard stale results if a newer refresh was started
+    if (seq !== refreshSeq) return
 
     if (statusRes?.data) {
       setServers(reconcile(statusRes.data as Record<string, MCPStatus>))
