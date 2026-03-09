@@ -1,10 +1,10 @@
 import type { QuestionRequest, Session } from "../sdk/client"
 
 /**
- * Generic BFS tree-walk through session hierarchy.
- * Starting from `sessionID`, walks through all descendant sessions
- * (children, grandchildren, etc.) and returns the first matching request.
- * The current session's own requests take priority over children's.
+ * Single-pass BFS tree-walk through session hierarchy.
+ * Starting from `sessionID`, checks the current session first, then walks
+ * through all descendant sessions (children, grandchildren, etc.) and returns
+ * the first matching request found. Returns immediately on first match.
  */
 function sessionTreeRequest<T>(
   sessions: Session[],
@@ -13,7 +13,10 @@ function sessionTreeRequest<T>(
 ) {
   if (!sessionID) return
 
-  // Build parent→children lookup map
+  // Check the current session first (highest priority)
+  if (requests[sessionID] !== undefined) return requests[sessionID]
+
+  // Build parent->children lookup map
   const children = sessions.reduce((acc, s) => {
     if (!s.parentID) return acc
     const list = acc.get(s.parentID)
@@ -22,23 +25,19 @@ function sessionTreeRequest<T>(
     return acc
   }, new Map<string, string[]>())
 
-  // BFS: current session first, then children, then grandchildren
+  // BFS through descendants, returning on first match
   const seen = new Set([sessionID])
   const queue = [sessionID]
-  for (const id of queue) {
-    const list = children.get(id)
+  for (let i = 0; i < queue.length; i++) {
+    const list = children.get(queue[i])
     if (!list) continue
     for (const child of list) {
       if (seen.has(child)) continue
       seen.add(child)
+      if (requests[child] !== undefined) return requests[child]
       queue.push(child)
     }
   }
-
-  // Return first matching request found in BFS order
-  const match = queue.find((id) => requests[id] !== undefined)
-  if (!match) return
-  return requests[match]
 }
 
 /**

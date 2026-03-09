@@ -54,6 +54,7 @@ export function EventProvider(props: ParentProps) {
         if (event.type === "session.status") {
           const props = event.properties
           if (props?.sessionID && props?.status) {
+            sseSeenStatuses.add(props.sessionID as string)
             setStatus(props.sessionID, props.status)
           }
         }
@@ -62,12 +63,14 @@ export function EventProvider(props: ParentProps) {
         if (event.type === "question.asked") {
           const q = event.properties as QuestionRequest
           if (q?.sessionID) {
+            sseSeenQuestions.add(q.sessionID)
             setPendingQuestions(q.sessionID, q)
           }
         }
         if (event.type === "question.replied" || event.type === "question.rejected") {
           const q = event.properties as { sessionID?: string }
           if (q?.sessionID) {
+            sseSeenQuestions.add(q.sessionID)
             setPendingQuestions(produce((map) => { delete map[q.sessionID!] }))
           }
         }
@@ -96,24 +99,32 @@ export function EventProvider(props: ParentProps) {
     }
   }
 
-  // Seed initial state (questions + statuses) then connect to SSE.
-  // Seed first to avoid race where replied/status events arrive before the list resolves.
+  // Connect SSE and seed initial state concurrently. SSE is connected first so
+  // no events are missed during the HTTP flight. The HTTP seed only applies
+  // entries for sessions that haven't already been touched by a live SSE event,
+  // preventing stale HTTP snapshots from overwriting newer SSE updates.
+  const sseSeenQuestions = new Set<string>()
+  const sseSeenStatuses = new Set<string>()
+
   onMount(() => {
-    if (!directory) { connect(); return }
-    Promise.all([
-      client.question.list({ directory })
-        .then((res) => {
-          const questions = Array.isArray(res.data) ? res.data : []
-          for (const q of questions) setPendingQuestions(q.sessionID, q)
-        })
-        .catch((err) => console.error("[Events] Failed to load questions:", err)),
-      client.session.status({ directory })
-        .then((res) => {
-          const statuses = (res.data ?? {}) as Record<string, SessionStatus>
-          for (const [sessionID, s] of Object.entries(statuses)) setStatus(sessionID, s)
-        })
-        .catch((err) => console.error("[Events] Failed to load statuses:", err)),
-    ]).finally(() => connect())
+    connect()
+    if (!directory) return
+    client.question.list({ directory })
+      .then((res) => {
+        const questions = Array.isArray(res.data) ? res.data : []
+        for (const q of questions) {
+          if (!sseSeenQuestions.has(q.sessionID)) setPendingQuestions(q.sessionID, q)
+        }
+      })
+      .catch((err) => console.error("[Events] Failed to load questions:", err))
+    client.session.status({ directory })
+      .then((res) => {
+        const statuses = (res.data ?? {}) as Record<string, SessionStatus>
+        for (const [sessionID, s] of Object.entries(statuses)) {
+          if (!sseSeenStatuses.has(sessionID)) setStatus(sessionID, s)
+        }
+      })
+      .catch((err) => console.error("[Events] Failed to load statuses:", err))
   })
 
   onCleanup(() => {
