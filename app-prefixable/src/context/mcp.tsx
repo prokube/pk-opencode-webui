@@ -154,6 +154,7 @@ export function MCPProvider(props: ParentProps) {
   async function connect(name: string) {
     try {
       await client.mcp.connect({ name })
+      await client.global.config.update({ config: { mcp: { [name]: { enabled: true } } } })
       await refresh()
     } catch (e) {
       console.error("[MCP] Failed to connect:", name, e)
@@ -163,6 +164,7 @@ export function MCPProvider(props: ParentProps) {
   async function disconnect(name: string) {
     try {
       await client.mcp.disconnect({ name })
+      await client.global.config.update({ config: { mcp: { [name]: { enabled: false } } } })
       await refresh()
     } catch (e) {
       console.error("[MCP] Failed to disconnect:", name, e)
