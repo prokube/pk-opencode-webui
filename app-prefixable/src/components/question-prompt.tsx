@@ -2,11 +2,14 @@ import { createSignal, createMemo, For, Show, onMount, onCleanup } from "solid-j
 import { Button } from "./ui/button"
 import { Markdown } from "./markdown"
 import type { QuestionRequest } from "../sdk/client"
+import { Users } from "lucide-solid"
 
 interface Props {
   request: QuestionRequest
   onReply: (answers: string[][]) => void
   onReject: () => void
+  /** When true, shows a sub-agent indicator in the header */
+  fromSubAgent?: boolean
 }
 
 export function QuestionPrompt(props: Props) {
@@ -200,9 +203,20 @@ export function QuestionPrompt(props: Props) {
           "border-bottom": "1px solid var(--border-base)",
         }}
       >
-        <span class="text-sm font-medium" style={{ color: "var(--text-interactive-base)" }}>
-          Question from AI
-        </span>
+        <div class="flex items-center gap-2">
+          <span class="text-sm font-medium" style={{ color: "var(--text-interactive-base)" }}>
+            Question from AI
+          </span>
+          <Show when={props.fromSubAgent}>
+            <span
+              class="inline-flex items-center gap-1 text-xs px-1.5 py-0.5 rounded"
+              style={{ background: "var(--background-base)", color: "var(--text-interactive-base)" }}
+            >
+              <Users class="w-3 h-3" />
+              sub-agent
+            </span>
+          </Show>
+        </div>
         <button
           onClick={props.onReject}
           class="text-xs px-2 py-1 rounded transition-colors"

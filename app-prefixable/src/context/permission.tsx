@@ -3,6 +3,8 @@ import { createStore, produce } from "solid-js/store"
 import type { PermissionRequest } from "../sdk/client"
 import { useSDK } from "./sdk"
 import { useEvents } from "./events"
+import { useSync } from "./sync"
+import { buildChildMap, sessionDescendantIds } from "../utils/session-tree-request"
 
 interface PermissionContextValue {
   pending: () => PermissionRequest[]
@@ -28,6 +30,7 @@ const RESPONDED_CAP = 1000
 export function PermissionProvider(props: ParentProps) {
   const { client, directory } = useSDK()
   const events = useEvents()
+  const sync = useSync()
 
   // Track pending permission requests
   const [permissions, setPermissions] = createStore<Record<string, PermissionRequest>>({})
@@ -151,19 +154,44 @@ export function PermissionProvider(props: ParentProps) {
 
   const pending = createMemo(() => Object.values(permissions))
 
-  // Group pending permissions by session for efficient lookups
+  // Group pending permissions by sessionID for O(1) lookup per session.
   const pendingBySession = createMemo(() => {
     const map = new Map<string, PermissionRequest[]>()
-    for (const p of pending()) {
-      const list = map.get(p.sessionID) ?? []
-      list.push(p)
-      map.set(p.sessionID, list)
+    for (const perm of pending()) {
+      const list = map.get(perm.sessionID)
+      if (list) list.push(perm)
+      if (!list) map.set(perm.sessionID, [perm])
     }
     return map
   })
 
+  // Memoize child map once per session-list change so descendant lookups
+  // don't rebuild it on every call (called per-row in sidebar).
+  const children = createMemo(() => buildChildMap(sync.sessions()))
+
+  // Cache descendant ID sets per session to avoid BFS walks on every render.
+  // Recomputed when the session list changes (child map changes).
+  const descendantsCache = createMemo(() => {
+    const map = new Map<string, Set<string>>()
+    const cm = children()
+    for (const s of sync.sessions()) {
+      map.set(s.id, sessionDescendantIds(sync.sessions(), s.id, cm))
+    }
+    return map
+  })
+
+  // Walk the session tree to include permissions from descendant sessions.
+  // Returns all permissions for the given session and its children/grandchildren.
+  // Uses precomputed descendant sets + pendingBySession map for O(descendants) per call.
   function pendingForSession(sessionID: string) {
-    return pendingBySession().get(sessionID) ?? []
+    const ids = descendantsCache().get(sessionID) ?? sessionDescendantIds(sync.sessions(), sessionID, children())
+    const bySession = pendingBySession()
+    const result: PermissionRequest[] = []
+    for (const id of ids) {
+      const perms = bySession.get(id)
+      if (perms) result.push(...perms)
+    }
+    return result
   }
 
   function toggleAutoAccept() {

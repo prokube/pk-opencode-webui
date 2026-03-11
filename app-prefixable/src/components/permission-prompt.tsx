@@ -1,13 +1,15 @@
 import { createSignal, createMemo, For, Show, onMount, onCleanup } from "solid-js"
 import { Button } from "./ui/button"
 import type { PermissionRequest } from "../sdk/client"
-import { FileEdit, Terminal, FileText, AlertTriangle, Check, X, CheckCheck } from "lucide-solid"
+import { FileEdit, Terminal, FileText, AlertTriangle, Check, X, CheckCheck, Users } from "lucide-solid"
 
 interface Props {
   requests: PermissionRequest[]
   onRespond: (id: string, response: "once" | "always" | "reject") => void
   onAutoAccept: () => void
   autoAcceptEnabled: boolean
+  /** The session ID the user is viewing. When a request's sessionID differs, show sub-agent badge. */
+  currentSessionID?: string
 }
 
 function getPermissionIcon(permission: string) {
@@ -142,6 +144,7 @@ export function PermissionPrompt(props: Props) {
             {(req, index) => {
               const Icon = getPermissionIcon(req.permission)
               const active = () => index() === selected()
+              const fromChild = () => !!props.currentSessionID && req.sessionID !== props.currentSessionID
               return (
                 <button
                   onClick={() => setSelected(index())}
@@ -159,8 +162,13 @@ export function PermissionPrompt(props: Props) {
                 >
                   <Icon class="w-4 h-4 shrink-0" style={{ color: "var(--text-interactive-base)" }} />
                   <div class="flex-1 min-w-0">
-                    <div class="text-sm truncate" style={{ color: "var(--text-strong)" }}>
+                    <div class="text-sm truncate flex items-center gap-1.5" style={{ color: "var(--text-strong)" }}>
                       {getPermissionLabel(req.permission)}
+                      <Show when={fromChild()}>
+                        <span role="img" title="From sub-agent" aria-label="Permission request from sub-agent">
+                          <Users class="w-3 h-3 shrink-0" style={{ color: "var(--text-interactive-base)" }} />
+                        </span>
+                      </Show>
                     </div>
                     <div class="text-xs truncate" style={{ color: "var(--text-weak)" }}>
                       {getPermissionDescription(req)}
@@ -177,6 +185,7 @@ export function PermissionPrompt(props: Props) {
       <Show when={current()}>
         {(perm) => {
           const Icon = getPermissionIcon(perm().permission)
+          const fromChild = () => !!props.currentSessionID && perm().sessionID !== props.currentSessionID
           return (
             <div class="p-4">
               <div class="flex items-start gap-3 mb-4">
@@ -187,8 +196,17 @@ export function PermissionPrompt(props: Props) {
                   <Icon class="w-5 h-5" style={{ color: "var(--text-interactive-base)" }} />
                 </div>
                 <div class="flex-1 min-w-0">
-                  <div class="text-sm font-medium mb-1" style={{ color: "var(--text-strong)" }}>
+                  <div class="text-sm font-medium mb-1 flex items-center gap-1.5" style={{ color: "var(--text-strong)" }}>
                     {getPermissionLabel(perm().permission)}
+                    <Show when={fromChild()}>
+                      <span
+                        class="inline-flex items-center gap-1 text-xs px-1.5 py-0.5 rounded"
+                        style={{ background: "var(--surface-inset)", color: "var(--text-interactive-base)" }}
+                      >
+                        <Users class="w-3 h-3" />
+                        sub-agent
+                      </span>
+                    </Show>
                   </div>
                   <div class="text-sm break-all" style={{ color: "var(--text-base)" }}>
                     {getPermissionDescription(perm())}
