@@ -856,7 +856,7 @@ export function Layout(props: ParentProps) {
   );
 
   // Precompute child map once per session-list change so per-row helpers
-  // (sessionHasQuestion, pendingForSession) don't rebuild it each time.
+  // like sessionHasQuestion don't rebuild it each time.
   const childMap = createMemo(() => buildChildMap(sync.sessions()));
 
   // Flat ordered list of session IDs for keyboard navigation (skips group headers)
