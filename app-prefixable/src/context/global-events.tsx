@@ -67,6 +67,10 @@ export function GlobalEventsProvider(props: ParentProps & {
     busySessions: Set<string>
     /** Known sub-agent session IDs — events from these are ignored */
     subAgents: Set<string>
+    /** Root session IDs from the initial seed — used to filter sub-agents
+     *  that existed before the SSE connection started (session.created
+     *  events are only observed for new sessions). Null until seeded. */
+    rootSessions: Set<string> | null
   }>()
 
   function getTracking(dir: string) {
@@ -77,6 +81,7 @@ export function GlobalEventsProvider(props: ParentProps & {
       questionSessions: new Set<string>(),
       busySessions: new Set<string>(),
       subAgents: new Set<string>(),
+      rootSessions: null as Set<string> | null,
     }
     perDir.set(dir, tracking)
     return tracking
@@ -174,10 +179,11 @@ export function GlobalEventsProvider(props: ParentProps & {
 
       if (event.type === "permission.asked") {
         const sid = (event.properties as { sessionID?: string })?.sessionID
-        if (sid && !tracking.subAgents.has(sid)) {
-          tracking.permissionSessions.add(sid)
-          recalcAlerts(dir)
-        }
+        if (!sid) return
+        if (tracking.subAgents.has(sid)) return
+        if (tracking.rootSessions && !tracking.rootSessions.has(sid)) return
+        tracking.permissionSessions.add(sid)
+        recalcAlerts(dir)
         return
       }
 
@@ -195,10 +201,11 @@ export function GlobalEventsProvider(props: ParentProps & {
 
       if (event.type === "question.asked") {
         const sid = (event.properties as { sessionID?: string })?.sessionID
-        if (sid && !tracking.subAgents.has(sid)) {
-          tracking.questionSessions.add(sid)
-          recalcAlerts(dir)
-        }
+        if (!sid) return
+        if (tracking.subAgents.has(sid)) return
+        if (tracking.rootSessions && !tracking.rootSessions.has(sid)) return
+        tracking.questionSessions.add(sid)
+        recalcAlerts(dir)
         return
       }
 
@@ -216,8 +223,9 @@ export function GlobalEventsProvider(props: ParentProps & {
         const sid = props?.sessionID
         const type = props?.status?.type
         if (!sid || !type) return
-        // Skip sub-agent sessions
+        // Skip sub-agent sessions (known or not in root set)
         if (tracking.subAgents.has(sid)) return
+        if (tracking.rootSessions && !tracking.rootSessions.has(sid)) return
 
         if (type === "busy" || type === "retry") {
           tracking.busySessions.add(sid)
@@ -314,9 +322,32 @@ export function GlobalEventsProvider(props: ParentProps & {
     // Ensure tracking exists before any async work so the perDir.has(dir)
     // guards in seed functions correctly detect disconnection (rather than
     // failing because the entry was never created).
-    getTracking(dir)
+    const tracking = getTracking(dir)
     const roots = await fetchRootSessionIds(dir)
     if (!perDir.has(dir)) return  // disconnected while fetching
+
+    // Store root session IDs so SSE handlers can filter pre-existing
+    // sub-agents that we never saw a session.created event for.
+    tracking.rootSessions = roots
+
+    // Seed subAgents from all sessions: any session with a parentID is a
+    // sub-agent. This covers sessions that existed before the SSE connection.
+    if (roots) {
+      await fetch(prefix(`/session?directory=${encodeURIComponent(dir)}`))
+        .then((r) => {
+          if (!r.ok) return
+          return r.json()
+        })
+        .then((data) => {
+          if (!data || !perDir.has(dir)) return
+          const all = Array.isArray(data) ? data : (data?.data ?? [])
+          for (const s of all) {
+            if (s?.parentID && s?.id) tracking.subAgents.add(s.id as string)
+          }
+        })
+        .catch(() => {})
+    }
+
     await Promise.allSettled([
       seedPermissions(dir, roots),
       seedQuestions(dir, roots),
@@ -339,7 +370,7 @@ export function GlobalEventsProvider(props: ParentProps & {
         for (const p of perms) {
           // When roots is null (fetch failed), accept all sessions as a
           // graceful degradation instead of clearing everything.
-          if (p?.sessionID && (roots === null || roots.has(p.sessionID))) fetched.add(p.sessionID)
+          if (p?.sessionID && !tracking.subAgents.has(p.sessionID) && (roots === null || roots.has(p.sessionID))) fetched.add(p.sessionID)
         }
         // Merge: use the fetched set as the base, but preserve any sessions
         // that were added by SSE events AFTER we started the fetch (i.e.,
@@ -367,7 +398,7 @@ export function GlobalEventsProvider(props: ParentProps & {
         const questions = Array.isArray(data) ? data : (data?.data ?? [])
         tracking.questionSessions.clear()
         for (const q of questions) {
-          if (q?.sessionID && (roots === null || roots.has(q.sessionID))) tracking.questionSessions.add(q.sessionID)
+          if (q?.sessionID && !tracking.subAgents.has(q.sessionID) && (roots === null || roots.has(q.sessionID))) tracking.questionSessions.add(q.sessionID)
         }
         recalcAlerts(dir)
       })
@@ -384,7 +415,7 @@ export function GlobalEventsProvider(props: ParentProps & {
         const statuses = (data?.data ?? data ?? {}) as Record<string, { type?: string }>
         tracking.busySessions.clear()
         for (const [sid, s] of Object.entries(statuses)) {
-          if ((roots === null || roots.has(sid)) && (s?.type === "busy" || s?.type === "retry")) {
+          if (!tracking.subAgents.has(sid) && (roots === null || roots.has(sid)) && (s?.type === "busy" || s?.type === "retry")) {
             tracking.busySessions.add(sid)
           }
         }
