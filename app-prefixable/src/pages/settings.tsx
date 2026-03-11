@@ -421,26 +421,24 @@ Add your project-specific instructions here.
       }
     }
 
-    // Update opencode.json to include the instructions field
-    const configPath = `${directory.replace(/\/$/, "")}/opencode.json`
-    // Read existing config if any
-    const existingRes = await client.file.read({ path: "opencode.json", directory }).catch(() => null)
-    const existingData = existingRes?.data as { content?: string } | undefined
-    const existing = (() => {
-      if (!existingData?.content) return {}
-      try { return JSON.parse(existingData.content) } catch { return {} }
-    })()
-    const existingInstructions = (existing as { instructions?: string[] }).instructions ?? []
-    const hasAgents = existingInstructions.includes("AGENTS.md")
-    const updated = {
-      ...existing,
-      instructions: hasAgents ? existingInstructions : [...existingInstructions, "AGENTS.md"],
-    }
-    const configOk = await writeFile(basePath.serverUrl, configPath, JSON.stringify(updated, null, 2))
-    if (!configOk) {
-      setInstructionError("Failed to update opencode.json")
+    // Update config via backend API so the change is immediately visible
+    const configRes = await client.config.get().catch(() => null)
+    if (!configRes?.data) {
+      setInstructionError("Failed to fetch project config")
       setInstructionCreating(false)
       return
+    }
+    const cfg = configRes.data as Config
+    const existingInstructions = cfg.instructions ?? []
+    const hasAgents = existingInstructions.includes("AGENTS.md")
+    if (!hasAgents) {
+      const instructions = [...existingInstructions, "AGENTS.md"]
+      const updateRes = await client.config.update({ config: { instructions } }).catch(() => null)
+      if (!updateRes?.data) {
+        setInstructionError("Failed to update project instructions. Please try again.")
+        setInstructionCreating(false)
+        return
+      }
     }
 
     setInstructionCreating(false)
