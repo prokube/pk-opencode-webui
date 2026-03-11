@@ -127,9 +127,12 @@ export function rootAncestorId(
   getSession: (id: string) => Session | undefined,
   sessionID: string,
 ): string {
+  const visited = new Set<string>([sessionID])
   let root = sessionID
   let walk = getSession(sessionID)
   while (walk?.parentID) {
+    if (visited.has(walk.parentID)) break // cycle protection
+    visited.add(walk.parentID)
     const parent = getSession(walk.parentID)
     if (!parent) break
     root = walk.parentID
