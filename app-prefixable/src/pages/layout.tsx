@@ -77,6 +77,7 @@ import { ConstrainDragXAxis } from "../utils/solid-dnd";
 import { readNotifyMap, cleanupNotifyState, NOTIFY_STORAGE_KEY } from "../utils/notify";
 import { readSoundSettings, playSound, primeAudioContext, SOUND_STORAGE_KEY } from "../utils/sound";
 import { dispatchStorageEvent } from "../utils/storage";
+import { sessionHasQuestion } from "../utils/session-tree-request";
 
 // Storage keys
 const PROJECTS_STORAGE_KEY = "opencode.projects";
@@ -448,7 +449,7 @@ export function Layout(props: ParentProps) {
             when={permission.pendingForSession(session.id).length > 0}
             fallback={
               <Show
-                when={!!events.pendingQuestions[session.id]}
+                when={sessionHasQuestion(sync.sessions(), events.pendingQuestions, session.id)}
                 fallback={
                   <Show
                     when={
@@ -1689,27 +1690,52 @@ export function Layout(props: ParentProps) {
         if (type === "idle" && busyTracker[sid]) {
           busyTracker[sid] = false;
 
-          // Check if bell is enabled for this session
-          if (notifyCache()[sid] !== true) return;
-
+          // Walk up the parentID chain to find the root ancestor for bell state.
           const sess = sync.session.get(sid);
+          const nc = notifyCache();
+          let bellSid = sid;
+          if (sess) {
+            let walk = sess;
+            while (walk?.parentID) {
+              const parent = sync.session.get(walk.parentID);
+              if (!parent) break;
+              bellSid = walk.parentID;
+              walk = parent;
+            }
+          }
+          if (nc[bellSid] !== true) return;
+
           const title = sess?.title || "Task complete";
           fireNotification(sid, title, getSessionSummary(sid), `session-complete-${sid}`);
         }
         return;
       }
 
-      // Permission request alarms (keyed by request ID so multiple requests per session each fire)
+      // Permission request alarms (keyed by request ID so multiple requests per session each fire).
+      // For child/grandchild sessions, walk the parentID chain to find the root
+      // ancestor and check its bell state, mirroring the question alarm logic.
       if (event.type === "permission.asked") {
         const props = event.properties as { id?: string; sessionID?: string };
         const sid = props.sessionID;
         const rid = props.id;
         if (!sid || !rid) return;
-        if (notifyCache()[sid] !== true) return;
         if (firedPermission.has(rid)) return;
-        firedPermission.add(rid);
 
         const sess = sync.session.get(sid);
+        const nc = notifyCache();
+        let bellSid = sid;
+        if (sess) {
+          let walk = sess;
+          while (walk?.parentID) {
+            const parent = sync.session.get(walk.parentID);
+            if (!parent) break;
+            bellSid = walk.parentID;
+            walk = parent;
+          }
+        }
+        if (nc[bellSid] !== true) return;
+        firedPermission.add(rid);
+
         const title = sess?.title || "Permission needed";
         fireNotification(sid, title, "A tool needs your approval to continue.", `session-permission-${rid}`);
         return;

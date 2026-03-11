@@ -3,6 +3,8 @@ import { createStore, produce } from "solid-js/store"
 import type { PermissionRequest } from "../sdk/client"
 import { useSDK } from "./sdk"
 import { useEvents } from "./events"
+import { useSync } from "./sync"
+import { sessionPermissionRequests } from "../utils/session-tree-request"
 
 interface PermissionContextValue {
   pending: () => PermissionRequest[]
@@ -28,6 +30,7 @@ const RESPONDED_CAP = 1000
 export function PermissionProvider(props: ParentProps) {
   const { client, directory } = useSDK()
   const events = useEvents()
+  const sync = useSync()
 
   // Track pending permission requests
   const [permissions, setPermissions] = createStore<Record<string, PermissionRequest>>({})
@@ -151,19 +154,10 @@ export function PermissionProvider(props: ParentProps) {
 
   const pending = createMemo(() => Object.values(permissions))
 
-  // Group pending permissions by session for efficient lookups
-  const pendingBySession = createMemo(() => {
-    const map = new Map<string, PermissionRequest[]>()
-    for (const p of pending()) {
-      const list = map.get(p.sessionID) ?? []
-      list.push(p)
-      map.set(p.sessionID, list)
-    }
-    return map
-  })
-
+  // Walk the session tree to include permissions from descendant sessions.
+  // Returns all permissions for the given session and its children/grandchildren.
   function pendingForSession(sessionID: string) {
-    return pendingBySession().get(sessionID) ?? []
+    return sessionPermissionRequests(sync.sessions(), pending(), sessionID)
   }
 
   function toggleAutoAccept() {

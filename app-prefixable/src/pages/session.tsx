@@ -1644,34 +1644,37 @@ export function Session() {
                 class="px-6 pb-4"
                 style={{ background: "var(--background-stronger)" }}
               >
-                <Show when={q().sessionID !== sessionId()}>
-                  <div
-                    class="text-xs mb-2 px-1"
-                    style={{ color: "var(--text-dimmed)" }}
-                  >
-                    Question from sub-agent
-                  </div>
-                </Show>
                 <QuestionPrompt
                   request={q()}
                   onReply={handleQuestionReply}
                   onReject={handleQuestionReject}
+                  fromSubAgent={q().sessionID !== sessionId()}
                 />
               </div>
             )}
           </Show>
 
-          {/* Permission Prompt - rendered outside timeline for proper focus */}
+          {/* Permission Prompt - rendered outside timeline for proper focus.
+              Uses session tree walk so child/grandchild permissions are surfaced here. */}
           <Show when={pendingPermissions().length > 0}>
             <div
               class="px-6 pb-4"
               style={{ background: "var(--background-stronger)" }}
             >
+              <Show when={pendingPermissions().some((p) => p.sessionID !== sessionId())}>
+                <div
+                  class="text-xs mb-2 px-1"
+                  style={{ color: "var(--text-dimmed)" }}
+                >
+                  Permission request from sub-agent
+                </div>
+              </Show>
               <PermissionPrompt
                 requests={pendingPermissions()}
                 onRespond={permission.respond}
                 onAutoAccept={permission.enableAutoAccept}
                 autoAcceptEnabled={permission.autoAcceptEnabled()}
+                currentSessionID={sessionId()}
               />
             </div>
           </Show>
