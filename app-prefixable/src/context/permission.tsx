@@ -4,7 +4,7 @@ import type { PermissionRequest } from "../sdk/client"
 import { useSDK } from "./sdk"
 import { useEvents } from "./events"
 import { useSync } from "./sync"
-import { sessionPermissionRequests } from "../utils/session-tree-request"
+import { buildChildMap, sessionDescendantIds } from "../utils/session-tree-request"
 
 interface PermissionContextValue {
   pending: () => PermissionRequest[]
@@ -154,10 +154,30 @@ export function PermissionProvider(props: ParentProps) {
 
   const pending = createMemo(() => Object.values(permissions))
 
+  // Group pending permissions by sessionID for O(1) lookup per session.
+  const pendingBySession = createMemo(() => {
+    const map = new Map<string, PermissionRequest[]>()
+    for (const perm of pending()) {
+      const list = map.get(perm.sessionID)
+      if (list) list.push(perm)
+      if (!list) map.set(perm.sessionID, [perm])
+    }
+    return map
+  })
+
   // Walk the session tree to include permissions from descendant sessions.
   // Returns all permissions for the given session and its children/grandchildren.
+  // Uses precomputed pendingBySession map so cost is O(descendants) not O(all permissions).
   function pendingForSession(sessionID: string) {
-    return sessionPermissionRequests(sync.sessions(), pending(), sessionID)
+    const children = buildChildMap(sync.sessions())
+    const ids = sessionDescendantIds(sync.sessions(), sessionID, children)
+    const bySession = pendingBySession()
+    const result: PermissionRequest[] = []
+    for (const id of ids) {
+      const perms = bySession.get(id)
+      if (perms) result.push(...perms)
+    }
+    return result
   }
 
   function toggleAutoAccept() {
