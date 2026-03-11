@@ -23,9 +23,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Filter sub-agent sessions from project activity badges (#162)
 - Prevent permission toggle from reverting after server.connected refresh (#161)
 - Use backend config API for instructions creation (#160)
-- Persist MCP server enabled state to config on toggle
-- Ensure MCP status refresh runs even if config update fails
-- Log warning on MCP config persistence failure
+- Persist MCP server enabled state to config on toggle (#160)
+- Ensure MCP status refresh runs even if config update fails (#160)
+- Log warning on MCP config persistence failure (#160)
 
 ## [0.8.1] - 2026-03-09
 

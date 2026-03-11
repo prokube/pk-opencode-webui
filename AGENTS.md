@@ -176,7 +176,7 @@ git commit -m "fix: description of what changed"
 
 ### Changelog
 
-Every PR must include a one bullet-line entry in `CHANGELOG.md` under the existing `## [Unreleased]` section. Add your bullet under the appropriate subheading (creating it only if it does not already exist):
+Every PR must include a single bullet-point entry (one line) in `CHANGELOG.md` under the existing `## [Unreleased]` section. Add your bullet under the appropriate subheading (creating it only if it does not already exist):
 
 - `### Added` for new features
 - `### Fixed` for bug fixes
@@ -292,7 +292,7 @@ gh pr create --title "docs: Documentation improvements" --body "Closes #79, clos
 │     - Push: git push -u origin issue-<n>                │
 │     - Create PR: gh pr create --title "..." --body "..." │
 │     - Link PR to issue in body: "Closes #<n>"           │
-│     - Request Copilot review: gh copilot-review <pr>    │
+│     - Request Copilot review: gh copilot-review <pr-number>│
 │                                                         │
 │  IF BLOCKED:                                            │
 │     - Commit any partial progress                       │
