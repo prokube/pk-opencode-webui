@@ -138,6 +138,17 @@ export function Session() {
   const [loadingHistory, setLoadingHistory] = createSignal(false);
   const [sessionId, setSessionId] = createSignal(params.id);
 
+  // Find the Nth-from-last user message (1-indexed: 1 = last, 2 = second-to-last)
+  function getNthLastUserMsg(msgs: DisplayMessage[], n: number) {
+    let count = 0;
+    for (let i = msgs.length - 1; i >= 0; i--) {
+      if (msgs[i].role !== "user") continue;
+      count++;
+      if (count === n) return msgs[i];
+    }
+    return undefined;
+  }
+
   // Extract text content from message parts with optional separator and truncation
   function textFromParts(parts: Part[], separator = " ", maxLen?: number) {
     const text = parts
@@ -447,17 +458,7 @@ export function Session() {
     const msgs = syncMessages();
     const hasMessages = msgs.length > 0;
     const isProcessing = processing();
-    // Find the Nth-from-last user message (1-indexed: 1 = last, 2 = second-to-last)
-    function nthLastUserMsg(n: number) {
-      let count = 0;
-      for (let i = msgs.length - 1; i >= 0; i--) {
-        if (msgs[i].role !== "user") continue;
-        count++;
-        if (count === n) return msgs[i];
-      }
-      return undefined;
-    }
-    const lastUserMsg = nthLastUserMsg(1);
+    const lastUserMsg = getNthLastUserMsg(msgs, 1);
 
     const commands: Command[] = [
       {
@@ -703,21 +704,15 @@ export function Session() {
   // implicitly removes everything after it.
   async function undoTurns(count: number) {
     const id = sessionId();
-    if (!id) return;
-    const msgs = syncMessages();
-    // Find the Nth-from-last user message
-    let found = 0;
-    let target: DisplayMessage | undefined;
-    for (let i = msgs.length - 1; i >= 0; i--) {
-      if (msgs[i].role !== "user") continue;
-      found++;
-      if (found === count) {
-        target = msgs[i];
-        break;
-      }
+    if (!id) {
+      showToast("No active session to undo");
+      return;
     }
+    const msgs = syncMessages();
+    const target = getNthLastUserMsg(msgs, count);
     if (!target) {
-      showToast(count === 1 ? "No user message to undo" : `Only ${found} user message${found === 1 ? "" : "s"} to undo`);
+      const total = msgs.filter((m) => m.role === "user").length;
+      showToast(count === 1 ? "No user message to undo" : `Only ${total} user message${total === 1 ? "" : "s"} to undo`);
       return;
     }
     try {
@@ -783,19 +778,6 @@ export function Session() {
   // Handle input changes to detect slash commands
   function handleInputChange(value: string) {
     setInput(value);
-
-    // Detect `/undo N` — revert N user turns at once
-    const undoMatch = value.match(/^\/undo\s+(\d+)\s*$/i);
-    if (undoMatch) {
-      const n = parseInt(undoMatch[1], 10);
-      if (n > 0) {
-        setInput("");
-        setShowSlashPopover(false);
-        setSlashQuery("");
-        undoTurns(n);
-        return;
-      }
-    }
 
     // Detect `/prompt <search>` — auto-open prompt picker with filter
     const promptMatch = value.match(/^\/prompt\s+(.*)$/i);
@@ -1212,6 +1194,18 @@ export function Session() {
   async function sendMessage(e: SubmitEvent) {
     e.preventDefault();
     const text = input().trim();
+
+    // Intercept `/undo N` — revert N user turns at once (explicit submit only)
+    const undoMatch = text.match(/^\/undo\s+(\d+)$/i);
+    if (undoMatch) {
+      const n = parseInt(undoMatch[1], 10);
+      if (n > 0) {
+        setInput("");
+        undoTurns(n);
+        return;
+      }
+    }
+
     const files = fileContext();
     const images = imageAttachments();
     if ((!text && files.length === 0 && images.length === 0) || loading() || inputBlocked())
