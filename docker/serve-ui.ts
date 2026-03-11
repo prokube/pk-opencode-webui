@@ -91,8 +91,11 @@ const server = Bun.serve<{ path: string; search: string }>({
       path = "/" + path
     }
 
-    // Kubeflow idle culling: GET /api/kernels returns synthetic kernel status
-    if (path === "/api/kernels" && req.method === "GET") {
+    // Kubeflow idle culling: /api/kernels must never update activity timestamp
+    if (path === "/api/kernels") {
+      if (req.method !== "GET") {
+        return new Response("Method Not Allowed", { status: 405, headers: { Allow: "GET" } })
+      }
       const idle = Date.now() - lastActivity >= 60_000
       const kernel = {
         id: "opencode-activity",
@@ -102,7 +105,10 @@ const server = Bun.serve<{ path: string; search: string }>({
         connections: 0,
       }
       return new Response(JSON.stringify([kernel]), {
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          "Cache-Control": "no-store",
+        },
       })
     }
 
