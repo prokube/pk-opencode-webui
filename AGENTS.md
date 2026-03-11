@@ -292,7 +292,8 @@ gh pr create --title "docs: Documentation improvements" --body "Closes #79, clos
 │     - Push: git push -u origin issue-<n>                │
 │     - Create PR: gh pr create --title "..." --body "..." │
 │     - Link PR to issue in body: "Closes #<n>"           │
-│     - Request Copilot review: gh copilot-review <pr-number>│
+│     - Request Copilot review:                           │
+│       gh copilot-review <pr-number>                     │
 │                                                         │
 │  IF BLOCKED:                                            │
 │     - Commit any partial progress                       │
