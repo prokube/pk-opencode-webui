@@ -68,6 +68,9 @@ function isPtyWebSocket(path: string): boolean {
   return /^\/pty\/[^/]+\/connect/.test(path)
 }
 
+// Track last non-polling activity for Kubeflow idle culling
+let lastActivity = Date.now()
+
 // Store for backend WebSocket connections (keyed by client WebSocket)
 const backendConnections = new WeakMap<object, WebSocket>()
 
@@ -87,6 +90,24 @@ const server = Bun.serve<{ path: string; search: string }>({
     if (!path.startsWith("/")) {
       path = "/" + path
     }
+
+    // Kubeflow idle culling: GET /api/kernels returns synthetic kernel status
+    if (path === "/api/kernels" && req.method === "GET") {
+      const idle = Date.now() - lastActivity >= 60_000
+      const kernel = {
+        id: "opencode-activity",
+        name: "opencode",
+        last_activity: new Date(lastActivity).toISOString(),
+        execution_state: idle ? "idle" : "busy",
+        connections: 0,
+      }
+      return new Response(JSON.stringify([kernel]), {
+        headers: { "Content-Type": "application/json" },
+      })
+    }
+
+    // Update activity timestamp for all non-polling requests
+    lastActivity = Date.now()
 
     // Handle WebSocket upgrade for PTY connections
     if (isPtyWebSocket(path)) {
