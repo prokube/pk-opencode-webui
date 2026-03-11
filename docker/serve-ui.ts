@@ -276,6 +276,7 @@ const server = Bun.serve<{ path: string; search: string }>({
 
     message(ws, message) {
       // Forward client messages to backend
+      lastActivity = Date.now()
       const backend = backendConnections.get(ws)
       if (backend?.readyState === WebSocket.OPEN) {
         backend.send(message)
