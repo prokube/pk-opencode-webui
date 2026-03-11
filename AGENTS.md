@@ -176,18 +176,15 @@ git commit -m "fix: description of what changed"
 
 ### Changelog
 
-Every PR must include a one-line entry in `CHANGELOG.md` under the `## [Unreleased]` section. Use the appropriate sub-heading:
+Every PR must include a one bullet-line entry in `CHANGELOG.md` under the existing `## [Unreleased]` section. Add your bullet under the appropriate subheading (creating it only if it does not already exist):
 
 - `### Added` for new features
 - `### Fixed` for bug fixes
 - `### Changed` for changes to existing functionality
 - `### Removed` for removed features
 
-Example entry:
+Example entry (add this bullet under the appropriate `### Added`/`### Fixed`/... subsection beneath `## [Unreleased]`):
 ```markdown
-## [Unreleased]
-
-### Fixed
 - Prevent permission toggle from reverting after refresh (#161)
 ```
 
@@ -295,10 +292,24 @@ gh pr create --title "docs: Documentation improvements" --body "Closes #79, clos
 │     - Push: git push -u origin issue-<n>                │
 │     - Create PR: gh pr create --title "..." --body "..." │
 │     - Link PR to issue in body: "Closes #<n>"           │
+│     - Request Copilot review: gh copilot-review <pr>    │
 │                                                         │
 │  IF BLOCKED:                                            │
 │     - Commit any partial progress                       │
 │     - Add comment to issue explaining blocker           │
+├─────────────────────────────────────────────────────────┤
+│  6. COPILOT REVIEW (after PR creation)                   │
+│     - ALWAYS request a Copilot review after creating PR │
+│       gh copilot-review <pr-number>                     │
+│     - Wait ~3 minutes for the review to complete        │
+│     - Check for inline comments:                        │
+│       gh api repos/:owner/:repo/pulls/<n>/comments      │
+│     - Address all review comments by pushing fixes      │
+│     - Re-request review after each fix push:            │
+│       gh copilot-review <pr-number>                     │
+│     - Repeat until the review generates no new comments │
+│     - Do NOT use `gh pr edit --add-reviewer copilot`    │
+│       (it does not work; use the extension instead)     │
 └─────────────────────────────────────────────────────────┘
 ```
 
