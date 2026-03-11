@@ -65,6 +65,12 @@ export function GlobalEventsProvider(props: ParentProps & {
     permissionSessions: Set<string>
     questionSessions: Set<string>
     busySessions: Set<string>
+    /** Known sub-agent session IDs — events from these are ignored */
+    subAgents: Set<string>
+    /** Root session IDs from the initial seed — used to filter sub-agents
+     *  that existed before the SSE connection started (session.created
+     *  events are only observed for new sessions). Null until seeded. */
+    rootSessions: Set<string> | null
   }>()
 
   function getTracking(dir: string) {
@@ -74,6 +80,8 @@ export function GlobalEventsProvider(props: ParentProps & {
       permissionSessions: new Set<string>(),
       questionSessions: new Set<string>(),
       busySessions: new Set<string>(),
+      subAgents: new Set<string>(),
+      rootSessions: null as Set<string> | null,
     }
     perDir.set(dir, tracking)
     return tracking
@@ -135,12 +143,51 @@ export function GlobalEventsProvider(props: ParentProps & {
 
       const tracking = getTracking(dir)
 
+      // Track sub-agent sessions so we can exclude them from badge counts.
+      // session.created includes the full Session object with parentID.
+      if (event.type === "session.created") {
+        const info = (event.properties as { info?: { id?: string; parentID?: string } })?.info
+        if (info?.id && info?.parentID) {
+          const sid = info.id
+          tracking.subAgents.add(sid)
+          // Retroactively clean up tracking sets in case out-of-order events
+          // (permission.asked/question.asked/session.status) arrived before
+          // session.created and added this sub-agent's ID.
+          let changed = false
+          if (tracking.permissionSessions.delete(sid)) changed = true
+          if (tracking.questionSessions.delete(sid)) changed = true
+          if (tracking.busySessions.delete(sid)) changed = true
+          if (changed) recalcAlerts(dir)
+        }
+        // Keep rootSessions up to date for new root sessions created after seeding
+        if (info?.id && !info?.parentID && tracking.rootSessions) {
+          tracking.rootSessions.add(info.id)
+        }
+        return
+      }
+
+      // Prune sub-agent (and its tracking state) when its session is deleted
+      if (event.type === "session.deleted") {
+        const info = (event.properties as { info?: { id?: string } })?.info
+        const sid = info?.id
+        if (sid) {
+          tracking.subAgents.delete(sid)
+          let changed = false
+          if (tracking.permissionSessions.delete(sid)) changed = true
+          if (tracking.questionSessions.delete(sid)) changed = true
+          if (tracking.busySessions.delete(sid)) changed = true
+          if (changed) recalcAlerts(dir)
+        }
+        return
+      }
+
       if (event.type === "permission.asked") {
         const sid = (event.properties as { sessionID?: string })?.sessionID
-        if (sid) {
-          tracking.permissionSessions.add(sid)
-          recalcAlerts(dir)
-        }
+        if (!sid) return
+        if (tracking.subAgents.has(sid)) return
+        if (tracking.rootSessions && !tracking.rootSessions.has(sid)) return
+        tracking.permissionSessions.add(sid)
+        recalcAlerts(dir)
         return
       }
 
@@ -151,17 +198,22 @@ export function GlobalEventsProvider(props: ParentProps & {
         if (existing) clearTimeout(existing)
         permReseedTimers.set(dir, setTimeout(() => {
           permReseedTimers.delete(dir)
-          seedPermissions(dir)
+          fetchRootSessionIds(dir).then((roots) => {
+            const tracking = perDir.get(dir)
+            if (tracking && roots) tracking.rootSessions = roots
+            seedPermissions(dir, roots)
+          })
         }, 300))
         return
       }
 
       if (event.type === "question.asked") {
         const sid = (event.properties as { sessionID?: string })?.sessionID
-        if (sid) {
-          tracking.questionSessions.add(sid)
-          recalcAlerts(dir)
-        }
+        if (!sid) return
+        if (tracking.subAgents.has(sid)) return
+        if (tracking.rootSessions && !tracking.rootSessions.has(sid)) return
+        tracking.questionSessions.add(sid)
+        recalcAlerts(dir)
         return
       }
 
@@ -179,6 +231,9 @@ export function GlobalEventsProvider(props: ParentProps & {
         const sid = props?.sessionID
         const type = props?.status?.type
         if (!sid || !type) return
+        // Skip sub-agent sessions (known or not in root set)
+        if (tracking.subAgents.has(sid)) return
+        if (tracking.rootSessions && !tracking.rootSessions.has(sid)) return
 
         if (type === "busy" || type === "retry") {
           tracking.busySessions.add(sid)
@@ -241,35 +296,97 @@ export function GlobalEventsProvider(props: ParentProps & {
     setAlerts(produce((draft) => { delete draft[dir] }))
   }
 
+  // Fetch root session IDs for a directory so seed functions can filter sub-agents.
+  // Returns null on failure so callers can gracefully degrade (seed all sessions)
+  // instead of clearing all state with a false-negative empty set.
+  function fetchRootSessionIds(dir: string): Promise<Set<string> | null> {
+    return fetch(prefix(`/session?directory=${encodeURIComponent(dir)}&roots=true`))
+      .then((r) => {
+        if (!r.ok) {
+          console.warn("[GlobalEvents] Failed to fetch root sessions for", dir, `HTTP ${r.status}`)
+          return null
+        }
+        return r.json()
+      })
+      .then((data) => {
+        if (data === null) return null
+        const sessions = Array.isArray(data) ? data : (data?.data ?? [])
+        const roots = new Set<string>()
+        for (const s of sessions) {
+          if (s?.id) roots.add(s.id as string)
+        }
+        return roots
+      })
+      .catch((e) => {
+        console.warn("[GlobalEvents] Failed to fetch root sessions for", dir, e)
+        return null
+      })
+  }
+
   // Seed permission/question/status state from REST for a directory.
+  // First fetches root session IDs, then seeds only root sessions.
   // Returns a promise that resolves when all seeds complete (or fail).
-  function seedDirectory(dir: string) {
-    return Promise.allSettled([
-      seedPermissions(dir),
-      seedQuestions(dir),
-      seedStatuses(dir),
+  async function seedDirectory(dir: string) {
+    // Ensure tracking exists before any async work so the perDir.has(dir)
+    // guards in seed functions correctly detect disconnection (rather than
+    // failing because the entry was never created).
+    const tracking = getTracking(dir)
+    const roots = await fetchRootSessionIds(dir)
+    if (!perDir.has(dir)) return  // disconnected while fetching
+
+    // Store root session IDs so SSE handlers can filter pre-existing
+    // sub-agents that we never saw a session.created event for.
+    tracking.rootSessions = roots
+
+    // Seed subAgents from all sessions: any session with a parentID is a
+    // sub-agent. This covers sessions that existed before the SSE connection.
+    if (roots) {
+      await fetch(prefix(`/session?directory=${encodeURIComponent(dir)}`))
+        .then((r) => {
+          if (!r.ok) return
+          return r.json()
+        })
+        .then((data) => {
+          if (!data || !perDir.has(dir)) return
+          const all = Array.isArray(data) ? data : (data?.data ?? [])
+          for (const s of all) {
+            if (s?.parentID && s?.id) tracking.subAgents.add(s.id as string)
+          }
+        })
+        .catch(() => {})
+    }
+
+    await Promise.allSettled([
+      seedPermissions(dir, roots),
+      seedQuestions(dir, roots),
+      seedStatuses(dir, roots),
     ])
   }
 
-  function seedPermissions(dir: string) {
-    const tracking = getTracking(dir)
+  function seedPermissions(dir: string, roots: Set<string> | null) {
+    const tracking = perDir.get(dir)
+    if (!tracking) return  // disconnected: do not recreate tracking while seeding
     // Snapshot sessions added by SSE before the fetch started so we can
     // merge them back, avoiding a race where clear() drops concurrent events.
     const before = new Set(tracking.permissionSessions)
     return fetch(prefix(`/permission?directory=${encodeURIComponent(dir)}`))
       .then((r) => r.json())
       .then((data) => {
+        if (!perDir.has(dir)) return  // disconnected while fetching
         const perms = Array.isArray(data) ? data : (data?.data ?? [])
         const fetched = new Set<string>()
         for (const p of perms) {
-          if (p?.sessionID) fetched.add(p.sessionID)
+          // When roots is null (fetch failed), accept all sessions as a
+          // graceful degradation instead of clearing everything.
+          if (p?.sessionID && !tracking.subAgents.has(p.sessionID) && (roots === null || roots.has(p.sessionID))) fetched.add(p.sessionID)
         }
         // Merge: use the fetched set as the base, but preserve any sessions
         // that were added by SSE events AFTER we started the fetch (i.e.,
         // sessions in current set that weren't in the pre-fetch snapshot).
+        // Filter out sub-agent IDs to prevent non-root sessions from leaking in.
         const added = new Set<string>()
         for (const sid of tracking.permissionSessions) {
-          if (!before.has(sid)) added.add(sid)
+          if (!before.has(sid) && !tracking.subAgents.has(sid)) added.add(sid)
         }
         tracking.permissionSessions.clear()
         for (const sid of fetched) tracking.permissionSessions.add(sid)
@@ -279,30 +396,34 @@ export function GlobalEventsProvider(props: ParentProps & {
       .catch((e) => console.warn("[GlobalEvents] Failed to seed permissions for", dir, e))
   }
 
-  function seedQuestions(dir: string) {
-    const tracking = getTracking(dir)
+  function seedQuestions(dir: string, roots: Set<string> | null) {
+    const tracking = perDir.get(dir)
+    if (!tracking) return  // disconnected: do not recreate tracking while seeding
     return fetch(prefix(`/question?directory=${encodeURIComponent(dir)}`))
       .then((r) => r.json())
       .then((data) => {
+        if (!perDir.has(dir)) return  // disconnected while fetching
         const questions = Array.isArray(data) ? data : (data?.data ?? [])
         tracking.questionSessions.clear()
         for (const q of questions) {
-          if (q?.sessionID) tracking.questionSessions.add(q.sessionID)
+          if (q?.sessionID && !tracking.subAgents.has(q.sessionID) && (roots === null || roots.has(q.sessionID))) tracking.questionSessions.add(q.sessionID)
         }
         recalcAlerts(dir)
       })
       .catch((e) => console.warn("[GlobalEvents] Failed to seed questions for", dir, e))
   }
 
-  function seedStatuses(dir: string) {
-    const tracking = getTracking(dir)
+  function seedStatuses(dir: string, roots: Set<string> | null) {
+    const tracking = perDir.get(dir)
+    if (!tracking) return  // disconnected: do not recreate tracking while seeding
     return fetch(prefix(`/session/status?directory=${encodeURIComponent(dir)}`))
       .then((r) => r.json())
       .then((data) => {
+        if (!perDir.has(dir)) return  // disconnected while fetching
         const statuses = (data?.data ?? data ?? {}) as Record<string, { type?: string }>
         tracking.busySessions.clear()
         for (const [sid, s] of Object.entries(statuses)) {
-          if (s?.type === "busy" || s?.type === "retry") {
+          if (!tracking.subAgents.has(sid) && (roots === null || roots.has(sid)) && (s?.type === "busy" || s?.type === "retry")) {
             tracking.busySessions.add(sid)
           }
         }
