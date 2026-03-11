@@ -2657,7 +2657,7 @@ function ProjectConfigTab() {
         </div>
       </Show>
 
-      <Show when={config.loading()}>
+      <Show when={config.initialLoading()}>
         <div class="flex items-center gap-2" style={{ color: "var(--text-weak)" }}>
           <Spinner class="w-4 h-4" />
           <span class="text-sm">Loading configuration...</span>
@@ -2665,7 +2665,7 @@ function ProjectConfigTab() {
       </Show>
 
       {/* Form View */}
-      <Show when={!config.loading() && view() === "form"}>
+      <Show when={!config.initialLoading() && view() === "form"}>
         <div class="space-y-6">
 
           {/* Permissions Section */}
@@ -2974,7 +2974,7 @@ function ProjectConfigTab() {
       </Show>
 
       {/* JSON View */}
-      <Show when={!config.loading() && view() === "json"}>
+      <Show when={!config.initialLoading() && view() === "json"}>
         <section
           class="rounded-lg overflow-hidden"
           style={{
