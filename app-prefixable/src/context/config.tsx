@@ -73,12 +73,12 @@ export function ConfigProvider(props: ParentProps) {
   }
 
   async function updateProject(patch: Config): Promise<Config | null> {
-    lastUpdateAt = Date.now()
     setError(null)
     try {
       const res = await sdk.client.config.update({ config: patch })
       const data = res.data as Config | undefined
       if (data) {
+        lastUpdateAt = Date.now()
         setProject(reconcile(data))
         return data
       }
@@ -91,12 +91,12 @@ export function ConfigProvider(props: ParentProps) {
   }
 
   async function updateGlobal(patch: Config): Promise<Config | null> {
-    lastUpdateAt = Date.now()
     setError(null)
     try {
       const res = await sdk.client.global.config.update({ config: patch })
       const data = res.data as Config | undefined
       if (data) {
+        lastUpdateAt = Date.now()
         setGlobal(reconcile(data))
         return data
       }
