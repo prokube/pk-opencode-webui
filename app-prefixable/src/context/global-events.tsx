@@ -159,7 +159,8 @@ export function GlobalEventsProvider(props: ParentProps & {
 
       // Prune sub-agent (and its tracking state) when its session is deleted
       if (event.type === "session.deleted") {
-        const sid = (event.properties as { sessionID?: string })?.sessionID
+        const info = (event.properties as { info?: { id?: string } })?.info
+        const sid = info?.id
         if (sid) {
           tracking.subAgents.delete(sid)
           let changed = false
@@ -284,8 +285,15 @@ export function GlobalEventsProvider(props: ParentProps & {
   // instead of clearing all state with a false-negative empty set.
   function fetchRootSessionIds(dir: string): Promise<Set<string> | null> {
     return fetch(prefix(`/session?directory=${encodeURIComponent(dir)}&roots=true`))
-      .then((r) => r.json())
+      .then((r) => {
+        if (!r.ok) {
+          console.warn("[GlobalEvents] Failed to fetch root sessions for", dir, `HTTP ${r.status}`)
+          return null
+        }
+        return r.json()
+      })
       .then((data) => {
+        if (data === null) return null
         const sessions = Array.isArray(data) ? data : (data?.data ?? [])
         const roots = new Set<string>()
         for (const s of sessions) {
@@ -302,14 +310,14 @@ export function GlobalEventsProvider(props: ParentProps & {
   // Seed permission/question/status state from REST for a directory.
   // First fetches root session IDs, then seeds only root sessions.
   // Returns a promise that resolves when all seeds complete (or fail).
-  function seedDirectory(dir: string) {
-    return fetchRootSessionIds(dir).then((roots) =>
-      Promise.allSettled([
-        seedPermissions(dir, roots),
-        seedQuestions(dir, roots),
-        seedStatuses(dir, roots),
-      ]),
-    )
+  async function seedDirectory(dir: string) {
+    const roots = await fetchRootSessionIds(dir)
+    if (!perDir.has(dir)) return  // disconnected while fetching
+    await Promise.allSettled([
+      seedPermissions(dir, roots),
+      seedQuestions(dir, roots),
+      seedStatuses(dir, roots),
+    ])
   }
 
   function seedPermissions(dir: string, roots: Set<string> | null) {
@@ -320,6 +328,7 @@ export function GlobalEventsProvider(props: ParentProps & {
     return fetch(prefix(`/permission?directory=${encodeURIComponent(dir)}`))
       .then((r) => r.json())
       .then((data) => {
+        if (!perDir.has(dir)) return  // disconnected while fetching
         const perms = Array.isArray(data) ? data : (data?.data ?? [])
         const fetched = new Set<string>()
         for (const p of perms) {
@@ -348,6 +357,7 @@ export function GlobalEventsProvider(props: ParentProps & {
     return fetch(prefix(`/question?directory=${encodeURIComponent(dir)}`))
       .then((r) => r.json())
       .then((data) => {
+        if (!perDir.has(dir)) return  // disconnected while fetching
         const questions = Array.isArray(data) ? data : (data?.data ?? [])
         tracking.questionSessions.clear()
         for (const q of questions) {
@@ -363,6 +373,7 @@ export function GlobalEventsProvider(props: ParentProps & {
     return fetch(prefix(`/session/status?directory=${encodeURIComponent(dir)}`))
       .then((r) => r.json())
       .then((data) => {
+        if (!perDir.has(dir)) return  // disconnected while fetching
         const statuses = (data?.data ?? data ?? {}) as Record<string, { type?: string }>
         tracking.busySessions.clear()
         for (const [sid, s] of Object.entries(statuses)) {
