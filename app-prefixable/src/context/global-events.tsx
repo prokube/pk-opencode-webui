@@ -147,7 +147,7 @@ export function GlobalEventsProvider(props: ParentProps & {
       // session.created includes the full Session object with parentID.
       if (event.type === "session.created") {
         const info = (event.properties as { info?: { id?: string; parentID?: string } })?.info
-        if (info?.parentID && info?.id) {
+        if (info?.id && info?.parentID) {
           const sid = info.id
           tracking.subAgents.add(sid)
           // Retroactively clean up tracking sets in case out-of-order events
@@ -158,6 +158,10 @@ export function GlobalEventsProvider(props: ParentProps & {
           if (tracking.questionSessions.delete(sid)) changed = true
           if (tracking.busySessions.delete(sid)) changed = true
           if (changed) recalcAlerts(dir)
+        }
+        // Keep rootSessions up to date for new root sessions created after seeding
+        if (info?.id && !info?.parentID && tracking.rootSessions) {
+          tracking.rootSessions.add(info.id)
         }
         return
       }
@@ -194,7 +198,11 @@ export function GlobalEventsProvider(props: ParentProps & {
         if (existing) clearTimeout(existing)
         permReseedTimers.set(dir, setTimeout(() => {
           permReseedTimers.delete(dir)
-          fetchRootSessionIds(dir).then((roots) => seedPermissions(dir, roots))
+          fetchRootSessionIds(dir).then((roots) => {
+            const tracking = perDir.get(dir)
+            if (tracking && roots) tracking.rootSessions = roots
+            seedPermissions(dir, roots)
+          })
         }, 300))
         return
       }
