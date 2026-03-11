@@ -165,15 +165,26 @@ export function PermissionProvider(props: ParentProps) {
     return map
   })
 
-  // Memoize child map once per session-list change so pendingForSession
-  // doesn't rebuild it on every call (called per-row in sidebar).
+  // Memoize child map once per session-list change so descendant lookups
+  // don't rebuild it on every call (called per-row in sidebar).
   const children = createMemo(() => buildChildMap(sync.sessions()))
+
+  // Cache descendant ID sets per session to avoid BFS walks on every render.
+  // Recomputed when the session list changes (child map changes).
+  const descendantsCache = createMemo(() => {
+    const map = new Map<string, Set<string>>()
+    const cm = children()
+    for (const s of sync.sessions()) {
+      map.set(s.id, sessionDescendantIds(sync.sessions(), s.id, cm))
+    }
+    return map
+  })
 
   // Walk the session tree to include permissions from descendant sessions.
   // Returns all permissions for the given session and its children/grandchildren.
-  // Uses precomputed pendingBySession map so cost is O(descendants) not O(all permissions).
+  // Uses precomputed descendant sets + pendingBySession map for O(descendants) per call.
   function pendingForSession(sessionID: string) {
-    const ids = sessionDescendantIds(sync.sessions(), sessionID, children())
+    const ids = descendantsCache().get(sessionID) ?? sessionDescendantIds(sync.sessions(), sessionID, children())
     const bySession = pendingBySession()
     const result: PermissionRequest[] = []
     for (const id of ids) {

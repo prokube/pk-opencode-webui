@@ -165,7 +165,7 @@ export function PermissionPrompt(props: Props) {
                     <div class="text-sm truncate flex items-center gap-1.5" style={{ color: "var(--text-strong)" }}>
                       {getPermissionLabel(req.permission)}
                       <Show when={fromChild()}>
-                        <span title="From sub-agent">
+                        <span title="From sub-agent" aria-label="Permission request from sub-agent">
                           <Users class="w-3 h-3 shrink-0" style={{ color: "var(--text-interactive-base)" }} />
                         </span>
                       </Show>
