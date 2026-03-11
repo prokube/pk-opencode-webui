@@ -447,12 +447,17 @@ export function Session() {
     const msgs = syncMessages();
     const hasMessages = msgs.length > 0;
     const isProcessing = processing();
-    const lastUserMsg = (() => {
+    // Find the Nth-from-last user message (1-indexed: 1 = last, 2 = second-to-last)
+    function nthLastUserMsg(n: number) {
+      let count = 0;
       for (let i = msgs.length - 1; i >= 0; i--) {
-        if (msgs[i].role === "user") return msgs[i];
+        if (msgs[i].role !== "user") continue;
+        count++;
+        if (count === n) return msgs[i];
       }
       return undefined;
-    })();
+    }
+    const lastUserMsg = nthLastUserMsg(1);
 
     const commands: Command[] = [
       {
@@ -656,42 +661,15 @@ export function Session() {
 
     // /undo — requires a session with at least one user message
     // Allowed during processing so abort-then-revert flow works
+    // Supports `/undo` (last turn) and `/undo N` (Nth-from-last turn)
     if (id && lastUserMsg) {
       commands.push({
         id: "session.undo",
-        title: "Undo Last Message",
-        description: "Revert the last user message and restore its text",
+        title: "Undo Message",
+        description: "Revert the last user message (use /undo N for multiple turns)",
         slash: "undo",
         onSelect: async () => {
-          if (!id || !lastUserMsg) return;
-          try {
-            // If processing, abort first (clears pendingQuestion too)
-            if (processing()) {
-              await handleAbort();
-            }
-            await client.session.revert({
-              sessionID: id,
-              messageID: lastUserMsg.id,
-            });
-            // Restore the reverted message text into the input field
-            const textPart = lastUserMsg.parts.find((p) => p.type === "text") as
-              | { type: "text"; text?: string }
-              | undefined;
-            if (textPart?.text) {
-              setInput(textPart.text);
-              requestAnimationFrame(() => {
-                if (inputRef) {
-                  inputRef.style.height = "auto";
-                  inputRef.style.height = Math.min(inputRef.scrollHeight, 200) + "px";
-                  inputRef.focus();
-                }
-              });
-            }
-            showToast("Message undone");
-            refetchSession();
-          } catch (err) {
-            showToast(`Failed to undo message: ${err instanceof Error ? err.message : String(err)}`);
-          }
+          await undoTurns(1);
         },
       });
     }
@@ -719,6 +697,51 @@ export function Session() {
 
     return commands;
   });
+
+  // Undo N user turns — finds the Nth-from-last user message and reverts to it.
+  // The backend accepts any messageID, so reverting to an earlier message
+  // implicitly removes everything after it.
+  async function undoTurns(count: number) {
+    const id = sessionId();
+    if (!id) return;
+    const msgs = syncMessages();
+    // Find the Nth-from-last user message
+    let found = 0;
+    let target: DisplayMessage | undefined;
+    for (let i = msgs.length - 1; i >= 0; i--) {
+      if (msgs[i].role !== "user") continue;
+      found++;
+      if (found === count) {
+        target = msgs[i];
+        break;
+      }
+    }
+    if (!target) {
+      showToast(count === 1 ? "No user message to undo" : `Only ${found} user message${found === 1 ? "" : "s"} to undo`);
+      return;
+    }
+    try {
+      // If processing, abort first (clears pendingQuestion too)
+      if (processing()) {
+        await handleAbort();
+      }
+      await client.session.revert({
+        sessionID: id,
+        messageID: target.id,
+      });
+      // Restore the reverted message text into the input field
+      const textPart = target.parts.find((p) => p.type === "text") as
+        | { type: "text"; text?: string }
+        | undefined;
+      if (textPart?.text && inputRef) {
+        applyInputAndAutogrow(inputRef, textPart.text);
+      }
+      showToast(count === 1 ? "Undone 1 turn" : `Undone ${count} turns`);
+      refetchSession();
+    } catch (err) {
+      showToast(`Failed to undo: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
 
   // Filtered slash commands based on query
   const filteredSlashCommands = createMemo(() => {
@@ -760,6 +783,19 @@ export function Session() {
   // Handle input changes to detect slash commands
   function handleInputChange(value: string) {
     setInput(value);
+
+    // Detect `/undo N` — revert N user turns at once
+    const undoMatch = value.match(/^\/undo\s+(\d+)\s*$/i);
+    if (undoMatch) {
+      const n = parseInt(undoMatch[1], 10);
+      if (n > 0) {
+        setInput("");
+        setShowSlashPopover(false);
+        setSlashQuery("");
+        undoTurns(n);
+        return;
+      }
+    }
 
     // Detect `/prompt <search>` — auto-open prompt picker with filter
     const promptMatch = value.match(/^\/prompt\s+(.*)$/i);
