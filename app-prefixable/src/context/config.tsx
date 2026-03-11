@@ -10,6 +10,8 @@ interface ConfigContextValue {
   /** Global config (from ~/.config/opencode/opencode.json) */
   global: Config
   loading: () => boolean
+  /** True only during the very first config fetch (before any data is available) */
+  initialLoading: () => boolean
   error: () => string | null
   /** Update project config (deep merge). Returns updated config or null on error. */
   updateProject: (patch: Config) => Promise<Config | null>
@@ -27,9 +29,11 @@ export function ConfigProvider(props: ParentProps) {
   const [project, setProject] = createStore<Config>({})
   const [global, setGlobal] = createStore<Config>({})
   const [loading, setLoading] = createSignal(true)
+  const [initialLoading, setInitialLoading] = createSignal(true)
   const [error, setError] = createSignal<string | null>(null)
 
   let refreshSeq = 0
+  let lastUpdateAt = 0
 
   async function refresh() {
     const seq = ++refreshSeq
@@ -64,10 +68,12 @@ export function ConfigProvider(props: ParentProps) {
     if (errors.length > 0) {
       setError(`Failed to load ${errors.join(" and ")} configuration`)
     }
+    setInitialLoading(false)
     setLoading(false)
   }
 
   async function updateProject(patch: Config): Promise<Config | null> {
+    lastUpdateAt = Date.now()
     setError(null)
     try {
       const res = await sdk.client.config.update({ config: patch })
@@ -85,6 +91,7 @@ export function ConfigProvider(props: ParentProps) {
   }
 
   async function updateGlobal(patch: Config): Promise<Config | null> {
+    lastUpdateAt = Date.now()
     setError(null)
     try {
       const res = await sdk.client.global.config.update({ config: patch })
@@ -107,9 +114,12 @@ export function ConfigProvider(props: ParentProps) {
     refresh()
   })
 
-  // Refresh config when server reconnects (e.g. after config file changes)
+  // Refresh config when server reconnects (e.g. after config file changes).
+  // Skip if we just did an API update — our response already has the latest data
+  // and re-fetching risks returning stale data from a restarting server.
   const unsub = events.subscribe((event) => {
     if (event.type === "server.connected") {
+      if (Date.now() - lastUpdateAt < 5000) return
       if (refreshTimer !== undefined) clearTimeout(refreshTimer)
       refreshTimer = window.setTimeout(() => {
         refreshTimer = undefined
@@ -129,6 +139,7 @@ export function ConfigProvider(props: ParentProps) {
         project,
         global,
         loading,
+        initialLoading,
         error,
         updateProject,
         updateGlobal,
