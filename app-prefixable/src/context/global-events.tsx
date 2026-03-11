@@ -311,6 +311,10 @@ export function GlobalEventsProvider(props: ParentProps & {
   // First fetches root session IDs, then seeds only root sessions.
   // Returns a promise that resolves when all seeds complete (or fail).
   async function seedDirectory(dir: string) {
+    // Ensure tracking exists before any async work so the perDir.has(dir)
+    // guards in seed functions correctly detect disconnection (rather than
+    // failing because the entry was never created).
+    getTracking(dir)
     const roots = await fetchRootSessionIds(dir)
     if (!perDir.has(dir)) return  // disconnected while fetching
     await Promise.allSettled([
@@ -321,7 +325,8 @@ export function GlobalEventsProvider(props: ParentProps & {
   }
 
   function seedPermissions(dir: string, roots: Set<string> | null) {
-    const tracking = getTracking(dir)
+    const tracking = perDir.get(dir)
+    if (!tracking) return  // disconnected: do not recreate tracking while seeding
     // Snapshot sessions added by SSE before the fetch started so we can
     // merge them back, avoiding a race where clear() drops concurrent events.
     const before = new Set(tracking.permissionSessions)
@@ -353,7 +358,8 @@ export function GlobalEventsProvider(props: ParentProps & {
   }
 
   function seedQuestions(dir: string, roots: Set<string> | null) {
-    const tracking = getTracking(dir)
+    const tracking = perDir.get(dir)
+    if (!tracking) return  // disconnected: do not recreate tracking while seeding
     return fetch(prefix(`/question?directory=${encodeURIComponent(dir)}`))
       .then((r) => r.json())
       .then((data) => {
@@ -369,7 +375,8 @@ export function GlobalEventsProvider(props: ParentProps & {
   }
 
   function seedStatuses(dir: string, roots: Set<string> | null) {
-    const tracking = getTracking(dir)
+    const tracking = perDir.get(dir)
+    if (!tracking) return  // disconnected: do not recreate tracking while seeding
     return fetch(prefix(`/session/status?directory=${encodeURIComponent(dir)}`))
       .then((r) => r.json())
       .then((data) => {
