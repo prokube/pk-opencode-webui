@@ -307,6 +307,8 @@ export function Session() {
     setPendingUserMessageText(null); // Clear pending text on session change
     setFileContext([]); // Clear file context on session change
     setImageAttachments([]); // Clear image attachments on session change
+    setInput(""); // Clear draft text on session change
+    if (inputRef) inputRef.style.height = ""; // Reset textarea auto-grow height
     setPromptSent(false); // Reset so pending prompts fire in the new session
     wasProcessing.value = false; // Reset to avoid false notifications
     if (id) {
