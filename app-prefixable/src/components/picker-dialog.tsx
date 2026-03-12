@@ -84,13 +84,19 @@ export function PickerDialog(props: Props) {
     onCleanup(() => window.removeEventListener("keydown", handler, true))
   })
 
+  let mouseDownOnBackdrop = false
+
   return (
     <Portal>
       <div
         class="fixed inset-0 z-50 flex items-center justify-center"
         style={{ background: "rgba(0,0,0,0.5)" }}
+        onMouseDown={(e) => {
+          mouseDownOnBackdrop = e.target === e.currentTarget
+        }}
         onClick={(e) => {
-          if (e.target === e.currentTarget) props.onClose()
+          if (mouseDownOnBackdrop && e.target === e.currentTarget) props.onClose()
+          mouseDownOnBackdrop = false
         }}
         role="presentation"
       >

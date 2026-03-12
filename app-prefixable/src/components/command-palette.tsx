@@ -39,6 +39,7 @@ export function CommandPalette() {
   let inputRef: HTMLInputElement | undefined
   let listRef: HTMLDivElement | undefined
   let previousFocus: HTMLElement | null = null
+  let mouseDownOnBackdrop = false
 
   // Build palette items from all sources
   const items = createMemo((): PaletteItem[] => {
@@ -277,8 +278,12 @@ export function CommandPalette() {
         <div
           class="fixed inset-0 z-50 flex items-start justify-center pt-[15vh]"
           style={{ background: "rgba(0,0,0,0.5)" }}
+          onMouseDown={(e) => {
+            mouseDownOnBackdrop = e.target === e.currentTarget
+          }}
           onClick={(e) => {
-            if (e.target === e.currentTarget) command.setPaletteOpen(false)
+            if (mouseDownOnBackdrop && e.target === e.currentTarget) command.setPaletteOpen(false)
+            mouseDownOnBackdrop = false
           }}
           role="presentation"
         >

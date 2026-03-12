@@ -91,12 +91,18 @@ export function MCPDialog(props: Props) {
     }
   }
 
+  let mouseDownOnBackdrop = false
+
   return (
     <div
       class="fixed inset-0 z-50 flex items-center justify-center"
       style={{ background: "rgba(0,0,0,0.5)" }}
+      onMouseDown={(e) => {
+        mouseDownOnBackdrop = e.target === e.currentTarget
+      }}
       onClick={(e) => {
-        if (e.target === e.currentTarget) props.onClose()
+        if (mouseDownOnBackdrop && e.target === e.currentTarget) props.onClose()
+        mouseDownOnBackdrop = false
       }}
     >
       <div

@@ -425,20 +425,27 @@ export function ProjectDialog(props: ProjectDialogProps) {
 
   const home = createMemo(() => homeDirectory() || "")
 
+  let mouseDownOnBackdrop = false
+
   return (
     <Show when={props.open}>
       {/* Backdrop */}
       <div
         class="fixed inset-0 z-50 flex items-center justify-center"
         style={{ background: "rgba(0, 0, 0, 0.5)" }}
-        onClick={() => props.onClose()}
+        onMouseDown={(e) => {
+          mouseDownOnBackdrop = e.target === e.currentTarget
+        }}
+        onClick={(e) => {
+          if (mouseDownOnBackdrop && e.target === e.currentTarget) props.onClose()
+          mouseDownOnBackdrop = false
+        }}
         onKeyDown={handleKeyDown}
       >
         {/* Dialog */}
         <div
           class="w-full max-w-lg mx-4 rounded-xl shadow-2xl"
           style={{ background: "var(--background-base)", border: "1px solid var(--border-base)" }}
-          onClick={(e) => e.stopPropagation()}
         >
           {/* Header */}
           <div

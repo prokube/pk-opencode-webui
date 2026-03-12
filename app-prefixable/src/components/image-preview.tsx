@@ -28,6 +28,8 @@ export const ImagePreview: Component<Props> = (props) => {
     closeButtonRef?.focus()
   })
 
+  let mouseDownOnBackdrop = false
+
   return (
     <Show when={props.url}>
       {(url) => (
@@ -35,7 +37,13 @@ export const ImagePreview: Component<Props> = (props) => {
           <div
             class="fixed inset-0 z-50 flex items-center justify-center"
             style={{ background: "rgba(0, 0, 0, 0.85)" }}
-            onClick={props.onClose}
+            onMouseDown={(e) => {
+              mouseDownOnBackdrop = e.target === e.currentTarget
+            }}
+            onClick={(e) => {
+              if (mouseDownOnBackdrop && e.target === e.currentTarget) props.onClose()
+              mouseDownOnBackdrop = false
+            }}
             role="presentation"
           >
             <div
@@ -43,7 +51,6 @@ export const ImagePreview: Component<Props> = (props) => {
               aria-modal="true"
               aria-label="Image preview"
               class="relative max-w-[90vw] max-h-[90vh]"
-              onClick={(e) => e.stopPropagation()}
             >
               {/* Close button */}
               <button

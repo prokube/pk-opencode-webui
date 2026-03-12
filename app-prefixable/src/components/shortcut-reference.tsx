@@ -23,14 +23,20 @@ export function ShortcutReference() {
     onCleanup(() => document.removeEventListener("keydown", handleKeyDown))
   })
 
+  let mouseDownOnBackdrop = false
+
   return (
     <Show when={cmd.shortcutRefOpen()}>
       {/* Backdrop */}
       <div
         class="fixed inset-0 z-50 flex items-center justify-center"
         style={{ background: "rgba(0,0,0,0.5)" }}
+        onMouseDown={(e) => {
+          mouseDownOnBackdrop = e.target === e.currentTarget
+        }}
         onClick={(e) => {
-          if (e.target === e.currentTarget) close()
+          if (mouseDownOnBackdrop && e.target === e.currentTarget) close()
+          mouseDownOnBackdrop = false
         }}
       >
         {/* Dialog */}
