@@ -1,6 +1,8 @@
 // Relative time formatting: "just now", "3m ago", "1h ago", "2d ago"
-export function formatRelativeTime(ms: number): string {
-  const seconds = Math.floor((Date.now() - ms) / 1000)
+// Accepts an optional `now` to allow a shared timer signal across components.
+// Clamps negative deltas to 0 so slightly-ahead server timestamps show "just now".
+export function formatRelativeTime(ms: number, now = Date.now()): string {
+  const seconds = Math.max(0, Math.floor((now - ms) / 1000))
   if (seconds < 10) return "just now"
   if (seconds < 60) return `${seconds}s ago`
   const minutes = Math.floor(seconds / 60)
@@ -21,11 +23,16 @@ export function formatAbsoluteTime(ms: number): string {
 }
 
 // Duration formatting: "0.3s", "4.2s", "1m 12s"
+// Rounds first, then carries overflow so values near 60s never produce "60.0s".
 export function formatDuration(ms: number): string {
-  if (ms < 1000) return `${(ms / 1000).toFixed(1)}s`
   const totalSeconds = ms / 1000
-  if (totalSeconds < 60) return `${totalSeconds.toFixed(1)}s`
-  const minutes = Math.floor(totalSeconds / 60)
-  const seconds = Math.round(totalSeconds % 60)
+  if (totalSeconds < 60) {
+    const rounded = Math.round(totalSeconds * 10) / 10
+    if (rounded >= 60) return "1m 0s"
+    return `${rounded.toFixed(1)}s`
+  }
+  const total = Math.round(totalSeconds)
+  const minutes = Math.floor(total / 60)
+  const seconds = total % 60
   return `${minutes}m ${seconds}s`
 }

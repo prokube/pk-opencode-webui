@@ -1,4 +1,4 @@
-import { createSignal, createEffect, Show, For, createMemo, onCleanup } from "solid-js"
+import { type Accessor, createSignal, createEffect, Show, For, createMemo, onCleanup } from "solid-js"
 import { ChevronDown, ChevronRight, User, Bot, FileText, Copy, Check, Clock } from "lucide-solid"
 import { Markdown } from "./markdown"
 import { MessageParts } from "./tool-part"
@@ -40,7 +40,7 @@ function extractToolTimings(messages: DisplayMessage[]): { name: string; duratio
       const state = (part as { state: ToolState }).state
       if (state.status !== "completed" && state.status !== "error") continue
       const time = state.time
-      if (!time.start || !time.end) continue
+      if (time.start == null || time.end == null) continue
       const title = (state as { title?: string }).title || (part as { tool: string }).tool
       results.push({ name: title, duration: time.end - time.start })
     }
@@ -160,6 +160,7 @@ function TurnDetails(props: { turn: Turn }) {
 
 export function MessageTurn(props: {
   turn: Turn
+  now: Accessor<number>
   defaultExpanded?: boolean
   isLast?: boolean
   onToggle?: (turnId: string, expanded: boolean) => void
@@ -172,16 +173,11 @@ export function MessageTurn(props: {
   const [focused, setFocused] = createSignal(false)
   const [detailsOpen, setDetailsOpen] = createSignal(false)
 
-  // Reactive relative timestamp — updates every 30s
-  const [now, setNow] = createSignal(Date.now())
-  const timer = setInterval(() => setNow(Date.now()), 30_000)
-  onCleanup(() => clearInterval(timer))
-
+  // Relative timestamp driven by shared `now` signal from parent
   const relativeTime = createMemo(() => {
-    now() // track dependency
     const created = props.turn.userMessage.time?.created
     if (!created) return undefined
-    return formatRelativeTime(created)
+    return formatRelativeTime(created, props.now())
   })
 
   const absoluteTime = createMemo(() => {
