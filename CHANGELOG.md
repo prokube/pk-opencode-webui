@@ -18,6 +18,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Remove backdrop-click dismiss from form dialogs to prevent accidental data loss (#171)
 - Fix drag-to-dismiss bug on non-form dialogs (#172)
 - Fix newly created saved prompt not appearing in prompt list until page refresh (#174)
+- Preserve per-session draft input text, file context, and image attachments across session switches (#173)
 - Clear chat input text when switching sessions (#167)
 - Remove 600px max-height cap on terminal panel drag resize, use viewport-based limit instead (#169)
 

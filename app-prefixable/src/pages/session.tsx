@@ -7,6 +7,8 @@ import {
   createEffect,
   onCleanup,
   createMemo,
+  on,
+  untrack,
 } from "solid-js";
 import { useParams, useNavigate } from "@solidjs/router";
 import { Button } from "../components/ui/button";
@@ -62,6 +64,23 @@ interface Command {
   description?: string;
   slash?: string;
   onSelect: () => void;
+}
+
+// Per-session draft storage — module-level because SolidJS Router reuses
+// the component instance when only the :id param changes.
+interface SessionDraft {
+  text: string;
+  files: FileContext[];
+  images: ImageAttachment[];
+  height: string;
+  drag: number;
+}
+const drafts = new Map<string, SessionDraft>();
+
+// Composite key for the drafts Map so drafts are scoped to a directory+session
+// pair. Uses "__new__" as sentinel when there is no session id yet.
+function draftKey(dir: string, id?: string) {
+  return `${dir}:${id ?? "__new__"}`;
 }
 
 export function Session() {
@@ -305,17 +324,44 @@ export function Session() {
   // Track whether the agent was genuinely processing (not initial load)
   const wasProcessing = { value: false };
 
-  // Keep sessionId in sync with URL params and sync session data
-  createEffect(() => {
+  // Keep sessionId in sync with URL params and sync session data.
+  // Track the composite dir+id key so the effect fires on directory changes too,
+  // preventing drafts from leaking across projects when id stays undefined.
+  createEffect(on(() => draftKey(params.dir, params.id), (key, prevKey) => {
     const id = params.id;
-    console.log("[Session] URL param changed:", id);
+    console.log("[Session] URL param changed:", key);
+
+    // Save draft from the previous session before switching.
+    // Read signals via untrack() so they aren't tracked dependencies.
+    if (prevKey && prevKey !== key) {
+      const text = untrack(input);
+      const files = untrack(fileContext);
+      const images = untrack(imageAttachments);
+      const meaningful =
+        text.trim().length > 0 ||
+        (files && files.length > 0) ||
+        (images && images.length > 0);
+
+      if (meaningful) {
+        drafts.set(prevKey, { text, files, images, height: inputRef?.style.height ?? "", drag: untrack(dragHeight) });
+      } else {
+        drafts.delete(prevKey);
+      }
+    }
+
     setSessionId(id);
     setPendingUserMessageText(null); // Clear pending text on session change
-    setFileContext([]); // Clear file context on session change
-    setImageAttachments([]); // Clear image attachments on session change
-    setInput(""); // Clear draft text on session change
-    setDragHeight(0); // Reset manual resize on session change
-    if (inputRef) inputRef.style.height = ""; // Reset textarea auto-grow height
+
+    // Restore draft for the new session (or clear if none saved)
+    const saved = drafts.get(key);
+    setInput(saved?.text ?? "");
+    setFileContext(saved?.files ?? []);
+    setImageAttachments(saved?.images ?? []);
+    setDragHeight(saved?.drag ?? 0);
+    if (inputRef) inputRef.style.height = saved?.height ?? "";
+    setShowSlashPopover(false);
+    setSlashQuery("");
+    setSlashIndex(0);
     setPromptSent(false); // Reset so pending prompts fire in the new session
     wasProcessing.value = false; // Reset to avoid false notifications
     if (id) {
@@ -351,7 +397,7 @@ export function Session() {
       setLoadingHistory(false);
       setProcessing(false);
     }
-  });
+  }));
 
   // Auto-send saved prompt stored in sessionStorage by layout's createSessionWithPrompt.
   // We read from sessionStorage instead of URL params to avoid browser URL length limits.
@@ -1258,6 +1304,9 @@ export function Session() {
     if (inputRef) inputRef.style.height = ""; // Reset textarea to default height
     setFileContext([]); // Clear file context after sending
     setImageAttachments([]); // Clear image attachments after sending
+
+    // Clear saved draft for this session since the message was sent
+    drafts.delete(draftKey(params.dir, sessionId()));
 
     // Track pending user message text to match backend echoes
     setPendingUserMessageText(text);
