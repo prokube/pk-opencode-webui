@@ -2,6 +2,7 @@ import { createSignal, createEffect, createMemo, Show, onMount, onCleanup, Index
 import { Portal } from "solid-js/web"
 import { X, Search, FileText } from "lucide-solid"
 import { useSDK } from "../context/sdk"
+import { createBackdropDismiss } from "../utils/backdrop"
 
 interface Props {
   onSelect: (path: string) => void
@@ -107,14 +108,15 @@ export function FilePickerDialog(props: Props) {
     return parts.slice(0, -1).join("/") + "/"
   }
 
+  const backdrop = createBackdropDismiss(() => props.onClose())
+
   return (
     <Portal>
       <div
         class="fixed inset-0 z-50 flex items-center justify-center"
         style={{ background: "rgba(0,0,0,0.5)" }}
-        onClick={(e) => {
-          if (e.target === e.currentTarget) props.onClose()
-        }}
+        onMouseDown={backdrop.onMouseDown}
+        onClick={backdrop.onClick}
         role="presentation"
       >
         <div

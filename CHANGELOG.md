@@ -13,6 +13,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 - Remove backdrop-click dismiss from form dialogs to prevent accidental data loss (#171)
+- Fix drag-to-dismiss bug on non-form dialogs (#172)
 - Clear chat input text when switching sessions (#167)
 - Remove 600px max-height cap on terminal panel drag resize, use viewport-based limit instead (#169)
 

@@ -1,6 +1,7 @@
 import { Component, Show, createEffect, onCleanup } from "solid-js"
 import { Portal } from "solid-js/web"
 import { X } from "lucide-solid"
+import { createBackdropDismiss } from "../utils/backdrop"
 
 interface Props {
   url: string | null
@@ -28,6 +29,8 @@ export const ImagePreview: Component<Props> = (props) => {
     closeButtonRef?.focus()
   })
 
+  const backdrop = createBackdropDismiss(() => props.onClose())
+
   return (
     <Show when={props.url}>
       {(url) => (
@@ -35,7 +38,8 @@ export const ImagePreview: Component<Props> = (props) => {
           <div
             class="fixed inset-0 z-50 flex items-center justify-center"
             style={{ background: "rgba(0, 0, 0, 0.85)" }}
-            onClick={props.onClose}
+            onMouseDown={backdrop.onMouseDown}
+            onClick={backdrop.onClick}
             role="presentation"
           >
             <div
@@ -43,7 +47,6 @@ export const ImagePreview: Component<Props> = (props) => {
               aria-modal="true"
               aria-label="Image preview"
               class="relative max-w-[90vw] max-h-[90vh]"
-              onClick={(e) => e.stopPropagation()}
             >
               {/* Close button */}
               <button

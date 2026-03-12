@@ -10,6 +10,7 @@ import { useEvents } from "../context/events"
 import { usePermission } from "../context/permission"
 import { useProviders } from "../context/providers"
 import { base64Encode } from "../utils/path"
+import { createBackdropDismiss } from "../utils/backdrop"
 import { getFilename } from "./shared"
 
 
@@ -39,6 +40,7 @@ export function CommandPalette() {
   let inputRef: HTMLInputElement | undefined
   let listRef: HTMLDivElement | undefined
   let previousFocus: HTMLElement | null = null
+  const backdrop = createBackdropDismiss(() => command.setPaletteOpen(false))
 
   // Build palette items from all sources
   const items = createMemo((): PaletteItem[] => {
@@ -277,9 +279,8 @@ export function CommandPalette() {
         <div
           class="fixed inset-0 z-50 flex items-start justify-center pt-[15vh]"
           style={{ background: "rgba(0,0,0,0.5)" }}
-          onClick={(e) => {
-            if (e.target === e.currentTarget) command.setPaletteOpen(false)
-          }}
+          onMouseDown={backdrop.onMouseDown}
+          onClick={backdrop.onClick}
           role="presentation"
         >
           <div

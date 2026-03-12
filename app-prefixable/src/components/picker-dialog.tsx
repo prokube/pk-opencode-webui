@@ -1,6 +1,7 @@
 import { createSignal, createEffect, createMemo, Show, onMount, onCleanup, Index } from "solid-js"
 import { Portal } from "solid-js/web"
 import { X, Search } from "lucide-solid"
+import { createBackdropDismiss } from "../utils/backdrop"
 
 interface PickerItem {
   id: string
@@ -84,14 +85,15 @@ export function PickerDialog(props: Props) {
     onCleanup(() => window.removeEventListener("keydown", handler, true))
   })
 
+  const backdrop = createBackdropDismiss(() => props.onClose())
+
   return (
     <Portal>
       <div
         class="fixed inset-0 z-50 flex items-center justify-center"
         style={{ background: "rgba(0,0,0,0.5)" }}
-        onClick={(e) => {
-          if (e.target === e.currentTarget) props.onClose()
-        }}
+        onMouseDown={backdrop.onMouseDown}
+        onClick={backdrop.onClick}
         role="presentation"
       >
         <div
