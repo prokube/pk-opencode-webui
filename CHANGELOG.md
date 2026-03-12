@@ -16,6 +16,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Build OpenCode from source (memory-leak fix fork) instead of upstream installer, configurable via build args
 
 ### Fixed
+- Fix sub-agent session SSE events being silently dropped due to incorrect property extraction, breaking permission bubble-up
 - Fix permission toggles reverting after direct config file write due to unsuppressed server.connected refresh
 - Remove backdrop-click dismiss from form dialogs to prevent accidental data loss (#171)
 - Fix drag-to-dismiss bug on non-form dialogs (#172)
