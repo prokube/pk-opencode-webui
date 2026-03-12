@@ -326,12 +326,19 @@ export function Session() {
     // Save draft from the previous session before switching
     const prevId = prev.id;
     if (prevId && prevId !== id) {
-      drafts.set(prevId, {
-        text: input(),
-        files: fileContext(),
-        images: imageAttachments(),
-        height: inputRef?.style.height ?? "",
-      });
+      const text = input();
+      const files = fileContext();
+      const images = imageAttachments();
+      const meaningful =
+        text.trim().length > 0 ||
+        (files && files.length > 0) ||
+        (images && images.length > 0);
+
+      if (meaningful) {
+        drafts.set(prevId, { text, files, images, height: inputRef?.style.height ?? "" });
+      } else {
+        drafts.delete(prevId);
+      }
     }
     prev.id = id;
 
@@ -1289,6 +1296,9 @@ export function Session() {
     // Clear saved draft for this session since the message was sent
     const sid = sessionId();
     if (sid) drafts.delete(sid);
+
+    // Reset textarea height after clearing input
+    if (inputRef) inputRef.style.height = "";
 
     // Track pending user message text to match backend echoes
     setPendingUserMessageText(text);
