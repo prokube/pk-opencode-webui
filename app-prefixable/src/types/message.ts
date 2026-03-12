@@ -4,7 +4,7 @@ export interface DisplayMessage {
   id: string
   role: "user" | "assistant"
   parts: Part[]
-  error?: { name: string; data?: { message?: string } }
+  error?: AssistantMessage["error"]
   time?: AssistantMessage["time"]
   tokens?: AssistantMessage["tokens"]
   modelID?: string

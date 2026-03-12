@@ -171,6 +171,7 @@ export function MessageTurn(props: {
   const [copied, setCopied] = createSignal(false)
   const [focused, setFocused] = createSignal(false)
   const [detailsOpen, setDetailsOpen] = createSignal(false)
+  const [hovered, setHovered] = createSignal(false)
 
   // Relative timestamp driven by shared `now` signal from parent
   const relativeTime = createMemo(() => {
@@ -371,11 +372,9 @@ export function MessageTurn(props: {
               setDetailsOpen(!detailsOpen())
             }}
             class="shrink-0 p-1 rounded transition-colors"
-            style={{ color: detailsOpen() ? "var(--text-strong)" : "var(--icon-weak)" }}
-            onMouseEnter={(e) => (e.currentTarget.style.color = "var(--text-strong)")}
-            onMouseLeave={(e) => {
-              if (!detailsOpen()) e.currentTarget.style.color = "var(--icon-weak)"
-            }}
+            style={{ color: detailsOpen() || hovered() ? "var(--text-strong)" : "var(--icon-weak)" }}
+            onMouseEnter={() => setHovered(true)}
+            onMouseLeave={() => setHovered(false)}
             title="Turn details"
             aria-label={detailsOpen() ? "Hide turn details" : "Show turn details"}
             aria-expanded={detailsOpen()}
@@ -518,7 +517,7 @@ export function MessageTurn(props: {
                           class="px-3 py-2 rounded text-sm mb-2"
                           style={{ background: "var(--status-danger-dim)", color: "var(--status-danger-text)" }}
                         >
-                          <strong>Error:</strong> {err().data?.message || err().name || "Unknown error"}
+                          <strong>Error:</strong> {"message" in err().data ? err().data.message : err().name}
                         </div>
                       )}
                     </Show>

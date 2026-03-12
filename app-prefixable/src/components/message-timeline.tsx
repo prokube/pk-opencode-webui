@@ -444,7 +444,7 @@ export function FlatMessageList(props: { messages: DisplayMessage[]; processing:
                           class="px-3 py-2 rounded text-sm mb-2"
                           style={{ background: "var(--status-danger-dim)", color: "var(--status-danger-text)" }}
                         >
-                          <strong>Error:</strong> {err().data?.message || err().name || "Unknown error"}
+                          <strong>Error:</strong> {"message" in err().data ? err().data.message : err().name}
                         </div>
                       )}
                     </Show>
