@@ -146,7 +146,7 @@ function TurnDetails(props: { turn: Turn }) {
           <For each={toolTimings()}>
             {(tool) => (
               <div class="flex justify-between pl-4">
-                <span class="truncate" style={{ color: "var(--text-base)" }}>{tool.name}</span>
+                <span class="flex-1 min-w-0 truncate" style={{ color: "var(--text-base)" }}>{tool.name}</span>
                 <span class="shrink-0 ml-2">{formatDuration(tool.duration)}</span>
               </div>
             )}
