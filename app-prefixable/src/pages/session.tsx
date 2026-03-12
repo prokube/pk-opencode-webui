@@ -64,6 +64,16 @@ interface Command {
   onSelect: () => void;
 }
 
+// Per-session draft storage — module-level because SolidJS Router reuses
+// the component instance when only the :id param changes.
+interface SessionDraft {
+  text: string;
+  files: FileContext[];
+  images: ImageAttachment[];
+  height: string;
+}
+const drafts = new Map<string, SessionDraft>();
+
 export function Session() {
   const params = useParams<{ dir: string; id?: string }>();
   const navigate = useNavigate();
@@ -305,17 +315,36 @@ export function Session() {
   // Track whether the agent was genuinely processing (not initial load)
   const wasProcessing = { value: false };
 
+  // Track previous session ID for draft save/restore across switches
+  const prev = { id: params.id as string | undefined };
+
   // Keep sessionId in sync with URL params and sync session data
   createEffect(() => {
     const id = params.id;
     console.log("[Session] URL param changed:", id);
+
+    // Save draft from the previous session before switching
+    const prevId = prev.id;
+    if (prevId && prevId !== id) {
+      drafts.set(prevId, {
+        text: input(),
+        files: fileContext(),
+        images: imageAttachments(),
+        height: inputRef?.style.height ?? "",
+      });
+    }
+    prev.id = id;
+
     setSessionId(id);
     setPendingUserMessageText(null); // Clear pending text on session change
-    setFileContext([]); // Clear file context on session change
-    setImageAttachments([]); // Clear image attachments on session change
-    setInput(""); // Clear draft text on session change
+
+    // Restore draft for the new session (or clear if none saved)
+    const saved = id ? drafts.get(id) : undefined;
+    setInput(saved?.text ?? "");
+    setFileContext(saved?.files ?? []);
+    setImageAttachments(saved?.images ?? []);
     setDragHeight(0); // Reset manual resize on session change
-    if (inputRef) inputRef.style.height = ""; // Reset textarea auto-grow height
+    if (inputRef) inputRef.style.height = saved?.height ?? "";
     setPromptSent(false); // Reset so pending prompts fire in the new session
     wasProcessing.value = false; // Reset to avoid false notifications
     if (id) {
@@ -1256,6 +1285,10 @@ export function Session() {
     if (inputRef) inputRef.style.height = ""; // Reset textarea to default height
     setFileContext([]); // Clear file context after sending
     setImageAttachments([]); // Clear image attachments after sending
+
+    // Clear saved draft for this session since the message was sent
+    const sid = sessionId();
+    if (sid) drafts.delete(sid);
 
     // Track pending user message text to match backend echoes
     setPendingUserMessageText(text);
