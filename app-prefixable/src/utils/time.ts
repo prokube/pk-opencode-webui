@@ -1,8 +1,8 @@
 // Relative time formatting: "just now", "3m ago", "1h ago", "2d ago"
 // Accepts an optional `now` to allow a shared timer signal across components.
 // Clamps negative deltas to 0 so slightly-ahead server timestamps show "just now".
-export function formatRelativeTime(ms: number, now = Date.now()): string {
-  const seconds = Math.max(0, Math.floor((now - ms) / 1000))
+export function formatRelativeTime(timestamp: number, now = Date.now()): string {
+  const seconds = Math.max(0, Math.floor((now - timestamp) / 1000))
   if (seconds < 60) return "just now"
   const minutes = Math.floor(seconds / 60)
   if (minutes < 60) return `${minutes}m ago`
@@ -13,8 +13,8 @@ export function formatRelativeTime(ms: number, now = Date.now()): string {
 }
 
 // Absolute time in 24h format: "14:34:12"
-export function formatAbsoluteTime(ms: number): string {
-  const d = new Date(ms)
+export function formatAbsoluteTime(timestamp: number): string {
+  const d = new Date(timestamp)
   const h = String(d.getHours()).padStart(2, "0")
   const m = String(d.getMinutes()).padStart(2, "0")
   const s = String(d.getSeconds()).padStart(2, "0")

@@ -362,8 +362,8 @@ export function MessageTurn(props: {
           </span>
         </Show>
 
-        {/* Details toggle button */}
-        <Show when={props.turn.userMessage.time?.created != null}>
+        {/* Details toggle button — shown when any detail fields are available */}
+        <Show when={props.turn.userMessage.time?.created != null || props.turn.assistantMessages.length > 0}>
           <button
             type="button"
             onClick={(e) => {
