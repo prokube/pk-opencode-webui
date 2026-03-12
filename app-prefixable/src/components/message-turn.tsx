@@ -4,7 +4,7 @@ import { Markdown } from "./markdown"
 import { MessageParts } from "./tool-part"
 import { ImagePreview } from "./image-preview"
 import type { DisplayMessage, Turn } from "../types/message"
-import type { Part, ToolState } from "../sdk/client"
+import type { Part } from "../sdk/client"
 import { extractTextContent } from "../utils/message"
 import { formatRelativeTime, formatAbsoluteTime, formatDuration } from "../utils/time"
 
@@ -37,11 +37,10 @@ function extractToolTimings(messages: DisplayMessage[]): { name: string; duratio
   for (const msg of messages) {
     for (const part of msg.parts) {
       if (part.type !== "tool") continue
-      const state = (part as { state: ToolState }).state
-      if (state.status !== "completed") continue
-      const time = state.time
+      if (part.state.status !== "completed") continue
+      const time = part.state.time
       if (time.start == null || time.end == null) continue
-      const title = (state as { title?: string }).title || (part as { tool: string }).tool
+      const title = part.state.title ?? part.tool
       results.push({ name: title, duration: time.end - time.start })
     }
   }

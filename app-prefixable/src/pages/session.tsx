@@ -415,20 +415,24 @@ export function Session() {
     if (!id) return [];
     return sync.messages(id).map((msg) => {
       const info = msg.info;
-      const base: DisplayMessage = {
+      if (info.role === "assistant") {
+        return {
+          id: info.id,
+          role: info.role,
+          parts: msg.parts,
+          error: info.error,
+          time: { created: info.time.created, completed: info.time.completed },
+          modelID: info.modelID,
+          providerID: info.providerID,
+          tokens: info.tokens,
+        };
+      }
+      return {
         id: info.id,
-        role: info.role as "user" | "assistant",
+        role: info.role,
         parts: msg.parts,
-        error: "error" in info ? info.error : undefined,
         time: { created: info.time.created },
       };
-      if (info.role === "assistant") {
-        base.time = { created: info.time.created, completed: info.time.completed };
-        if ("modelID" in info) base.modelID = info.modelID;
-        if ("providerID" in info) base.providerID = info.providerID;
-        if ("tokens" in info) base.tokens = info.tokens;
-      }
-      return base;
     });
   });
 
