@@ -10,6 +10,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Pass message timing, token, and model data through to DisplayMessage and Turn types (#175)
 - Add CHANGELOG.md and require changelog entries in PRs (#165)
 - Add drag-to-resize handle for chat input textarea (#170)
+- Add timestamp display and expandable details panel to message turns (#176)
 
 ### Changed
 

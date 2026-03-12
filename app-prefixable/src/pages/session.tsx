@@ -35,6 +35,7 @@ import { SessionHeader } from "../components/session-header";
 import { ResizeHandle } from "../components/resize-handle";
 import { base64Encode, base64Decode } from "../utils/path";
 import type { Part, QuestionRequest, TextPart } from "../sdk/client";
+import type { DisplayMessage } from "../types/message";
 import { Plus, Settings, Paperclip, Upload, Bookmark, BookOpen } from "lucide-solid";
 import { Portal } from "solid-js/web";
 import { ContextItems, type FileContext } from "../components/context-items";
@@ -45,7 +46,6 @@ import {
 } from "../components/image-attachments";
 import { readNotifyMap, writeNotifyMap } from "../utils/notify";
 import { sessionQuestionRequest } from "../utils/session-tree-request";
-import type { DisplayMessage } from "../types/message";
 
 const ACCEPTED_TYPES = [
   "image/png",
@@ -415,22 +415,24 @@ export function Session() {
     if (!id) return [];
     return sync.messages(id).map((msg) => {
       const info = msg.info;
-      const base = {
-        id: info.id,
-        role: info.role as "user" | "assistant",
-        parts: msg.parts,
-        error: (info as { error?: DisplayMessage["error"] }).error,
-        time: info.time,
-      };
       if (info.role === "assistant") {
         return {
-          ...base,
-          tokens: info.tokens,
+          id: info.id,
+          role: info.role,
+          parts: msg.parts,
+          error: info.error,
+          time: { created: info.time.created, completed: info.time.completed },
           modelID: info.modelID,
           providerID: info.providerID,
+          tokens: info.tokens,
         };
       }
-      return base;
+      return {
+        id: info.id,
+        role: info.role,
+        parts: msg.parts,
+        time: { created: info.time.created },
+      };
     });
   });
 

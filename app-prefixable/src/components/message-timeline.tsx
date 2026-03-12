@@ -1,10 +1,11 @@
-import { createSignal, createMemo, createEffect, For, Show, onMount, untrack } from "solid-js"
+import { createSignal, createMemo, createEffect, For, Show, onMount, onCleanup, untrack } from "solid-js"
 import { Spinner } from "./ui/spinner"
 import { MessageTurn } from "./message-turn"
 // Note: Markdown and MessageParts are used in the FlatMessageList component below
 import { Markdown } from "./markdown"
 import { MessageParts } from "./tool-part"
 import { ChevronUp } from "lucide-solid"
+import { errorText } from "../types/message"
 import type { DisplayMessage, Turn } from "../types/message"
 import { extractTextContent } from "../utils/message"
 
@@ -77,6 +78,16 @@ export function MessageTimeline(props: {
 }) {
   let containerRef: HTMLDivElement | undefined
   let endRef: HTMLDivElement | undefined
+
+  // Shared clock signal for relative timestamps — one timer for all turns
+  const [now, setNow] = createSignal(Date.now())
+  let tick: number | undefined
+  onMount(() => {
+    tick = window.setInterval(() => setNow(Date.now()), 30_000)
+  })
+  onCleanup(() => {
+    if (tick !== undefined) clearInterval(tick)
+  })
 
   // Track which turns are expanded
   const [expanded, setExpanded] = createSignal<Record<string, boolean>>({})
@@ -258,6 +269,7 @@ export function MessageTimeline(props: {
             {(turn, index) => (
               <MessageTurn
                 turn={turn}
+                now={now}
                 isLast={index() === renderedTurns().length - 1}
                 defaultExpanded={expanded()[turn.id] ?? index() === renderedTurns().length - 1}
                 onToggle={handleToggle}
@@ -433,7 +445,7 @@ export function FlatMessageList(props: { messages: DisplayMessage[]; processing:
                           class="px-3 py-2 rounded text-sm mb-2"
                           style={{ background: "var(--status-danger-dim)", color: "var(--status-danger-text)" }}
                         >
-                          <strong>Error:</strong> {err().data?.message || err().name || "Unknown error"}
+                          <strong>Error:</strong> {errorText(err())}
                         </div>
                       )}
                     </Show>
