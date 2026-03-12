@@ -131,6 +131,7 @@ export function Session() {
   );
 
   const [input, setInput] = createSignal("");
+  const [dragHeight, setDragHeight] = createSignal(0); // 0 = no manual drag, positive = user-set minimum
   const [optimisticMessage, setOptimisticMessage] =
     createSignal<DisplayMessage | null>(null);
   const [loading, setLoading] = createSignal(false);
@@ -159,14 +160,25 @@ export function Session() {
     return text;
   }
 
+  // Viewport-aware maximum matching the CSS max-height on the textarea
+  function maxInputHeight() {
+    return Math.max(200, window.innerHeight - 200);
+  }
+
+  // Clamp height to at least the drag floor but no more than viewport max
+  function clampInputHeight(el: HTMLTextAreaElement) {
+    el.style.height = "auto";
+    const desired = Math.max(dragHeight(), el.scrollHeight);
+    el.style.height = `${Math.min(maxInputHeight(), desired)}px`;
+  }
+
   // Set textarea value, trigger auto-grow, and focus — bypasses input handler
   // to avoid slash-command detection when restored text starts with "/"
   function applyInputAndAutogrow(el: HTMLTextAreaElement, text: string) {
     setInput(text);
     const nativeSet = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")?.set;
     nativeSet?.call(el, text);
-    el.style.height = "auto";
-    el.style.height = `${Math.min(el.scrollHeight, 200)}px`;
+    clampInputHeight(el);
     requestAnimationFrame(() => el.focus());
   }
 
@@ -308,6 +320,7 @@ export function Session() {
     setFileContext([]); // Clear file context on session change
     setImageAttachments([]); // Clear image attachments on session change
     setInput(""); // Clear draft text on session change
+    setDragHeight(0); // Reset manual resize on session change
     if (inputRef) inputRef.style.height = ""; // Reset textarea auto-grow height
     setPromptSent(false); // Reset so pending prompts fire in the new session
     wasProcessing.value = false; // Reset to avoid false notifications
@@ -1232,6 +1245,8 @@ export function Session() {
     setError(null);
     setLoading(true);
     setInput("");
+    setDragHeight(0); // Reset manual resize after sending
+    if (inputRef) inputRef.style.height = ""; // Reset textarea to default height
     setFileContext([]); // Clear file context after sending
     setImageAttachments([]); // Clear image attachments after sending
 
@@ -1898,6 +1913,19 @@ export function Session() {
                   </div>
                 </Show>
 
+                {/* Drag-to-resize handle */}
+                <ResizeHandle
+                  direction="vertical"
+                  edge="start"
+                  size={dragHeight() || (inputRef?.offsetHeight ?? 48)}
+                  min={48}
+                  max={maxInputHeight()}
+                  onResize={(h) => {
+                    setDragHeight(h);
+                    if (inputRef) inputRef.style.height = `${h}px`;
+                  }}
+                />
+
                 <textarea
                   ref={inputRef}
                   value={input()}
@@ -1905,10 +1933,7 @@ export function Session() {
                   onPaste={handlePaste}
                   onInput={(e) => {
                     handleInputChange(e.currentTarget.value);
-                    // Auto-grow: reset height then set to scrollHeight
-                    e.currentTarget.style.height = "auto";
-                    e.currentTarget.style.height =
-                      Math.min(e.currentTarget.scrollHeight, 200) + "px";
+                    clampInputHeight(e.currentTarget);
                   }}
                   onKeyDown={(e) => {
                     // Handle slash command navigation first
@@ -1944,7 +1969,7 @@ export function Session() {
                   style={{
                     color: "var(--text-base)",
                     "min-height": "48px",
-                    "max-height": "200px",
+                    "max-height": "max(200px, calc(100dvh - 200px))",
                     "overflow-y": "auto",
                   }}
                 />
