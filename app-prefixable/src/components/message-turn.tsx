@@ -53,7 +53,7 @@ function TurnDetails(props: { turn: Turn }) {
   const first = () => assistants()[0]
   const last = () => assistants()[assistants().length - 1]
   const turnTime = () => props.turn.time
-  const inProgress = () => assistants().length === 0 || !last()?.time?.completed
+  const inProgress = () => assistants().length === 0 || turnTime()?.completed == null
 
   const toolTimings = createMemo(() => extractToolTimings(assistants()))
 
@@ -94,7 +94,7 @@ function TurnDetails(props: { turn: Turn }) {
         <div class="flex justify-between">
           <span>Duration</span>
           <span style={{ color: "var(--text-base)" }}>
-            {inProgress() ? "in progress..." : formatDuration(turnTime()!.duration!)}
+            {turnTime()?.duration != null ? formatDuration(turnTime()!.duration!) : "in progress..."}
           </span>
         </div>
       </Show>

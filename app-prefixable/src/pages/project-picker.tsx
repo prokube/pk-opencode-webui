@@ -1,6 +1,7 @@
 import { createSignal, Show, For, createMemo, onMount } from "solid-js"
 import { useNavigate } from "@solidjs/router"
 import { base64Encode } from "../utils/path"
+import { formatRelativeTime } from "../utils/time"
 import { Folder, GitBranch } from "lucide-solid"
 import { ProjectDialog } from "../components/project-dialog"
 import { useBranding } from "../context/branding"
@@ -52,21 +53,6 @@ function OpenCodeWordmark(props: { class?: string }) {
       />
     </svg>
   )
-}
-
-// Relative time formatting
-function formatRelativeTime(timestamp: number): string {
-  const now = Date.now()
-  const diff = now - timestamp
-  const seconds = Math.floor(diff / 1000)
-  const minutes = Math.floor(seconds / 60)
-  const hours = Math.floor(minutes / 60)
-  const days = Math.floor(hours / 24)
-
-  if (days > 0) return `${days}d ago`
-  if (hours > 0) return `${hours}h ago`
-  if (minutes > 0) return `${minutes}m ago`
-  return "just now"
 }
 
 // Shorten path for display

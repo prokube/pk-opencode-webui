@@ -80,8 +80,13 @@ export function MessageTimeline(props: {
 
   // Shared clock signal for relative timestamps — one timer for all turns
   const [now, setNow] = createSignal(Date.now())
-  const tick = setInterval(() => setNow(Date.now()), 30_000)
-  onCleanup(() => clearInterval(tick))
+  let tick: number | undefined
+  onMount(() => {
+    tick = window.setInterval(() => setNow(Date.now()), 30_000)
+  })
+  onCleanup(() => {
+    if (tick !== undefined) clearInterval(tick)
+  })
 
   // Track which turns are expanded
   const [expanded, setExpanded] = createSignal<Record<string, boolean>>({})
