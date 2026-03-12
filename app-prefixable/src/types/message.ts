@@ -1,20 +1,12 @@
-import type { Part } from "../sdk/client"
+import type { Part, AssistantMessage } from "../sdk/client"
 
 export interface DisplayMessage {
   id: string
   role: "user" | "assistant"
   parts: Part[]
   error?: { name: string; data?: { message?: string } }
-  time?: {
-    created: number
-    completed?: number
-  }
-  tokens?: {
-    input: number
-    output: number
-    reasoning: number
-    cache: { read: number; write: number }
-  }
+  time?: AssistantMessage["time"]
+  tokens?: AssistantMessage["tokens"]
   modelID?: string
   providerID?: string
 }

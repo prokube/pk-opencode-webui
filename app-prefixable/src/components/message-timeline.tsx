@@ -15,15 +15,15 @@ const INITIAL_TURNS = 5
 // Compute turn-level timing from user and assistant message timestamps
 function computeTurnTime(user: DisplayMessage, assistants: DisplayMessage[]): Turn["time"] {
   const started = user.time?.created
-  if (!started) return undefined
+  if (started == null || !Number.isFinite(started)) return undefined
   // Find the latest completed timestamp among all assistant messages
   const completed = assistants.reduce<number | undefined>((latest, msg) => {
     const c = msg.time?.completed
-    if (!c) return latest
-    if (!latest) return c
+    if (c == null || !Number.isFinite(c)) return latest
+    if (latest == null) return c
     return c > latest ? c : latest
   }, undefined)
-  const duration = completed ? completed - started : undefined
+  const duration = completed != null && Number.isFinite(completed) ? completed - started : undefined
   return { started, completed, duration }
 }
 

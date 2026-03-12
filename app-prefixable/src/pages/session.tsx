@@ -45,6 +45,7 @@ import {
 } from "../components/image-attachments";
 import { readNotifyMap, writeNotifyMap } from "../utils/notify";
 import { sessionQuestionRequest } from "../utils/session-tree-request";
+import type { DisplayMessage } from "../types/message";
 
 const ACCEPTED_TYPES = [
   "image/png",
@@ -61,25 +62,6 @@ interface Command {
   description?: string;
   slash?: string;
   onSelect: () => void;
-}
-
-interface DisplayMessage {
-  id: string;
-  role: "user" | "assistant";
-  parts: Part[];
-  error?: { name: string; data?: { message?: string } };
-  time?: {
-    created: number;
-    completed?: number;
-  };
-  tokens?: {
-    input: number;
-    output: number;
-    reasoning: number;
-    cache: { read: number; write: number };
-  };
-  modelID?: string;
-  providerID?: string;
 }
 
 export function Session() {
