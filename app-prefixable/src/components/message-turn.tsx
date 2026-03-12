@@ -53,7 +53,6 @@ function TurnDetails(props: { turn: Turn }) {
   const first = () => assistants()[0]
   const last = () => assistants()[assistants().length - 1]
   const turnTime = () => props.turn.time
-  const inProgress = () => assistants().length === 0 || turnTime()?.completed == null
 
   const toolTimings = createMemo(() => extractToolTimings(assistants()))
 

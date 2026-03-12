@@ -3,8 +3,7 @@
 // Clamps negative deltas to 0 so slightly-ahead server timestamps show "just now".
 export function formatRelativeTime(ms: number, now = Date.now()): string {
   const seconds = Math.max(0, Math.floor((now - ms) / 1000))
-  if (seconds < 10) return "just now"
-  if (seconds < 60) return `${seconds}s ago`
+  if (seconds < 60) return "just now"
   const minutes = Math.floor(seconds / 60)
   if (minutes < 60) return `${minutes}m ago`
   const hours = Math.floor(minutes / 60)
