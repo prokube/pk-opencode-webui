@@ -160,10 +160,16 @@ export function Session() {
     return text;
   }
 
-  // Clamp height to at least the drag floor but no more than CSS max-height
+  // Viewport-aware maximum matching the CSS max-height on the textarea
+  function maxInputHeight() {
+    return Math.max(200, window.innerHeight - 200);
+  }
+
+  // Clamp height to at least the drag floor but no more than viewport max
   function clampInputHeight(el: HTMLTextAreaElement) {
     el.style.height = "auto";
-    el.style.height = `${Math.max(dragHeight(), el.scrollHeight)}px`;
+    const desired = Math.max(dragHeight(), el.scrollHeight);
+    el.style.height = `${Math.min(maxInputHeight(), desired)}px`;
   }
 
   // Set textarea value, trigger auto-grow, and focus — bypasses input handler
@@ -1908,40 +1914,17 @@ export function Session() {
                 </Show>
 
                 {/* Drag-to-resize handle */}
-                <div
-                  class="cursor-ns-resize z-10 group flex items-center justify-center"
-                  style={{ height: "6px", "flex-shrink": 0 }}
-                  onMouseDown={(e) => {
-                    e.preventDefault();
-                    const startY = e.clientY;
-                    const startHeight = inputRef?.offsetHeight ?? 48;
-                    document.body.style.userSelect = "none";
-
-                    const onMove = (ev: MouseEvent) => {
-                      const raw = startHeight + (startY - ev.clientY);
-                      const clamped = Math.max(48, raw);
-                      setDragHeight(clamped);
-                      if (inputRef) inputRef.style.height = `${clamped}px`;
-                    };
-
-                    const cleanup = () => {
-                      document.body.style.userSelect = "";
-                      document.removeEventListener("mousemove", onMove);
-                      document.removeEventListener("mouseup", onUp);
-                    };
-
-                    const onUp = () => cleanup();
-
-                    document.addEventListener("mousemove", onMove);
-                    document.addEventListener("mouseup", onUp);
-                    onCleanup(cleanup);
+                <ResizeHandle
+                  direction="vertical"
+                  edge="start"
+                  size={dragHeight() || (inputRef?.offsetHeight ?? 48)}
+                  min={48}
+                  max={maxInputHeight()}
+                  onResize={(h) => {
+                    setDragHeight(h);
+                    if (inputRef) inputRef.style.height = `${h}px`;
                   }}
-                >
-                  <div
-                    class="rounded-full transition-colors group-hover:bg-[var(--surface-strong)]"
-                    style={{ width: "40px", height: "2px", background: "var(--border-base)" }}
-                  />
-                </div>
+                />
 
                 <textarea
                   ref={inputRef}
