@@ -13,6 +13,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 - Clear chat input text when switching sessions (#167)
+- Remove 600px max-height cap on terminal panel drag resize, use viewport-based limit instead (#169)
 
 ### Removed
 

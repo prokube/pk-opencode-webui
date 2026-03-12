@@ -2756,9 +2756,10 @@ export function Layout(props: ParentProps) {
 
                   function onMouseMove(e: MouseEvent) {
                     const delta = startY - e.clientY;
+                    const maxHeight = window.innerHeight - 100;
                     const newHeight = Math.max(
                       100,
-                      Math.min(600, startHeight + delta),
+                      Math.min(maxHeight, startHeight + delta),
                     );
                     terminal.setHeight(newHeight);
                   }

@@ -256,7 +256,8 @@ export function HomeLayout(props: ParentProps) {
 
                         function onMouseMove(e: MouseEvent) {
                           const delta = startY - e.clientY
-                          const newHeight = Math.max(100, Math.min(600, startHeight + delta))
+                          const maxHeight = window.innerHeight - 100
+                          const newHeight = Math.max(100, Math.min(maxHeight, startHeight + delta))
                           setTerminalHeight(newHeight)
                         }
 
