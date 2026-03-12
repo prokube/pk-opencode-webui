@@ -73,6 +73,7 @@ interface SessionDraft {
   files: FileContext[];
   images: ImageAttachment[];
   height: string;
+  drag: number;
 }
 const drafts = new Map<string, SessionDraft>();
 
@@ -342,7 +343,7 @@ export function Session() {
         (images && images.length > 0);
 
       if (meaningful) {
-        drafts.set(prevKey, { text, files, images, height: inputRef?.style.height ?? "" });
+        drafts.set(prevKey, { text, files, images, height: inputRef?.style.height ?? "", drag: untrack(dragHeight) });
       } else {
         drafts.delete(prevKey);
       }
@@ -356,8 +357,11 @@ export function Session() {
     setInput(saved?.text ?? "");
     setFileContext(saved?.files ?? []);
     setImageAttachments(saved?.images ?? []);
-    setDragHeight(0); // Reset manual resize on session change
+    setDragHeight(saved?.drag ?? 0);
     if (inputRef) inputRef.style.height = saved?.height ?? "";
+    setShowSlashPopover(false);
+    setSlashQuery("");
+    setSlashIndex(0);
     setPromptSent(false); // Reset so pending prompts fire in the new session
     wasProcessing.value = false; // Reset to avoid false notifications
     if (id) {
