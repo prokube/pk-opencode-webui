@@ -2513,6 +2513,7 @@ function ProjectConfigTab() {
     const ok = await writeFile(basePath.serverUrl, path, content)
     setSaving(false)
     if (ok) {
+      config.markUpdated()
       await config.refresh()
       showSaved()
       return true

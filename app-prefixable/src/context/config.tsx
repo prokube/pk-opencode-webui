@@ -19,6 +19,8 @@ interface ConfigContextValue {
   updateGlobal: (patch: Config) => Promise<Config | null>
   /** Reload both configs from the backend */
   refresh: () => Promise<void>
+  /** Mark config as just-updated so server.connected refresh is suppressed */
+  markUpdated: () => void
 }
 
 const ConfigContext = createContext<ConfigContextValue>()
@@ -108,6 +110,10 @@ export function ConfigProvider(props: ParentProps) {
     }
   }
 
+  function markUpdated() {
+    lastUpdateAt = Date.now()
+  }
+
   let refreshTimer: number | undefined
 
   onMount(() => {
@@ -144,6 +150,7 @@ export function ConfigProvider(props: ParentProps) {
         updateProject,
         updateGlobal,
         refresh,
+        markUpdated,
       }}
     >
       {props.children}
