@@ -7,6 +7,8 @@ import {
   createEffect,
   onCleanup,
   createMemo,
+  on,
+  untrack,
 } from "solid-js";
 import { useParams, useNavigate } from "@solidjs/router";
 import { Button } from "../components/ui/button";
@@ -315,20 +317,18 @@ export function Session() {
   // Track whether the agent was genuinely processing (not initial load)
   const wasProcessing = { value: false };
 
-  // Track previous session ID for draft save/restore across switches
-  const prev = { id: params.id as string | undefined };
-
-  // Keep sessionId in sync with URL params and sync session data
-  createEffect(() => {
-    const id = params.id;
+  // Keep sessionId in sync with URL params and sync session data.
+  // Use on() to explicitly track only params.id so edits to input/fileContext/
+  // imageAttachments don't re-trigger this effect.
+  createEffect(on(() => params.id, (id, prevId) => {
     console.log("[Session] URL param changed:", id);
 
-    // Save draft from the previous session before switching
-    const prevId = prev.id;
+    // Save draft from the previous session before switching.
+    // Read signals via untrack() so they aren't tracked dependencies.
     if (prevId && prevId !== id) {
-      const text = input();
-      const files = fileContext();
-      const images = imageAttachments();
+      const text = untrack(input);
+      const files = untrack(fileContext);
+      const images = untrack(imageAttachments);
       const meaningful =
         text.trim().length > 0 ||
         (files && files.length > 0) ||
@@ -340,7 +340,6 @@ export function Session() {
         drafts.delete(prevId);
       }
     }
-    prev.id = id;
 
     setSessionId(id);
     setPendingUserMessageText(null); // Clear pending text on session change
@@ -387,7 +386,7 @@ export function Session() {
       setLoadingHistory(false);
       setProcessing(false);
     }
-  });
+  }));
 
   // Auto-send saved prompt stored in sessionStorage by layout's createSessionWithPrompt.
   // We read from sessionStorage instead of URL params to avoid browser URL length limits.
