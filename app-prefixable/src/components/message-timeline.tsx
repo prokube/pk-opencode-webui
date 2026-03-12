@@ -12,6 +12,21 @@ import { extractTextContent } from "../utils/message"
 const TURNS_PER_BATCH = 10
 const INITIAL_TURNS = 5
 
+// Compute turn-level timing from user and assistant message timestamps
+function computeTurnTime(user: DisplayMessage, assistants: DisplayMessage[]): Turn["time"] {
+  const started = user.time?.created
+  if (!started) return undefined
+  // Find the latest completed timestamp among all assistant messages
+  const completed = assistants.reduce<number | undefined>((latest, msg) => {
+    const c = msg.time?.completed
+    if (!c) return latest
+    if (!latest) return c
+    return c > latest ? c : latest
+  }, undefined)
+  const duration = completed ? completed - started : undefined
+  return { started, completed, duration }
+}
+
 // Convert flat message list to turns (user + assistant groupings)
 function messagesToTurns(messages: DisplayMessage[]): Turn[] {
   const turns: Turn[] = []
@@ -20,7 +35,10 @@ function messagesToTurns(messages: DisplayMessage[]): Turn[] {
   for (const msg of messages) {
     if (msg.role === "user") {
       // Start a new turn
-      if (current) turns.push(current)
+      if (current) {
+        current.time = computeTurnTime(current.userMessage, current.assistantMessages)
+        turns.push(current)
+      }
       current = {
         id: msg.id,
         userMessage: msg,
@@ -36,7 +54,10 @@ function messagesToTurns(messages: DisplayMessage[]): Turn[] {
   }
 
   // Don't forget the last turn
-  if (current) turns.push(current)
+  if (current) {
+    current.time = computeTurnTime(current.userMessage, current.assistantMessages)
+    turns.push(current)
+  }
 
   return turns
 }

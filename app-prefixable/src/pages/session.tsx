@@ -68,6 +68,18 @@ interface DisplayMessage {
   role: "user" | "assistant";
   parts: Part[];
   error?: { name: string; data?: { message?: string } };
+  time?: {
+    created: number;
+    completed?: number;
+  };
+  tokens?: {
+    input: number;
+    output: number;
+    reasoning: number;
+    cache: { read: number; write: number };
+  };
+  modelID?: string;
+  providerID?: string;
 }
 
 export function Session() {
@@ -406,12 +418,25 @@ export function Session() {
   const syncMessages = createMemo(() => {
     const id = sessionId();
     if (!id) return [];
-    return sync.messages(id).map((msg) => ({
-      id: msg.info.id,
-      role: msg.info.role as "user" | "assistant",
-      parts: msg.parts,
-      error: (msg.info as { error?: DisplayMessage["error"] }).error,
-    }));
+    return sync.messages(id).map((msg) => {
+      const info = msg.info;
+      const base = {
+        id: info.id,
+        role: info.role as "user" | "assistant",
+        parts: msg.parts,
+        error: (info as { error?: DisplayMessage["error"] }).error,
+        time: info.time,
+      };
+      if (info.role === "assistant") {
+        return {
+          ...base,
+          tokens: info.tokens,
+          modelID: info.modelID,
+          providerID: info.providerID,
+        };
+      }
+      return base;
+    });
   });
 
   // Includes optimistic message if present and not yet in sync
