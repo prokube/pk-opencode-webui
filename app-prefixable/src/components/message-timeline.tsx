@@ -28,6 +28,15 @@ function computeTurnTime(user: DisplayMessage, assistants: DisplayMessage[]): Tu
 }
 
 // Convert flat message list to turns (user + assistant groupings)
+function computeTurnTime(turn: Turn): Turn["time"] {
+  const created = turn.userMessage.time?.created
+  if (!created) return undefined
+  const last = turn.assistantMessages[turn.assistantMessages.length - 1]
+  const completed = last?.time?.completed
+  const duration = completed ? completed - created : undefined
+  return { created, completed, duration }
+}
+
 function messagesToTurns(messages: DisplayMessage[]): Turn[] {
   const turns: Turn[] = []
   let current: Turn | null = null

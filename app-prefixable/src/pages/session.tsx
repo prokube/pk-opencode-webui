@@ -35,6 +35,7 @@ import { SessionHeader } from "../components/session-header";
 import { ResizeHandle } from "../components/resize-handle";
 import { base64Encode, base64Decode } from "../utils/path";
 import type { Part, QuestionRequest, TextPart } from "../sdk/client";
+import type { DisplayMessage } from "../types/message";
 import { Plus, Settings, Paperclip, Upload, Bookmark, BookOpen } from "lucide-solid";
 import { Portal } from "solid-js/web";
 import { ContextItems, type FileContext } from "../components/context-items";
@@ -415,20 +416,18 @@ export function Session() {
     if (!id) return [];
     return sync.messages(id).map((msg) => {
       const info = msg.info;
-      const base = {
+      const base: DisplayMessage = {
         id: info.id,
         role: info.role as "user" | "assistant",
         parts: msg.parts,
-        error: (info as { error?: DisplayMessage["error"] }).error,
-        time: info.time,
+        error: "error" in info ? info.error : undefined,
+        time: { created: info.time.created },
       };
       if (info.role === "assistant") {
-        return {
-          ...base,
-          tokens: info.tokens,
-          modelID: info.modelID,
-          providerID: info.providerID,
-        };
+        base.time = { created: info.time.created, completed: info.time.completed };
+        if ("modelID" in info) base.modelID = info.modelID;
+        if ("providerID" in info) base.providerID = info.providerID;
+        if ("tokens" in info) base.tokens = info.tokens;
       }
       return base;
     });

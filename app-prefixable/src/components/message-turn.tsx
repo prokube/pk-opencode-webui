@@ -1,11 +1,12 @@
 import { createSignal, createEffect, Show, For, createMemo, onCleanup } from "solid-js"
-import { ChevronDown, ChevronRight, User, Bot, FileText, Copy, Check } from "lucide-solid"
+import { ChevronDown, ChevronRight, User, Bot, FileText, Copy, Check, Clock } from "lucide-solid"
 import { Markdown } from "./markdown"
 import { MessageParts } from "./tool-part"
 import { ImagePreview } from "./image-preview"
 import type { DisplayMessage, Turn } from "../types/message"
-import type { Part } from "../sdk/client"
+import type { Part, ToolState } from "../sdk/client"
 import { extractTextContent } from "../utils/message"
+import { formatRelativeTime, formatAbsoluteTime, formatDuration } from "../utils/time"
 
 // Type for file parts with image/PDF data
 interface FilePart {
@@ -30,6 +31,133 @@ function hasTools(message: DisplayMessage): boolean {
   return message.parts.some((p) => p.type === "tool")
 }
 
+// Extract completed tool parts with timing from all assistant messages
+function extractToolTimings(messages: DisplayMessage[]): { name: string; duration: number }[] {
+  const results: { name: string; duration: number }[] = []
+  for (const msg of messages) {
+    for (const part of msg.parts) {
+      if (part.type !== "tool") continue
+      const state = (part as { state: ToolState }).state
+      if (state.status !== "completed" && state.status !== "error") continue
+      const time = state.time
+      if (!time.start || !time.end) continue
+      const title = (state as { title?: string }).title || (part as { tool: string }).tool
+      results.push({ name: title, duration: time.end - time.start })
+    }
+  }
+  return results
+}
+
+function TurnDetails(props: { turn: Turn }) {
+  const user = () => props.turn.userMessage
+  const assistants = () => props.turn.assistantMessages
+  const last = () => assistants()[assistants().length - 1]
+  const turnTime = () => props.turn.time
+  const inProgress = () => assistants().length === 0 || !last()?.time?.completed
+
+  const toolTimings = createMemo(() => extractToolTimings(assistants()))
+
+  const fmt = (n: number) => n.toLocaleString()
+
+  return (
+    <div
+      class="px-4 py-2 text-xs font-mono space-y-1"
+      style={{
+        "border-top": "1px solid var(--border-base)",
+        background: "var(--surface-inset)",
+        color: "var(--text-weak)",
+      }}
+    >
+      {/* Sent time */}
+      <Show when={user().time?.created}>
+        <div class="flex justify-between">
+          <span>Sent</span>
+          <span style={{ color: "var(--text-base)" }}>{formatAbsoluteTime(user().time!.created)}</span>
+        </div>
+      </Show>
+
+      {/* Response time range */}
+      <Show when={last()?.time?.created}>
+        <div class="flex justify-between">
+          <span>Response</span>
+          <span style={{ color: "var(--text-base)" }}>
+            {formatAbsoluteTime(last()!.time!.created)}
+            <Show when={last()?.time?.completed} fallback={<span class="opacity-60"> → in progress...</span>}>
+              <span> → {formatAbsoluteTime(last()!.time!.completed!)}</span>
+            </Show>
+          </span>
+        </div>
+      </Show>
+
+      {/* Duration */}
+      <Show when={turnTime()}>
+        <div class="flex justify-between">
+          <span>Duration</span>
+          <span style={{ color: "var(--text-base)" }}>
+            {inProgress() ? "in progress..." : formatDuration(turnTime()!.duration!)}
+          </span>
+        </div>
+      </Show>
+
+      {/* Model */}
+      <Show when={last()?.providerID || last()?.modelID}>
+        <div class="flex justify-between">
+          <span>Model</span>
+          <span style={{ color: "var(--text-base)" }}>
+            {[last()?.providerID, last()?.modelID].filter(Boolean).join(" / ")}
+          </span>
+        </div>
+      </Show>
+
+      {/* Tokens */}
+      <Show when={last()?.tokens}>
+        {(tokens) => (
+          <>
+            <div class="flex justify-between">
+              <span>Tokens</span>
+              <span style={{ color: "var(--text-base)" }}>
+                in: {fmt(tokens().input)} · out: {fmt(tokens().output)}
+              </span>
+            </div>
+            <Show when={tokens().cache.read > 0 || tokens().cache.write > 0}>
+              <div class="flex justify-between pl-4">
+                <span />
+                <span class="opacity-80">
+                  cache read: {fmt(tokens().cache.read)} · write: {fmt(tokens().cache.write)}
+                </span>
+              </div>
+            </Show>
+            <Show when={tokens().reasoning > 0}>
+              <div class="flex justify-between pl-4">
+                <span />
+                <span class="opacity-80">reasoning: {fmt(tokens().reasoning)}</span>
+              </div>
+            </Show>
+          </>
+        )}
+      </Show>
+
+      {/* Tool timings */}
+      <Show when={toolTimings().length > 0}>
+        <div
+          class="pt-1 mt-1 space-y-0.5"
+          style={{ "border-top": "1px solid var(--border-base)" }}
+        >
+          <div>Tools</div>
+          <For each={toolTimings()}>
+            {(tool) => (
+              <div class="flex justify-between pl-4">
+                <span class="truncate" style={{ color: "var(--text-base)" }}>{tool.name}</span>
+                <span class="shrink-0 ml-2">{formatDuration(tool.duration)}</span>
+              </div>
+            )}
+          </For>
+        </div>
+      </Show>
+    </div>
+  )
+}
+
 export function MessageTurn(props: {
   turn: Turn
   defaultExpanded?: boolean
@@ -42,6 +170,25 @@ export function MessageTurn(props: {
   const [canExpand, setCanExpand] = createSignal(false)
   const [copied, setCopied] = createSignal(false)
   const [focused, setFocused] = createSignal(false)
+  const [detailsOpen, setDetailsOpen] = createSignal(false)
+
+  // Reactive relative timestamp — updates every 30s
+  const [now, setNow] = createSignal(Date.now())
+  const timer = setInterval(() => setNow(Date.now()), 30_000)
+  onCleanup(() => clearInterval(timer))
+
+  const relativeTime = createMemo(() => {
+    now() // track dependency
+    const created = props.turn.userMessage.time?.created
+    if (!created) return undefined
+    return formatRelativeTime(created)
+  })
+
+  const absoluteTime = createMemo(() => {
+    const created = props.turn.userMessage.time?.created
+    if (!created) return undefined
+    return formatAbsoluteTime(created)
+  })
 
   // Ref for text overflow detection
   let textRef: HTMLDivElement | undefined
@@ -209,6 +356,39 @@ export function MessageTurn(props: {
           </div>
         </div>
 
+        {/* Relative timestamp */}
+        <Show when={relativeTime()}>
+          <span
+            class="shrink-0 text-xs mt-1"
+            style={{ color: "var(--text-weak)" }}
+            title={absoluteTime()}
+          >
+            {relativeTime()}
+          </span>
+        </Show>
+
+        {/* Details toggle button */}
+        <Show when={props.turn.userMessage.time?.created}>
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation()
+              setDetailsOpen(!detailsOpen())
+            }}
+            class="shrink-0 p-1 rounded transition-colors"
+            style={{ color: detailsOpen() ? "var(--text-strong)" : "var(--icon-weak)" }}
+            onMouseEnter={(e) => (e.currentTarget.style.color = "var(--text-strong)")}
+            onMouseLeave={(e) => {
+              if (!detailsOpen()) e.currentTarget.style.color = "var(--icon-weak)"
+            }}
+            title="Turn details"
+            aria-label={detailsOpen() ? "Hide turn details" : "Show turn details"}
+            aria-expanded={detailsOpen()}
+          >
+            <Clock class="w-4 h-4" />
+          </button>
+        </Show>
+
         {/* Copy button (appears on hover or focus) */}
         <Show when={userText()}>
           <button
@@ -249,6 +429,11 @@ export function MessageTurn(props: {
           />
         </button>
       </div>
+
+      {/* Details panel */}
+      <Show when={detailsOpen()}>
+        <TurnDetails turn={props.turn} />
+      </Show>
 
       {/* Expanded content */}
       <Show when={expanded()}>
