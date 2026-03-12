@@ -70,7 +70,7 @@ function TurnDetails(props: { turn: Turn }) {
       }}
     >
       {/* Sent time */}
-      <Show when={user().time?.created}>
+      <Show when={user().time?.created != null}>
         <div class="flex justify-between">
           <span>Sent</span>
           <span style={{ color: "var(--text-base)" }}>{formatAbsoluteTime(user().time!.created)}</span>
@@ -78,12 +78,12 @@ function TurnDetails(props: { turn: Turn }) {
       </Show>
 
       {/* Response time range */}
-      <Show when={first()?.time?.created}>
+      <Show when={first()?.time?.created != null}>
         <div class="flex justify-between">
           <span>Response</span>
           <span style={{ color: "var(--text-base)" }}>
             {formatAbsoluteTime(first()!.time!.created)}
-            <Show when={last()?.time?.completed} fallback={<span class="opacity-60"> → in progress...</span>}>
+            <Show when={last()?.time?.completed != null} fallback={<span class="opacity-60"> → in progress...</span>}>
               <span> → {formatAbsoluteTime(last()!.time!.completed!)}</span>
             </Show>
           </span>
@@ -177,13 +177,13 @@ export function MessageTurn(props: {
   // Relative timestamp driven by shared `now` signal from parent
   const relativeTime = createMemo(() => {
     const created = props.turn.userMessage.time?.created
-    if (!created) return undefined
+    if (created == null) return undefined
     return formatRelativeTime(created, props.now())
   })
 
   const absoluteTime = createMemo(() => {
     const created = props.turn.userMessage.time?.created
-    if (!created) return undefined
+    if (created == null) return undefined
     return formatAbsoluteTime(created)
   })
 
@@ -365,7 +365,7 @@ export function MessageTurn(props: {
         </Show>
 
         {/* Details toggle button */}
-        <Show when={props.turn.userMessage.time?.created}>
+        <Show when={props.turn.userMessage.time?.created != null}>
           <button
             type="button"
             onClick={(e) => {

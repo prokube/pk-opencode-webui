@@ -46,7 +46,6 @@ import {
 } from "../components/image-attachments";
 import { readNotifyMap, writeNotifyMap } from "../utils/notify";
 import { sessionQuestionRequest } from "../utils/session-tree-request";
-import type { DisplayMessage } from "../types/message";
 
 const ACCEPTED_TYPES = [
   "image/png",
