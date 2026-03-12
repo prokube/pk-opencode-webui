@@ -13,6 +13,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Add timestamp display and expandable details panel to message turns (#176)
 
 ### Changed
+- Build OpenCode from source (memory-leak fix fork) instead of upstream installer, configurable via build args
 
 ### Fixed
 - Remove backdrop-click dismiss from form dialogs to prevent accidental data loss (#171)

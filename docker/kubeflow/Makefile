@@ -9,25 +9,38 @@ PLATFORM ?= linux/amd64
 S6_OVERLAY_VERSION ?= 3.1.6.2
 KF_EXAMPLES_REPO ?=
 
+# OpenCode source build args
+# Set OPENCODE_BUILD_FROM_SOURCE=false to use upstream installer instead
+OPENCODE_BUILD_FROM_SOURCE ?= true
+OPENCODE_REPO ?= https://github.com/kryptobaseddev/opencode.git
+OPENCODE_REF ?= fix/memory-leaks
+OPENCODE_VERSION ?= 1.2.6
+
 # Registry (optional)
 REGISTRY ?=
 
-.PHONY: build build-no-cache run run-with-prefix stop logs shell clean help
+.PHONY: build build-no-cache build-upstream run run-with-prefix stop logs shell clean help
 
 # Build the Docker image
 build:
 	@echo "Building $(IMAGE_NAME):$(IMAGE_TAG)..."
+	@echo "  OpenCode source: $(if $(filter true,$(OPENCODE_BUILD_FROM_SOURCE)),$(OPENCODE_REPO)@$(OPENCODE_REF),upstream installer v$(OPENCODE_VERSION))"
 	cd ../.. && docker build \
 		--platform $(PLATFORM) \
 		-t $(IMAGE_NAME):$(IMAGE_TAG) \
 		-f docker/kubeflow/Dockerfile \
 		--build-arg S6_OVERLAY_VERSION=$(S6_OVERLAY_VERSION) \
 		--build-arg KF_EXAMPLES_REPO=$(KF_EXAMPLES_REPO) \
+		--build-arg OPENCODE_BUILD_FROM_SOURCE=$(OPENCODE_BUILD_FROM_SOURCE) \
+		--build-arg OPENCODE_REPO=$(OPENCODE_REPO) \
+		--build-arg OPENCODE_REF=$(OPENCODE_REF) \
+		--build-arg OPENCODE_VERSION=$(OPENCODE_VERSION) \
 		.
 
 # Build without cache
 build-no-cache:
 	@echo "Building $(IMAGE_NAME):$(IMAGE_TAG) (no cache)..."
+	@echo "  OpenCode source: $(if $(filter true,$(OPENCODE_BUILD_FROM_SOURCE)),$(OPENCODE_REPO)@$(OPENCODE_REF),upstream installer v$(OPENCODE_VERSION))"
 	cd ../.. && docker build \
 		--platform $(PLATFORM) \
 		--no-cache \
@@ -35,7 +48,16 @@ build-no-cache:
 		-f docker/kubeflow/Dockerfile \
 		--build-arg S6_OVERLAY_VERSION=$(S6_OVERLAY_VERSION) \
 		--build-arg KF_EXAMPLES_REPO=$(KF_EXAMPLES_REPO) \
+		--build-arg OPENCODE_BUILD_FROM_SOURCE=$(OPENCODE_BUILD_FROM_SOURCE) \
+		--build-arg OPENCODE_REPO=$(OPENCODE_REPO) \
+		--build-arg OPENCODE_REF=$(OPENCODE_REF) \
+		--build-arg OPENCODE_VERSION=$(OPENCODE_VERSION) \
 		.
+
+# Build using upstream installer (shortcut)
+build-upstream:
+	@echo "Building $(IMAGE_NAME):$(IMAGE_TAG) with upstream OpenCode v$(OPENCODE_VERSION)..."
+	$(MAKE) build OPENCODE_BUILD_FROM_SOURCE=false
 
 # Run locally without prefix
 run:
@@ -84,7 +106,8 @@ help:
 	@echo "OpenCode Web - Kubeflow Docker Build"
 	@echo ""
 	@echo "Usage:"
-	@echo "  make build              Build the Docker image"
+	@echo "  make build              Build with memory-leak fix fork (default)"
+	@echo "  make build-upstream     Build with upstream OpenCode installer"
 	@echo "  make build-no-cache     Build without Docker cache"
 	@echo "  make run                Run locally (http://localhost:8888/)"
 	@echo "  make run-with-prefix    Run with NB_PREFIX simulation"
@@ -99,3 +122,9 @@ help:
 	@echo "  IMAGE_TAG=$(IMAGE_TAG)"
 	@echo "  PLATFORM=$(PLATFORM)"
 	@echo "  REGISTRY=$(REGISTRY)"
+	@echo ""
+	@echo "OpenCode source:"
+	@echo "  OPENCODE_BUILD_FROM_SOURCE=$(OPENCODE_BUILD_FROM_SOURCE)"
+	@echo "  OPENCODE_REPO=$(OPENCODE_REPO)"
+	@echo "  OPENCODE_REF=$(OPENCODE_REF)"
+	@echo "  OPENCODE_VERSION=$(OPENCODE_VERSION) (used when BUILD_FROM_SOURCE=false)"

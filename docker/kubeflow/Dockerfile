@@ -3,12 +3,20 @@
 # =============================================================================
 # This image runs the prefix-aware OpenCode Web UI with the OpenCode API server.
 # It supports dynamic URL prefixes via NB_PREFIX environment variable.
+#
+# OpenCode source: By default, builds from a fork with memory-leak fixes.
+# Override via --build-arg:
+#   OPENCODE_REPO=https://github.com/anomalyco/opencode.git
+#   OPENCODE_REF=dev
+# Or to use the upstream pre-built installer instead:
+#   OPENCODE_BUILD_FROM_SOURCE=false
+#   OPENCODE_VERSION=1.2.6
 # =============================================================================
 
 # -----------------------------------------------------------------------------
 # Stage 1: Build the app-prefixable UI
 # -----------------------------------------------------------------------------
-FROM oven/bun:1-alpine AS builder
+FROM oven/bun:1-alpine AS ui-builder
 
 WORKDIR /app
 
@@ -22,7 +30,35 @@ RUN bun install
 RUN bun run build
 
 # -----------------------------------------------------------------------------
-# Stage 2: Runtime
+# Stage 2: Build OpenCode from source (conditional)
+# -----------------------------------------------------------------------------
+FROM oven/bun:1-alpine AS opencode-builder
+
+ARG OPENCODE_BUILD_FROM_SOURCE=true
+ARG OPENCODE_REPO=https://github.com/kryptobaseddev/opencode.git
+ARG OPENCODE_REF=fix/memory-leaks
+
+# Install git (needed for clone) and build dependencies
+RUN apk add --no-cache git bash curl
+
+WORKDIR /build
+
+# Clone, install deps, and build the opencode binary (single-target for current platform)
+# The build produces dist/opencode-linux-<arch>/bin/opencode
+RUN if [ "$OPENCODE_BUILD_FROM_SOURCE" = "true" ]; then \
+        git clone --depth 1 --branch "${OPENCODE_REF}" "${OPENCODE_REPO}" . && \
+        bun install && \
+        cd packages/opencode && \
+        bun run build -- --single --skip-install && \
+        mkdir -p /build/out && \
+        cp dist/opencode-linux-*/bin/opencode /build/out/opencode; \
+    else \
+        mkdir -p /build/out && \
+        echo "skipping source build" > /build/out/.skip; \
+    fi
+
+# -----------------------------------------------------------------------------
+# Stage 3: Runtime
 # -----------------------------------------------------------------------------
 FROM alpine:3.21
 
@@ -48,11 +84,20 @@ RUN curl -fsSL https://bun.sh/install | bash -s "bun-v${BUN_VERSION}" && \
     mv /root/.bun/bin/bun /usr/local/bin/bun && \
     rm -rf /root/.bun
 
-# Install OpenCode CLI
+# Install OpenCode CLI — either from source build or upstream installer
+ARG OPENCODE_BUILD_FROM_SOURCE=true
+ARG OPENCODE_VERSION=1.2.6
 ENV SHELL=/bin/bash
-RUN curl -fsSL https://opencode.ai/install | bash && \
-    mv /root/.opencode/bin/opencode /usr/local/bin/opencode && \
-    rm -rf /root/.opencode
+COPY --from=opencode-builder /build/out/ /tmp/opencode-build/
+RUN if [ "$OPENCODE_BUILD_FROM_SOURCE" = "true" ] && [ -f /tmp/opencode-build/opencode ]; then \
+        mv /tmp/opencode-build/opencode /usr/local/bin/opencode && \
+        chmod +x /usr/local/bin/opencode; \
+    else \
+        curl -fsSL https://opencode.ai/install | bash -s -- --version "${OPENCODE_VERSION}" && \
+        mv /root/.opencode/bin/opencode /usr/local/bin/opencode && \
+        rm -rf /root/.opencode; \
+    fi && \
+    rm -rf /tmp/opencode-build
 
 # Install s6-overlay for process supervision
 ARG S6_OVERLAY_VERSION=3.1.6.2
@@ -84,7 +129,7 @@ COPY docker/kubeflow/opencode-default-config.json /home/jovyan/.config/opencode/
 RUN cp -r /home/jovyan /tmp_home/
 
 # Copy built UI from builder stage
-COPY --from=builder /app/app-prefixable/dist /opt/opencode-ui/dist
+COPY --from=ui-builder /app/app-prefixable/dist /opt/opencode-ui/dist
 
 # Copy server script (path relative to repo root)
 COPY docker/serve-ui.ts /opt/opencode-ui/serve-ui.ts
