@@ -1,4 +1,4 @@
-import { createContext, useContext, createSignal, createEffect, type ParentProps, type Accessor } from "solid-js"
+import { createContext, useContext, createSignal, createEffect, on, type ParentProps, type Accessor } from "solid-js"
 
 interface SavedPrompt {
   id: string
@@ -79,12 +79,16 @@ export function SavedPromptsProvider(props: ParentProps & { directory?: Accessor
     loadFromStorage(key()).sort((a, b) => b.createdAt - a.createdAt),
   )
 
-  // Reload prompts (with migration) when the directory changes
-  createEffect(() => {
+  // Reload prompts (with migration) only when the storage key actually changes
+  // (i.e. when switching projects). Using `on()` with `defer: true` prevents
+  // this effect from running on initial mount (data is already loaded above)
+  // and avoids clobbering in-memory signal updates from add/update/remove
+  // during same-project navigation.
+  createEffect(on(key, (k) => {
     const d = dir()
     if (d) migrateIfNeeded(d)
-    setPrompts(loadFromStorage(key()).sort((a, b) => b.createdAt - a.createdAt))
-  })
+    setPrompts(loadFromStorage(k).sort((a, b) => b.createdAt - a.createdAt))
+  }, { defer: true }))
 
   function add(title: string, text: string) {
     setPrompts((prev) => {
