@@ -76,6 +76,12 @@ interface SessionDraft {
 }
 const drafts = new Map<string, SessionDraft>();
 
+// Composite key for the drafts Map so drafts are scoped to a directory+session
+// pair. Uses "__new__" as sentinel when there is no session id yet.
+function draftKey(dir: string, id?: string) {
+  return `${dir}:${id ?? "__new__"}`;
+}
+
 export function Session() {
   const params = useParams<{ dir: string; id?: string }>();
   const navigate = useNavigate();
@@ -318,14 +324,15 @@ export function Session() {
   const wasProcessing = { value: false };
 
   // Keep sessionId in sync with URL params and sync session data.
-  // Use on() to explicitly track only params.id so edits to input/fileContext/
-  // imageAttachments don't re-trigger this effect.
-  createEffect(on(() => params.id, (id, prevId) => {
-    console.log("[Session] URL param changed:", id);
+  // Track the composite dir+id key so the effect fires on directory changes too,
+  // preventing drafts from leaking across projects when id stays undefined.
+  createEffect(on(() => draftKey(params.dir, params.id), (key, prevKey) => {
+    const id = params.id;
+    console.log("[Session] URL param changed:", key);
 
     // Save draft from the previous session before switching.
     // Read signals via untrack() so they aren't tracked dependencies.
-    if (prevId && prevId !== id) {
+    if (prevKey && prevKey !== key) {
       const text = untrack(input);
       const files = untrack(fileContext);
       const images = untrack(imageAttachments);
@@ -335,9 +342,9 @@ export function Session() {
         (images && images.length > 0);
 
       if (meaningful) {
-        drafts.set(prevId, { text, files, images, height: inputRef?.style.height ?? "" });
+        drafts.set(prevKey, { text, files, images, height: inputRef?.style.height ?? "" });
       } else {
-        drafts.delete(prevId);
+        drafts.delete(prevKey);
       }
     }
 
@@ -345,7 +352,7 @@ export function Session() {
     setPendingUserMessageText(null); // Clear pending text on session change
 
     // Restore draft for the new session (or clear if none saved)
-    const saved = id ? drafts.get(id) : undefined;
+    const saved = drafts.get(key);
     setInput(saved?.text ?? "");
     setFileContext(saved?.files ?? []);
     setImageAttachments(saved?.images ?? []);
@@ -1293,8 +1300,7 @@ export function Session() {
     setImageAttachments([]); // Clear image attachments after sending
 
     // Clear saved draft for this session since the message was sent
-    const sid = sessionId();
-    if (sid) drafts.delete(sid);
+    drafts.delete(draftKey(params.dir, sessionId()));
 
     // Reset textarea height after clearing input
     if (inputRef) inputRef.style.height = "";
