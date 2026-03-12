@@ -1302,9 +1302,6 @@ export function Session() {
     // Clear saved draft for this session since the message was sent
     drafts.delete(draftKey(params.dir, sessionId()));
 
-    // Reset textarea height after clearing input
-    if (inputRef) inputRef.style.height = "";
-
     // Track pending user message text to match backend echoes
     setPendingUserMessageText(text);
 
