@@ -3,6 +3,7 @@ import { ChevronDown, ChevronRight, User, Bot, FileText, Copy, Check, Clock } fr
 import { Markdown } from "./markdown"
 import { MessageParts } from "./tool-part"
 import { ImagePreview } from "./image-preview"
+import { errorText } from "../types/message"
 import type { DisplayMessage, Turn } from "../types/message"
 import type { Part } from "../sdk/client"
 import { extractTextContent } from "../utils/message"
@@ -517,7 +518,7 @@ export function MessageTurn(props: {
                           class="px-3 py-2 rounded text-sm mb-2"
                           style={{ background: "var(--status-danger-dim)", color: "var(--status-danger-text)" }}
                         >
-                          <strong>Error:</strong> {"message" in err().data ? err().data.message : err().name}
+                          <strong>Error:</strong> {errorText(err())}
                         </div>
                       )}
                     </Show>

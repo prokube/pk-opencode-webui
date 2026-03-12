@@ -5,6 +5,7 @@ import { MessageTurn } from "./message-turn"
 import { Markdown } from "./markdown"
 import { MessageParts } from "./tool-part"
 import { ChevronUp } from "lucide-solid"
+import { errorText } from "../types/message"
 import type { DisplayMessage, Turn } from "../types/message"
 import { extractTextContent } from "../utils/message"
 
@@ -444,7 +445,7 @@ export function FlatMessageList(props: { messages: DisplayMessage[]; processing:
                           class="px-3 py-2 rounded text-sm mb-2"
                           style={{ background: "var(--status-danger-dim)", color: "var(--status-danger-text)" }}
                         >
-                          <strong>Error:</strong> {"message" in err().data ? err().data.message : err().name}
+                          <strong>Error:</strong> {errorText(err())}
                         </div>
                       )}
                     </Show>
