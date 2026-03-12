@@ -93,9 +93,6 @@ export function ConfirmDialog(props: Props) {
         <div
           class="fixed inset-0 z-[100] flex items-center justify-center"
           style={{ background: "rgba(0,0,0,0.5)" }}
-          onClick={(e) => {
-            if (e.target === e.currentTarget && !props.cancelDisabled) props.onCancel()
-          }}
           role="presentation"
         >
           <div

@@ -122,9 +122,6 @@ export function MCPAddDialog(props: Props) {
     <div
       class="fixed inset-0 z-50 flex items-center justify-center"
       style={{ background: "rgba(0,0,0,0.5)" }}
-      onClick={(e) => {
-        if (e.target === e.currentTarget) props.onClose()
-      }}
     >
       <div
         class="w-full max-w-lg max-h-[90vh] rounded-lg shadow-xl overflow-hidden flex flex-col"
