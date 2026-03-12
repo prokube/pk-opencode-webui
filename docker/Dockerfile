@@ -37,7 +37,7 @@ RUN bun run build
 FROM oven/bun:1-alpine AS opencode-builder
 
 ARG OPENCODE_BUILD_FROM_SOURCE=true
-ARG OPENCODE_REPO=https://github.com/kryptobaseddev/opencode.git
+ARG OPENCODE_REPO=https://github.com/binarydoubling/opencode.git
 ARG OPENCODE_REF=fix/memory-leaks
 
 # Install git (needed for clone) and build dependencies

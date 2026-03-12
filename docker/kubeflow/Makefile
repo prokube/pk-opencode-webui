@@ -12,7 +12,7 @@ KF_EXAMPLES_REPO ?=
 # OpenCode source build args
 # Set OPENCODE_BUILD_FROM_SOURCE=false to use upstream installer instead
 OPENCODE_BUILD_FROM_SOURCE ?= true
-OPENCODE_REPO ?= https://github.com/kryptobaseddev/opencode.git
+OPENCODE_REPO ?= https://github.com/binarydoubling/opencode.git
 OPENCODE_REF ?= fix/memory-leaks
 OPENCODE_VERSION ?= 1.2.6
 
