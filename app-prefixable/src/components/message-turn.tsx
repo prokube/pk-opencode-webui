@@ -38,7 +38,7 @@ function extractToolTimings(messages: DisplayMessage[]): { name: string; duratio
     for (const part of msg.parts) {
       if (part.type !== "tool") continue
       const state = (part as { state: ToolState }).state
-      if (state.status !== "completed" && state.status !== "error") continue
+      if (state.status !== "completed") continue
       const time = state.time
       if (time.start == null || time.end == null) continue
       const title = (state as { title?: string }).title || (part as { tool: string }).tool
@@ -51,6 +51,7 @@ function extractToolTimings(messages: DisplayMessage[]): { name: string; duratio
 function TurnDetails(props: { turn: Turn }) {
   const user = () => props.turn.userMessage
   const assistants = () => props.turn.assistantMessages
+  const first = () => assistants()[0]
   const last = () => assistants()[assistants().length - 1]
   const turnTime = () => props.turn.time
   const inProgress = () => assistants().length === 0 || !last()?.time?.completed
@@ -77,11 +78,11 @@ function TurnDetails(props: { turn: Turn }) {
       </Show>
 
       {/* Response time range */}
-      <Show when={last()?.time?.created}>
+      <Show when={first()?.time?.created}>
         <div class="flex justify-between">
           <span>Response</span>
           <span style={{ color: "var(--text-base)" }}>
-            {formatAbsoluteTime(last()!.time!.created)}
+            {formatAbsoluteTime(first()!.time!.created)}
             <Show when={last()?.time?.completed} fallback={<span class="opacity-60"> → in progress...</span>}>
               <span> → {formatAbsoluteTime(last()!.time!.completed!)}</span>
             </Show>
