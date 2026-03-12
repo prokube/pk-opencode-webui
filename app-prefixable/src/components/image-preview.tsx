@@ -1,6 +1,7 @@
 import { Component, Show, createEffect, onCleanup } from "solid-js"
 import { Portal } from "solid-js/web"
 import { X } from "lucide-solid"
+import { createBackdropDismiss } from "../utils/backdrop"
 
 interface Props {
   url: string | null
@@ -28,7 +29,7 @@ export const ImagePreview: Component<Props> = (props) => {
     closeButtonRef?.focus()
   })
 
-  let mouseDownOnBackdrop = false
+  const backdrop = createBackdropDismiss(() => props.onClose())
 
   return (
     <Show when={props.url}>
@@ -37,13 +38,8 @@ export const ImagePreview: Component<Props> = (props) => {
           <div
             class="fixed inset-0 z-50 flex items-center justify-center"
             style={{ background: "rgba(0, 0, 0, 0.85)" }}
-            onMouseDown={(e) => {
-              mouseDownOnBackdrop = e.target === e.currentTarget
-            }}
-            onClick={(e) => {
-              if (mouseDownOnBackdrop && e.target === e.currentTarget) props.onClose()
-              mouseDownOnBackdrop = false
-            }}
+            onMouseDown={backdrop.onMouseDown}
+            onClick={backdrop.onClick}
             role="presentation"
           >
             <div

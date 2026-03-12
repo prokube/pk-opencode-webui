@@ -1,6 +1,7 @@
 import { Show, For, onMount, onCleanup } from "solid-js"
 import { useCommand, formatKeybind } from "../context/command"
 import { X } from "lucide-solid"
+import { createBackdropDismiss } from "../utils/backdrop"
 
 export function ShortcutReference() {
   const cmd = useCommand()
@@ -23,7 +24,7 @@ export function ShortcutReference() {
     onCleanup(() => document.removeEventListener("keydown", handleKeyDown))
   })
 
-  let mouseDownOnBackdrop = false
+  const backdrop = createBackdropDismiss(close)
 
   return (
     <Show when={cmd.shortcutRefOpen()}>
@@ -31,13 +32,8 @@ export function ShortcutReference() {
       <div
         class="fixed inset-0 z-50 flex items-center justify-center"
         style={{ background: "rgba(0,0,0,0.5)" }}
-        onMouseDown={(e) => {
-          mouseDownOnBackdrop = e.target === e.currentTarget
-        }}
-        onClick={(e) => {
-          if (mouseDownOnBackdrop && e.target === e.currentTarget) close()
-          mouseDownOnBackdrop = false
-        }}
+        onMouseDown={backdrop.onMouseDown}
+        onClick={backdrop.onClick}
       >
         {/* Dialog */}
         <div

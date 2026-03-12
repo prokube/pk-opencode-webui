@@ -7,6 +7,7 @@ import { Folder, X, GitBranch, AlertCircle } from "lucide-solid"
 import { Terminal } from "./terminal"
 import { useEvents } from "../context/events"
 import { mkdir, listDirs } from "../utils/extended-api"
+import { createBackdropDismiss } from "../utils/backdrop"
 import fuzzysort from "fuzzysort"
 
 type DialogView = "browse" | "clone"
@@ -425,7 +426,7 @@ export function ProjectDialog(props: ProjectDialogProps) {
 
   const home = createMemo(() => homeDirectory() || "")
 
-  let mouseDownOnBackdrop = false
+  const backdrop = createBackdropDismiss(props.onClose)
 
   return (
     <Show when={props.open}>
@@ -433,13 +434,8 @@ export function ProjectDialog(props: ProjectDialogProps) {
       <div
         class="fixed inset-0 z-50 flex items-center justify-center"
         style={{ background: "rgba(0, 0, 0, 0.5)" }}
-        onMouseDown={(e) => {
-          mouseDownOnBackdrop = e.target === e.currentTarget
-        }}
-        onClick={(e) => {
-          if (mouseDownOnBackdrop && e.target === e.currentTarget) props.onClose()
-          mouseDownOnBackdrop = false
-        }}
+        onMouseDown={backdrop.onMouseDown}
+        onClick={backdrop.onClick}
         onKeyDown={handleKeyDown}
       >
         {/* Dialog */}

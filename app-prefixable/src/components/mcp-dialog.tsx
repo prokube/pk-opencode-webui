@@ -3,6 +3,7 @@ import { useMCP } from "../context/mcp"
 import { X, Plus, Trash2 } from "lucide-solid"
 import { Button } from "./ui/button"
 import { ConfirmDialog } from "./confirm-dialog"
+import { createBackdropDismiss } from "../utils/backdrop"
 
 interface Props {
   onClose: () => void
@@ -91,19 +92,14 @@ export function MCPDialog(props: Props) {
     }
   }
 
-  let mouseDownOnBackdrop = false
+  const backdrop = createBackdropDismiss(() => props.onClose())
 
   return (
     <div
       class="fixed inset-0 z-50 flex items-center justify-center"
       style={{ background: "rgba(0,0,0,0.5)" }}
-      onMouseDown={(e) => {
-        mouseDownOnBackdrop = e.target === e.currentTarget
-      }}
-      onClick={(e) => {
-        if (mouseDownOnBackdrop && e.target === e.currentTarget) props.onClose()
-        mouseDownOnBackdrop = false
-      }}
+      onMouseDown={backdrop.onMouseDown}
+      onClick={backdrop.onClick}
     >
       <div
         class="w-full max-w-md rounded-lg shadow-xl overflow-hidden"
