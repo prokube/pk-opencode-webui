@@ -131,6 +131,7 @@ export function Session() {
   );
 
   const [input, setInput] = createSignal("");
+  const [dragHeight, setDragHeight] = createSignal(0); // 0 = no manual drag, positive = user-set minimum
   const [optimisticMessage, setOptimisticMessage] =
     createSignal<DisplayMessage | null>(null);
   const [loading, setLoading] = createSignal(false);
@@ -166,7 +167,9 @@ export function Session() {
     const nativeSet = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")?.set;
     nativeSet?.call(el, text);
     el.style.height = "auto";
-    el.style.height = `${Math.min(el.scrollHeight, 200)}px`;
+    const max = Math.max(200, window.innerHeight - 200);
+    const floor = Math.max(dragHeight(), el.scrollHeight);
+    el.style.height = `${Math.min(floor, max)}px`;
     requestAnimationFrame(() => el.focus());
   }
 
@@ -308,6 +311,7 @@ export function Session() {
     setFileContext([]); // Clear file context on session change
     setImageAttachments([]); // Clear image attachments on session change
     setInput(""); // Clear draft text on session change
+    setDragHeight(0); // Reset manual resize on session change
     if (inputRef) inputRef.style.height = ""; // Reset textarea auto-grow height
     setPromptSent(false); // Reset so pending prompts fire in the new session
     wasProcessing.value = false; // Reset to avoid false notifications
@@ -1232,6 +1236,7 @@ export function Session() {
     setError(null);
     setLoading(true);
     setInput("");
+    setDragHeight(0); // Reset manual resize after sending
     setFileContext([]); // Clear file context after sending
     setImageAttachments([]); // Clear image attachments after sending
 
@@ -1898,6 +1903,40 @@ export function Session() {
                   </div>
                 </Show>
 
+                {/* Drag-to-resize handle */}
+                <div
+                  class="cursor-ns-resize z-10 group flex items-center justify-center"
+                  style={{ height: "6px", "flex-shrink": 0 }}
+                  onMouseDown={(e) => {
+                    e.preventDefault();
+                    const startY = e.clientY;
+                    const startHeight = inputRef?.offsetHeight ?? 48;
+                    document.body.style.userSelect = "none";
+
+                    function onMouseMove(ev: MouseEvent) {
+                      const max = Math.max(200, window.innerHeight - 200);
+                      const raw = startHeight + (startY - ev.clientY);
+                      const clamped = Math.max(48, Math.min(max, raw));
+                      setDragHeight(clamped);
+                      if (inputRef) inputRef.style.height = `${clamped}px`;
+                    }
+
+                    function onMouseUp() {
+                      document.body.style.userSelect = "";
+                      document.removeEventListener("mousemove", onMouseMove);
+                      document.removeEventListener("mouseup", onMouseUp);
+                    }
+
+                    document.addEventListener("mousemove", onMouseMove);
+                    document.addEventListener("mouseup", onMouseUp);
+                  }}
+                >
+                  <div
+                    class="rounded-full transition-colors group-hover:bg-[var(--surface-strong)]"
+                    style={{ width: "40px", height: "2px", background: "var(--border-base)" }}
+                  />
+                </div>
+
                 <textarea
                   ref={inputRef}
                   value={input()}
@@ -1905,10 +1944,11 @@ export function Session() {
                   onPaste={handlePaste}
                   onInput={(e) => {
                     handleInputChange(e.currentTarget.value);
-                    // Auto-grow: reset height then set to scrollHeight
+                    // Auto-grow: reset height then set to scrollHeight, respecting drag floor
                     e.currentTarget.style.height = "auto";
-                    e.currentTarget.style.height =
-                      Math.min(e.currentTarget.scrollHeight, 200) + "px";
+                    const max = Math.max(200, window.innerHeight - 200);
+                    const floor = Math.max(dragHeight(), e.currentTarget.scrollHeight);
+                    e.currentTarget.style.height = Math.min(floor, max) + "px";
                   }}
                   onKeyDown={(e) => {
                     // Handle slash command navigation first
@@ -1944,7 +1984,7 @@ export function Session() {
                   style={{
                     color: "var(--text-base)",
                     "min-height": "48px",
-                    "max-height": "200px",
+                    "max-height": `${Math.max(200, window.innerHeight - 200)}px`,
                     "overflow-y": "auto",
                   }}
                 />
