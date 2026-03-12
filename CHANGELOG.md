@@ -12,6 +12,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Changed
 
 ### Fixed
+- Remove backdrop-click dismiss from form dialogs to prevent accidental data loss (#171)
 - Clear chat input text when switching sessions (#167)
 
 ### Removed
