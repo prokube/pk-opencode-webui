@@ -15,6 +15,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Changed
 
 ### Fixed
+- Fix saved prompts written to wrong localStorage key during navigation (#187)
 - Remove backdrop-click dismiss from form dialogs to prevent accidental data loss (#171)
 - Fix drag-to-dismiss bug on non-form dialogs (#172)
 - Fix newly created saved prompt not appearing in prompt list until page refresh (#174)

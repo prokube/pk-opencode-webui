@@ -1,4 +1,5 @@
 import { createContext, useContext, createSignal, createEffect, on, type ParentProps, type Accessor } from "solid-js"
+import { deriveDirectoryFromPathname } from "../utils/path"
 
 interface SavedPrompt {
   id: string
@@ -68,7 +69,35 @@ function migrateIfNeeded(directory: string) {
 }
 
 export function SavedPromptsProvider(props: ParentProps & { directory?: Accessor<string | undefined> }) {
-  const dir = () => props.directory?.()
+  // Keep a "sticky" directory that survives transient undefined flickers
+  // during SolidJS router transitions (e.g. project → project settings).
+  //
+  // When the directory signal becomes undefined, we use the shared
+  // deriveDirectoryFromPathname() helper to check the actual URL.  If it
+  // indicates a global route AND the directory is still undefined after a
+  // microtask (confirming the state is stable, not a transient `/` flash
+  // during router transitions), the sticky value clears.
+  const [sticky, setSticky] = createSignal<string | undefined>(props.directory?.())
+  createEffect(() => {
+    const d = props.directory?.()
+    if (d) {
+      setSticky(d)
+      return
+    }
+    // Directory became undefined — check whether the URL indicates a global
+    // route.  If it does, confirm stability via microtask: the pathname can
+    // briefly be `/` during SolidJS router transitions between project
+    // sub-routes, so we wait one microtask to see if a real directory arrives.
+    if (sticky() !== undefined && deriveDirectoryFromPathname() === undefined) {
+      queueMicrotask(() => {
+        if (props.directory?.() !== undefined) return
+        if (deriveDirectoryFromPathname() !== undefined) return
+        setSticky(undefined)
+      })
+    }
+  })
+
+  const dir = sticky
   const key = () => storageKey(dir())
 
   // Run migration synchronously before initial load so first render has data

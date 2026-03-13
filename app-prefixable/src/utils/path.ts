@@ -89,3 +89,28 @@ export function base64Decode(value: string): string {
   const bytes = Uint8Array.from(binary, (c) => c.charCodeAt(0))
   return new TextDecoder().decode(bytes)
 }
+
+/**
+ * Derive the active project directory from window.location.pathname.
+ * Returns the decoded directory string for project-scoped routes, or
+ * `undefined` for global routes (home `/`, `/settings`, etc.).
+ *
+ * Shared by `useActiveDirectory` in app.tsx and `SavedPromptsProvider`.
+ */
+export function deriveDirectoryFromPathname(): string | undefined {
+  const basePath = getBasePath()
+  const base = basePath.endsWith("/") ? basePath.slice(0, -1) : basePath
+  const pathname = window.location.pathname
+  const path = (pathname === base || pathname.startsWith(base + "/"))
+    ? pathname.slice(base.length)
+    : pathname
+  const segments = path.split("/").filter(Boolean)
+  if (segments.length === 0) return undefined
+  try {
+    const decoded = base64Decode(segments[0])
+    if (decoded.startsWith("/") || decoded.startsWith("~")) return decoded
+    return undefined
+  } catch {
+    return undefined
+  }
+}

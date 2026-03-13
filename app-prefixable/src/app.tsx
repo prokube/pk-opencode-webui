@@ -12,7 +12,7 @@ import { HomeLayout } from "./pages/home-layout"
 import { Session } from "./pages/session"
 import { Settings } from "./pages/settings"
 import { ProjectPicker } from "./pages/project-picker"
-import { base64Decode, getBasePath } from "./utils/path"
+import { base64Decode, deriveDirectoryFromPathname } from "./utils/path"
 import type { Project } from "./components/shared"
 
 const PROJECTS_STORAGE_KEY = "opencode.projects"
@@ -71,34 +71,15 @@ function AppRoutes() {
  * Re-evaluates on popstate and on history.pushState/history.replaceState navigation.
  */
 function useActiveDirectory() {
-  const basePath = getBasePath()
-  const base = basePath.endsWith("/") ? basePath.slice(0, -1) : basePath
-
-  function derive(): string | undefined {
-    const pathname = window.location.pathname
-    const path = (pathname === base || pathname.startsWith(base + "/"))
-      ? pathname.slice(base.length)
-      : pathname
-    const segments = path.split("/").filter(Boolean)
-    if (segments.length === 0) return undefined
-    try {
-      const decoded = base64Decode(segments[0])
-      if (decoded.startsWith("/") || decoded.startsWith("~")) return decoded
-      return undefined
-    } catch {
-      return undefined
-    }
-  }
-
   const [dir, setDir] = createSignal<string | undefined>(
-    typeof window === "undefined" ? undefined : derive(),
+    typeof window === "undefined" ? undefined : deriveDirectoryFromPathname(),
   )
 
   onMount(() => {
     // Ensure correct value once mounted (covers SSR hydration)
-    setDir(derive())
+    setDir(deriveDirectoryFromPathname())
 
-    function update() { setDir(derive()) }
+    function update() { setDir(deriveDirectoryFromPathname()) }
 
     // Patch pushState/replaceState to detect SolidJS Router navigations
     // instead of polling with setInterval
