@@ -1,4 +1,4 @@
-import { createContext, useContext, createSignal, createEffect, on, onCleanup, type ParentProps, type Accessor } from "solid-js"
+import { batch, createContext, useContext, createSignal, createEffect, on, onCleanup, type ParentProps, type Accessor } from "solid-js"
 
 interface SavedPrompt {
   id: string
@@ -67,6 +67,10 @@ function migrateIfNeeded(directory: string) {
   }
 }
 
+// Time to wait before clearing sticky directory — long enough to outlast
+// transient undefined emissions during SolidJS router transitions.
+const STICKY_CLEAR_DELAY = 150
+
 export function SavedPromptsProvider(props: ParentProps & { directory?: Accessor<string | undefined> }) {
   // Keep a "sticky" directory that survives transient undefined flickers
   // (e.g. SolidJS router briefly emits undefined when navigating between
@@ -90,9 +94,11 @@ export function SavedPromptsProvider(props: ParentProps & { directory?: Accessor
     // flickers during route transitions are ignored
     if (!pending && sticky() !== undefined) {
       setTimer(setTimeout(() => {
-        setTimer(undefined)
-        setSticky(undefined)
-      }, 150))
+        batch(() => {
+          setTimer(undefined)
+          setSticky(undefined)
+        })
+      }, STICKY_CLEAR_DELAY))
     }
   })
   onCleanup(() => {
