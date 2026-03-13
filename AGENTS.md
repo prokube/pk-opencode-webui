@@ -174,20 +174,6 @@ git commit -m "fix: description of what changed"
 - For local development, commit locally but wait for user approval before pushing
 - If unsure, ask the user: "Should I push these changes now?"
 
-### Changelog
-
-Every PR must include a single bullet-point entry (one line) in `CHANGELOG.md` under the existing `## [Unreleased]` section. Add your bullet under the appropriate subheading (creating it only if it does not already exist):
-
-- `### Added` for new features
-- `### Fixed` for bug fixes
-- `### Changed` for changes to existing functionality
-- `### Removed` for removed features
-
-Example entry (add this bullet under the appropriate `### Added`/`### Fixed`/... subsection beneath `## [Unreleased]`):
-```markdown
-- Prevent permission toggle from reverting after refresh (#161)
-```
-
 ## Required GitHub CLI Extensions
 
 The workflow requires the `gh-copilot-review` extension for requesting Copilot code reviews on PRs.
