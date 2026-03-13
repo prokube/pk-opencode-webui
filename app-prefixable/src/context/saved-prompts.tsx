@@ -68,7 +68,18 @@ function migrateIfNeeded(directory: string) {
 }
 
 export function SavedPromptsProvider(props: ParentProps & { directory?: Accessor<string | undefined> }) {
-  const dir = () => props.directory?.()
+  // Keep a "sticky" directory that never regresses to undefined once a real
+  // value has been seen.  When the user navigates to the settings page the
+  // active-directory signal transiently emits undefined — without stickiness
+  // that would cause reads/writes to hit the global localStorage key instead
+  // of the project-scoped one.
+  const [sticky, setSticky] = createSignal<string | undefined>(props.directory?.())
+  createEffect(() => {
+    const d = props.directory?.()
+    if (d) setSticky(d)
+  })
+
+  const dir = sticky
   const key = () => storageKey(dir())
 
   // Run migration synchronously before initial load so first render has data
