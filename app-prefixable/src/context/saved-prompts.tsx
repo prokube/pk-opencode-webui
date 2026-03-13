@@ -1,4 +1,4 @@
-import { createContext, useContext, createSignal, createEffect, on, type ParentProps, type Accessor } from "solid-js"
+import { createContext, useContext, createSignal, createEffect, on, onCleanup, type ParentProps, type Accessor } from "solid-js"
 
 interface SavedPrompt {
   id: string
@@ -68,15 +68,36 @@ function migrateIfNeeded(directory: string) {
 }
 
 export function SavedPromptsProvider(props: ParentProps & { directory?: Accessor<string | undefined> }) {
-  // Keep a "sticky" directory that never regresses to undefined once a real
-  // value has been seen.  When the user navigates to the settings page the
-  // active-directory signal transiently emits undefined — without stickiness
-  // that would cause reads/writes to hit the global localStorage key instead
-  // of the project-scoped one.
+  // Keep a "sticky" directory that survives transient undefined flickers
+  // (e.g. SolidJS router briefly emits undefined when navigating between
+  // project sub-routes like project → project settings).  However, when the
+  // user intentionally navigates to a global route (home `/` or global
+  // settings `/settings`), directory stays undefined long enough for the
+  // debounce to fire and the sticky value clears properly.
   const [sticky, setSticky] = createSignal<string | undefined>(props.directory?.())
+  const [timer, setTimer] = createSignal<ReturnType<typeof setTimeout> | undefined>()
   createEffect(() => {
     const d = props.directory?.()
-    if (d) setSticky(d)
+    const pending = timer()
+    if (d) {
+      // Real directory arrived — cancel any pending clear and latch it
+      if (pending) clearTimeout(pending)
+      setTimer(undefined)
+      setSticky(d)
+      return
+    }
+    // Directory became undefined — debounce before clearing so transient
+    // flickers during route transitions are ignored
+    if (!pending && sticky() !== undefined) {
+      setTimer(setTimeout(() => {
+        setTimer(undefined)
+        setSticky(undefined)
+      }, 150))
+    }
+  })
+  onCleanup(() => {
+    const pending = timer()
+    if (pending) clearTimeout(pending)
   })
 
   const dir = sticky
