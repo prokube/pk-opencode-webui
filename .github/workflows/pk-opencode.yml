@@ -158,3 +158,18 @@ jobs:
                 body: summary
               });
             }
+
+  create-release:
+    needs: build-prefixable-image
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Create GitHub Release
+        run: gh release create "${{ github.ref_name }}" --generate-notes --title "${{ github.ref_name }}"
+        env:
+          GH_TOKEN: ${{ github.token }}
