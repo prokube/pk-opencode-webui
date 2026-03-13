@@ -1805,7 +1805,9 @@ export function Layout(props: ParentProps) {
     try {
       await client.session.update({
         sessionID: session.id,
-        time: { archived: undefined },
+        // Send 0 instead of undefined — JSON.stringify strips undefined values,
+        // so the server would never see the field and skip the unarchive.
+        time: { archived: 0 },
       });
       // Session restoration will be reflected via SSE events updating sync context
     } catch (e) {
