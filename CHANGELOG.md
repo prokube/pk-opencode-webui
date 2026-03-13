@@ -12,8 +12,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Add drag-to-resize handle for chat input textarea (#170)
 - Add timestamp display and expandable details panel to message turns (#176)
 
-### Changed
-
 ### Fixed
 - Fix saved prompts written to wrong localStorage key during navigation (#187)
 - Fix session unarchive not working due to undefined being stripped by JSON.stringify (#189)
@@ -23,8 +21,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Preserve per-session draft input text, file context, and image attachments across session switches (#173)
 - Clear chat input text when switching sessions (#167)
 - Remove 600px max-height cap on terminal panel drag resize, use viewport-based limit instead (#169)
-
-### Removed
 
 ## [0.8.2] - 2026-03-11
 
