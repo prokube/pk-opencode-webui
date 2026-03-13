@@ -1,5 +1,5 @@
 import { createContext, useContext, createSignal, createEffect, on, type ParentProps, type Accessor } from "solid-js"
-import { getBasePath, base64Decode } from "../utils/path"
+import { deriveDirectoryFromPathname } from "../utils/path"
 
 interface SavedPrompt {
   id: string
@@ -68,42 +68,15 @@ function migrateIfNeeded(directory: string) {
   }
 }
 
-/**
- * Determine whether the current URL is a global (non-project) route by
- * inspecting window.location.pathname.  Global routes are the home page
- * (`/`) and global settings (`/settings`).  Project-scoped routes always
- * have a base64-encoded directory as the first path segment.
- */
-function isGlobalRoute(): boolean {
-  const basePath = getBasePath()
-  const base = basePath.endsWith("/") ? basePath.slice(0, -1) : basePath
-  const pathname = window.location.pathname
-  const path = (pathname === base || pathname.startsWith(base + "/"))
-    ? pathname.slice(base.length)
-    : pathname
-  const segments = path.split("/").filter(Boolean)
-  // No segments → home page
-  if (segments.length === 0) return true
-  // Check whether the first segment is a valid base64-encoded directory path
-  try {
-    const decoded = base64Decode(segments[0])
-    if (decoded.startsWith("/") || decoded.startsWith("~")) return false
-    return true
-  } catch {
-    return true
-  }
-}
-
 export function SavedPromptsProvider(props: ParentProps & { directory?: Accessor<string | undefined> }) {
   // Keep a "sticky" directory that survives transient undefined flickers
   // during SolidJS router transitions (e.g. project → project settings).
   //
-  // Instead of a time-based debounce, we use route-aware clearing: when the
-  // directory signal becomes undefined, we check the actual URL to determine
-  // whether we're on a global route (home `/` or `/settings`) or a project
-  // route.  On a global route the sticky value clears immediately.  On a
-  // project route, the undefined is a transient flicker and is ignored —
-  // the real directory value will arrive in the same or next microtask.
+  // When the directory signal becomes undefined, we use the shared
+  // deriveDirectoryFromPathname() helper to check the actual URL.  If it
+  // indicates a global route AND the directory is still undefined after a
+  // microtask (confirming the state is stable, not a transient `/` flash
+  // during router transitions), the sticky value clears.
   const [sticky, setSticky] = createSignal<string | undefined>(props.directory?.())
   createEffect(() => {
     const d = props.directory?.()
@@ -111,12 +84,16 @@ export function SavedPromptsProvider(props: ParentProps & { directory?: Accessor
       setSticky(d)
       return
     }
-    // Directory became undefined — only clear if the URL confirms we're on
-    // a genuinely global route.  This avoids the race window a time-based
-    // debounce would leave open, where a prompt save could write to the
-    // wrong project's localStorage key.
-    if (sticky() !== undefined && isGlobalRoute()) {
-      setSticky(undefined)
+    // Directory became undefined — check whether the URL indicates a global
+    // route.  If it does, confirm stability via microtask: the pathname can
+    // briefly be `/` during SolidJS router transitions between project
+    // sub-routes, so we wait one microtask to see if a real directory arrives.
+    if (sticky() !== undefined && deriveDirectoryFromPathname() === undefined) {
+      queueMicrotask(() => {
+        if (props.directory?.() !== undefined) return
+        if (deriveDirectoryFromPathname() !== undefined) return
+        setSticky(undefined)
+      })
     }
   })
 
