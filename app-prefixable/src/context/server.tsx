@@ -123,12 +123,28 @@ export function ServerProvider(props: ParentProps) {
       const basePathPrefix = basePath.basePath.endsWith("/") 
         ? basePath.basePath.slice(0, -1) 
         : basePath.basePath
-      const originalPath = urlObj.pathname.startsWith(basePathPrefix)
-        ? urlObj.pathname.slice(basePathPrefix.length)
-        : urlObj.pathname
       
-      // Build proxy URL (goes to local server which proxies to external)
-      const proxyUrl = `${basePath.serverUrl}/api/external/proxy${originalPath}${urlObj.search}`
+      // The SDK sends relative URLs like "/session/status" which get resolved against serverUrl
+      // But serverUrl already includes the basePath, so the pathname will be like /notebook/ns/name/session/status
+      // We need to strip the basePath prefix to get just /session/status for the external server
+      let apiPath = urlObj.pathname
+      if (apiPath.startsWith(basePathPrefix)) {
+        apiPath = apiPath.slice(basePathPrefix.length)
+      }
+      // Ensure it starts with /
+      if (!apiPath.startsWith("/")) {
+        apiPath = "/" + apiPath
+      }
+      
+      console.log("[ServerContext] proxy rewrite:", { 
+        input: url, 
+        pathname: urlObj.pathname, 
+        basePathPrefix, 
+        apiPath 
+      })
+      
+      // Build proxy URL - use basePath.prefix() to add the basePath correctly
+      const proxyUrl = `${basePath.serverUrl}/api/external/proxy${apiPath}${urlObj.search}`
 
       // Add proxy headers
       const headers = new Headers(init?.headers)
