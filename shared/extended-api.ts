@@ -328,7 +328,8 @@ export async function handleExtendedEndpoint(
         headers["Authorization"] = `Basic ${btoa(`${body.username}:${body.password}`)}`
       }
 
-      const response = await fetch(`${targetUrl}/health`, {
+      // Use /global/health as health check - returns {"healthy":true,"version":"..."}
+      const response = await fetch(`${targetUrl}/global/health`, {
         method: "GET",
         headers,
         signal: AbortSignal.timeout(5000),
