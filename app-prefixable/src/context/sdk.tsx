@@ -23,21 +23,23 @@ export function SDKProvider(props: ParentProps & { directory?: string }) {
   // Track activeKey to re-create clients when server changes
   const clients = createMemo(() => {
     // Access activeKey to make this memo reactive to server changes
-    server.activeKey()
+    const activeKey = server.activeKey()
     const proxyFetch = server.createProxyFetch()
+    
+    console.log("[SDK] Creating clients, activeKey:", activeKey)
     
     const client = createOpencodeClient({
       baseUrl: serverUrl,
       directory: props.directory,
       throwOnError: true,
-      fetch: proxyFetch as any,
+      fetch: proxyFetch as typeof fetch,
     })
 
     // Global client without directory - for PTY operations, SSH keys, etc.
     const global = createOpencodeClient({
       baseUrl: serverUrl,
       throwOnError: true,
-      fetch: proxyFetch as any,
+      fetch: proxyFetch as typeof fetch,
     })
 
     return { client, global }
