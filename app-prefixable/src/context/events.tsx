@@ -1,4 +1,4 @@
-import { createContext, useContext, onCleanup, onMount, type ParentProps } from "solid-js"
+import { createContext, useContext, onCleanup, onMount, createEffect, type ParentProps } from "solid-js"
 import { createStore, produce } from "solid-js/store"
 import type { Event, SessionStatus, QuestionRequest } from "../sdk/client"
 import { useBasePath } from "./base-path"
@@ -135,8 +135,29 @@ export function EventProvider(props: ParentProps) {
   const sseClearedRequests = new Set<string>()
   const sseSeenStatuses = new Set<string>()
 
-  onMount(() => {
+  // Reconnect SSE when external server changes
+  createEffect(() => {
+    // Track activeKey to trigger reconnect when server changes
+    const activeKey = server.activeKey()
+    console.log("[Events] Server changed, activeKey:", activeKey)
+    
+    // Disconnect existing connection
+    if (eventSource) {
+      console.log("[Events] Closing existing SSE connection for server switch")
+      eventSource.close()
+      eventSource = null
+    }
+    if (reconnectTimer) {
+      clearTimeout(reconnectTimer)
+      reconnectTimer = null
+    }
+    
+    // Reconnect with new server
     connect()
+  })
+
+  onMount(() => {
+    // Initial connection is handled by createEffect above
     if (!directory) return
     client.question.list({ directory })
       .then((res) => {

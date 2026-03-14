@@ -1,4 +1,4 @@
-import { createContext, useContext, onCleanup, batch, type ParentProps } from "solid-js"
+import { createContext, useContext, onCleanup, batch, createEffect, type ParentProps } from "solid-js"
 import { createStore, reconcile, produce } from "solid-js/store"
 import type { Session, Message, Part, Provider } from "../sdk/client"
 import { useBasePath } from "./base-path"
@@ -434,8 +434,36 @@ export function SyncProvider(props: ParentProps) {
     await bootstrap()
   }
 
-  // Start connection
-  connect()
+  // Reconnect SSE when external server changes
+  createEffect(() => {
+    // Track activeKey to trigger reconnect when server changes
+    const activeKey = server.activeKey()
+    console.log("[Sync] Server changed, activeKey:", activeKey)
+    
+    // Disconnect existing connection
+    if (eventSource) {
+      console.log("[Sync] Closing existing SSE connection for server switch")
+      eventSource.close()
+      eventSource = null
+    }
+    if (reconnectTimer) {
+      clearTimeout(reconnectTimer)
+      reconnectTimer = null
+    }
+    
+    // Reset store when switching servers
+    setStore({
+      ready: false,
+      session: [],
+      archivedSession: [],
+      message: {},
+      part: {},
+      provider: { all: [], connected: [], default: {} },
+    })
+    
+    // Reconnect with new server
+    connect()
+  })
 
   onCleanup(() => {
     eventSource?.close()
