@@ -422,10 +422,22 @@ export async function handleExtendedEndpoint(
         headers.set("Content-Type", contentType)
       }
 
+      // For POST/PUT, we need to read and forward the body
+      // req.body is a ReadableStream that can only be consumed once
+      let body: string | undefined
+      if (method !== "GET" && method !== "HEAD") {
+        try {
+          body = await req.text()
+          console.log("[ExtAPI] external proxy body:", body?.substring(0, 200))
+        } catch (e) {
+          console.error("[ExtAPI] external proxy: failed to read body:", e)
+        }
+      }
+
       const response = await fetch(targetUrl, {
         method,
         headers,
-        body: method !== "GET" && method !== "HEAD" ? req.body : undefined,
+        body,
         signal: AbortSignal.timeout(30000),
       })
 
