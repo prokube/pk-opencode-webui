@@ -141,29 +141,29 @@ export function ServerProvider(props: ParentProps) {
       // Build proxy URL
       const proxyUrl = `${basePath.serverUrl}/api/external/proxy${apiPath}${urlObj.search}`
 
-      // If input is a Request, we need to clone it and add our headers
-      // The trick is to use Request.clone() first, then create new Request with modified headers
+      // If input is a Request, we need to extract everything and rebuild
+      // Reading body as text ensures it's properly captured before forwarding
       if (input instanceof Request) {
-        // Clone first to preserve the body stream
-        const cloned = input.clone()
+        // Read the body as text (this consumes the stream)
+        const bodyText = await input.text()
         
         // Build new headers
-        const headers = new Headers(cloned.headers)
+        const headers = new Headers(input.headers)
         headers.set("X-Target-Server", server.url)
         if (server.username && server.password) {
           headers.set("X-Target-Auth", `Basic ${btoa(`${server.username}:${server.password}`)}`)
         }
         
-        // Create the proxied request - use clone's body directly in fetch
+        // Send with the body text
         return fetch(proxyUrl, {
-          method: cloned.method,
+          method: input.method,
           headers,
-          body: cloned.body,
-          credentials: cloned.credentials,
-          cache: cloned.cache,
-          redirect: cloned.redirect,
-          referrer: cloned.referrer,
-          integrity: cloned.integrity,
+          body: bodyText || undefined,
+          credentials: input.credentials,
+          cache: input.cache,
+          redirect: input.redirect,
+          referrer: input.referrer,
+          integrity: input.integrity,
         })
       }
 
