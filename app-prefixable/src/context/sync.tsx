@@ -3,6 +3,7 @@ import { createStore, reconcile, produce } from "solid-js/store"
 import type { Session, Message, Part, Provider } from "../sdk/client"
 import { useBasePath } from "./base-path"
 import { useSDK } from "./sdk"
+import { useServer } from "./server"
 
 // Event type - looser than SDK type to handle all events
 type SyncEvent = {
@@ -71,6 +72,7 @@ function binarySearch<T>(arr: T[], id: string, getId: (item: T) => string): { fo
 export function SyncProvider(props: ParentProps) {
   const { prefix } = useBasePath()
   const { client, directory } = useSDK()
+  const server = useServer()
 
   const [store, setStore] = createStore<SyncStore>({
     ready: false,
@@ -90,8 +92,26 @@ export function SyncProvider(props: ParentProps) {
   function connect() {
     if (eventSource) return
 
-    const dirParam = directory ? `?directory=${encodeURIComponent(directory)}` : ""
-    const eventUrl = prefix(`/event${dirParam}`)
+    // Build query params
+    const params = new URLSearchParams()
+    if (directory) params.set("directory", directory)
+    
+    // If external server is active, use the SSE proxy endpoint
+    const externalServer = server.activeServer()
+    let eventUrl: string
+    
+    if (externalServer) {
+      params.set("target", externalServer.url)
+      if (externalServer.username && externalServer.password) {
+        params.set("auth", btoa(`${externalServer.username}:${externalServer.password}`))
+      }
+      const queryString = params.toString()
+      eventUrl = prefix(`/api/external/event${queryString ? `?${queryString}` : ""}`)
+    } else {
+      const queryString = params.toString()
+      eventUrl = prefix(`/event${queryString ? `?${queryString}` : ""}`)
+    }
+    
     eventSource = new EventSource(eventUrl)
     console.log("[Sync] Connecting to SSE:", eventUrl)
 

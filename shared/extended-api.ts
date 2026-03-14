@@ -342,6 +342,59 @@ export async function handleExtendedEndpoint(
     }
   }
 
+  // GET /api/external/event - SSE proxy to external server
+  // EventSource doesn't support custom headers, so target server is passed via query param
+  if (path === "/api/external/event" && method === "GET") {
+    const targetServer = url.searchParams.get("target")
+    if (!targetServer) {
+      return Response.json({ error: "target query param is required" }, { status: 400 })
+    }
+
+    const directory = url.searchParams.get("directory")
+    const auth = url.searchParams.get("auth") // base64 encoded credentials
+
+    // Build target URL
+    const targetParams = new URLSearchParams()
+    if (directory) targetParams.set("directory", directory)
+    const targetUrl = `${targetServer.replace(/\/+$/, "")}/event${targetParams.toString() ? `?${targetParams.toString()}` : ""}`
+
+    console.log("[ExtAPI] external SSE proxy:", targetUrl)
+
+    try {
+      const headers: Record<string, string> = {
+        Accept: "text/event-stream",
+        "Cache-Control": "no-cache",
+      }
+      if (auth) {
+        headers["Authorization"] = `Basic ${auth}`
+      }
+
+      const response = await fetch(targetUrl, {
+        method: "GET",
+        headers,
+      })
+
+      if (!response.ok) {
+        console.error("[ExtAPI] external SSE proxy error:", response.status, response.statusText)
+        return new Response(`Failed to connect to external server: ${response.status}`, { status: 502 })
+      }
+
+      // Stream the SSE response
+      return new Response(response.body, {
+        status: 200,
+        headers: {
+          "Content-Type": "text/event-stream",
+          "Cache-Control": "no-cache",
+          Connection: "keep-alive",
+          "X-Accel-Buffering": "no",
+        },
+      })
+    } catch (e) {
+      console.error("[ExtAPI] external SSE proxy error:", e)
+      return new Response(`SSE proxy error: ${e}`, { status: 502 })
+    }
+  }
+
   // ALL /api/external/proxy/* - Proxy requests to external server
   if (path.startsWith("/api/external/proxy/")) {
     const targetServer = req.headers.get("X-Target-Server")

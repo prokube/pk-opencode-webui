@@ -3,6 +3,7 @@ import { createStore, produce } from "solid-js/store"
 import type { Event, SessionStatus, QuestionRequest } from "../sdk/client"
 import { useBasePath } from "./base-path"
 import { useSDK } from "./sdk"
+import { useServer } from "./server"
 
 type EventHandler = (event: Event) => void
 
@@ -18,6 +19,7 @@ const EventContext = createContext<EventContextValue>()
 export function EventProvider(props: ParentProps) {
   const { prefix } = useBasePath()
   const { client, directory } = useSDK()
+  const server = useServer()
   const handlers = new Set<EventHandler>()
   const [status, setStatus] = createStore<Record<string, SessionStatus>>({})
   const [pendingQuestions, setPendingQuestions] = createStore<Record<string, QuestionRequest | undefined>>({})
@@ -29,9 +31,27 @@ export function EventProvider(props: ParentProps) {
   function connect() {
     if (eventSource) return
 
-    // Use prefixed path with directory parameter so events are scoped to the correct instance
-    const dirParam = directory ? `?directory=${encodeURIComponent(directory)}` : ""
-    const eventUrl = prefix(`/event${dirParam}`)
+    // Build query params
+    const params = new URLSearchParams()
+    if (directory) params.set("directory", directory)
+    
+    // If external server is active, use the SSE proxy endpoint
+    // EventSource doesn't support custom headers, so we pass the target server as a query param
+    const externalServer = server.activeServer()
+    let eventUrl: string
+    
+    if (externalServer) {
+      params.set("target", externalServer.url)
+      if (externalServer.username && externalServer.password) {
+        params.set("auth", btoa(`${externalServer.username}:${externalServer.password}`))
+      }
+      const queryString = params.toString()
+      eventUrl = prefix(`/api/external/event${queryString ? `?${queryString}` : ""}`)
+    } else {
+      const queryString = params.toString()
+      eventUrl = prefix(`/event${queryString ? `?${queryString}` : ""}`)
+    }
+    
     eventSource = new EventSource(eventUrl)
     console.log("[Events] Connecting to SSE:", eventUrl)
 
