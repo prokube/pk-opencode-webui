@@ -141,28 +141,30 @@ export function ServerProvider(props: ParentProps) {
       // Build proxy URL
       const proxyUrl = `${basePath.serverUrl}/api/external/proxy${apiPath}${urlObj.search}`
 
-      // If input is a Request, clone it with the new URL to preserve body/method/headers
-      // Request.body is a ReadableStream that can only be read once, so we must clone
+      // If input is a Request, we need to clone it and add our headers
+      // The trick is to use Request.clone() first, then create new Request with modified headers
       if (input instanceof Request) {
-        const clonedRequest = new Request(proxyUrl, input)
-        // Add our proxy headers
-        const headers = new Headers(clonedRequest.headers)
+        // Clone first to preserve the body stream
+        const cloned = input.clone()
+        
+        // Build new headers
+        const headers = new Headers(cloned.headers)
         headers.set("X-Target-Server", server.url)
         if (server.username && server.password) {
           headers.set("X-Target-Auth", `Basic ${btoa(`${server.username}:${server.password}`)}`)
         }
-        // Create final request with updated headers
-        return fetch(new Request(proxyUrl, {
-          method: clonedRequest.method,
+        
+        // Create the proxied request - use clone's body directly in fetch
+        return fetch(proxyUrl, {
+          method: cloned.method,
           headers,
-          body: clonedRequest.body,
-          credentials: clonedRequest.credentials,
-          cache: clonedRequest.cache,
-          redirect: clonedRequest.redirect,
-          referrer: clonedRequest.referrer,
-          integrity: clonedRequest.integrity,
-          mode: clonedRequest.mode,
-        }))
+          body: cloned.body,
+          credentials: cloned.credentials,
+          cache: cloned.cache,
+          redirect: cloned.redirect,
+          referrer: cloned.referrer,
+          integrity: cloned.integrity,
+        })
       }
 
       // For string/URL input, use init directly
