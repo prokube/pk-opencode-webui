@@ -379,13 +379,48 @@ export async function handleExtendedEndpoint(
         return new Response(`Failed to connect to external server: ${response.status}`, { status: 502 })
       }
 
-      // Stream the SSE response
-      return new Response(response.body, {
+      if (!response.body) {
+        console.error("[ExtAPI] external SSE proxy: no body in response")
+        return new Response("No body in SSE response", { status: 502 })
+      }
+
+      // Create a transform stream that logs and passes through SSE events
+      const reader = response.body.getReader()
+      const stream = new ReadableStream({
+        async start(controller) {
+          console.log("[ExtAPI] SSE stream started")
+        },
+        async pull(controller) {
+          try {
+            const { done, value } = await reader.read()
+            if (done) {
+              console.log("[ExtAPI] SSE stream ended")
+              controller.close()
+              return
+            }
+            // Log the first few bytes of each chunk for debugging
+            const text = new TextDecoder().decode(value)
+            if (text.includes("data:")) {
+              console.log("[ExtAPI] SSE forwarding event:", text.substring(0, 100))
+            }
+            controller.enqueue(value)
+          } catch (e) {
+            console.error("[ExtAPI] SSE stream error:", e)
+            controller.error(e)
+          }
+        },
+        cancel() {
+          console.log("[ExtAPI] SSE stream cancelled")
+          reader.cancel()
+        }
+      })
+
+      return new Response(stream, {
         status: 200,
         headers: {
           "Content-Type": "text/event-stream",
           "Cache-Control": "no-cache",
-          Connection: "keep-alive",
+          "Connection": "keep-alive",
           "X-Accel-Buffering": "no",
         },
       })
