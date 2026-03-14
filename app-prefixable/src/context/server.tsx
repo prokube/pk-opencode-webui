@@ -118,8 +118,16 @@ export function ServerProvider(props: ParentProps) {
       const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url
       const urlObj = new URL(url, basePath.serverUrl)
       
-      // Replace the path with proxy path
-      const originalPath = urlObj.pathname
+      // Strip the basePath prefix from the pathname
+      // e.g. /notebook/ns/name/session/status -> /session/status
+      const basePathPrefix = basePath.basePath.endsWith("/") 
+        ? basePath.basePath.slice(0, -1) 
+        : basePath.basePath
+      const originalPath = urlObj.pathname.startsWith(basePathPrefix)
+        ? urlObj.pathname.slice(basePathPrefix.length)
+        : urlObj.pathname
+      
+      // Build proxy URL (goes to local server which proxies to external)
       const proxyUrl = `${basePath.serverUrl}/api/external/proxy${originalPath}${urlObj.search}`
 
       // Add proxy headers
