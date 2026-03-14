@@ -9,12 +9,13 @@ import { useConfig } from "../context/config"
 import { MCPAddDialog } from "../components/mcp-add-dialog"
 import { ConfirmDialog } from "../components/confirm-dialog"
 import { Button } from "../components/ui/button"
-import { Check, Copy, Plug, GitBranch, Server, ExternalLink, Key, Search, X, Trash2, BookmarkPlus, Pencil, Palette, Sun, Moon, Monitor, BookOpen, Plus, Save, Volume2, Play, Settings2, Code, Shield, Cpu, Wrench, ChevronDown, ChevronRight, Info } from "lucide-solid"
+import { Check, Copy, Plug, GitBranch, Server, ExternalLink, Key, Search, X, Trash2, BookmarkPlus, Pencil, Palette, Sun, Moon, Monitor, BookOpen, Plus, Save, Volume2, Play, Settings2, Code, Shield, Cpu, Wrench, ChevronDown, ChevronRight, Info, Wifi, WifiOff, Loader2, Globe, Edit2 } from "lucide-solid"
 import { SOUND_OPTIONS, readSoundSettings, writeSoundSettings, playSound, primeAudioContext, SOUND_STORAGE_KEY, type SoundSettings } from "../utils/sound"
 import { useSavedPrompts } from "../context/saved-prompts"
 import { useTheme } from "../context/theme"
 import { writeFile } from "../utils/extended-api"
 import type { Config, PermissionActionConfig } from "../sdk/client"
+import { useServer, serverDisplayName, type ServerConnection, type ServerHealth } from "../context/server"
 
 export function Settings() {
   const providers = useProviders()
@@ -29,7 +30,7 @@ export function Settings() {
   // Initialize tab from URL hash, default to "providers"
   const getInitialTab = () => {
     const hash = window.location.hash.slice(1)
-    const baseTabs = ["providers", "git", "mcp", "prompts", "instructions", "appearance", "sounds"]
+    const baseTabs = ["providers", "server", "git", "mcp", "prompts", "instructions", "appearance", "sounds"]
     const validTabs = directory ? [...baseTabs, "config"] : baseTabs
     return validTabs.includes(hash) ? hash : "providers"
   }
@@ -638,6 +639,7 @@ Add your project-specific instructions here.
   const tabs = createMemo(() => {
     const base: Array<{ id: string; label: string; icon: () => JSX.Element; scope: ScopeBadge }> = [
       { id: "providers", label: "Providers", icon: () => <Plug class="w-4 h-4" />, scope: "Global" },
+      { id: "server", label: "Server", icon: () => <Globe class="w-4 h-4" />, scope: "Global" },
       { id: "git", label: "Git", icon: () => <GitBranch class="w-4 h-4" />, scope: "Global" },
       { id: "mcp", label: "MCP Servers", icon: () => <Server class="w-4 h-4" />, scope: "Global + Project" },
       { id: "prompts", label: "Prompts", icon: () => <BookmarkPlus class="w-4 h-4" />, scope: directory ? "Project" : null },
@@ -1167,6 +1169,11 @@ Add your project-specific instructions here.
                 </div>
               </section>
             </div>
+          </Show>
+
+          {/* Server Tab */}
+          <Show when={activeTab() === "server"}>
+            <ServerTab />
           </Show>
 
           {/* Git Tab */}
@@ -3184,5 +3191,428 @@ function PromptDialog(props: {
         </div>
       </div>
     </Portal>
+  )
+}
+
+function ServerHealthIndicator(props: { health: ServerHealth }) {
+  return (
+    <div class="flex items-center justify-center w-5 h-5">
+      <Show when={props.health === "healthy"}>
+        <Wifi class="w-4 h-4" style={{ color: "var(--text-success-base)" }} />
+      </Show>
+      <Show when={props.health === "unhealthy"}>
+        <WifiOff class="w-4 h-4" style={{ color: "var(--text-critical-base)" }} />
+      </Show>
+      <Show when={props.health === "checking"}>
+        <Loader2 class="w-4 h-4 animate-spin" style={{ color: "var(--text-weak)" }} />
+      </Show>
+    </div>
+  )
+}
+
+function ServerTab() {
+  const server = useServer()
+  
+  // Form state for add/edit
+  const [mode, setMode] = createSignal<"list" | "add" | "edit">("list")
+  const [editingUrl, setEditingUrl] = createSignal<string | null>(null)
+  const [url, setUrl] = createSignal("")
+  const [name, setName] = createSignal("")
+  const [username, setUsername] = createSignal("")
+  const [password, setPassword] = createSignal("")
+  const [error, setError] = createSignal("")
+  const [loading, setLoading] = createSignal(false)
+
+  const resetForm = () => {
+    setUrl("")
+    setName("")
+    setUsername("")
+    setPassword("")
+    setError("")
+    setLoading(false)
+  }
+
+  const startAdd = () => {
+    resetForm()
+    setMode("add")
+  }
+
+  const startEdit = (conn: ServerConnection) => {
+    setEditingUrl(conn.url)
+    setUrl(conn.url)
+    setName(conn.name || "")
+    setUsername(conn.username || "")
+    setPassword(conn.password || "")
+    setError("")
+    setMode("edit")
+  }
+
+  const goBack = () => {
+    resetForm()
+    setEditingUrl(null)
+    setMode("list")
+  }
+
+  const handleSubmit = async (e: SubmitEvent) => {
+    e.preventDefault()
+    setError("")
+
+    const serverUrl = url().trim()
+    if (!serverUrl) {
+      setError("URL is required")
+      return
+    }
+
+    setLoading(true)
+    
+    const healthy = await server.checkHealth(serverUrl, username() || undefined, password() || undefined)
+    
+    if (!healthy) {
+      setError("Could not connect to server. Please check the URL and credentials.")
+      setLoading(false)
+      return
+    }
+
+    const conn: ServerConnection = {
+      url: serverUrl,
+      name: name().trim() || undefined,
+      username: username().trim() || undefined,
+      password: password() || undefined,
+    }
+
+    if (mode() === "edit" && editingUrl()) {
+      server.update(editingUrl()!, conn)
+    } else {
+      server.add(conn)
+    }
+
+    setLoading(false)
+    goBack()
+  }
+
+  const handleRemove = (serverUrl: string) => {
+    server.remove(serverUrl)
+  }
+
+  const handleSelect = (serverUrl: string | null) => {
+    server.setActive(serverUrl)
+  }
+
+  const inputStyle = {
+    background: "var(--background-base)",
+    border: "1px solid var(--border-base)",
+    color: "var(--text-base)",
+  }
+
+  return (
+    <div class="space-y-6">
+      <header>
+        <h1 class="text-lg font-medium" style={{ color: "var(--text-strong)" }}>
+          Server Connection
+        </h1>
+        <p class="text-sm mt-1" style={{ color: "var(--text-weak)" }}>
+          Connect to a local or external OpenCode server
+        </p>
+      </header>
+
+      <Show when={mode() === "list"}>
+        {/* Current Server */}
+        <section
+          class="rounded-lg overflow-hidden"
+          style={{
+            background: "var(--background-base)",
+            border: "1px solid var(--border-base)",
+          }}
+        >
+          <div class="px-4 py-3" style={{ "border-bottom": "1px solid var(--border-base)" }}>
+            <h2 class="text-sm font-medium" style={{ color: "var(--text-strong)" }}>
+              Active Server
+            </h2>
+          </div>
+          <div class="p-4">
+            <Show
+              when={server.activeKey()}
+              fallback={
+                <div
+                  class="flex items-center gap-3 p-3 rounded-md"
+                  style={{ background: "var(--surface-inset)" }}
+                >
+                  <Server class="w-5 h-5" style={{ color: "var(--icon-base)" }} />
+                  <div class="flex-1">
+                    <div class="text-sm font-medium" style={{ color: "var(--text-base)" }}>
+                      Local Server
+                    </div>
+                    <div class="text-xs" style={{ color: "var(--text-weak)" }}>
+                      Built-in server running in this notebook
+                    </div>
+                  </div>
+                  <Check class="w-5 h-5" style={{ color: "var(--text-success-base)" }} />
+                </div>
+              }
+            >
+              {(activeKey) => {
+                const activeServer = () => server.servers().find(s => s.url === activeKey())
+                return (
+                  <div
+                    class="flex items-center gap-3 p-3 rounded-md"
+                    style={{ background: "var(--surface-inset)" }}
+                  >
+                    <ServerHealthIndicator health={server.health(activeKey())} />
+                    <div class="flex-1 min-w-0">
+                      <div class="text-sm font-medium truncate" style={{ color: "var(--text-base)" }}>
+                        {activeServer()?.name || serverDisplayName(activeServer()!)}
+                      </div>
+                      <div class="text-xs truncate" style={{ color: "var(--text-weak)" }}>
+                        {activeKey()}
+                      </div>
+                    </div>
+                    <button
+                      onClick={() => handleSelect(null)}
+                      class="text-xs px-2 py-1 rounded transition-colors"
+                      style={{
+                        color: "var(--text-interactive-base)",
+                        background: "var(--surface-hover)",
+                      }}
+                    >
+                      Switch to Local
+                    </button>
+                  </div>
+                )
+              }}
+            </Show>
+          </div>
+        </section>
+
+        {/* External Servers */}
+        <section
+          class="rounded-lg overflow-hidden"
+          style={{
+            background: "var(--background-base)",
+            border: "1px solid var(--border-base)",
+          }}
+        >
+          <div class="px-4 py-3 flex items-center justify-between" style={{ "border-bottom": "1px solid var(--border-base)" }}>
+            <h2 class="text-sm font-medium" style={{ color: "var(--text-strong)" }}>
+              External Servers
+            </h2>
+            <button
+              onClick={startAdd}
+              class="flex items-center gap-1 text-xs px-2 py-1 rounded transition-colors"
+              style={{
+                color: "var(--text-interactive-base)",
+                background: "var(--surface-hover)",
+              }}
+            >
+              <Plus class="w-3 h-3" />
+              Add Server
+            </button>
+          </div>
+          <div class="p-4">
+            <Show
+              when={server.servers().length > 0}
+              fallback={
+                <p class="text-sm text-center py-4" style={{ color: "var(--text-weak)" }}>
+                  No external servers configured. Add a server to connect to an OpenCode instance running elsewhere.
+                </p>
+              }
+            >
+              <div class="space-y-2">
+                <For each={server.servers()}>
+                  {(conn) => (
+                    <div
+                      class="flex items-center gap-3 p-3 rounded-md transition-colors"
+                      style={{
+                        background: server.activeKey() === conn.url ? "var(--surface-inset)" : "transparent",
+                        border: "1px solid var(--border-base)",
+                      }}
+                    >
+                      <button
+                        onClick={() => handleSelect(conn.url)}
+                        class="flex-1 flex items-center gap-3 text-left min-w-0"
+                      >
+                        <ServerHealthIndicator health={server.health(conn.url)} />
+                        <div class="flex-1 min-w-0">
+                          <div class="text-sm font-medium truncate" style={{ color: "var(--text-base)" }}>
+                            {serverDisplayName(conn)}
+                          </div>
+                          <div class="text-xs truncate" style={{ color: "var(--text-weak)" }}>
+                            {conn.url}
+                          </div>
+                        </div>
+                        <Show when={server.activeKey() === conn.url}>
+                          <Check class="w-4 h-4 shrink-0" style={{ color: "var(--text-success-base)" }} />
+                        </Show>
+                      </button>
+                      <div class="flex items-center gap-1 shrink-0">
+                        <button
+                          onClick={() => startEdit(conn)}
+                          class="p-1.5 rounded transition-colors"
+                          style={{ color: "var(--icon-weak)" }}
+                          title="Edit"
+                        >
+                          <Edit2 class="w-4 h-4" />
+                        </button>
+                        <button
+                          onClick={() => handleRemove(conn.url)}
+                          class="p-1.5 rounded transition-colors"
+                          style={{ color: "var(--icon-critical-base)" }}
+                          title="Remove"
+                        >
+                          <Trash2 class="w-4 h-4" />
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </For>
+              </div>
+            </Show>
+          </div>
+        </section>
+
+        {/* Info */}
+        <div
+          class="flex items-start gap-2 px-3 py-2 rounded-md text-xs"
+          style={{
+            background: "var(--surface-inset)",
+            color: "var(--text-weak)",
+            border: "1px solid var(--border-base)",
+          }}
+        >
+          <Info class="w-3.5 h-3.5 shrink-0 mt-0.5" />
+          <span>
+            External servers allow connecting to an OpenCode instance running in a separate environment, 
+            such as a Kubernetes sandbox pod. Requests are proxied through this notebook for security.
+          </span>
+        </div>
+      </Show>
+
+      {/* Add/Edit Form */}
+      <Show when={mode() === "add" || mode() === "edit"}>
+        <section
+          class="rounded-lg overflow-hidden"
+          style={{
+            background: "var(--background-base)",
+            border: "1px solid var(--border-base)",
+          }}
+        >
+          <div class="px-4 py-3 flex items-center gap-3" style={{ "border-bottom": "1px solid var(--border-base)" }}>
+            <button
+              onClick={goBack}
+              class="p-1 rounded transition-colors"
+              style={{ color: "var(--icon-weak)" }}
+            >
+              <ChevronRight class="w-4 h-4 rotate-180" />
+            </button>
+            <h2 class="text-sm font-medium" style={{ color: "var(--text-strong)" }}>
+              {mode() === "add" ? "Add External Server" : "Edit Server"}
+            </h2>
+          </div>
+          <form onSubmit={handleSubmit} class="p-4 space-y-4">
+            {/* URL Field */}
+            <div>
+              <label class="block text-sm font-medium mb-1" style={{ color: "var(--text-base)" }}>
+                Server URL <span style={{ color: "var(--text-critical-base)" }}>*</span>
+              </label>
+              <input
+                type="text"
+                value={url()}
+                onInput={(e) => setUrl(e.currentTarget.value)}
+                placeholder="http://sandbox-service:4096"
+                class="w-full px-3 py-2 rounded-md text-sm"
+                style={inputStyle}
+                autofocus
+              />
+              <p class="text-xs mt-1" style={{ color: "var(--text-weak)" }}>
+                The URL of the external OpenCode server (e.g., Kubernetes service URL)
+              </p>
+            </div>
+
+            {/* Name Field */}
+            <div>
+              <label class="block text-sm font-medium mb-1" style={{ color: "var(--text-base)" }}>
+                Display Name
+              </label>
+              <input
+                type="text"
+                value={name()}
+                onInput={(e) => setName(e.currentTarget.value)}
+                placeholder="My Sandbox"
+                class="w-full px-3 py-2 rounded-md text-sm"
+                style={inputStyle}
+              />
+            </div>
+
+            {/* Credentials */}
+            <div class="grid grid-cols-2 gap-3">
+              <div>
+                <label class="block text-sm font-medium mb-1" style={{ color: "var(--text-base)" }}>
+                  Username
+                </label>
+                <input
+                  type="text"
+                  value={username()}
+                  onInput={(e) => setUsername(e.currentTarget.value)}
+                  placeholder="(optional)"
+                  class="w-full px-3 py-2 rounded-md text-sm"
+                  style={inputStyle}
+                />
+              </div>
+              <div>
+                <label class="block text-sm font-medium mb-1" style={{ color: "var(--text-base)" }}>
+                  Password
+                </label>
+                <input
+                  type="password"
+                  value={password()}
+                  onInput={(e) => setPassword(e.currentTarget.value)}
+                  placeholder="(optional)"
+                  class="w-full px-3 py-2 rounded-md text-sm"
+                  style={inputStyle}
+                />
+              </div>
+            </div>
+
+            {/* Error */}
+            <Show when={error()}>
+              <div
+                class="px-3 py-2 rounded-md text-sm"
+                style={{
+                  background: "var(--surface-critical-base)",
+                  color: "var(--text-critical-base)",
+                }}
+              >
+                {error()}
+              </div>
+            </Show>
+
+            {/* Submit */}
+            <div class="flex gap-2">
+              <button
+                type="button"
+                onClick={goBack}
+                class="px-4 py-2 rounded-md text-sm font-medium transition-colors"
+                style={{
+                  background: "var(--surface-inset)",
+                  color: "var(--text-base)",
+                }}
+              >
+                Cancel
+              </button>
+              <button
+                type="submit"
+                disabled={loading() || !url().trim()}
+                class="px-4 py-2 rounded-md text-sm font-medium transition-colors disabled:opacity-50"
+                style={{
+                  background: "var(--interactive-base)",
+                  color: "white",
+                }}
+              >
+                {loading() ? "Connecting..." : mode() === "edit" ? "Save" : "Add Server"}
+              </button>
+            </div>
+          </form>
+        </section>
+      </Show>
+    </div>
   )
 }
