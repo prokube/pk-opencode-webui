@@ -7,6 +7,7 @@ import { CommandProvider } from "./context/command"
 import { RecentProjectsProvider } from "./context/recent-projects"
 import { SavedPromptsProvider } from "./context/saved-prompts"
 import { GlobalEventsProvider } from "./context/global-events"
+import { ServerProvider } from "./context/server"
 import { DirectoryLayout } from "./pages/directory-layout"
 import { HomeLayout } from "./pages/home-layout"
 import { Session } from "./pages/session"
@@ -136,15 +137,17 @@ export function App() {
     <BasePathProvider>
       <ThemeProvider>
         <BrandingProvider>
-          <RecentProjectsProvider>
-            <SavedPromptsProvider directory={activeDirectory}>
-              <GlobalEventsProvider projects={projects} activeDirectory={activeDirectory}>
-                <CommandProvider>
-                  <AppRoutes />
-                </CommandProvider>
-              </GlobalEventsProvider>
-            </SavedPromptsProvider>
-          </RecentProjectsProvider>
+          <ServerProvider>
+            <RecentProjectsProvider>
+              <SavedPromptsProvider directory={activeDirectory}>
+                <GlobalEventsProvider projects={projects} activeDirectory={activeDirectory}>
+                  <CommandProvider>
+                    <AppRoutes />
+                  </CommandProvider>
+                </GlobalEventsProvider>
+              </SavedPromptsProvider>
+            </RecentProjectsProvider>
+          </ServerProvider>
         </BrandingProvider>
       </ThemeProvider>
     </BasePathProvider>

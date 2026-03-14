@@ -1,6 +1,7 @@
-import { createContext, useContext, type ParentProps } from "solid-js"
+import { createContext, useContext, createMemo, type ParentProps } from "solid-js"
 import { createOpencodeClient } from "../sdk/client"
 import { useBasePath } from "./base-path"
+import { useServer } from "./server"
 
 type SDKClient = ReturnType<typeof createOpencodeClient>
 
@@ -16,21 +17,36 @@ const SDKContext = createContext<SDKContextValue>()
 
 export function SDKProvider(props: ParentProps & { directory?: string }) {
   const { serverUrl } = useBasePath()
+  const server = useServer()
 
-  const client = createOpencodeClient({
-    baseUrl: serverUrl,
-    directory: props.directory,
-    throwOnError: true,
-  })
+  // Create clients that use proxy fetch when external server is active
+  const clients = createMemo(() => {
+    const proxyFetch = server.createProxyFetch()
+    
+    const client = createOpencodeClient({
+      baseUrl: serverUrl,
+      directory: props.directory,
+      throwOnError: true,
+      fetch: proxyFetch as any,
+    })
 
-  // Global client without directory - for PTY operations, SSH keys, etc.
-  const global = createOpencodeClient({
-    baseUrl: serverUrl,
-    throwOnError: true,
+    // Global client without directory - for PTY operations, SSH keys, etc.
+    const global = createOpencodeClient({
+      baseUrl: serverUrl,
+      throwOnError: true,
+      fetch: proxyFetch as any,
+    })
+
+    return { client, global }
   })
 
   return (
-    <SDKContext.Provider value={{ client, global, url: serverUrl, directory: props.directory }}>
+    <SDKContext.Provider value={{ 
+      get client() { return clients().client },
+      get global() { return clients().global },
+      url: serverUrl, 
+      directory: props.directory 
+    }}>
       {props.children}
     </SDKContext.Provider>
   )

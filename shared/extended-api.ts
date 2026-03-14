@@ -312,6 +312,99 @@ export async function handleExtendedEndpoint(
     }
   }
 
+  // POST /api/external/health - Check health of an external server
+  if (path === "/api/external/health" && method === "POST") {
+    const body = await req.json().catch(() => null)
+    if (!body || typeof body.url !== "string") {
+      return Response.json({ error: "url is required" }, { status: 400 })
+    }
+
+    const targetUrl = body.url.replace(/\/+$/, "")
+    console.log("[ExtAPI] external health check:", targetUrl)
+
+    try {
+      const headers: Record<string, string> = {}
+      if (body.username && body.password) {
+        headers["Authorization"] = `Basic ${btoa(`${body.username}:${body.password}`)}`
+      }
+
+      const response = await fetch(`${targetUrl}/health`, {
+        method: "GET",
+        headers,
+        signal: AbortSignal.timeout(5000),
+      })
+
+      return Response.json({ healthy: response.ok, status: response.status })
+    } catch (e) {
+      console.error("[ExtAPI] external health check error:", e)
+      return Response.json({ healthy: false, error: String(e) })
+    }
+  }
+
+  // ALL /api/external/proxy/* - Proxy requests to external server
+  if (path.startsWith("/api/external/proxy/")) {
+    const targetServer = req.headers.get("X-Target-Server")
+    if (!targetServer) {
+      return Response.json({ error: "X-Target-Server header is required" }, { status: 400 })
+    }
+
+    // Extract the path after /api/external/proxy
+    const proxyPath = path.replace("/api/external/proxy", "")
+    const targetUrl = `${targetServer.replace(/\/+$/, "")}${proxyPath}`
+    
+    console.log("[ExtAPI] external proxy:", method, targetUrl)
+
+    try {
+      // Build headers, preserving auth if provided
+      const headers = new Headers()
+      const authHeader = req.headers.get("X-Target-Auth")
+      if (authHeader) {
+        headers.set("Authorization", authHeader)
+      }
+      
+      // Copy content-type for POST/PUT requests
+      const contentType = req.headers.get("Content-Type")
+      if (contentType) {
+        headers.set("Content-Type", contentType)
+      }
+
+      const response = await fetch(targetUrl, {
+        method,
+        headers,
+        body: method !== "GET" && method !== "HEAD" ? req.body : undefined,
+        signal: AbortSignal.timeout(30000),
+      })
+
+      // For SSE, handle streaming
+      if (proxyPath.startsWith("/event")) {
+        return new Response(response.body, {
+          status: response.status,
+          headers: {
+            "Content-Type": "text/event-stream",
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+          },
+        })
+      }
+
+      // Copy response headers we care about
+      const responseHeaders = new Headers()
+      const respContentType = response.headers.get("Content-Type")
+      if (respContentType) {
+        responseHeaders.set("Content-Type", respContentType)
+      }
+
+      return new Response(response.body, {
+        status: response.status,
+        headers: responseHeaders,
+      })
+    } catch (e) {
+      console.error("[ExtAPI] external proxy error:", e)
+      return Response.json({ error: String(e) }, { status: 502 })
+    }
+  }
+
   // Not an extended endpoint
   return undefined
 }
