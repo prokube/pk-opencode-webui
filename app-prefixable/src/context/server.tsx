@@ -144,8 +144,16 @@ export function ServerProvider(props: ParentProps) {
       // If input is a Request, we need to extract everything and rebuild
       // Reading body as text ensures it's properly captured before forwarding
       if (input instanceof Request) {
+        console.log("[ProxyFetch] Request received:", {
+          url: input.url,
+          method: input.method,
+          bodyUsed: input.bodyUsed,
+          hasBody: input.body !== null,
+        })
+        
         // Read the body as text (this consumes the stream)
         const bodyText = await input.text()
+        console.log("[ProxyFetch] Body text:", bodyText?.substring(0, 200) || "(empty)")
         
         // Build new headers
         const headers = new Headers(input.headers)
