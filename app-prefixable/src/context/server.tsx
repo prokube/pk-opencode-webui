@@ -114,8 +114,29 @@ export function ServerProvider(props: ParentProps) {
         return fetch(input, init)
       }
 
-      // Rewrite URL to go through proxy
-      const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url
+      // Extract URL and request options from input
+      // The SDK may pass a Request object which contains method, body, headers, etc.
+      let url: string
+      let requestInit: RequestInit = init || {}
+      
+      if (input instanceof Request) {
+        url = input.url
+        // Merge Request properties with init (init takes precedence)
+        requestInit = {
+          method: init?.method ?? input.method,
+          body: init?.body ?? input.body,
+          credentials: init?.credentials ?? input.credentials,
+          cache: init?.cache ?? input.cache,
+          redirect: init?.redirect ?? input.redirect,
+          referrer: init?.referrer ?? input.referrer,
+          integrity: init?.integrity ?? input.integrity,
+          // Headers need special handling - merge them
+          headers: init?.headers ?? input.headers,
+        }
+      } else {
+        url = typeof input === "string" ? input : input.toString()
+      }
+
       const urlObj = new URL(url, basePath.serverUrl)
       
       // Strip the basePath prefix from the pathname
@@ -124,37 +145,26 @@ export function ServerProvider(props: ParentProps) {
         ? basePath.basePath.slice(0, -1) 
         : basePath.basePath
       
-      // The SDK sends relative URLs like "/session/status" which get resolved against serverUrl
-      // But serverUrl already includes the basePath, so the pathname will be like /notebook/ns/name/session/status
-      // We need to strip the basePath prefix to get just /session/status for the external server
       let apiPath = urlObj.pathname
       if (apiPath.startsWith(basePathPrefix)) {
         apiPath = apiPath.slice(basePathPrefix.length)
       }
-      // Ensure it starts with /
       if (!apiPath.startsWith("/")) {
         apiPath = "/" + apiPath
       }
       
-      console.log("[ServerContext] proxy rewrite:", { 
-        input: url, 
-        pathname: urlObj.pathname, 
-        basePathPrefix, 
-        apiPath 
-      })
-      
-      // Build proxy URL - use basePath.prefix() to add the basePath correctly
+      // Build proxy URL
       const proxyUrl = `${basePath.serverUrl}/api/external/proxy${apiPath}${urlObj.search}`
 
-      // Add proxy headers
-      const headers = new Headers(init?.headers)
+      // Build headers - start with request headers, add proxy headers
+      const headers = new Headers(requestInit.headers)
       headers.set("X-Target-Server", server.url)
       if (server.username && server.password) {
         headers.set("X-Target-Auth", `Basic ${btoa(`${server.username}:${server.password}`)}`)
       }
 
       return fetch(proxyUrl, {
-        ...init,
+        ...requestInit,
         headers,
       })
     }

@@ -353,8 +353,6 @@ export async function handleExtendedEndpoint(
     const proxyPath = path.replace("/api/external/proxy", "")
     const targetUrl = `${targetServer.replace(/\/+$/, "")}${proxyPath}`
     
-    console.log("[ExtAPI] external proxy: incoming path:", path)
-    console.log("[ExtAPI] external proxy: proxyPath:", proxyPath)
     console.log("[ExtAPI] external proxy:", method, targetUrl)
 
     try {

@@ -23,10 +23,8 @@ export function SDKProvider(props: ParentProps & { directory?: string }) {
   // Track activeKey to re-create clients when server changes
   const clients = createMemo(() => {
     // Access activeKey to make this memo reactive to server changes
-    const activeKey = server.activeKey()
+    server.activeKey()
     const proxyFetch = server.createProxyFetch()
-    
-    console.log("[SDKProvider] Creating clients, activeKey:", activeKey)
     
     const client = createOpencodeClient({
       baseUrl: serverUrl,
