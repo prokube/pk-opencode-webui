@@ -114,30 +114,15 @@ export function ServerProvider(props: ParentProps) {
         return fetch(input, init)
       }
 
-      // Extract URL and request options from input
-      // The SDK may pass a Request object which contains method, body, headers, etc.
-      let url: string
-      let requestInit: RequestInit = init || {}
-      
+      // Extract URL from input
+      let originalUrl: string
       if (input instanceof Request) {
-        url = input.url
-        // Merge Request properties with init (init takes precedence)
-        requestInit = {
-          method: init?.method ?? input.method,
-          body: init?.body ?? input.body,
-          credentials: init?.credentials ?? input.credentials,
-          cache: init?.cache ?? input.cache,
-          redirect: init?.redirect ?? input.redirect,
-          referrer: init?.referrer ?? input.referrer,
-          integrity: init?.integrity ?? input.integrity,
-          // Headers need special handling - merge them
-          headers: init?.headers ?? input.headers,
-        }
+        originalUrl = input.url
       } else {
-        url = typeof input === "string" ? input : input.toString()
+        originalUrl = typeof input === "string" ? input : input.toString()
       }
 
-      const urlObj = new URL(url, basePath.serverUrl)
+      const urlObj = new URL(originalUrl, basePath.serverUrl)
       
       // Strip the basePath prefix from the pathname
       // e.g. /notebook/ns/name/session/status -> /session/status
@@ -156,15 +141,39 @@ export function ServerProvider(props: ParentProps) {
       // Build proxy URL
       const proxyUrl = `${basePath.serverUrl}/api/external/proxy${apiPath}${urlObj.search}`
 
-      // Build headers - start with request headers, add proxy headers
-      const headers = new Headers(requestInit.headers)
+      // If input is a Request, clone it with the new URL to preserve body/method/headers
+      // Request.body is a ReadableStream that can only be read once, so we must clone
+      if (input instanceof Request) {
+        const clonedRequest = new Request(proxyUrl, input)
+        // Add our proxy headers
+        const headers = new Headers(clonedRequest.headers)
+        headers.set("X-Target-Server", server.url)
+        if (server.username && server.password) {
+          headers.set("X-Target-Auth", `Basic ${btoa(`${server.username}:${server.password}`)}`)
+        }
+        // Create final request with updated headers
+        return fetch(new Request(proxyUrl, {
+          method: clonedRequest.method,
+          headers,
+          body: clonedRequest.body,
+          credentials: clonedRequest.credentials,
+          cache: clonedRequest.cache,
+          redirect: clonedRequest.redirect,
+          referrer: clonedRequest.referrer,
+          integrity: clonedRequest.integrity,
+          mode: clonedRequest.mode,
+        }))
+      }
+
+      // For string/URL input, use init directly
+      const headers = new Headers(init?.headers)
       headers.set("X-Target-Server", server.url)
       if (server.username && server.password) {
         headers.set("X-Target-Auth", `Basic ${btoa(`${server.username}:${server.password}`)}`)
       }
 
       return fetch(proxyUrl, {
-        ...requestInit,
+        ...init,
         headers,
       })
     }
