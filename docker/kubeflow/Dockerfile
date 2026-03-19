@@ -80,7 +80,7 @@ RUN mkdir -p /home/jovyan/.config/opencode \
              /tmp_home \
              /run
 
-RUN printf 'git_protocol: https\nprompt: disabled\nversion: "1"\n' > /home/jovyan/.config/gh/config.yml && \
+RUN printf 'git_protocol: https\nversion: "1"\n' > /home/jovyan/.config/gh/config.yml && \
     printf 'github.com:\n    git_protocol: https\n' > /home/jovyan/.config/gh/hosts.yml
 
 # Install GitHub Copilot review extension for the runtime user.
