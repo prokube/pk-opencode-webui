@@ -78,16 +78,19 @@ RUN mkdir -p /home/jovyan/.config/opencode \
              /home/jovyan/.s6-runtime \
              /opt/opencode-ui \
              /tmp_home \
-              /run
+             /run
 
 RUN printf 'git_protocol: https\nprompt: disabled\nversion: "1"\n' > /home/jovyan/.config/gh/config.yml && \
-    printf 'github.com:\n    user: jovyan\n    oauth_token: ""\n    git_protocol: https\n' > /home/jovyan/.config/gh/hosts.yml
+    printf 'github.com:\n    git_protocol: https\n' > /home/jovyan/.config/gh/hosts.yml
 
 # Install GitHub Copilot review extension for the runtime user.
 # The extension has no tags/releases, so pin to an audited commit for reproducibility.
 ARG GH_COPILOT_REVIEW_REF=1dfe6cd4abf66f8d45cbc0b3de26cf202fd27910
-RUN git clone https://github.com/ChrisCarini/gh-copilot-review /home/jovyan/.local/share/gh/extensions/gh-copilot-review && \
-    git -C /home/jovyan/.local/share/gh/extensions/gh-copilot-review checkout "${GH_COPILOT_REVIEW_REF}"
+RUN mkdir -p /home/jovyan/.local/share/gh/extensions/gh-copilot-review && \
+    git -C /home/jovyan/.local/share/gh/extensions/gh-copilot-review init && \
+    git -C /home/jovyan/.local/share/gh/extensions/gh-copilot-review remote add origin https://github.com/ChrisCarini/gh-copilot-review && \
+    git -C /home/jovyan/.local/share/gh/extensions/gh-copilot-review fetch --depth 1 origin "${GH_COPILOT_REVIEW_REF}" && \
+    git -C /home/jovyan/.local/share/gh/extensions/gh-copilot-review checkout FETCH_HEAD
 
 # Copy default OpenCode config (disables amazon-bedrock to avoid S3/MinIO credential confusion)
 COPY docker/kubeflow/opencode-default-config.json /home/jovyan/.config/opencode/opencode.json
