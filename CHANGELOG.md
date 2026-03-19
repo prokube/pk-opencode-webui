@@ -12,6 +12,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Add CHANGELOG.md and require changelog entries in PRs (#165)
 - Add drag-to-resize handle for chat input textarea (#170)
 - Add timestamp display and expandable details panel to message turns (#176)
+- Preinstall GitHub CLI and pinned `gh-copilot-review` extension in the Kubeflow image (#194)
 
 ### Fixed
 - Fix saved prompts written to wrong localStorage key during navigation (#187)

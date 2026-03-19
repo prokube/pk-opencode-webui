@@ -8,6 +8,7 @@ This image combines:
 
 - **OpenCode API Server** (runs on internal port 4096)
 - **Prefix-Aware Web UI** (serves on port 8888, proxies to API)
+- **GitHub CLI and Copilot Review extension** (`gh` + `gh-copilot-review`)
 
 The UI automatically adapts to any URL prefix set by Kubeflow's `NB_PREFIX` environment variable.
 
@@ -115,6 +116,12 @@ spec:
 | `KF_EXAMPLES_REPO` | (empty)                 | Git repo to clone on startup      |
 | `BRANDING_NAME`    | (empty)                 | Optional branding name shown in UI|
 | `BRANDING_URL`     | (empty)                 | Optional URL for branding link    |
+
+## Preinstalled Developer Tooling
+
+- `gh` is preinstalled in the image and available to the runtime user (`jovyan`).
+- `gh-copilot-review` is preinstalled for `jovyan` and can be used with `gh copilot-review <pr-number>`.
+- The extension is pinned in `docker/kubeflow/Dockerfile` via `GH_COPILOT_REVIEW_REF` for reproducible builds.
 
 ## Configuration Directories
 
