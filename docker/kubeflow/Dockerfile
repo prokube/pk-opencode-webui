@@ -30,6 +30,7 @@ FROM alpine:3.21
 RUN apk add --no-cache \
     bash \
     git \
+    github-cli \
     curl \
     openssh-client \
     neovim \
@@ -71,11 +72,22 @@ RUN addgroup -g 1000 jovyan && \
 # Create directories (including s6 runtime directory for rootless mode)
 # /run must be writable by jovyan for s6-overlay's preinit writability test
 RUN mkdir -p /home/jovyan/.config/opencode \
+             /home/jovyan/.config/gh \
+             /home/jovyan/.local/share/gh \
              /home/jovyan/.local/share/opencode \
              /home/jovyan/.s6-runtime \
              /opt/opencode-ui \
              /tmp_home \
-             /run
+              /run
+
+RUN printf 'git_protocol: https\nprompt: disabled\nversion: "1"\n' > /home/jovyan/.config/gh/config.yml && \
+    printf 'github.com:\n    user: jovyan\n    oauth_token: ""\n    git_protocol: https\n' > /home/jovyan/.config/gh/hosts.yml
+
+# Install GitHub Copilot review extension for the runtime user.
+# The extension has no tags/releases, so pin to an audited commit for reproducibility.
+ARG GH_COPILOT_REVIEW_REF=1dfe6cd4abf66f8d45cbc0b3de26cf202fd27910
+RUN git clone https://github.com/ChrisCarini/gh-copilot-review /home/jovyan/.local/share/gh/extensions/gh-copilot-review && \
+    git -C /home/jovyan/.local/share/gh/extensions/gh-copilot-review checkout "${GH_COPILOT_REVIEW_REF}"
 
 # Copy default OpenCode config (disables amazon-bedrock to avoid S3/MinIO credential confusion)
 COPY docker/kubeflow/opencode-default-config.json /home/jovyan/.config/opencode/opencode.json
