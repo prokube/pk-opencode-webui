@@ -2,6 +2,7 @@ import { type ParentProps, createSignal, For, onMount, onCleanup, Show } from "s
 import { useNavigate } from "@solidjs/router"
 import { createOpencodeClient } from "../sdk/client"
 import { base64Encode, getServerUrl } from "../utils/path"
+import { useServer } from "../context/server"
 import { SDKProvider } from "../context/sdk"
 import { EventProvider } from "../context/events"
 import { ProviderProvider } from "../context/providers"
@@ -12,7 +13,8 @@ import { ProjectDialog } from "../components/project-dialog"
 import { Terminal } from "../components/terminal"
 import { getFilename, OpenCodeLogo, ProjectAvatar, type Project } from "../components/shared"
 import { Spinner } from "../components/ui/spinner"
-import { Plus, X, Settings, SquareTerminal, ChevronDown } from "lucide-solid"
+import { Plus, X, Settings, Server, SquareTerminal, ChevronDown } from "lucide-solid"
+import { ServerDialog } from "../components/server-dialog"
 import { dispatchStorageEvent } from "../utils/storage"
 
 // Storage key
@@ -25,9 +27,13 @@ const PROJECTS_STORAGE_KEY = "opencode.projects"
 export function HomeLayout(props: ParentProps) {
   const navigate = useNavigate()
   const globalEvents = useGlobalEvents()
+  const serverCtx = useServer()
 
   const [projects, setProjects] = createSignal<Project[]>([])
   const [projectDialogOpen, setProjectDialogOpen] = createSignal(false)
+
+  // Server dialog state
+  const [serverDialogOpen, setServerDialogOpen] = createSignal(false)
 
   // Terminal state
   const [terminalOpen, setTerminalOpen] = createSignal(false)
@@ -36,7 +42,7 @@ export function HomeLayout(props: ParentProps) {
   const [terminalHeight, setTerminalHeight] = createSignal(300)
 
   // Client for PTY operations
-  const client = createOpencodeClient({ baseUrl: getServerUrl(), throwOnError: false })
+  const client = createOpencodeClient({ baseUrl: serverCtx.serverUrl(), headers: serverCtx.authHeaders(), throwOnError: false })
 
   onMount(() => {
     try {
@@ -140,6 +146,12 @@ export function HomeLayout(props: ParentProps) {
           <ProviderProvider>
             <MCPProvider>
             <div class="flex h-screen" style={{ background: "var(--background-stronger)" }}>
+              {/* Server Dialog */}
+              <ServerDialog
+                open={serverDialogOpen()}
+                onClose={() => setServerDialogOpen(false)}
+              />
+
               {/* Project Dialog */}
               <ProjectDialog
                 open={projectDialogOpen()}
@@ -199,11 +211,28 @@ export function HomeLayout(props: ParentProps) {
                   </button>
                 </div>
 
-                {/* Bottom: Terminal & Settings */}
+                {/* Bottom: Server, Terminal & Settings */}
                 <div
                   class="flex flex-col items-center gap-2 py-3"
                   style={{ "border-top": "1px solid var(--border-base)" }}
                 >
+                  <button
+                    onClick={() => setServerDialogOpen(true)}
+                    class="w-10 h-10 rounded-lg flex items-center justify-center transition-colors relative"
+                    style={{
+                      color: serverDialogOpen() ? "var(--text-interactive-base)" : "var(--icon-base)",
+                      background: serverDialogOpen() ? "var(--surface-inset)" : "transparent",
+                    }}
+                    title={`Server: ${serverCtx.activeServer().name}`}
+                  >
+                    <Server class="w-5 h-5" />
+                    <Show when={!serverCtx.activeServer().isDefault}>
+                      <div
+                        class="absolute top-1.5 right-1.5 w-2 h-2 rounded-full"
+                        style={{ background: "var(--interactive-base)" }}
+                      />
+                    </Show>
+                  </button>
                   <button
                     onClick={toggleTerminal}
                     class="w-10 h-10 rounded-lg flex items-center justify-center transition-colors"

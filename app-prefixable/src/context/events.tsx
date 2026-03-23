@@ -3,6 +3,7 @@ import { createStore, produce } from "solid-js/store"
 import type { Event, SessionStatus, QuestionRequest } from "../sdk/client"
 import { useBasePath } from "./base-path"
 import { useSDK } from "./sdk"
+import { useServer } from "./server"
 
 type EventHandler = (event: Event) => void
 
@@ -18,82 +19,110 @@ const EventContext = createContext<EventContextValue>()
 export function EventProvider(props: ParentProps) {
   const { prefix } = useBasePath()
   const { client, directory } = useSDK()
+  const { authHeaders } = useServer()
   const handlers = new Set<EventHandler>()
   const [status, setStatus] = createStore<Record<string, SessionStatus>>({})
   const [pendingQuestions, setPendingQuestions] = createStore<Record<string, QuestionRequest | undefined>>({})
 
-  // Connect to SSE endpoint
-  let eventSource: EventSource | null = null
+  // Connect to SSE endpoint using fetch (supports custom headers unlike EventSource)
+  let abortController: AbortController | null = null
   let reconnectTimer: ReturnType<typeof setTimeout> | null = null
 
-  function connect() {
-    if (eventSource) return
+  function processEvent(rawData: string) {
+    try {
+      const data = JSON.parse(rawData)
+      // Handle both formats: direct event or wrapped in payload
+      const event = (data?.payload ?? data) as Event
+      if (!event || !event.type) {
+        console.warn("[Events] Received event without type:", data)
+        return
+      }
+      console.log("[Events] Received:", event.type, event.properties)
 
-    // Use prefixed path with directory parameter so events are scoped to the correct instance
+      // Update session status
+      if (event.type === "session.status") {
+        const props = event.properties
+        if (props?.sessionID && props?.status) {
+          sseSeenStatuses.add(props.sessionID as string)
+          setStatus(props.sessionID, props.status)
+        }
+      }
+
+      // Track pending questions
+      if (event.type === "question.asked") {
+        const q = event.properties as QuestionRequest
+        if (q?.sessionID) {
+          sseAskedQuestions.add(q.sessionID)
+          setPendingQuestions(q.sessionID, q)
+        }
+      }
+      if (event.type === "question.replied" || event.type === "question.rejected") {
+        const q = event.properties as { sessionID?: string; requestID?: string }
+        if (q?.sessionID) {
+          if (q.requestID) sseClearedRequests.add(q.requestID)
+          setPendingQuestions(produce((map) => {
+            if (!q.requestID || map[q.sessionID!]?.id === q.requestID) delete map[q.sessionID!]
+          }))
+        }
+      }
+
+      // Notify all handlers
+      for (const handler of handlers) {
+        handler(event)
+      }
+    } catch (err) {
+      console.error("[Events] Parse error:", err)
+    }
+  }
+
+  async function connect() {
+    if (abortController) return
+
     const dirParam = directory ? `?directory=${encodeURIComponent(directory)}` : ""
     const eventUrl = prefix(`/event${dirParam}`)
-    eventSource = new EventSource(eventUrl)
     console.log("[Events] Connecting to SSE:", eventUrl)
 
-    eventSource.onopen = () => {
-      console.log("[Events] Connected")
-    }
+    abortController = new AbortController()
+    const signal = abortController.signal
 
-    eventSource.onmessage = (e) => {
-      try {
-        const data = JSON.parse(e.data)
-        // Handle both formats: direct event or wrapped in payload
-        const event = (data?.payload ?? data) as Event
-        if (!event || !event.type) {
-          console.warn("[Events] Received event without type:", data)
-          return
-        }
-        console.log("[Events] Received:", event.type, event.properties)
+    try {
+      const response = await fetch(eventUrl, {
+        headers: { ...authHeaders(), Accept: "text/event-stream" },
+        signal,
+      })
 
-        // Update session status
-        if (event.type === "session.status") {
-          const props = event.properties
-          if (props?.sessionID && props?.status) {
-            sseSeenStatuses.add(props.sessionID as string)
-            setStatus(props.sessionID, props.status)
-          }
-        }
-
-        // Track pending questions
-        if (event.type === "question.asked") {
-          const q = event.properties as QuestionRequest
-          if (q?.sessionID) {
-            sseAskedQuestions.add(q.sessionID)
-            setPendingQuestions(q.sessionID, q)
-          }
-        }
-        if (event.type === "question.replied" || event.type === "question.rejected") {
-          const q = event.properties as { sessionID?: string; requestID?: string }
-          if (q?.sessionID) {
-            if (q.requestID) sseClearedRequests.add(q.requestID)
-            // Only clear if the stored question matches this request to avoid
-            // accidentally removing a newer question for the same session.
-            setPendingQuestions(produce((map) => {
-              if (!q.requestID || map[q.sessionID!]?.id === q.requestID) delete map[q.sessionID!]
-            }))
-          }
-        }
-
-        // Notify all handlers
-        for (const handler of handlers) {
-          handler(event)
-        }
-      } catch (err) {
-        console.error("[Events] Parse error:", err)
+      if (!response.ok || !response.body) {
+        throw new Error(`SSE connection failed: ${response.status}`)
       }
-    }
 
-    eventSource.onerror = (e) => {
-      console.error("[Events] Connection error, reconnecting...", e)
-      eventSource?.close()
-      eventSource = null
+      console.log("[Events] Connected")
 
-      // Reconnect after delay
+      const reader = response.body.getReader()
+      const decoder = new TextDecoder()
+      let buffer = ""
+
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+
+        buffer += decoder.decode(value, { stream: true })
+        const lines = buffer.split("\n")
+        buffer = lines.pop() || ""
+
+        for (const line of lines) {
+          if (line.startsWith("data: ")) {
+            processEvent(line.slice(6))
+          }
+        }
+      }
+
+      // Stream ended normally, reconnect
+      throw new Error("SSE stream ended")
+    } catch (err) {
+      if (signal.aborted) return // Intentional disconnect
+      console.error("[Events] Connection error, reconnecting...", err)
+      abortController = null
+
       if (!reconnectTimer) {
         reconnectTimer = setTimeout(() => {
           reconnectTimer = null
@@ -141,7 +170,8 @@ export function EventProvider(props: ParentProps) {
   })
 
   onCleanup(() => {
-    eventSource?.close()
+    abortController?.abort()
+    abortController = null
     if (reconnectTimer) clearTimeout(reconnectTimer)
   })
 

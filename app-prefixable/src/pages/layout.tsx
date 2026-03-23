@@ -21,6 +21,8 @@ import { Spinner } from "../components/ui/spinner";
 import { Button } from "../components/ui/button";
 import { Terminal } from "../components/terminal";
 import { ProjectDialog } from "../components/project-dialog";
+import { ServerDialog } from "../components/server-dialog";
+import { useServer } from "../context/server";
 import {
   getFilename,
   OpenCodeLogo,
@@ -31,6 +33,7 @@ import type { Session } from "../sdk/client";
 import {
   Plus,
   Settings,
+  Server,
   SquareTerminal,
   MessageCircle,
   Loader2,
@@ -252,6 +255,8 @@ export function Layout(props: ParentProps) {
   const [sidebarExpanded, setSidebarExpanded] = createSignal(true);
   const [showArchived, setShowArchived] = createSignal(false);
   const [projectDialogOpen, setProjectDialogOpen] = createSignal(false);
+  const [serverDialogOpen, setServerDialogOpen] = createSignal(false);
+  const serverCtx = useServer();
   const [renamingId, setRenamingId] = createSignal<string | null>(null);
   const [editTitle, setEditTitle] = createSignal("");
   const [windowWidth, setWindowWidth] = createSignal(
@@ -2000,6 +2005,12 @@ export function Layout(props: ParentProps) {
         onSelect={handleProjectSelect}
       />
 
+      {/* Server Dialog */}
+      <ServerDialog
+        open={serverDialogOpen()}
+        onClose={() => setServerDialogOpen(false)}
+      />
+
       {/* Left: Project Icons Strip (always visible) */}
       <div
         class="w-16 shrink-0 flex flex-col items-center"
@@ -2086,6 +2097,28 @@ export function Layout(props: ParentProps) {
           class="flex flex-col items-center gap-2 py-3"
           style={{ "border-top": "1px solid var(--border-base)" }}
         >
+          <button
+            data-hint-target
+            onClick={() => setServerDialogOpen(true)}
+            class="w-10 h-10 rounded-lg flex items-center justify-center transition-colors relative"
+            style={{
+              color: serverDialogOpen()
+                ? "var(--text-interactive-base)"
+                : "var(--icon-base)",
+              background: serverDialogOpen()
+                ? "var(--surface-inset)"
+                : "transparent",
+            }}
+            title={`Server: ${serverCtx.activeServer().name}`}
+          >
+            <Server class="w-5 h-5" />
+            <Show when={!serverCtx.activeServer().isDefault}>
+              <div
+                class="absolute top-1.5 right-1.5 w-2 h-2 rounded-full"
+                style={{ background: "var(--interactive-base)" }}
+              />
+            </Show>
+          </button>
           <button
             data-hint-target
             onClick={() => terminal.toggle(directory)}
