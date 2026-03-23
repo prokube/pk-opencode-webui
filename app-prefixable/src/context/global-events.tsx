@@ -8,6 +8,7 @@ import {
 } from "solid-js"
 import { createStore, produce } from "solid-js/store"
 import { useBasePath } from "./base-path"
+import { useServer } from "./server"
 
 /**
  * Alert priority: permission (highest) > question > busy
@@ -45,12 +46,13 @@ export function GlobalEventsProvider(props: ParentProps & {
   activeDirectory: () => string | undefined
 }) {
   const { prefix } = useBasePath()
+  const { authHeaders } = useServer()
 
   // Per-directory alert state
   const [alerts, setAlerts] = createStore<Record<string, ProjectAlerts>>({})
 
-  // Map of directory → SSE connection
-  const connections = new Map<string, { source: EventSource }>()
+  // Map of directory → SSE connection (abort controller for fetch-based SSE)
+  const connections = new Map<string, { controller: AbortController }>()
   let disposed = false
 
   // Pending reconnect timers, tracked separately from connections but cleared by disconnectDirectory
@@ -116,27 +118,27 @@ export function GlobalEventsProvider(props: ParentProps & {
 
     const dirParam = `?directory=${encodeURIComponent(dir)}`
     const url = prefix(`/event${dirParam}`)
-    const source = new EventSource(url)
+    const controller = new AbortController()
 
-    connections.set(dir, { source })
+    connections.set(dir, { controller })
 
     // Buffer events until seed completes to avoid races where an SSE event
     // adds state, then the seed clears and repopulates (dropping the event).
-    const buffer: MessageEvent[] = []
+    const buffer: string[] = []
     const MAX_BUFFER = 1000
     let seeded = false
 
-    function handleMessage(e: MessageEvent) {
+    function handleMessage(rawData: string) {
       if (!seeded) {
         if (buffer.length >= MAX_BUFFER) buffer.shift()
-        buffer.push(e)
+        buffer.push(rawData)
         return
       }
-      processMessage(e)
+      processMessage(rawData)
     }
 
-    function processMessage(e: MessageEvent) {
-      const data = (() => { try { return JSON.parse(e.data) } catch { return null } })()
+    function processMessage(rawData: string) {
+      const data = (() => { try { return JSON.parse(rawData) } catch { return null } })()
       if (!data) return
       const event = data?.payload ?? data
       if (!event?.type) return
@@ -150,23 +152,18 @@ export function GlobalEventsProvider(props: ParentProps & {
         if (info?.id && info?.parentID) {
           const sid = info.id
           tracking.subAgents.add(sid)
-          // Retroactively clean up tracking sets in case out-of-order events
-          // (permission.asked/question.asked/session.status) arrived before
-          // session.created and added this sub-agent's ID.
           let changed = false
           if (tracking.permissionSessions.delete(sid)) changed = true
           if (tracking.questionSessions.delete(sid)) changed = true
           if (tracking.busySessions.delete(sid)) changed = true
           if (changed) recalcAlerts(dir)
         }
-        // Keep rootSessions up to date for new root sessions created after seeding
         if (info?.id && !info?.parentID && tracking.rootSessions) {
           tracking.rootSessions.add(info.id)
         }
         return
       }
 
-      // Prune sub-agent (and its tracking state) when its session is deleted
       if (event.type === "session.deleted") {
         const info = (event.properties as { info?: { id?: string } })?.info
         const sid = info?.id
@@ -192,8 +189,6 @@ export function GlobalEventsProvider(props: ParentProps & {
       }
 
       if (event.type === "permission.replied") {
-        // A permission was answered — debounce reseed to avoid overlapping
-        // fetches when multiple permission.replied events arrive quickly
         const existing = permReseedTimers.get(dir)
         if (existing) clearTimeout(existing)
         permReseedTimers.set(dir, setTimeout(() => {
@@ -231,7 +226,6 @@ export function GlobalEventsProvider(props: ParentProps & {
         const sid = props?.sessionID
         const type = props?.status?.type
         if (!sid || !type) return
-        // Skip sub-agent sessions (known or not in root set)
         if (tracking.subAgents.has(sid)) return
         if (tracking.rootSessions && !tracking.rootSessions.has(sid)) return
 
@@ -245,41 +239,68 @@ export function GlobalEventsProvider(props: ParentProps & {
       }
     }
 
-    source.onmessage = handleMessage
+    // Start fetch-based SSE with auth headers
+    ;(async () => {
+      try {
+        const response = await fetch(url, {
+          headers: { ...authHeaders(), Accept: "text/event-stream" },
+          signal: controller.signal,
+        })
 
-    // Seed initial state, then flush any buffered SSE events.
-    // Guard: only flush if this connection is still active (not torn down mid-flight).
-    seedDirectory(dir).then(() => {
-      const conn = connections.get(dir)
-      if (!conn || conn.source !== source) return
-      seeded = true
-      for (const buffered of buffer) processMessage(buffered)
-      buffer.length = 0
-    })
-
-    source.onerror = () => {
-      if (disposed) return
-      // Clear all state (source, perDir, alerts) so stale badges don't linger
-      disconnectDirectory(dir)
-      // Schedule reconnect outside the connection lifecycle
-      const reconnectTimer = setTimeout(() => {
-        reconnectTimers.delete(dir)
-        if (disposed) return
-        const active = props.activeDirectory()
-        const wanted = props.projects().some((p) => p.worktree === dir)
-        if (wanted && dir !== active) {
-          connectToDirectory(dir)
+        if (!response.ok || !response.body) {
+          throw new Error(`SSE connection failed: ${response.status}`)
         }
-      }, 5000)
-      // Store timer so cleanup can cancel it if the component unmounts
-      reconnectTimers.set(dir, reconnectTimer)
-    }
+
+        // Seed initial state, then flush buffered events
+        await seedDirectory(dir)
+        const conn = connections.get(dir)
+        if (!conn || conn.controller !== controller) return
+        seeded = true
+        for (const buffered of buffer) processMessage(buffered)
+        buffer.length = 0
+
+        const reader = response.body.getReader()
+        const decoder = new TextDecoder()
+        let lineBuf = ""
+
+        while (true) {
+          const { done, value } = await reader.read()
+          if (done) break
+
+          lineBuf += decoder.decode(value, { stream: true })
+          const lines = lineBuf.split("\n")
+          lineBuf = lines.pop() || ""
+
+          for (const line of lines) {
+            if (line.startsWith("data: ")) {
+              handleMessage(line.slice(6))
+            }
+          }
+        }
+
+        throw new Error("SSE stream ended")
+      } catch (err) {
+        if (controller.signal.aborted) return
+        if (disposed) return
+        disconnectDirectory(dir)
+        const reconnectTimer = setTimeout(() => {
+          reconnectTimers.delete(dir)
+          if (disposed) return
+          const active = props.activeDirectory()
+          const wanted = props.projects().some((p) => p.worktree === dir)
+          if (wanted && dir !== active) {
+            connectToDirectory(dir)
+          }
+        }, 5000)
+        reconnectTimers.set(dir, reconnectTimer)
+      }
+    })()
   }
 
   function disconnectDirectory(dir: string) {
     const conn = connections.get(dir)
     if (conn) {
-      conn.source.close()
+      conn.controller.abort()
       connections.delete(dir)
     }
     const timer = reconnectTimers.get(dir)
@@ -300,7 +321,7 @@ export function GlobalEventsProvider(props: ParentProps & {
   // Returns null on failure so callers can gracefully degrade (seed all sessions)
   // instead of clearing all state with a false-negative empty set.
   function fetchRootSessionIds(dir: string): Promise<Set<string> | null> {
-    return fetch(prefix(`/session?directory=${encodeURIComponent(dir)}&roots=true`))
+    return fetch(prefix(`/session?directory=${encodeURIComponent(dir)}&roots=true`), { headers: authHeaders() })
       .then((r) => {
         if (!r.ok) {
           console.warn("[GlobalEvents] Failed to fetch root sessions for", dir, `HTTP ${r.status}`)
@@ -341,7 +362,7 @@ export function GlobalEventsProvider(props: ParentProps & {
     // Seed subAgents from all sessions: any session with a parentID is a
     // sub-agent. This covers sessions that existed before the SSE connection.
     if (roots) {
-      await fetch(prefix(`/session?directory=${encodeURIComponent(dir)}`))
+      await fetch(prefix(`/session?directory=${encodeURIComponent(dir)}`), { headers: authHeaders() })
         .then((r) => {
           if (!r.ok) return
           return r.json()
@@ -369,7 +390,7 @@ export function GlobalEventsProvider(props: ParentProps & {
     // Snapshot sessions added by SSE before the fetch started so we can
     // merge them back, avoiding a race where clear() drops concurrent events.
     const before = new Set(tracking.permissionSessions)
-    return fetch(prefix(`/permission?directory=${encodeURIComponent(dir)}`))
+    return fetch(prefix(`/permission?directory=${encodeURIComponent(dir)}`), { headers: authHeaders() })
       .then((r) => r.json())
       .then((data) => {
         if (!perDir.has(dir)) return  // disconnected while fetching
@@ -399,7 +420,7 @@ export function GlobalEventsProvider(props: ParentProps & {
   function seedQuestions(dir: string, roots: Set<string> | null) {
     const tracking = perDir.get(dir)
     if (!tracking) return  // disconnected: do not recreate tracking while seeding
-    return fetch(prefix(`/question?directory=${encodeURIComponent(dir)}`))
+    return fetch(prefix(`/question?directory=${encodeURIComponent(dir)}`), { headers: authHeaders() })
       .then((r) => r.json())
       .then((data) => {
         if (!perDir.has(dir)) return  // disconnected while fetching
@@ -416,7 +437,7 @@ export function GlobalEventsProvider(props: ParentProps & {
   function seedStatuses(dir: string, roots: Set<string> | null) {
     const tracking = perDir.get(dir)
     if (!tracking) return  // disconnected: do not recreate tracking while seeding
-    return fetch(prefix(`/session/status?directory=${encodeURIComponent(dir)}`))
+    return fetch(prefix(`/session/status?directory=${encodeURIComponent(dir)}`), { headers: authHeaders() })
       .then((r) => r.json())
       .then((data) => {
         if (!perDir.has(dir)) return  // disconnected while fetching

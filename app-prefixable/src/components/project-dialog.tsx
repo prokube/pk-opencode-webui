@@ -1,6 +1,7 @@
 import { createSignal, For, Show, onMount, createEffect, createMemo } from "solid-js"
 import { createOpencodeClient, type Event } from "../sdk/client"
 import { useBasePath } from "../context/base-path"
+import { useServer } from "../context/server"
 import { Spinner } from "./ui/spinner"
 import { Button } from "./ui/button"
 import { Folder, X, GitBranch, AlertCircle } from "lucide-solid"
@@ -60,6 +61,7 @@ function displayPath(path: string, home: string) {
 
 export function ProjectDialog(props: ProjectDialogProps) {
   const { serverUrl } = useBasePath()
+  const { authHeaders } = useServer()
   const events = useEvents()
 
   const [homeDirectory, setHomeDirectory] = createSignal<string | null>(null)
@@ -85,8 +87,8 @@ export function ProjectDialog(props: ProjectDialogProps) {
   let inputRef: HTMLInputElement | undefined
   let cloneUnsubscribe: (() => void) | null = null
 
-  const client = createOpencodeClient({ baseUrl: serverUrl, throwOnError: false })
-  const global = createOpencodeClient({ baseUrl: serverUrl, throwOnError: false })
+  const client = createOpencodeClient({ baseUrl: serverUrl, headers: authHeaders(), throwOnError: false })
+  const global = createOpencodeClient({ baseUrl: serverUrl, headers: authHeaders(), throwOnError: false })
 
   // Load home directory on mount
   onMount(async () => {

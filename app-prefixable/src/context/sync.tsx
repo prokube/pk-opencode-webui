@@ -3,6 +3,7 @@ import { createStore, reconcile, produce } from "solid-js/store"
 import type { Session, Message, Part, Provider } from "../sdk/client"
 import { useBasePath } from "./base-path"
 import { useSDK } from "./sdk"
+import { useServer } from "./server"
 
 // Event type - looser than SDK type to handle all events
 type SyncEvent = {
@@ -71,6 +72,7 @@ function binarySearch<T>(arr: T[], id: string, getId: (item: T) => string): { fo
 export function SyncProvider(props: ParentProps) {
   const { prefix } = useBasePath()
   const { client, directory } = useSDK()
+  const { authHeaders } = useServer()
 
   const [store, setStore] = createStore<SyncStore>({
     ready: false,
@@ -83,38 +85,63 @@ export function SyncProvider(props: ParentProps) {
 
   const inflight = new Map<string, Promise<void>>()
 
-  // Connect to SSE endpoint
-  let eventSource: EventSource | null = null
+  // Connect to SSE endpoint using fetch (supports custom headers unlike EventSource)
+  let abortController: AbortController | null = null
   let reconnectTimer: ReturnType<typeof setTimeout> | null = null
 
-  function connect() {
-    if (eventSource) return
+  async function connect() {
+    if (abortController) return
 
     const dirParam = directory ? `?directory=${encodeURIComponent(directory)}` : ""
     const eventUrl = prefix(`/event${dirParam}`)
-    eventSource = new EventSource(eventUrl)
     console.log("[Sync] Connecting to SSE:", eventUrl)
 
-    eventSource.onopen = () => {
+    abortController = new AbortController()
+    const signal = abortController.signal
+
+    try {
+      const response = await fetch(eventUrl, {
+        headers: { ...authHeaders(), Accept: "text/event-stream" },
+        signal,
+      })
+
+      if (!response.ok || !response.body) {
+        throw new Error(`SSE connection failed: ${response.status}`)
+      }
+
       console.log("[Sync] Connected, bootstrapping...")
       if (!store.ready) bootstrap()
-    }
 
-    eventSource.onmessage = (e) => {
-      try {
-        const data = JSON.parse(e.data)
-        const event = (data?.payload ?? data) as SyncEvent
-        if (!event || !event.type) return
-        handleEvent(event)
-      } catch (err) {
-        console.error("[Sync] Parse error:", err)
+      const reader = response.body.getReader()
+      const decoder = new TextDecoder()
+      let buffer = ""
+
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+
+        buffer += decoder.decode(value, { stream: true })
+        const lines = buffer.split("\n")
+        buffer = lines.pop() || ""
+
+        for (const line of lines) {
+          if (line.startsWith("data: ")) {
+            try {
+              const data = JSON.parse(line.slice(6))
+              const event = (data?.payload ?? data) as SyncEvent
+              if (event?.type) handleEvent(event)
+            } catch (err) {
+              console.error("[Sync] Parse error:", err)
+            }
+          }
+        }
       }
-    }
 
-    eventSource.onerror = () => {
-      console.error("[Sync] Connection error, reconnecting...")
-      eventSource?.close()
-      eventSource = null
+      throw new Error("SSE stream ended")
+    } catch (err) {
+      if (signal.aborted) return
+      console.error("[Sync] Connection error, reconnecting...", err)
+      abortController = null
 
       if (!reconnectTimer) {
         reconnectTimer = setTimeout(() => {
@@ -418,7 +445,8 @@ export function SyncProvider(props: ParentProps) {
   connect()
 
   onCleanup(() => {
-    eventSource?.close()
+    abortController?.abort()
+    abortController = null
     if (reconnectTimer) clearTimeout(reconnectTimer)
   })
 

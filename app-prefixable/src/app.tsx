@@ -1,6 +1,7 @@
 import { Router, Route, Navigate, useParams } from "@solidjs/router"
-import { createSignal, onMount, onCleanup } from "solid-js"
+import { createSignal, onMount, onCleanup, For } from "solid-js"
 import { BasePathProvider, useBasePath } from "./context/base-path"
+import { ServerProvider, useServer } from "./context/server"
 import { BrandingProvider } from "./context/branding"
 import { ThemeProvider } from "./context/theme"
 import { CommandProvider } from "./context/command"
@@ -128,25 +129,40 @@ function useProjectsList() {
   return projects
 }
 
+function AppWithServer(props: { projects: () => Project[]; activeDirectory: () => string | undefined }) {
+  const { serverUrl, activeServerId } = useServer()
+
+  // Key by server ID to force full remount when switching servers
+  return (
+    <For each={[activeServerId()]}>
+      {() => (
+        <BasePathProvider serverUrl={serverUrl()}>
+          <ThemeProvider>
+            <BrandingProvider>
+              <RecentProjectsProvider>
+                <SavedPromptsProvider directory={props.activeDirectory}>
+                  <GlobalEventsProvider projects={props.projects} activeDirectory={props.activeDirectory}>
+                    <CommandProvider>
+                      <AppRoutes />
+                    </CommandProvider>
+                  </GlobalEventsProvider>
+                </SavedPromptsProvider>
+              </RecentProjectsProvider>
+            </BrandingProvider>
+          </ThemeProvider>
+        </BasePathProvider>
+      )}
+    </For>
+  )
+}
+
 export function App() {
   const projects = useProjectsList()
   const activeDirectory = useActiveDirectory()
 
   return (
-    <BasePathProvider>
-      <ThemeProvider>
-        <BrandingProvider>
-          <RecentProjectsProvider>
-            <SavedPromptsProvider directory={activeDirectory}>
-              <GlobalEventsProvider projects={projects} activeDirectory={activeDirectory}>
-                <CommandProvider>
-                  <AppRoutes />
-                </CommandProvider>
-              </GlobalEventsProvider>
-            </SavedPromptsProvider>
-          </RecentProjectsProvider>
-        </BrandingProvider>
-      </ThemeProvider>
-    </BasePathProvider>
+    <ServerProvider>
+      <AppWithServer projects={projects} activeDirectory={activeDirectory} />
+    </ServerProvider>
   )
 }

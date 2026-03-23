@@ -8,6 +8,7 @@ import { useBranding } from "../context/branding"
 import { useBasePath } from "../context/base-path"
 import { useRecentProjects } from "../context/recent-projects"
 import { createOpencodeClient } from "../sdk/client"
+import { useServer } from "../context/server"
 import { Button } from "../components/ui/button"
 
 // OpenCode Wordmark
@@ -71,6 +72,7 @@ export function ProjectPicker() {
   const navigate = useNavigate()
   const branding = useBranding()
   const { serverUrl } = useBasePath()
+  const { authHeaders } = useServer()
   const recent = useRecentProjects()
   const [dialogOpen, setDialogOpen] = createSignal(false)
   const [dialogView, setDialogView] = createSignal<"browse" | "clone">("browse")
@@ -78,7 +80,7 @@ export function ProjectPicker() {
 
   // Get home directory for path shortening
   onMount(async () => {
-    const client = createOpencodeClient({ baseUrl: serverUrl, throwOnError: false })
+    const client = createOpencodeClient({ baseUrl: serverUrl, headers: authHeaders(), throwOnError: false })
     const res = await client.path.get()
     if (res.data?.home) setHomeDir(res.data.home)
   })
