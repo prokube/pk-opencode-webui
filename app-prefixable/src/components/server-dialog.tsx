@@ -120,10 +120,13 @@ export function ServerDialog(props: Props) {
     })
 
     try {
+      const controller = new AbortController()
+      const timer = setTimeout(() => controller.abort(), 5000)
       const res = await fetch(`${s.url}/session`, {
         headers: getAuthHeaders(s.auth),
-        signal: AbortSignal.timeout(5000),
+        signal: controller.signal,
       })
+      clearTimeout(timer)
       if (!res.ok) throw new Error(`HTTP ${res.status}`)
       setTestResult((prev) => ({ ...prev, [s.id]: "ok" }))
     } catch {

@@ -27,12 +27,43 @@ function createDefaultServer(): ServerConfig {
   }
 }
 
+function isValidServerEntry(s: unknown): s is ServerConfig {
+  if (!s || typeof s !== "object") return false
+  const obj = s as Record<string, unknown>
+  if (typeof obj.id !== "string" || !obj.id) return false
+  if (typeof obj.name !== "string" || !obj.name) return false
+  if (typeof obj.url !== "string" || !obj.url) return false
+  // Validate auth shape; default missing/invalid auth to {type:"none"}
+  if (obj.auth && typeof obj.auth === "object") {
+    const auth = obj.auth as Record<string, unknown>
+    if (auth.type === "api-key" && typeof auth.key === "string") return true
+    if (auth.type === "basic" && typeof auth.username === "string" && typeof auth.password === "string") return true
+    if (auth.type === "none") return true
+    // Invalid auth shape — will be defaulted below
+  }
+  return true
+}
+
+function normalizeAuth(s: Record<string, unknown>): ServerAuth {
+  const auth = s.auth as Record<string, unknown> | undefined
+  if (!auth || typeof auth !== "object") return { type: "none" }
+  if (auth.type === "api-key" && typeof auth.key === "string") return auth as ServerAuth
+  if (auth.type === "basic" && typeof auth.username === "string" && typeof auth.password === "string") return auth as ServerAuth
+  if (auth.type === "none") return { type: "none" }
+  return { type: "none" }
+}
+
 function loadServers(): ServerConfig[] {
   try {
     const stored = localStorage.getItem(SERVERS_KEY)
     if (stored) {
-      const parsed = JSON.parse(stored) as ServerConfig[]
-      if (Array.isArray(parsed) && parsed.length > 0) {
+      const raw = JSON.parse(stored)
+      if (Array.isArray(raw) && raw.length > 0) {
+        // Validate and normalize entries
+        const parsed: ServerConfig[] = raw
+          .filter(isValidServerEntry)
+          .map((s) => ({ ...s, auth: normalizeAuth(s as unknown as Record<string, unknown>) }))
+
         // Ensure the default server exists and has the correct URL
         const defaultServer = createDefaultServer()
         const hasDefault = parsed.some((s) => s.id === "local")
@@ -93,11 +124,22 @@ export function ServerProvider(props: ParentProps) {
 
   const [servers, setServers] = createSignal<ServerConfig[]>(initialServers)
   const [activeId, setActiveId] = createSignal(validatedActiveId)
+  const [revision, setRevision] = createSignal(0)
 
   function save(list: ServerConfig[]) {
     setServers(list)
+    setRevision((r) => r + 1)
     try {
-      localStorage.setItem(SERVERS_KEY, JSON.stringify(list))
+      // Strip env-derived auth from the default "local" server before persisting
+      // so credentials from environment variables are not leaked to localStorage.
+      const defaultAuth = createDefaultServer().auth
+      const toStore = list.map((s) => {
+        if (s.id === "local" && JSON.stringify(s.auth) === JSON.stringify(defaultAuth)) {
+          return { ...s, auth: { type: "none" as const } }
+        }
+        return s
+      })
+      localStorage.setItem(SERVERS_KEY, JSON.stringify(toStore))
     } catch {}
   }
 
@@ -115,7 +157,7 @@ export function ServerProvider(props: ParentProps) {
 
   function activeServerKey() {
     const s = activeServer()
-    return `${s.id}|${s.url}|${JSON.stringify(s.auth)}`
+    return `${s.id}|${s.url}|${s.auth.type}|${revision()}`
   }
 
   function addServer(server: Omit<ServerConfig, "id">): ServerConfig {
