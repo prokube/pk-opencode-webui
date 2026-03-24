@@ -17,8 +17,13 @@ export function createSSEParser(onData: SSECallback) {
   let trailingCR = false
 
   return {
-    /** Feed a raw text chunk from the stream. */
+    /** Feed a raw text chunk from the stream. Pass empty string to flush. */
     push(chunk: string) {
+      // Flush: treat empty push as end-of-stream, converting any pending CR
+      if (chunk.length === 0 && trailingCR) {
+        buffer += "\n"
+        trailingCR = false
+      }
       // Normalize CRLF to LF efficiently — only process the incoming chunk,
       // keeping a 1-char lookbehind for \r split across chunk boundaries.
       let normalized = ""
