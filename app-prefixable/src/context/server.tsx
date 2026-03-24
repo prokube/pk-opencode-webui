@@ -2,7 +2,8 @@ import { createContext, useContext, createSignal, type ParentProps, type Accesso
 import { type ServerConfig, type ServerAuth, getAuthHeaders } from "../types/server"
 import { getServerUrl } from "../utils/path"
 
-const SERVERS_KEY = "opencode.servers"
+const SERVERS_KEY = "opencode.servers"           // localStorage: metadata (no secrets)
+const SERVERS_CREDS_KEY = "opencode.serversCreds" // sessionStorage: credentials only
 const ACTIVE_SERVER_KEY = "opencode.activeServerId"
 
 function createDefaultServer(): ServerConfig {
@@ -53,24 +54,40 @@ function normalizeAuth(s: Record<string, unknown>): ServerAuth {
   return { type: "none" }
 }
 
+/** Load credentials overlay from sessionStorage (keyed by server id) */
+function loadCredentials(): Record<string, ServerAuth> {
+  try {
+    const stored = sessionStorage.getItem(SERVERS_CREDS_KEY)
+    if (stored) return JSON.parse(stored)
+  } catch {}
+  return {}
+}
+
 function loadServers(): ServerConfig[] {
   try {
-    const stored = sessionStorage.getItem(SERVERS_KEY)
+    const stored = localStorage.getItem(SERVERS_KEY)
     if (stored) {
       const raw = JSON.parse(stored)
       if (Array.isArray(raw) && raw.length > 0) {
-        // Validate and normalize entries
+        // Validate and normalize entries (localStorage has metadata with auth type only)
         const parsed: ServerConfig[] = raw
           .filter(isValidServerEntry)
           .map((s) => ({ ...s, auth: normalizeAuth(s as unknown as Record<string, unknown>) }))
 
-        // Ensure the default server exists and has the correct URL
+        // Overlay credentials from sessionStorage
+        const creds = loadCredentials()
+        for (const server of parsed) {
+          if (creds[server.id]) {
+            server.auth = normalizeAuth({ auth: creds[server.id] } as unknown as Record<string, unknown>)
+          }
+        }
+
+        // Ensure the default server exists and has the correct URL and env-based auth
         const defaultServer = createDefaultServer()
         const hasDefault = parsed.some((s) => s.id === "local")
         if (!hasDefault) {
           parsed.unshift(defaultServer)
         } else {
-          // Update the default server properties in case they changed (URL, env-based auth)
           const idx = parsed.findIndex((s) => s.id === "local")
           if (idx >= 0) {
             parsed[idx] = {
@@ -135,16 +152,22 @@ export function ServerProvider(props: ParentProps) {
     }
     setServers(list)
     try {
-      // Strip env-derived auth from the default "local" server before persisting
-      // so credentials from environment variables are not stored in sessionStorage.
+      // Persist metadata (without secrets) to localStorage for durability
+      const metadata = list.map((s) => ({
+        ...s,
+        auth: { type: s.auth.type } as ServerAuth,
+      }))
+      localStorage.setItem(SERVERS_KEY, JSON.stringify(metadata))
+
+      // Persist credentials to sessionStorage (does not survive browser restart)
+      // Skip env-derived auth for the default server to avoid leaking env secrets
       const defaultAuth = createDefaultServer().auth
-      const toStore = list.map((s) => {
-        if (s.id === "local" && JSON.stringify(s.auth) === JSON.stringify(defaultAuth)) {
-          return { ...s, auth: { type: "none" as const } }
-        }
-        return s
-      })
-      sessionStorage.setItem(SERVERS_KEY, JSON.stringify(toStore))
+      const creds: Record<string, ServerAuth> = {}
+      for (const s of list) {
+        if (s.id === "local" && JSON.stringify(s.auth) === JSON.stringify(defaultAuth)) continue
+        if (s.auth.type !== "none") creds[s.id] = s.auth
+      }
+      sessionStorage.setItem(SERVERS_CREDS_KEY, JSON.stringify(creds))
     } catch {}
   }
 
