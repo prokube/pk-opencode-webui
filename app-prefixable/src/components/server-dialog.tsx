@@ -1,7 +1,7 @@
-import { createSignal, Show, For } from "solid-js"
+import { createSignal, createEffect, onCleanup, Show, For } from "solid-js"
 import { useServer } from "../context/server"
 import type { ServerConfig, ServerAuth } from "../types/server"
-import { X, Plus, Trash2, Check, Pencil, Server, Wifi, WifiOff } from "lucide-solid"
+import { X, Plus, Trash2, Pencil, Server, Wifi, WifiOff } from "lucide-solid"
 import { Button } from "./ui/button"
 import { Spinner } from "./ui/spinner"
 import { ConfirmDialog } from "./confirm-dialog"
@@ -36,6 +36,30 @@ export function ServerDialog(props: Props) {
   const [toDelete, setToDelete] = createSignal<string | null>(null)
 
   const backdrop = createBackdropDismiss(props.onClose)
+
+  // Handle Escape key via document listener (backdrop div isn't focusable)
+  createEffect(() => {
+    if (!props.open) return
+    function onKeyDown(e: KeyboardEvent) {
+      if (e.key === "Escape") {
+        e.preventDefault()
+        if (showForm()) resetForm()
+        else props.onClose()
+      }
+    }
+    document.addEventListener("keydown", onKeyDown)
+    onCleanup(() => document.removeEventListener("keydown", onKeyDown))
+  })
+
+  // Reset all state when dialog closes
+  createEffect(() => {
+    if (!props.open) {
+      resetForm()
+      setTesting(null)
+      setTestResult({})
+      setToDelete(null)
+    }
+  })
 
   function resetForm() {
     setShowForm(false)
@@ -121,7 +145,6 @@ export function ServerDialog(props: Props) {
         style={{ background: "rgba(0, 0, 0, 0.5)" }}
         onMouseDown={backdrop.onMouseDown}
         onClick={backdrop.onClick}
-        onKeyDown={(e) => e.key === "Escape" && (showForm() ? resetForm() : props.onClose())}
       >
         <div
           class="w-full max-w-lg mx-4 rounded-xl shadow-2xl max-h-[80vh] flex flex-col"

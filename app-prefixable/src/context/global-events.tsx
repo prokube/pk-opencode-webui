@@ -7,7 +7,6 @@ import {
   type ParentProps,
 } from "solid-js"
 import { createStore, produce } from "solid-js/store"
-import { useBasePath } from "./base-path"
 import { useServer } from "./server"
 
 /**
@@ -45,8 +44,7 @@ export function GlobalEventsProvider(props: ParentProps & {
   projects: () => { worktree: string }[]
   activeDirectory: () => string | undefined
 }) {
-  const { prefix } = useBasePath()
-  const { authHeaders } = useServer()
+  const { authHeaders, serverUrl } = useServer()
 
   // Per-directory alert state
   const [alerts, setAlerts] = createStore<Record<string, ProjectAlerts>>({})
@@ -117,7 +115,7 @@ export function GlobalEventsProvider(props: ParentProps & {
     }
 
     const dirParam = `?directory=${encodeURIComponent(dir)}`
-    const url = prefix(`/event${dirParam}`)
+    const url = `${serverUrl()}/event${dirParam}`
     const controller = new AbortController()
 
     connections.set(dir, { controller })
@@ -321,7 +319,7 @@ export function GlobalEventsProvider(props: ParentProps & {
   // Returns null on failure so callers can gracefully degrade (seed all sessions)
   // instead of clearing all state with a false-negative empty set.
   function fetchRootSessionIds(dir: string): Promise<Set<string> | null> {
-    return fetch(prefix(`/session?directory=${encodeURIComponent(dir)}&roots=true`), { headers: authHeaders() })
+    return fetch(`${serverUrl()}/session?directory=${encodeURIComponent(dir)}&roots=true`, { headers: authHeaders() })
       .then((r) => {
         if (!r.ok) {
           console.warn("[GlobalEvents] Failed to fetch root sessions for", dir, `HTTP ${r.status}`)
@@ -362,7 +360,7 @@ export function GlobalEventsProvider(props: ParentProps & {
     // Seed subAgents from all sessions: any session with a parentID is a
     // sub-agent. This covers sessions that existed before the SSE connection.
     if (roots) {
-      await fetch(prefix(`/session?directory=${encodeURIComponent(dir)}`), { headers: authHeaders() })
+      await fetch(`${serverUrl()}/session?directory=${encodeURIComponent(dir)}`, { headers: authHeaders() })
         .then((r) => {
           if (!r.ok) return
           return r.json()
@@ -390,7 +388,7 @@ export function GlobalEventsProvider(props: ParentProps & {
     // Snapshot sessions added by SSE before the fetch started so we can
     // merge them back, avoiding a race where clear() drops concurrent events.
     const before = new Set(tracking.permissionSessions)
-    return fetch(prefix(`/permission?directory=${encodeURIComponent(dir)}`), { headers: authHeaders() })
+    return fetch(`${serverUrl()}/permission?directory=${encodeURIComponent(dir)}`, { headers: authHeaders() })
       .then((r) => r.json())
       .then((data) => {
         if (!perDir.has(dir)) return  // disconnected while fetching
@@ -420,7 +418,7 @@ export function GlobalEventsProvider(props: ParentProps & {
   function seedQuestions(dir: string, roots: Set<string> | null) {
     const tracking = perDir.get(dir)
     if (!tracking) return  // disconnected: do not recreate tracking while seeding
-    return fetch(prefix(`/question?directory=${encodeURIComponent(dir)}`), { headers: authHeaders() })
+    return fetch(`${serverUrl()}/question?directory=${encodeURIComponent(dir)}`, { headers: authHeaders() })
       .then((r) => r.json())
       .then((data) => {
         if (!perDir.has(dir)) return  // disconnected while fetching
@@ -437,7 +435,7 @@ export function GlobalEventsProvider(props: ParentProps & {
   function seedStatuses(dir: string, roots: Set<string> | null) {
     const tracking = perDir.get(dir)
     if (!tracking) return  // disconnected: do not recreate tracking while seeding
-    return fetch(prefix(`/session/status?directory=${encodeURIComponent(dir)}`), { headers: authHeaders() })
+    return fetch(`${serverUrl()}/session/status?directory=${encodeURIComponent(dir)}`, { headers: authHeaders() })
       .then((r) => r.json())
       .then((data) => {
         if (!perDir.has(dir)) return  // disconnected while fetching

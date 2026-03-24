@@ -17,7 +17,10 @@ export function getAuthHeaders(auth: ServerAuth): Record<string, string> {
       return {}
     case "api-key":
       return { "x-api-key": auth.key }
-    case "basic":
-      return { Authorization: `Basic ${btoa(`${auth.username}:${auth.password}`)}` }
+    case "basic": {
+      const encoded = new TextEncoder().encode(`${auth.username}:${auth.password}`)
+      const binary = Array.from(encoded, (b) => String.fromCharCode(b)).join("")
+      return { Authorization: `Basic ${btoa(binary)}` }
+    }
   }
 }
