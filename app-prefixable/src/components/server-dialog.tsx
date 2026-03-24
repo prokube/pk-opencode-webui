@@ -1,4 +1,5 @@
 import { createSignal, createEffect, onCleanup, Show, For } from "solid-js"
+import { Portal } from "solid-js/web"
 import { useServer } from "../context/server"
 import { getAuthHeaders, type ServerConfig, type ServerAuth } from "../types/server"
 import { X, Plus, Trash2, Pencil, Server, Wifi, WifiOff } from "lucide-solid"
@@ -143,6 +144,7 @@ export function ServerDialog(props: Props) {
 
   return (
     <Show when={props.open}>
+      <Portal>
       <div
         class="fixed inset-0 z-50 flex items-center justify-center"
         style={{ background: "rgba(0, 0, 0, 0.5)" }}
@@ -448,6 +450,7 @@ export function ServerDialog(props: Props) {
         onConfirm={() => handleDelete(toDelete()!)}
         onCancel={() => setToDelete(null)}
       />
+      </Portal>
     </Show>
   )
 }
