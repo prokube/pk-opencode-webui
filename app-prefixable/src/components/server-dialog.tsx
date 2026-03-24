@@ -1,12 +1,11 @@
 import { createSignal, createEffect, onCleanup, Show, For } from "solid-js"
 import { useServer } from "../context/server"
-import type { ServerConfig, ServerAuth } from "../types/server"
+import { getAuthHeaders, type ServerConfig, type ServerAuth } from "../types/server"
 import { X, Plus, Trash2, Pencil, Server, Wifi, WifiOff } from "lucide-solid"
 import { Button } from "./ui/button"
 import { Spinner } from "./ui/spinner"
 import { ConfirmDialog } from "./confirm-dialog"
 import { createBackdropDismiss } from "../utils/backdrop"
-import { getAuthHeaders } from "../types/server"
 
 interface Props {
   open: boolean
