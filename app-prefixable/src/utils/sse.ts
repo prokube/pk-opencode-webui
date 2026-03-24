@@ -18,7 +18,8 @@ export function createSSEParser(onData: SSECallback) {
   return {
     /** Feed a raw text chunk from the stream. */
     push(chunk: string) {
-      buffer += chunk.replace(/\r\n/g, "\n").replace(/\r/g, "\n")
+      // Normalize CRLF after concatenation so \r\n split across chunks is handled
+      buffer = (buffer + chunk).replace(/\r\n/g, "\n").replace(/\r/g, "\n")
 
       // SSE events are delimited by blank lines (\n\n).
       // Split on them and keep the last (possibly incomplete) fragment.
