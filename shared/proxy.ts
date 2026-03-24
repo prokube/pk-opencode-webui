@@ -84,8 +84,12 @@ export async function handleProxyRequest(path: string, req: Request): Promise<Re
       })
     }
 
-    // Forward the response with CORS headers
+    // Forward the response with CORS headers.
+    // Remove Content-Encoding because fetch() already decompresses the body,
+    // so passing gzip/br encoding to the browser causes double-decode failures.
     const responseHeaders = new Headers(response.headers)
+    responseHeaders.delete("content-encoding")
+    responseHeaders.delete("content-length") // length no longer matches after decompression
     responseHeaders.set("Access-Control-Allow-Origin", "*")
     return new Response(response.body, {
       status: response.status,
