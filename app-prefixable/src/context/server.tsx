@@ -127,8 +127,13 @@ export function ServerProvider(props: ParentProps) {
   const [revision, setRevision] = createSignal(0)
 
   function save(list: ServerConfig[]) {
+    // Only bump revision if the active server's config actually changed
+    const currentActive = activeServer()
+    const nextActive = list.find((s) => s.id === activeId()) || list[0]
+    if (nextActive && (nextActive.url !== currentActive.url || JSON.stringify(nextActive.auth) !== JSON.stringify(currentActive.auth))) {
+      setRevision((r) => r + 1)
+    }
     setServers(list)
-    setRevision((r) => r + 1)
     try {
       // Strip env-derived auth from the default "local" server before persisting
       // so credentials from environment variables are not leaked to localStorage.

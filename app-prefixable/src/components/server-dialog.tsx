@@ -119,19 +119,20 @@ export function ServerDialog(props: Props) {
       return next
     })
 
+    let timer: ReturnType<typeof setTimeout> | undefined
     try {
       const controller = new AbortController()
-      const timer = setTimeout(() => controller.abort(), 5000)
+      timer = setTimeout(() => controller.abort(), 5000)
       const res = await fetch(`${s.url}/session`, {
         headers: getAuthHeaders(s.auth),
         signal: controller.signal,
       })
-      clearTimeout(timer)
       if (!res.ok) throw new Error(`HTTP ${res.status}`)
       setTestResult((prev) => ({ ...prev, [s.id]: "ok" }))
     } catch {
       setTestResult((prev) => ({ ...prev, [s.id]: "fail" }))
     } finally {
+      if (timer !== undefined) clearTimeout(timer)
       setTesting(null)
     }
   }
@@ -423,7 +424,7 @@ export function ServerDialog(props: Props) {
                     onClick={save}
                     variant="primary"
                     class="flex-1"
-                    disabled={!name().trim() || !url().trim()}
+                    disabled={!name().trim() || !url().trim() || (authType() === "api-key" && !apiKey().trim()) || (authType() === "basic" && (!username().trim() || !password().trim()))}
                   >
                     {editingId() ? "Save" : "Add Server"}
                   </Button>
