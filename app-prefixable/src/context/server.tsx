@@ -55,7 +55,7 @@ function normalizeAuth(s: Record<string, unknown>): ServerAuth {
 
 function loadServers(): ServerConfig[] {
   try {
-    const stored = localStorage.getItem(SERVERS_KEY)
+    const stored = sessionStorage.getItem(SERVERS_KEY)
     if (stored) {
       const raw = JSON.parse(stored)
       if (Array.isArray(raw) && raw.length > 0) {
@@ -144,7 +144,7 @@ export function ServerProvider(props: ParentProps) {
         }
         return s
       })
-      localStorage.setItem(SERVERS_KEY, JSON.stringify(toStore))
+      sessionStorage.setItem(SERVERS_KEY, JSON.stringify(toStore))
     } catch {}
   }
 
