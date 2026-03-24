@@ -1,5 +1,5 @@
 import { describe, test, expect } from "bun:test";
-import { getAuthHeaders, type ServerAuth } from "./server";
+import { getAuthHeaders, type ServerAuth } from "../src/types/server";
 
 describe("getAuthHeaders", () => {
   test("type 'none' returns empty headers", () => {

@@ -1,5 +1,5 @@
 import { describe, test, expect } from "bun:test";
-import { createSSEParser } from "./sse";
+import { createSSEParser } from "../src/utils/sse";
 
 function collect(chunks: string[]): string[] {
   const results: string[] = [];
@@ -53,5 +53,10 @@ describe("createSSEParser", () => {
 
   test("skips blocks with no data lines", () => {
     expect(collect(["event: ping\n\ndata: actual\n\n"])).toEqual(["actual"]);
+  });
+
+  test("handles CRLF split across chunk boundaries", () => {
+    // \r at end of one chunk, \n at start of next
+    expect(collect(["data: hello\r", "\n\r\n"])).toEqual(["hello"]);
   });
 });

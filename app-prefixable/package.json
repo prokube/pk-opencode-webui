@@ -8,7 +8,8 @@
     "build": "bun run build.ts",
     "typecheck": "tsc --noEmit",
     "lint": "eslint src",
-    "test:api": "bun test tests/api-contract.test.ts"
+    "test:api": "bun test tests/api-contract.test.ts",
+    "test": "bun test tests/"
   },
   "license": "MIT",
   "dependencies": {
