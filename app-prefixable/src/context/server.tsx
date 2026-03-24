@@ -7,10 +7,11 @@ const SERVERS_CREDS_KEY = "opencode.serversCreds" // sessionStorage: credentials
 const ACTIVE_SERVER_KEY = "opencode.activeServerId"
 
 function createDefaultServer(): ServerConfig {
-  // Check for env-var pre-configured auth
-  const apiKey = import.meta.env.VITE_OPENCODE_API_KEY as string | undefined
-  const username = import.meta.env.VITE_OPENCODE_SERVER_USERNAME as string | undefined
-  const password = import.meta.env.VITE_OPENCODE_SERVER_PASSWORD as string | undefined
+  // Check for env-var pre-configured auth (guard against missing import.meta.env in non-Vite builds)
+  const env = typeof import.meta !== "undefined" ? import.meta.env ?? {} : {}
+  const apiKey = env.VITE_OPENCODE_API_KEY as string | undefined
+  const username = env.VITE_OPENCODE_SERVER_USERNAME as string | undefined
+  const password = env.VITE_OPENCODE_SERVER_PASSWORD as string | undefined
 
   let auth: ServerAuth = { type: "none" }
   if (apiKey) {
