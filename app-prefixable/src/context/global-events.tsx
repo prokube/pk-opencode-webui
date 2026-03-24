@@ -272,8 +272,8 @@ export function GlobalEventsProvider(props: ParentProps & {
           parser.push(decoder.decode(value, { stream: true }))
         }
 
-        const remaining = decoder.decode()
-        if (remaining) parser.push(remaining)
+        parser.push(decoder.decode())
+        parser.push("")
 
         throw new Error("SSE stream ended")
       } catch (err) {
