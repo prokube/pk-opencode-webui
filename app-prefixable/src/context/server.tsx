@@ -216,8 +216,10 @@ export function ServerProvider(props: ParentProps) {
   }
 
   function setActiveServerFn(id: string) {
-    setActiveId(id)
-    try { localStorage.setItem(ACTIVE_SERVER_KEY, id) } catch {}
+    const exists = servers().some((s) => s.id === id)
+    const nextId = exists ? id : "local"
+    setActiveId(nextId)
+    try { localStorage.setItem(ACTIVE_SERVER_KEY, nextId) } catch {}
   }
 
   return (
