@@ -10,6 +10,7 @@
  */
 
 import { handleExtendedEndpoint, isApiPath } from "../shared/extended-api"
+import { handleProxyRequest } from "../shared/proxy"
 
 const BASE_PATH = process.env.NB_PREFIX || process.env.BASE_PATH || "/"
 const PORT = parseInt(process.env.PORT || "8080", 10)
@@ -128,6 +129,15 @@ const server = Bun.serve<{ path: string; search: string }>({
         }
         return new Response("WebSocket upgrade failed", { status: 500 })
       }
+    }
+
+    // Proxy requests to remote servers (avoids CORS)
+    if (path.startsWith("/__proxy/")) {
+      const proxyPath = path.slice("/__proxy".length)
+      return handleProxyRequest(proxyPath, req)
+    }
+    if (path === "/__proxy") {
+      return handleProxyRequest("/", req)
     }
 
     // Extended API endpoints (handled locally, not proxied)

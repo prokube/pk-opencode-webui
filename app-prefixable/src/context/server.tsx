@@ -185,11 +185,23 @@ export function ServerProvider(props: ParentProps) {
   }
 
   function authHeaders() {
-    return getAuthHeaders(activeServer().auth)
+    const s = activeServer()
+    const auth = getAuthHeaders(s.auth)
+    // For remote servers, add proxy target header so the local server
+    // can forward the request to the correct remote URL
+    if (!s.isDefault) {
+      return { ...auth, "X-Proxy-Target": s.url }
+    }
+    return auth
   }
 
   function serverUrl() {
-    return activeServer().url
+    const s = activeServer()
+    // Remote servers go through the local proxy to avoid CORS issues
+    if (!s.isDefault) {
+      return getServerUrl() + "/__proxy"
+    }
+    return s.url
   }
 
   function activeServerKey() {
