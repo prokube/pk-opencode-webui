@@ -1,7 +1,7 @@
 import { type ParentProps, createSignal, For, onMount, onCleanup, Show } from "solid-js"
 import { useNavigate } from "@solidjs/router"
 import { createOpencodeClient } from "../sdk/client"
-import { base64Encode, getServerUrl } from "../utils/path"
+import { base64Encode } from "../utils/path"
 import { useServer } from "../context/server"
 import { SDKProvider } from "../context/sdk"
 import { EventProvider } from "../context/events"

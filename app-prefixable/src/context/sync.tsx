@@ -3,6 +3,7 @@ import { createStore, reconcile, produce } from "solid-js/store"
 import type { Session, Message, Part, Provider } from "../sdk/client"
 import { useSDK } from "./sdk"
 import { useServer } from "./server"
+import { createSSEParser } from "../utils/sse"
 
 // Event type - looser than SDK type to handle all events
 type SyncEvent = {
@@ -112,27 +113,20 @@ export function SyncProvider(props: ParentProps) {
 
       const reader = response.body.getReader()
       const decoder = new TextDecoder()
-      let buffer = ""
+      const parser = createSSEParser((rawData) => {
+        try {
+          const data = JSON.parse(rawData)
+          const event = (data?.payload ?? data) as SyncEvent
+          if (event?.type) handleEvent(event)
+        } catch (err) {
+          console.error("[Sync] Parse error:", err)
+        }
+      })
 
       while (true) {
         const { done, value } = await reader.read()
         if (done) break
-
-        buffer += decoder.decode(value, { stream: true })
-        const lines = buffer.split("\n")
-        buffer = lines.pop() || ""
-
-        for (const line of lines) {
-          if (line.startsWith("data: ")) {
-            try {
-              const data = JSON.parse(line.slice(6))
-              const event = (data?.payload ?? data) as SyncEvent
-              if (event?.type) handleEvent(event)
-            } catch (err) {
-              console.error("[Sync] Parse error:", err)
-            }
-          }
-        }
+        parser.push(decoder.decode(value, { stream: true }))
       }
 
       throw new Error("SSE stream ended")

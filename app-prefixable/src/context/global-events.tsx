@@ -8,6 +8,7 @@ import {
 } from "solid-js"
 import { createStore, produce } from "solid-js/store"
 import { useServer } from "./server"
+import { createSSEParser } from "../utils/sse"
 
 /**
  * Alert priority: permission (highest) > question > busy
@@ -259,21 +260,12 @@ export function GlobalEventsProvider(props: ParentProps & {
 
         const reader = response.body.getReader()
         const decoder = new TextDecoder()
-        let lineBuf = ""
+        const parser = createSSEParser((data) => handleMessage(data))
 
         while (true) {
           const { done, value } = await reader.read()
           if (done) break
-
-          lineBuf += decoder.decode(value, { stream: true })
-          const lines = lineBuf.split("\n")
-          lineBuf = lines.pop() || ""
-
-          for (const line of lines) {
-            if (line.startsWith("data: ")) {
-              handleMessage(line.slice(6))
-            }
-          }
+          parser.push(decoder.decode(value, { stream: true }))
         }
 
         throw new Error("SSE stream ended")

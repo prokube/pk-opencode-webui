@@ -3,6 +3,7 @@ import { createStore, produce } from "solid-js/store"
 import type { Event, SessionStatus, QuestionRequest } from "../sdk/client"
 import { useSDK } from "./sdk"
 import { useServer } from "./server"
+import { createSSEParser } from "../utils/sse"
 
 type EventHandler = (event: Event) => void
 
@@ -97,21 +98,12 @@ export function EventProvider(props: ParentProps) {
 
       const reader = response.body.getReader()
       const decoder = new TextDecoder()
-      let buffer = ""
+      const parser = createSSEParser((data) => processEvent(data))
 
       while (true) {
         const { done, value } = await reader.read()
         if (done) break
-
-        buffer += decoder.decode(value, { stream: true })
-        const lines = buffer.split("\n")
-        buffer = lines.pop() || ""
-
-        for (const line of lines) {
-          if (line.startsWith("data: ")) {
-            processEvent(line.slice(6))
-          }
-        }
+        parser.push(decoder.decode(value, { stream: true }))
       }
 
       // Stream ended normally, reconnect
