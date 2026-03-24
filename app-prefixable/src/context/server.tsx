@@ -39,10 +39,16 @@ function loadServers(): ServerConfig[] {
         if (!hasDefault) {
           parsed.unshift(defaultServer)
         } else {
-          // Update the default server URL in case it changed
+          // Update the default server properties in case they changed (URL, env-based auth)
           const idx = parsed.findIndex((s) => s.id === "local")
           if (idx >= 0) {
-            parsed[idx] = { ...parsed[idx], url: defaultServer.url }
+            parsed[idx] = {
+              ...parsed[idx],
+              url: defaultServer.url,
+              auth: defaultServer.auth,
+              name: defaultServer.name,
+              isDefault: defaultServer.isDefault,
+            }
           }
         }
         return parsed
@@ -66,6 +72,8 @@ interface ServerContextValue {
   activeServerId: Accessor<string>
   authHeaders: Accessor<Record<string, string>>
   serverUrl: Accessor<string>
+  /** Key that changes whenever the active server's identity or config changes — use for remounting */
+  activeServerKey: Accessor<string>
   addServer: (server: Omit<ServerConfig, "id">) => ServerConfig
   updateServer: (id: string, updates: Partial<Omit<ServerConfig, "id">>) => void
   removeServer: (id: string) => void
@@ -75,8 +83,16 @@ interface ServerContextValue {
 const ServerContext = createContext<ServerContextValue>()
 
 export function ServerProvider(props: ParentProps) {
-  const [servers, setServers] = createSignal<ServerConfig[]>(loadServers())
-  const [activeId, setActiveId] = createSignal(loadActiveServerId())
+  const initialServers = loadServers()
+  const initialActiveId = loadActiveServerId()
+  // Validate activeId against server list
+  const validatedActiveId = initialServers.some((s) => s.id === initialActiveId) ? initialActiveId : "local"
+  if (validatedActiveId !== initialActiveId) {
+    try { localStorage.setItem(ACTIVE_SERVER_KEY, validatedActiveId) } catch {}
+  }
+
+  const [servers, setServers] = createSignal<ServerConfig[]>(initialServers)
+  const [activeId, setActiveId] = createSignal(validatedActiveId)
 
   function save(list: ServerConfig[]) {
     setServers(list)
@@ -95,6 +111,11 @@ export function ServerProvider(props: ParentProps) {
 
   function serverUrl() {
     return activeServer().url
+  }
+
+  function activeServerKey() {
+    const s = activeServer()
+    return `${s.id}|${s.url}|${JSON.stringify(s.auth)}`
   }
 
   function addServer(server: Omit<ServerConfig, "id">): ServerConfig {
@@ -129,6 +150,7 @@ export function ServerProvider(props: ParentProps) {
         activeServerId: activeId,
         authHeaders,
         serverUrl,
+        activeServerKey,
         addServer,
         updateServer,
         removeServer,

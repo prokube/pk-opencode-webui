@@ -1,7 +1,6 @@
 import { createContext, useContext, onCleanup, batch, type ParentProps } from "solid-js"
 import { createStore, reconcile, produce } from "solid-js/store"
 import type { Session, Message, Part, Provider } from "../sdk/client"
-import { useBasePath } from "./base-path"
 import { useSDK } from "./sdk"
 import { useServer } from "./server"
 
@@ -70,8 +69,7 @@ function binarySearch<T>(arr: T[], id: string, getId: (item: T) => string): { fo
 }
 
 export function SyncProvider(props: ParentProps) {
-  const { prefix } = useBasePath()
-  const { client, directory } = useSDK()
+  const { client, directory, url: sdkUrl } = useSDK()
   const { authHeaders } = useServer()
 
   const [store, setStore] = createStore<SyncStore>({
@@ -93,7 +91,7 @@ export function SyncProvider(props: ParentProps) {
     if (abortController) return
 
     const dirParam = directory ? `?directory=${encodeURIComponent(directory)}` : ""
-    const eventUrl = prefix(`/event${dirParam}`)
+    const eventUrl = `${sdkUrl}/event${dirParam}`
     console.log("[Sync] Connecting to SSE:", eventUrl)
 
     abortController = new AbortController()

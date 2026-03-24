@@ -130,11 +130,11 @@ function useProjectsList() {
 }
 
 function AppWithServer(props: { projects: () => Project[]; activeDirectory: () => string | undefined }) {
-  const { serverUrl, activeServerId } = useServer()
+  const { serverUrl, activeServerKey } = useServer()
 
-  // Key by server ID to force full remount when switching servers
+  // Key by server config to force full remount when switching or editing servers
   return (
-    <For each={[activeServerId()]}>
+    <For each={[activeServerKey()]}>
       {() => (
         <BasePathProvider serverUrl={serverUrl()}>
           <ThemeProvider>
