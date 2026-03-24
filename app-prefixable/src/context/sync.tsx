@@ -129,6 +129,9 @@ export function SyncProvider(props: ParentProps) {
         parser.push(decoder.decode(value, { stream: true }))
       }
 
+      const remaining = decoder.decode()
+      if (remaining) parser.push(remaining)
+
       throw new Error("SSE stream ended")
     } catch (err) {
       if (signal.aborted) return

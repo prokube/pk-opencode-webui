@@ -106,6 +106,10 @@ export function EventProvider(props: ParentProps) {
         parser.push(decoder.decode(value, { stream: true }))
       }
 
+      // Flush any remaining bytes from the decoder
+      const remaining = decoder.decode()
+      if (remaining) parser.push(remaining)
+
       // Stream ended normally, reconnect
       throw new Error("SSE stream ended")
     } catch (err) {

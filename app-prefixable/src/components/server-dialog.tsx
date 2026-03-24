@@ -87,9 +87,9 @@ export function ServerDialog(props: Props) {
   function buildAuth(): ServerAuth {
     switch (authType()) {
       case "api-key":
-        return { type: "api-key", key: apiKey() }
+        return { type: "api-key", key: apiKey().trim() }
       case "basic":
-        return { type: "basic", username: username(), password: password() }
+        return { type: "basic", username: username().trim(), password: password() }
       default:
         return { type: "none" }
     }
