@@ -69,18 +69,23 @@ function loadServers(): ServerConfig[] {
     if (stored) {
       const raw = JSON.parse(stored)
       if (Array.isArray(raw) && raw.length > 0) {
-        // Validate and normalize entries (localStorage has metadata with auth type only)
+        // Validate and normalize entries from localStorage (metadata only, no secrets)
+        const creds = loadCredentials()
         const parsed: ServerConfig[] = raw
           .filter(isValidServerEntry)
-          .map((s) => ({ ...s, auth: normalizeAuth(s as unknown as Record<string, unknown>) }))
-
-        // Overlay credentials from sessionStorage
-        const creds = loadCredentials()
-        for (const server of parsed) {
-          if (creds[server.id]) {
-            server.auth = normalizeAuth({ auth: creds[server.id] } as unknown as Record<string, unknown>)
-          }
-        }
+          .map((s) => {
+            const obj = s as Record<string, unknown>
+            // Prefer credentials from sessionStorage; fall back to authMethod stub
+            if (creds[obj.id as string]) {
+              return { ...s, auth: normalizeAuth({ auth: creds[obj.id as string] } as unknown as Record<string, unknown>) }
+            }
+            // No session credentials — use authMethod to preserve configured type
+            // (credentials will need re-entry after browser restart)
+            const method = (obj.authMethod as string) || "none"
+            if (method === "api-key") return { ...s, auth: { type: "api-key" as const, key: "" } }
+            if (method === "basic") return { ...s, auth: { type: "basic" as const, username: "", password: "" } }
+            return { ...s, auth: { type: "none" as const } }
+          })
 
         // Ensure the default server exists and has the correct URL and env-based auth
         const defaultServer = createDefaultServer()
@@ -152,10 +157,13 @@ export function ServerProvider(props: ParentProps) {
     }
     setServers(list)
     try {
-      // Persist metadata (without secrets) to localStorage for durability
+      // Persist metadata (without secrets) to localStorage for durability.
+      // Store authMethod separately so the configured auth type survives reload
+      // even when credentials (in sessionStorage) are cleared.
       const metadata = list.map((s) => ({
         ...s,
-        auth: { type: s.auth.type } as ServerAuth,
+        authMethod: s.auth.type,
+        auth: { type: "none" as const },
       }))
       localStorage.setItem(SERVERS_KEY, JSON.stringify(metadata))
 
