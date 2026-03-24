@@ -123,8 +123,16 @@ export function ServerDialog(props: Props) {
     try {
       const controller = new AbortController()
       timer = setTimeout(() => controller.abort(), 5000)
-      const res = await fetch(`${s.url}/session`, {
-        headers: getAuthHeaders(s.auth),
+      // Route through proxy for remote servers to avoid CORS
+      const isRemote = !s.isDefault
+      const testUrl = isRemote
+        ? `${server.serverUrl()}/session`
+        : `${s.url}/session`
+      const headers = isRemote
+        ? { ...getAuthHeaders(s.auth), "X-Proxy-Target": s.url }
+        : getAuthHeaders(s.auth)
+      const res = await fetch(testUrl, {
+        headers,
         signal: controller.signal,
       })
       if (!res.ok) throw new Error(`HTTP ${res.status}`)

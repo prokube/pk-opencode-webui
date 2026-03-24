@@ -13,6 +13,19 @@
  * @returns Response or null if not a proxy request
  */
 export async function handleProxyRequest(path: string, req: Request): Promise<Response> {
+  // Handle CORS preflight for custom headers (x-proxy-target, x-api-key, etc.)
+  if (req.method === "OPTIONS") {
+    return new Response(null, {
+      status: 204,
+      headers: {
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, PATCH, OPTIONS",
+        "Access-Control-Allow-Headers": req.headers.get("access-control-request-headers") || "*",
+        "Access-Control-Max-Age": "86400",
+      },
+    })
+  }
+
   const target = req.headers.get("x-proxy-target")
   if (!target) {
     return new Response(JSON.stringify({ error: "Missing X-Proxy-Target header" }), {
@@ -51,15 +64,18 @@ export async function handleProxyRequest(path: string, req: Request): Promise<Re
       body: req.method !== "GET" && req.method !== "HEAD" ? req.body : undefined,
     })
 
+    const corsHeaders = { "Access-Control-Allow-Origin": "*" }
+
     if (isSSE) {
       if (!response.ok) {
         console.error("[Proxy] SSE error:", response.status, response.statusText)
-        return new Response(response.body, { status: response.status })
+        return new Response(response.body, { status: response.status, headers: corsHeaders })
       }
 
       return new Response(response.body, {
         status: response.status,
         headers: {
+          ...corsHeaders,
           "Content-Type": "text/event-stream",
           "Cache-Control": "no-cache",
           "Connection": "keep-alive",
@@ -68,8 +84,9 @@ export async function handleProxyRequest(path: string, req: Request): Promise<Re
       })
     }
 
-    // Forward the response with CORS-safe headers
+    // Forward the response with CORS headers
     const responseHeaders = new Headers(response.headers)
+    responseHeaders.set("Access-Control-Allow-Origin", "*")
     return new Response(response.body, {
       status: response.status,
       statusText: response.statusText,
