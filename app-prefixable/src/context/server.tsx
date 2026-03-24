@@ -136,7 +136,7 @@ export function ServerProvider(props: ParentProps) {
     setServers(list)
     try {
       // Strip env-derived auth from the default "local" server before persisting
-      // so credentials from environment variables are not leaked to localStorage.
+      // so credentials from environment variables are not stored in sessionStorage.
       const defaultAuth = createDefaultServer().auth
       const toStore = list.map((s) => {
         if (s.id === "local" && JSON.stringify(s.auth) === JSON.stringify(defaultAuth)) {

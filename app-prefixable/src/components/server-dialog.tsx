@@ -151,6 +151,9 @@ export function ServerDialog(props: Props) {
         onClick={backdrop.onClick}
       >
         <div
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="server-dialog-title"
           class="w-full max-w-lg mx-4 rounded-xl shadow-2xl max-h-[80vh] flex flex-col"
           style={{ background: "var(--background-base)", border: "1px solid var(--border-base)" }}
         >
@@ -159,13 +162,14 @@ export function ServerDialog(props: Props) {
             class="flex items-center justify-between p-4 shrink-0"
             style={{ "border-bottom": "1px solid var(--border-base)" }}
           >
-            <h2 class="text-lg font-semibold" style={{ color: "var(--text-strong)" }}>
+            <h2 id="server-dialog-title" class="text-lg font-semibold" style={{ color: "var(--text-strong)" }}>
               {showForm() ? (editingId() ? "Edit Server" : "Add Server") : "Servers"}
             </h2>
             <button
               onClick={() => (showForm() ? resetForm() : props.onClose())}
               class="p-1 rounded-md transition-colors"
               style={{ color: "var(--icon-base)" }}
+              aria-label="Close"
             >
               <X class="w-5 h-5" />
             </button>

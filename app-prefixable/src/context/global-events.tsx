@@ -250,17 +250,21 @@ export function GlobalEventsProvider(props: ParentProps & {
           throw new Error(`SSE connection failed: ${response.status}`)
         }
 
-        // Seed initial state, then flush buffered events
-        await seedDirectory(dir)
-        const conn = connections.get(dir)
-        if (!conn || conn.controller !== controller) return
-        seeded = true
-        for (const buffered of buffer) processMessage(buffered)
-        buffer.length = 0
-
         const reader = response.body.getReader()
         const decoder = new TextDecoder()
         const parser = createSSEParser((data) => handleMessage(data))
+
+        // Start reading SSE immediately (handleMessage buffers until seeded).
+        // Seed runs concurrently so events arriving during seed are captured
+        // under the MAX_BUFFER cap instead of accumulating unbounded in the
+        // network buffer.
+        seedDirectory(dir).then(() => {
+          const conn = connections.get(dir)
+          if (!conn || conn.controller !== controller) return
+          seeded = true
+          for (const buffered of buffer) processMessage(buffered)
+          buffer.length = 0
+        })
 
         while (true) {
           const { done, value } = await reader.read()
