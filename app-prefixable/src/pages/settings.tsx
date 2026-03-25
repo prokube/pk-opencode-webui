@@ -9,10 +9,12 @@ import { useConfig } from "../context/config"
 import { MCPAddDialog } from "../components/mcp-add-dialog"
 import { ConfirmDialog } from "../components/confirm-dialog"
 import { Button } from "../components/ui/button"
-import { Check, Copy, Plug, GitBranch, Server, ExternalLink, Key, Search, X, Trash2, BookmarkPlus, Pencil, Palette, Sun, Moon, Monitor, BookOpen, Plus, Save, Volume2, Play, Settings2, Code, Shield, Cpu, Wrench, ChevronDown, ChevronRight, Info } from "lucide-solid"
+import { Check, Copy, Plug, GitBranch, Server, Globe, ExternalLink, Key, Search, X, Trash2, BookmarkPlus, Pencil, Palette, Sun, Moon, Monitor, BookOpen, Plus, Save, Volume2, Play, Settings2, Code, Shield, Cpu, Wrench, ChevronDown, ChevronRight, Info } from "lucide-solid"
 import { SOUND_OPTIONS, readSoundSettings, writeSoundSettings, playSound, primeAudioContext, SOUND_STORAGE_KEY, type SoundSettings } from "../utils/sound"
 import { useSavedPrompts } from "../context/saved-prompts"
 import { useTheme } from "../context/theme"
+import { useServer } from "../context/server"
+import { ServerDialog } from "../components/server-dialog"
 import { writeFile } from "../utils/extended-api"
 import type { Config, PermissionActionConfig } from "../sdk/client"
 
@@ -29,11 +31,13 @@ export function Settings() {
   // Initialize tab from URL hash, default to "providers"
   const getInitialTab = () => {
     const hash = window.location.hash.slice(1)
-    const baseTabs = ["providers", "git", "mcp", "prompts", "instructions", "appearance", "sounds"]
+    const baseTabs = ["providers", "servers", "git", "mcp", "prompts", "instructions", "appearance", "sounds"]
     const validTabs = directory ? [...baseTabs, "config"] : baseTabs
     return validTabs.includes(hash) ? hash : "providers"
   }
   const [activeTab, setActiveTab] = createSignal(getInitialTab())
+  const serverCtx = useServer()
+  const [showServerDialog, setShowServerDialog] = createSignal(false)
   const [showMCPAddDialog, setShowMCPAddDialog] = createSignal(false)
   const [mcpLoading, setMcpLoading] = createSignal<string | null>(null)
   const [mcpDeleting, setMcpDeleting] = createSignal<string | null>(null)
@@ -638,6 +642,7 @@ Add your project-specific instructions here.
   const tabs = createMemo(() => {
     const base: Array<{ id: string; label: string; icon: () => JSX.Element; scope: ScopeBadge }> = [
       { id: "providers", label: "Providers", icon: () => <Plug class="w-4 h-4" />, scope: "Global" },
+      { id: "servers", label: "Servers", icon: () => <Globe class="w-4 h-4" />, scope: "Global" },
       { id: "git", label: "Git", icon: () => <GitBranch class="w-4 h-4" />, scope: "Global" },
       { id: "mcp", label: "MCP Servers", icon: () => <Server class="w-4 h-4" />, scope: "Global + Project" },
       { id: "prompts", label: "Prompts", icon: () => <BookmarkPlus class="w-4 h-4" />, scope: directory ? "Project" : null },
@@ -732,6 +737,61 @@ Add your project-specific instructions here.
               <span>
                 Project: <span style={{ color: "var(--text-base)" }}>{directory}</span>
               </span>
+            </div>
+          </Show>
+
+          {/* Servers Tab */}
+          <Show when={activeTab() === "servers"}>
+            <div class="space-y-6">
+              <header>
+                <h1 class="text-lg font-medium" style={{ color: "var(--text-strong)" }}>
+                  Servers
+                </h1>
+                <p class="text-sm mt-1" style={{ color: "var(--text-weak)" }}>
+                  Connect to multiple OpenCode servers. Remote servers are proxied through the local server to avoid CORS issues.
+                </p>
+              </header>
+
+              {/* Server list */}
+              <div class="space-y-2">
+                <For each={serverCtx.servers()}>
+                  {(s) => {
+                    const isActive = () => s.id === serverCtx.activeServerId()
+                    return (
+                      <div
+                        class="flex items-center gap-3 p-3 rounded-lg cursor-pointer transition-colors"
+                        style={{
+                          background: isActive() ? "color-mix(in srgb, var(--interactive-base) 15%, transparent)" : "var(--surface-inset)",
+                          border: isActive() ? "1px solid var(--interactive-base)" : "1px solid transparent",
+                        }}
+                        onClick={() => serverCtx.setActiveServer(s.id)}
+                      >
+                        <Globe class="w-5 h-5 shrink-0" style={{ color: isActive() ? "var(--interactive-base)" : "var(--icon-weak)" }} />
+                        <div class="flex-1 min-w-0">
+                          <div class="flex items-center gap-2">
+                            <span class="font-medium text-sm truncate" style={{ color: "var(--text-strong)" }}>{s.name}</span>
+                            <Show when={isActive()}>
+                              <span class="text-xs px-1.5 py-0.5 rounded" style={{ background: "var(--interactive-base)", color: "white" }}>active</span>
+                            </Show>
+                            <Show when={s.auth.type !== "none"}>
+                              <span class="text-xs px-1.5 py-0.5 rounded" style={{ background: "var(--surface-strong)", color: "var(--text-weak)" }}>
+                                {s.auth.type === "api-key" ? "API Key" : s.auth.type === "basic" ? "Basic Auth" : ""}
+                              </span>
+                            </Show>
+                          </div>
+                          <div class="text-xs truncate mt-0.5" style={{ color: "var(--text-weak)" }}>{s.url}</div>
+                        </div>
+                      </div>
+                    )
+                  }}
+                </For>
+              </div>
+
+              <Button onClick={() => setShowServerDialog(true)} variant="primary">
+                <Plus class="w-4 h-4" /> Manage Servers
+              </Button>
+
+              <ServerDialog open={showServerDialog()} onClose={() => setShowServerDialog(false)} />
             </div>
           </Show>
 

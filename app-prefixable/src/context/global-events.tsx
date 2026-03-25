@@ -45,7 +45,7 @@ export function GlobalEventsProvider(props: ParentProps & {
   projects: () => { worktree: string }[]
   activeDirectory: () => string | undefined
 }) {
-  const { authHeaders, serverUrl } = useServer()
+  const { authHeaders, serverUrl, activeServer } = useServer()
 
   // Per-directory alert state
   const [alerts, setAlerts] = createStore<Record<string, ProjectAlerts>>({})
@@ -107,6 +107,8 @@ export function GlobalEventsProvider(props: ParentProps & {
 
   function connectToDirectory(dir: string) {
     if (connections.has(dir)) return
+    // Don't connect when a remote server is active
+    if (!activeServer().isDefault) return
 
     // Cancel any pending reconnect timer for this directory
     const pending = reconnectTimers.get(dir)
@@ -283,6 +285,8 @@ export function GlobalEventsProvider(props: ParentProps & {
         const reconnectTimer = setTimeout(() => {
           reconnectTimers.delete(dir)
           if (disposed) return
+          // Don't reconnect when a remote server is active — local projects don't exist there
+          if (!activeServer().isDefault) return
           const active = props.activeDirectory()
           const wanted = props.projects().some((p) => p.worktree === dir)
           if (wanted && dir !== active) {
@@ -452,9 +456,19 @@ export function GlobalEventsProvider(props: ParentProps & {
 
   // Reactively manage connections when projects or active directory change.
   // Active project is excluded — it has its own EventProvider.
+  // Remote servers are skipped — local projects don't exist on remote servers.
   createEffect(on(
-    () => ({ dirs: props.projects().map((p) => p.worktree), active: props.activeDirectory() }),
+    () => ({ dirs: props.projects().map((p) => p.worktree), active: props.activeDirectory(), isRemote: !activeServer().isDefault }),
     (current) => {
+      // When a remote server is active, disconnect all global event connections
+      // since local projects don't exist on the remote server.
+      if (current.isRemote) {
+        for (const dir of [...connections.keys()]) {
+          disconnectDirectory(dir)
+        }
+        return
+      }
+
       const wanted = new Set(current.dirs)
       if (current.active) wanted.delete(current.active)
 
