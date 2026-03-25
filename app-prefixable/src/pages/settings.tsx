@@ -791,9 +791,10 @@ Add your project-specific instructions here.
                 <Plus class="w-4 h-4" /> Manage Servers
               </Button>
 
-              <ServerDialog open={showServerDialog()} onClose={() => setShowServerDialog(false)} />
             </div>
           </Show>
+
+          <ServerDialog open={showServerDialog()} onClose={() => setShowServerDialog(false)} />
 
           {/* Providers Tab */}
           <Show when={activeTab() === "providers"}>
