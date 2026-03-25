@@ -21,6 +21,9 @@ export function MCPAddDialog(props: Props) {
   const [loading, setLoading] = createSignal(false)
   const [showAdvanced, setShowAdvanced] = createSignal(false)
 
+  // API Key (convenience field — adds Authorization header automatically)
+  const [apiKey, setApiKey] = createSignal("")
+
   // Advanced options
   const [timeout, setTimeout] = createSignal("")
   const [headers, setHeaders] = createSignal<Header[]>([])
@@ -70,6 +73,12 @@ export function MCPAddDialog(props: Props) {
 
     // Build headers object
     const headersObj: Record<string, string> = {}
+    const rawApiKey = apiKey().trim()
+    if (rawApiKey) {
+      headersObj["Authorization"] = rawApiKey.toLowerCase().startsWith("bearer ")
+        ? rawApiKey
+        : `Bearer ${rawApiKey}`
+    }
     for (const h of headers()) {
       if (h.key.trim()) {
         headersObj[h.key.trim()] = h.value
@@ -192,6 +201,24 @@ export function MCPAddDialog(props: Props) {
             />
             <p class="text-xs mt-1" style={{ color: "var(--text-weak)" }}>
               The URL of the remote MCP server (SSE or HTTP endpoint)
+            </p>
+          </div>
+
+          {/* API Key (optional) */}
+          <div>
+            <label class="block text-sm font-medium mb-1" style={{ color: "var(--text-base)" }}>
+              API Key <span class="text-xs font-normal" style={{ color: "var(--text-weak)" }}>(optional)</span>
+            </label>
+            <input
+              type="password"
+              value={apiKey()}
+              onInput={(e) => setApiKey(e.currentTarget.value)}
+              placeholder="Bearer token or API key"
+              class="w-full px-3 py-2 rounded-md text-sm font-mono"
+              style={inputStyle}
+            />
+            <p class="text-xs mt-1" style={{ color: "var(--text-weak)" }}>
+              Sent as Authorization: Bearer header. Saved to MCP config file.
             </p>
           </div>
 
