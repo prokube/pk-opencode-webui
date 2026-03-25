@@ -201,7 +201,7 @@ export function HomeLayout(props: ParentProps) {
                   </button>
                 </div>
 
-                {/* Bottom: Server, Terminal & Settings */}
+                {/* Bottom: Terminal & Settings */}
                 <div
                   class="flex flex-col items-center gap-2 py-3"
                   style={{ "border-top": "1px solid var(--border-base)" }}

@@ -758,8 +758,8 @@ Add your project-specific instructions here.
                   {(s) => {
                     const isActive = () => s.id === serverCtx.activeServerId()
                     return (
-                      <div
-                        class="flex items-center gap-3 p-3 rounded-lg cursor-pointer transition-colors"
+                      <button
+                        class="w-full flex items-center gap-3 p-3 rounded-lg cursor-pointer transition-colors text-left"
                         style={{
                           background: isActive() ? "color-mix(in srgb, var(--interactive-base) 15%, transparent)" : "var(--surface-inset)",
                           border: isActive() ? "1px solid var(--interactive-base)" : "1px solid transparent",
@@ -781,7 +781,7 @@ Add your project-specific instructions here.
                           </div>
                           <div class="text-xs truncate mt-0.5" style={{ color: "var(--text-weak)" }}>{s.url}</div>
                         </div>
-                      </div>
+                      </button>
                     )
                   }}
                 </For>

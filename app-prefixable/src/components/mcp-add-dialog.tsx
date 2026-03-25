@@ -73,8 +73,11 @@ export function MCPAddDialog(props: Props) {
 
     // Build headers object
     const headersObj: Record<string, string> = {}
-    if (apiKey().trim()) {
-      headersObj["Authorization"] = `Bearer ${apiKey().trim()}`
+    const rawApiKey = apiKey().trim()
+    if (rawApiKey) {
+      headersObj["Authorization"] = rawApiKey.toLowerCase().startsWith("bearer ")
+        ? rawApiKey
+        : `Bearer ${rawApiKey}`
     }
     for (const h of headers()) {
       if (h.key.trim()) {
@@ -215,7 +218,7 @@ export function MCPAddDialog(props: Props) {
               style={inputStyle}
             />
             <p class="text-xs mt-1" style={{ color: "var(--text-weak)" }}>
-              Sent as Authorization: Bearer header
+              Sent as Authorization: Bearer header. Saved to MCP config file.
             </p>
           </div>
 
