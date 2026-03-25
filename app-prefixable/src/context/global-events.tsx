@@ -466,6 +466,11 @@ export function GlobalEventsProvider(props: ParentProps & {
         for (const dir of [...connections.keys()]) {
           disconnectDirectory(dir)
         }
+        // Cancel any pending reconnect and reseed timers
+        for (const [, timer] of reconnectTimers) clearTimeout(timer)
+        reconnectTimers.clear()
+        for (const [, timer] of permReseedTimers) clearTimeout(timer)
+        permReseedTimers.clear()
         return
       }
 
