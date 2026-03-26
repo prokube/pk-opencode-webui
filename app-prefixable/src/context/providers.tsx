@@ -11,7 +11,17 @@ const LEGACY_MODELS_KEY = "opencode.modelsByAgent"
 function modelsStorageKey(directory?: string): string {
   if (!directory) return LEGACY_MODELS_KEY
   const normalized = directory.replace(/[\\/]+$/, "")
-  return `${MODELS_BY_AGENT_PREFIX}:${normalized}`
+  return `${MODELS_BY_AGENT_PREFIX}.${normalized}`
+}
+
+// Validate that parsed localStorage data is a Record<string, ModelKey>
+function isValidModelsByAgent(value: unknown): value is Record<string, ModelKey> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false
+  for (const v of Object.values(value)) {
+    if (!v || typeof v !== "object") return false
+    if (typeof (v as ModelKey).providerID !== "string" || typeof (v as ModelKey).modelID !== "string") return false
+  }
+  return true
 }
 
 // Fallback defaults when no config is available
@@ -103,16 +113,22 @@ export function ProviderProvider(props: ParentProps) {
     try {
       const stored = localStorage.getItem(storageKey)
       if (stored) {
-        setStore("modelsByAgent", JSON.parse(stored))
-        return
+        const parsed = JSON.parse(stored)
+        if (isValidModelsByAgent(parsed)) {
+          setStore("modelsByAgent", parsed)
+          return
+        }
+        localStorage.removeItem(storageKey)
       }
       // Migrate: if no per-directory data exists, copy from legacy global key
       if (directory) {
         const legacy = localStorage.getItem(LEGACY_MODELS_KEY)
         if (legacy) {
           const parsed = JSON.parse(legacy)
-          setStore("modelsByAgent", parsed)
-          localStorage.setItem(storageKey, legacy)
+          if (isValidModelsByAgent(parsed)) {
+            setStore("modelsByAgent", parsed)
+            localStorage.setItem(storageKey, legacy)
+          }
         }
       }
     } catch (e) {
