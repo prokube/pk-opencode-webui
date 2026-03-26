@@ -1,4 +1,4 @@
-import { createContext, useContext, createResource, createEffect, on, type ParentProps, onMount } from "solid-js"
+import { createContext, useContext, createResource, createEffect, type ParentProps, onMount } from "solid-js"
 import { createStore } from "solid-js/store"
 import { useSDK } from "./sdk"
 import { useConfig } from "./config"
@@ -107,42 +107,52 @@ export function ProviderProvider(props: ParentProps) {
 
   // Track whether the user has manually changed the agent via setSelectedAgent
   let userChangedAgent = false
+  // Track whether localStorage has been hydrated (prevents saving the initial empty store)
+  let hydrated = false
 
   // Load models from localStorage (directory-scoped key, with migration from legacy global key)
   onMount(() => {
-    const stored = localStorage.getItem(storageKey)
-    if (stored) {
+    try {
+      const stored = localStorage.getItem(storageKey)
+      if (stored) {
+        try {
+          const parsed = JSON.parse(stored)
+          if (isValidModelsByAgent(parsed)) {
+            setStore("modelsByAgent", parsed)
+            hydrated = true
+            return
+          }
+        } catch (_) { /* invalid JSON, fall through to remove */ }
+        localStorage.removeItem(storageKey)
+      }
+      // Migrate: if no per-directory data exists, copy from legacy global key
+      if (!directory) { hydrated = true; return }
+      const legacy = localStorage.getItem(LEGACY_MODELS_KEY)
+      if (!legacy) { hydrated = true; return }
       try {
-        const parsed = JSON.parse(stored)
+        const parsed = JSON.parse(legacy)
         if (isValidModelsByAgent(parsed)) {
           setStore("modelsByAgent", parsed)
-          return
+          localStorage.setItem(storageKey, legacy)
         }
-      } catch (_) { /* invalid JSON, fall through to remove */ }
-      localStorage.removeItem(storageKey)
+      } catch (_) { /* legacy key corrupted, ignore */ }
+    } catch (e) {
+      console.error("Failed to load models from storage:", e)
     }
-    // Migrate: if no per-directory data exists, copy from legacy global key
-    if (!directory) return
-    const legacy = localStorage.getItem(LEGACY_MODELS_KEY)
-    if (!legacy) return
-    try {
-      const parsed = JSON.parse(legacy)
-      if (isValidModelsByAgent(parsed)) {
-        setStore("modelsByAgent", parsed)
-        localStorage.setItem(storageKey, legacy)
-      }
-    } catch (_) { /* legacy key corrupted, ignore */ }
+    hydrated = true
   })
 
   // Save models to localStorage whenever they change (directory-scoped).
-  // Deferred so the initial empty store doesn't overwrite persisted data before onMount hydrates.
-  createEffect(on(() => store.modelsByAgent, (models) => {
+  // The hydrated guard prevents the initial empty store from overwriting persisted data.
+  createEffect(() => {
+    const serialized = JSON.stringify(store.modelsByAgent)
+    if (!hydrated) return
     try {
-      localStorage.setItem(storageKey, JSON.stringify(models))
+      localStorage.setItem(storageKey, serialized)
     } catch (e) {
       console.error("Failed to save models to storage:", e)
     }
-  }, { defer: true }))
+  })
 
   // Fetch providers
   const [providerData, { refetch: refetchProviders }] = createResource(async () => {
