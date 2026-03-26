@@ -87,6 +87,8 @@ interface ProviderContextValue {
   modelsByAgent: Record<string, ModelKey>
   setSelectedModel: (model: ModelKey | null) => void
   setSelectedAgent: (agent: string) => void
+  getSessionModel: (sessionID: string) => ModelKey | null
+  setSessionModel: (sessionID: string, model: ModelKey | null) => void
   refetch: () => void
   connectProvider: (providerID: string, apiKey: string) => Promise<boolean>
   startOAuth: (providerID: string, methodIndex: number) => Promise<OAuthAuthorization | undefined>
@@ -103,6 +105,7 @@ export function ProviderProvider(props: ParentProps) {
   const [store, setStore] = createStore({
     modelsByAgent: {} as Record<string, ModelKey>,
     selectedAgent: FALLBACK_AGENT,
+    sessionModels: {} as Record<string, ModelKey>,
   })
 
   // Track whether the user has manually changed the agent via setSelectedAgent
@@ -285,6 +288,16 @@ export function ProviderProvider(props: ParentProps) {
     setStore("selectedAgent", agent)
   }
 
+  function getSessionModel(sessionID: string): ModelKey | null {
+    return store.sessionModels[sessionID] ?? null
+  }
+
+  function setSessionModel(sessionID: string, model: ModelKey | null) {
+    if (model) {
+      setStore("sessionModels", sessionID, model)
+    }
+  }
+
   async function connectProvider(providerID: string, apiKey: string): Promise<boolean> {
     try {
       await client.auth.set({
@@ -368,6 +381,8 @@ export function ProviderProvider(props: ParentProps) {
     },
     setSelectedModel,
     setSelectedAgent,
+    getSessionModel,
+    setSessionModel,
     refetch,
     connectProvider,
     startOAuth,
