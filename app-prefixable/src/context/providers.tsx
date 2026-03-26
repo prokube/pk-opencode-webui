@@ -1,4 +1,4 @@
-import { createContext, useContext, createResource, createEffect, type ParentProps, onMount } from "solid-js"
+import { createContext, useContext, createResource, createEffect, on, type ParentProps, onMount } from "solid-js"
 import { createStore } from "solid-js/store"
 import { useSDK } from "./sdk"
 import { useConfig } from "./config"
@@ -120,14 +120,15 @@ export function ProviderProvider(props: ParentProps) {
     }
   })
 
-  // Save models to localStorage whenever they change (directory-scoped)
-  createEffect(() => {
+  // Save models to localStorage whenever they change (directory-scoped).
+  // Deferred so the initial empty store doesn't overwrite persisted data before onMount hydrates.
+  createEffect(on(() => store.modelsByAgent, (models) => {
     try {
-      localStorage.setItem(storageKey, JSON.stringify(store.modelsByAgent))
+      localStorage.setItem(storageKey, JSON.stringify(models))
     } catch (e) {
       console.error("Failed to save models to storage:", e)
     }
-  })
+  }, { defer: true }))
 
   // Fetch providers
   const [providerData, { refetch: refetchProviders }] = createResource(async () => {
