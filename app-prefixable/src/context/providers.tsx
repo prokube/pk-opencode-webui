@@ -134,6 +134,8 @@ export function ProviderProvider(props: ParentProps) {
         if (isValidModelsByAgent(parsed)) {
           setStore("modelsByAgent", parsed)
           localStorage.setItem(storageKey, legacy)
+          // Remove legacy key so other projects fall through to their opencode.json defaults
+          localStorage.removeItem(LEGACY_MODELS_KEY)
         }
       } catch (_) { /* legacy key corrupted, ignore */ }
     } catch (e) {
