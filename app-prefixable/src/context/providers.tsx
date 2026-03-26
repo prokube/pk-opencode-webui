@@ -110,30 +110,28 @@ export function ProviderProvider(props: ParentProps) {
 
   // Load models from localStorage (directory-scoped key, with migration from legacy global key)
   onMount(() => {
-    try {
-      const stored = localStorage.getItem(storageKey)
-      if (stored) {
+    const stored = localStorage.getItem(storageKey)
+    if (stored) {
+      try {
         const parsed = JSON.parse(stored)
         if (isValidModelsByAgent(parsed)) {
           setStore("modelsByAgent", parsed)
           return
         }
-        localStorage.removeItem(storageKey)
-      }
-      // Migrate: if no per-directory data exists, copy from legacy global key
-      if (directory) {
-        const legacy = localStorage.getItem(LEGACY_MODELS_KEY)
-        if (legacy) {
-          const parsed = JSON.parse(legacy)
-          if (isValidModelsByAgent(parsed)) {
-            setStore("modelsByAgent", parsed)
-            localStorage.setItem(storageKey, legacy)
-          }
-        }
-      }
-    } catch (e) {
-      console.error("Failed to load models from storage:", e)
+      } catch (_) { /* invalid JSON, fall through to remove */ }
+      localStorage.removeItem(storageKey)
     }
+    // Migrate: if no per-directory data exists, copy from legacy global key
+    if (!directory) return
+    const legacy = localStorage.getItem(LEGACY_MODELS_KEY)
+    if (!legacy) return
+    try {
+      const parsed = JSON.parse(legacy)
+      if (isValidModelsByAgent(parsed)) {
+        setStore("modelsByAgent", parsed)
+        localStorage.setItem(storageKey, legacy)
+      }
+    } catch (_) { /* legacy key corrupted, ignore */ }
   })
 
   // Save models to localStorage whenever they change (directory-scoped).
