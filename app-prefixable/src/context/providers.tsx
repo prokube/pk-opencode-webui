@@ -3,8 +3,16 @@ import { createStore } from "solid-js/store"
 import { useSDK } from "./sdk"
 import { useConfig } from "./config"
 
-// Storage key
-const MODELS_BY_AGENT_KEY = "opencode.modelsByAgent"
+// Storage key prefix — scoped per project directory
+const MODELS_BY_AGENT_PREFIX = "opencode.modelsByAgent"
+// Legacy key (pre-namespacing) used for migration
+const LEGACY_MODELS_KEY = "opencode.modelsByAgent"
+
+function modelsStorageKey(directory?: string): string {
+  if (!directory) return LEGACY_MODELS_KEY
+  const normalized = directory.replace(/[\\/]+$/, "")
+  return `${MODELS_BY_AGENT_PREFIX}:${normalized}`
+}
 
 // Fallback defaults when no config is available
 const FALLBACK_PROVIDER = "opencode"
@@ -78,8 +86,9 @@ interface ProviderContextValue {
 const ProviderContext = createContext<ProviderContextValue>()
 
 export function ProviderProvider(props: ParentProps) {
-  const { client } = useSDK()
+  const { client, directory } = useSDK()
   const cfg = useConfig()
+  const storageKey = modelsStorageKey(directory)
 
   const [store, setStore] = createStore({
     modelsByAgent: {} as Record<string, ModelKey>,
@@ -89,23 +98,32 @@ export function ProviderProvider(props: ParentProps) {
   // Track whether the user has manually changed the agent via setSelectedAgent
   let userChangedAgent = false
 
-  // Load models from localStorage
+  // Load models from localStorage (directory-scoped key, with migration from legacy global key)
   onMount(() => {
     try {
-      const stored = localStorage.getItem(MODELS_BY_AGENT_KEY)
+      const stored = localStorage.getItem(storageKey)
       if (stored) {
-        const parsed = JSON.parse(stored)
-        setStore("modelsByAgent", parsed)
+        setStore("modelsByAgent", JSON.parse(stored))
+        return
+      }
+      // Migrate: if no per-directory data exists, copy from legacy global key
+      if (directory) {
+        const legacy = localStorage.getItem(LEGACY_MODELS_KEY)
+        if (legacy) {
+          const parsed = JSON.parse(legacy)
+          setStore("modelsByAgent", parsed)
+          localStorage.setItem(storageKey, legacy)
+        }
       }
     } catch (e) {
       console.error("Failed to load models from storage:", e)
     }
   })
 
-  // Save models to localStorage whenever they change
+  // Save models to localStorage whenever they change (directory-scoped)
   createEffect(() => {
     try {
-      localStorage.setItem(MODELS_BY_AGENT_KEY, JSON.stringify(store.modelsByAgent))
+      localStorage.setItem(storageKey, JSON.stringify(store.modelsByAgent))
     } catch (e) {
       console.error("Failed to save models to storage:", e)
     }
