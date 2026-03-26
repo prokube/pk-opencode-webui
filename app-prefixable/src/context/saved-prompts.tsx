@@ -72,24 +72,40 @@ export function SavedPromptsProvider(props: ParentProps & { directory?: Accessor
   // Keep a "sticky" directory that survives transient undefined flickers
   // during SolidJS router transitions (e.g. project → project settings).
   //
-  // When the directory signal becomes undefined, we use the shared
-  // deriveDirectoryFromPathname() helper to check the actual URL.  If it
-  // indicates a global route AND the directory is still undefined after a
-  // microtask (confirming the state is stable, not a transient `/` flash
-  // during router transitions), the sticky value clears.
-  const [sticky, setSticky] = createSignal<string | undefined>(props.directory?.())
+  // Initialise from the prop, falling back to the URL-derived directory.
+  // This avoids starting with undefined when the prop signal hasn't
+  // settled yet but the URL already encodes the directory.
+  const [sticky, setSticky] = createSignal<string | undefined>(
+    props.directory?.() ?? deriveDirectoryFromPathname(),
+  )
+
+  // Track a pending clear so we can cancel it if the directory reappears
+  // before the microtask fires (avoids stale-closure clears).
+  let pendingClear = false
+
   createEffect(() => {
     const d = props.directory?.()
     if (d) {
+      pendingClear = false
       setSticky(d)
       return
     }
-    // Directory became undefined — check whether the URL indicates a global
-    // route.  If it does, confirm stability via microtask: the pathname can
-    // briefly be `/` during SolidJS router transitions between project
-    // sub-routes, so we wait one microtask to see if a real directory arrives.
-    if (sticky() !== undefined && deriveDirectoryFromPathname() === undefined) {
+    // Directory became undefined — check whether the URL still indicates a
+    // project route.  If the URL also shows no directory, schedule a
+    // microtask-delayed clear to confirm the state is stable (the pathname
+    // can briefly flash to `/` during SolidJS router transitions).
+    const fromUrl = deriveDirectoryFromPathname()
+    if (fromUrl) {
+      // URL still has a directory even though the prop is undefined;
+      // keep the sticky value (may be a transient prop flicker).
+      pendingClear = false
+      setSticky(fromUrl)
+      return
+    }
+    if (sticky() !== undefined) {
+      pendingClear = true
       queueMicrotask(() => {
+        if (!pendingClear) return
         if (props.directory?.() !== undefined) return
         if (deriveDirectoryFromPathname() !== undefined) return
         setSticky(undefined)
@@ -104,20 +120,24 @@ export function SavedPromptsProvider(props: ParentProps & { directory?: Accessor
   const initialDir = dir()
   if (initialDir) migrateIfNeeded(initialDir)
 
+  const initialKey = key()
   const [prompts, setPrompts] = createSignal<SavedPrompt[]>(
-    loadFromStorage(key()).sort((a, b) => b.createdAt - a.createdAt),
+    loadFromStorage(initialKey).sort((a, b) => b.createdAt - a.createdAt),
   )
 
-  // Reload prompts (with migration) only when the storage key actually changes
-  // (i.e. when switching projects). Using `on()` with `defer: true` prevents
-  // this effect from running on initial mount (data is already loaded above)
-  // and avoids clobbering in-memory signal updates from add/update/remove
-  // during same-project navigation.
+  // Reload prompts (with migration) when the storage key changes (e.g.
+  // switching projects or the sticky directory settling after mount).
+  // We track the previous key to skip redundant reloads — this replaces
+  // the old `defer: true` approach that could miss corrections when the
+  // provider remounted with a stale initial key.
+  let prevKey = initialKey
   createEffect(on(key, (k) => {
+    if (k === prevKey) return
+    prevKey = k
     const d = dir()
     if (d) migrateIfNeeded(d)
     setPrompts(loadFromStorage(k).sort((a, b) => b.createdAt - a.createdAt))
-  }, { defer: true }))
+  }))
 
   function add(title: string, text: string) {
     setPrompts((prev) => {
