@@ -3,8 +3,26 @@ import { createStore } from "solid-js/store"
 import { useSDK } from "./sdk"
 import { useConfig } from "./config"
 
-// Storage key
-const MODELS_BY_AGENT_KEY = "opencode.modelsByAgent"
+// Storage key prefix — scoped per project directory
+const MODELS_BY_AGENT_PREFIX = "opencode.modelsByAgent"
+// Legacy key (pre-namespacing) used for migration
+const LEGACY_MODELS_KEY = "opencode.modelsByAgent"
+
+function modelsStorageKey(directory?: string): string {
+  if (!directory) return LEGACY_MODELS_KEY
+  const normalized = directory.replace(/[\\/]+$/, "")
+  return `${MODELS_BY_AGENT_PREFIX}.${normalized}`
+}
+
+// Validate that parsed localStorage data is a Record<string, ModelKey>
+function isValidModelsByAgent(value: unknown): value is Record<string, ModelKey> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false
+  for (const v of Object.values(value)) {
+    if (!v || typeof v !== "object") return false
+    if (typeof (v as ModelKey).providerID !== "string" || typeof (v as ModelKey).modelID !== "string") return false
+  }
+  return true
+}
 
 // Fallback defaults when no config is available
 const FALLBACK_PROVIDER = "opencode"
@@ -78,8 +96,9 @@ interface ProviderContextValue {
 const ProviderContext = createContext<ProviderContextValue>()
 
 export function ProviderProvider(props: ParentProps) {
-  const { client } = useSDK()
+  const { client, directory } = useSDK()
   const cfg = useConfig()
+  const storageKey = modelsStorageKey(directory)
 
   const [store, setStore] = createStore({
     modelsByAgent: {} as Record<string, ModelKey>,
@@ -88,24 +107,50 @@ export function ProviderProvider(props: ParentProps) {
 
   // Track whether the user has manually changed the agent via setSelectedAgent
   let userChangedAgent = false
+  // Track whether localStorage has been hydrated (prevents saving the initial empty store)
+  let hydrated = false
 
-  // Load models from localStorage
+  // Load models from localStorage (directory-scoped key, with migration from legacy global key)
   onMount(() => {
     try {
-      const stored = localStorage.getItem(MODELS_BY_AGENT_KEY)
+      const stored = localStorage.getItem(storageKey)
       if (stored) {
-        const parsed = JSON.parse(stored)
-        setStore("modelsByAgent", parsed)
+        try {
+          const parsed = JSON.parse(stored)
+          if (isValidModelsByAgent(parsed)) {
+            setStore("modelsByAgent", parsed)
+            hydrated = true
+            return
+          }
+        } catch (_) { /* invalid JSON, fall through to remove */ }
+        localStorage.removeItem(storageKey)
       }
+      // Migrate: if no per-directory data exists, copy from legacy global key
+      if (!directory) { hydrated = true; return }
+      const legacy = localStorage.getItem(LEGACY_MODELS_KEY)
+      if (!legacy) { hydrated = true; return }
+      try {
+        const parsed = JSON.parse(legacy)
+        if (isValidModelsByAgent(parsed)) {
+          setStore("modelsByAgent", parsed)
+          localStorage.setItem(storageKey, legacy)
+          // Remove legacy key so other projects fall through to their opencode.json defaults
+          localStorage.removeItem(LEGACY_MODELS_KEY)
+        }
+      } catch (_) { /* legacy key corrupted, ignore */ }
     } catch (e) {
       console.error("Failed to load models from storage:", e)
     }
+    hydrated = true
   })
 
-  // Save models to localStorage whenever they change
+  // Save models to localStorage whenever they change (directory-scoped).
+  // The hydrated guard prevents the initial empty store from overwriting persisted data.
   createEffect(() => {
+    const serialized = JSON.stringify(store.modelsByAgent)
+    if (!hydrated) return
     try {
-      localStorage.setItem(MODELS_BY_AGENT_KEY, JSON.stringify(store.modelsByAgent))
+      localStorage.setItem(storageKey, serialized)
     } catch (e) {
       console.error("Failed to save models to storage:", e)
     }
