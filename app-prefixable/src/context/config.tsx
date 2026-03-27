@@ -93,7 +93,14 @@ export function ConfigProvider(props: ParentProps) {
   async function updateGlobal(patch: Config): Promise<Config | null> {
     setError(null)
     try {
-      const res = await sdk.client.global.config.update({ config: patch })
+      // Preserve disabled_providers in the patch if it exists in the current
+      // global config but not in the patch itself. This prevents the backend
+      // from dropping it during a shallow merge (e.g. when saving MCP or
+      // provider settings from the UI).
+      const safePatch = global.disabled_providers && !patch.disabled_providers
+        ? { ...patch, disabled_providers: global.disabled_providers }
+        : patch
+      const res = await sdk.client.global.config.update({ config: safePatch })
       const data = res.data as Config | undefined
       if (data) {
         lastUpdateAt = Date.now()
