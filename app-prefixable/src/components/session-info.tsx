@@ -6,10 +6,16 @@ import { useProviders } from "../context/providers"
 import { getContextTokens } from "../utils/tokens"
 import { Zap, CornerDownLeft, Square } from "lucide-solid"
 
+interface ModelKey {
+  providerID: string
+  modelID: string
+}
+
 interface SessionInfoProps {
   input: () => string
   loading: () => boolean
   processing: () => boolean
+  sessionModel: () => ModelKey | null
   onAbort: () => void
   onAgentClick: () => void
   onModelClick: () => void
@@ -129,7 +135,7 @@ export function SessionInfo(props: SessionInfoProps) {
 
   // Resolve friendly model name from providers
   const modelLabel = createMemo(() => {
-    const selected = providers.selectedModel
+    const selected = props.sessionModel()
     if (!selected) return null
     const provider = providers.providers.find((p: { id: string }) => p.id === selected.providerID)
     const model = provider?.models[selected.modelID]
@@ -209,7 +215,7 @@ export function SessionInfo(props: SessionInfoProps) {
         </Show>
 
         {/* Model */}
-        <Show when={providers.selectedModel}>
+        <Show when={props.sessionModel()}>
           <button
             type="button"
             class="flex items-center gap-1 min-w-0 hover:opacity-80 cursor-pointer"
@@ -345,13 +351,13 @@ export function SessionInfo(props: SessionInfoProps) {
         </Show>
 
         {/* No provider warning */}
-        <Show when={!providers.selectedModel && providers.connected.length === 0}>
+        <Show when={!props.sessionModel() && providers.connected.length === 0}>
           <a href={`/${dirSlug()}/settings`} style={{ color: "var(--text-interactive-base)" }} class="hover:underline">
             Connect a provider to start
           </a>
         </Show>
 
-        <Show when={!providers.selectedModel && providers.connected.length > 0}>
+        <Show when={!props.sessionModel() && providers.connected.length > 0}>
           <span style={{ color: "var(--status-warning-text)" }}>No model selected</span>
         </Show>
       </div>

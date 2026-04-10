@@ -98,6 +98,13 @@ export function Session() {
   const terminal = useTerminal();
   const appConfig = useConfig();
 
+  // Per-session model: reads from providers.sessionModels, falls back to global default
+  const sessionModel = createMemo(() => {
+    const id = sessionId();
+    if (!id) return providers.selectedModel;
+    return providers.getSessionModel(id) ?? providers.selectedModel;
+  });
+
   // Unified toast system — only one toast visible at a time
   const [toastMessage, setToastMessage] = createSignal<string | null>(null);
   const [toastVariant, setToastVariant] = createSignal<"default" | "hint">("default");
@@ -370,6 +377,17 @@ export function Session() {
       setProcessing(false); // Reset processing state for new session
       sync.session.sync(id).then(() => {
         setLoadingHistory(false);
+        // Initialize per-session model from existing messages if not already set
+        if (!providers.getSessionModel(id)) {
+          const msgs = sync.messages(id);
+          for (let i = msgs.length - 1; i >= 0; i--) {
+            const info = msgs[i].info;
+            if (info.role === "assistant" && info.providerID && info.modelID) {
+              providers.setSessionModel(id, { providerID: info.providerID, modelID: info.modelID });
+              break;
+            }
+          }
+        }
       });
 
       // Check if this session is actually busy
@@ -428,14 +446,15 @@ export function Session() {
     // runs after createEffect. Skip without removing the sessionStorage item so
     // the effect re-runs once providers finish loading.
     if (providers.loading || providers.providers.length === 0) return;
-    if (!providers.selectedModel) {
+    const model = sessionModel();
+    if (!model) {
       sessionStorage.removeItem(key);
       setError("Please select a model before sending messages. Click the model button in the header.");
       return;
     }
-    if (!providers.connected.includes(providers.selectedModel.providerID)) {
+    if (!providers.connected.includes(model.providerID)) {
       sessionStorage.removeItem(key);
-      setError(`Provider "${providers.selectedModel.providerID}" is not connected. Please configure it in Settings.`);
+      setError(`Provider "${model.providerID}" is not connected. Please configure it in Settings.`);
       return;
     }
     // All validation passed — mark as sent, clear storage, and send
@@ -447,7 +466,7 @@ export function Session() {
       sessionID: id,
       parts: [{ type: "text", text }],
       agent: providers.selectedAgent || "build",
-      model: providers.selectedModel,
+      model,
     }).catch((err: unknown) => {
       setError(`Failed to send saved prompt: ${err instanceof Error ? err.message : String(err)}`);
       setProcessing(false);
@@ -629,7 +648,7 @@ export function Session() {
     ];
 
     // /compact — requires a session with messages and a selected model
-    if (id && hasMessages && !isProcessing && providers.selectedModel) {
+    if (id && hasMessages && !isProcessing && sessionModel()) {
       commands.push({
         id: "session.compact",
         title: "Compact Session",
@@ -637,7 +656,7 @@ export function Session() {
         slash: "compact",
         onSelect: async () => {
           if (!id) return;
-          const model = providers.selectedModel;
+          const model = sessionModel();
           if (!model) {
             showToast("Select a model before compacting");
             return;
@@ -1282,7 +1301,8 @@ export function Session() {
       return;
 
     // Require explicit model selection to avoid OpenCode auto-selecting a broken provider
-    if (!providers.selectedModel) {
+    const model = sessionModel();
+    if (!model) {
       setError(
         "Please select a model before sending messages. Click the model button in the header.",
       );
@@ -1290,9 +1310,9 @@ export function Session() {
     }
 
     // Check if the selected model's provider is connected
-    if (!providers.connected.includes(providers.selectedModel.providerID)) {
+    if (!providers.connected.includes(model.providerID)) {
       setError(
-        `Provider "${providers.selectedModel.providerID}" is not connected. Please configure it in Settings.`,
+        `Provider "${model.providerID}" is not connected. Please configure it in Settings.`,
       );
       return;
     }
@@ -1339,6 +1359,8 @@ export function Session() {
         id = createRes.data.id;
         setSessionId(id);
         navigate(`/${dirSlug()}/session/${id}`, { replace: true });
+        // Store the model for the new session
+        providers.setSessionModel(id, model);
       }
 
       // Build parts array with text and file attachments
@@ -1392,8 +1414,8 @@ export function Session() {
         agent: providers.selectedAgent || "build",
       };
 
-      if (providers.selectedModel) {
-        promptPayload.model = providers.selectedModel;
+      if (model) {
+        promptPayload.model = model;
       }
 
       const promptRes = await client.session.promptAsync(promptPayload);
@@ -1412,12 +1434,13 @@ export function Session() {
   }
 
   async function createSessionAndSendPrompt(text: string) {
-    if (!providers.selectedModel) {
+    const model = sessionModel();
+    if (!model) {
       setError("Please select a model before sending messages. Click the model button in the header.");
       return;
     }
-    if (!providers.connected.includes(providers.selectedModel.providerID)) {
-      setError(`Provider "${providers.selectedModel.providerID}" is not connected. Please configure it in Settings.`);
+    if (!providers.connected.includes(model.providerID)) {
+      setError(`Provider "${model.providerID}" is not connected. Please configure it in Settings.`);
       return;
     }
     setError(null);
@@ -1427,11 +1450,13 @@ export function Session() {
       const sid = res.data.id;
       setSessionId(sid);
       navigate(`/${dirSlug()}/session/${sid}`, { replace: true });
+      // Store the model for the new session
+      providers.setSessionModel(sid, model);
       await client.session.promptAsync({
         sessionID: sid,
         parts: [{ type: "text", text }],
         agent: providers.selectedAgent || "build",
-        model: providers.selectedModel,
+        model,
       });
     } catch (err) {
       setError(`Failed to send saved prompt: ${err instanceof Error ? err.message : String(err)}`);
@@ -2112,6 +2137,7 @@ export function Session() {
                       input={input}
                       loading={loading}
                       processing={processing}
+                      sessionModel={sessionModel}
                       onAbort={handleAbort}
                       onAgentClick={() => setShowAgentPicker(true)}
                       onModelClick={() => setShowModelPicker(true)}
@@ -2164,7 +2190,11 @@ export function Session() {
               const parts = item.id.split(":");
               const providerID = parts[0];
               const modelID = parts.slice(1).join(":");
-              providers.setSelectedModel({ providerID, modelID });
+              const model = { providerID, modelID };
+              // Store per-session and update global default
+              const id = sessionId();
+              if (id) providers.setSessionModel(id, model);
+              providers.setSelectedModel(model);
             }}
             onClose={() => setShowModelPicker(false)}
           />
