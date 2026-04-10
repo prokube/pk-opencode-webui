@@ -35,6 +35,11 @@ export function ConfigProvider(props: ParentProps) {
   let refreshSeq = 0
   let lastUpdateAt = 0
 
+  // Validate that a response has the expected Config shape (must be a non-array object)
+  function isValidConfig(data: unknown): data is Config {
+    return !!data && typeof data === "object" && !Array.isArray(data)
+  }
+
   async function refresh() {
     const seq = ++refreshSeq
     setLoading(true)
@@ -45,7 +50,11 @@ export function ConfigProvider(props: ParentProps) {
       try {
         const projRes = await sdk.client.config.get()
         if (seq !== refreshSeq) return // superseded by newer refresh
-        setProject(reconcile((projRes?.data as Config) ?? {}))
+        const projData = projRes?.data
+        if (projData && !isValidConfig(projData)) {
+          console.error("[Config] Unexpected project config response shape:", projData)
+        }
+        setProject(reconcile(isValidConfig(projData) ? projData : {}))
       } catch (e) {
         console.error("[Config] Failed to fetch project config:", e)
         if (seq !== refreshSeq) return
@@ -58,7 +67,11 @@ export function ConfigProvider(props: ParentProps) {
     try {
       const globalRes = await sdk.client.global.config.get()
       if (seq !== refreshSeq) return
-      setGlobal(reconcile((globalRes?.data as Config) ?? {}))
+      const globalData = globalRes?.data
+      if (globalData && !isValidConfig(globalData)) {
+        console.error("[Config] Unexpected global config response shape:", globalData)
+      }
+      setGlobal(reconcile(isValidConfig(globalData) ? globalData : {}))
     } catch (e) {
       console.error("[Config] Failed to fetch global config:", e)
       if (seq !== refreshSeq) return
@@ -76,8 +89,12 @@ export function ConfigProvider(props: ParentProps) {
     setError(null)
     try {
       const res = await sdk.client.config.update({ config: patch })
-      const data = res.data as Config | undefined
-      if (data) {
+      const data = res.data
+      if (data && !isValidConfig(data)) {
+        console.error("[Config] Unexpected project update response shape:", data)
+        return null
+      }
+      if (isValidConfig(data)) {
         lastUpdateAt = Date.now()
         setProject(reconcile(data))
         return data
@@ -101,8 +118,12 @@ export function ConfigProvider(props: ParentProps) {
         ? { ...patch, disabled_providers: global.disabled_providers }
         : patch
       const res = await sdk.client.global.config.update({ config: safePatch })
-      const data = res.data as Config | undefined
-      if (data) {
+      const data = res.data
+      if (data && !isValidConfig(data)) {
+        console.error("[Config] Unexpected global update response shape:", data)
+        return null
+      }
+      if (isValidConfig(data)) {
         lastUpdateAt = Date.now()
         setGlobal(reconcile(data))
         return data

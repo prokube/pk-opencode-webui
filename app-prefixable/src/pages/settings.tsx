@@ -1,4 +1,4 @@
-import { createSignal, For, Show, type JSX, createMemo, onMount, onCleanup, createEffect } from "solid-js"
+import { createSignal, For, Show, type JSX, createMemo, onMount, onCleanup, createEffect, ErrorBoundary } from "solid-js"
 import { Portal } from "solid-js/web"
 import { Spinner } from "../components/ui/spinner"
 import { useProviders } from "../context/providers"
@@ -17,6 +17,39 @@ import { useServer } from "../context/server"
 import { ServerDialog } from "../components/server-dialog"
 import { writeFile } from "../utils/extended-api"
 import type { Config, PermissionActionConfig } from "../sdk/client"
+
+function SectionErrorFallback(props: { error: Error; reset: () => void }) {
+  return (
+    <div
+      class="p-4 rounded-lg space-y-3"
+      style={{
+        background: "var(--surface-inset)",
+        border: "1px solid var(--border-base)",
+        "border-left": "3px solid var(--interactive-critical)",
+      }}
+    >
+      <div>
+        <h3 class="text-sm font-medium" style={{ color: "var(--interactive-critical)" }}>
+          Something went wrong
+        </h3>
+        <p class="text-xs mt-1" style={{ color: "var(--text-weak)" }}>
+          {props.error.message || "An unexpected error occurred while rendering this section."}
+        </p>
+      </div>
+      <button
+        onClick={props.reset}
+        class="px-3 py-1.5 rounded-md text-xs font-medium transition-colors"
+        style={{
+          background: "var(--surface-strong)",
+          color: "var(--text-base)",
+          border: "1px solid var(--border-base)",
+        }}
+      >
+        Try Again
+      </button>
+    </div>
+  )
+}
 
 export function Settings() {
   const providers = useProviders()
@@ -723,6 +756,7 @@ Add your project-specific instructions here.
       {/* Content */}
       <div class="flex-1 overflow-y-auto">
         <div class="max-w-2xl p-6 space-y-6">
+          <ErrorBoundary fallback={(err, reset) => <SectionErrorFallback error={err} reset={reset} />}>
           {/* Project header banner */}
           <Show when={directory}>
             <div
@@ -2260,6 +2294,7 @@ Add your project-specific instructions here.
               </section>
             </div>
           </Show>
+          </ErrorBoundary>
         </div>
       </div>
 

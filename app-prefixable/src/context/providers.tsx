@@ -159,17 +159,27 @@ export function ProviderProvider(props: ParentProps) {
     }
   })
 
+  // Validate that a response has the expected ProviderListData shape
+  function isValidProviderListData(data: unknown): data is ProviderListData {
+    if (!data || typeof data !== "object") return false
+    const d = data as Record<string, unknown>
+    return Array.isArray(d.all) && Array.isArray(d.connected)
+  }
+
   // Fetch providers
   const [providerData, { refetch: refetchProviders }] = createResource(async () => {
     try {
       const res = await client.provider.list()
-      const data = res.data as ProviderListData | undefined
-      if (!data) return undefined
+      const data = res.data
+      if (!isValidProviderListData(data)) {
+        console.error("[Providers] Invalid provider list response shape:", data)
+        return undefined
+      }
       // Inject providerID into each model since the SDK response doesn't include it
       const all = data.all.map((provider) => ({
         ...provider,
         models: Object.fromEntries(
-          Object.entries(provider.models).map(([k, m]) => [k, { ...m, providerID: provider.id }])
+          Object.entries(provider.models ?? {}).map(([k, m]) => [k, { ...m, providerID: provider.id }])
         ),
       }))
       return { ...data, all }
@@ -236,7 +246,12 @@ export function ProviderProvider(props: ParentProps) {
   const [authData] = createResource(async () => {
     try {
       const res = await client.provider.auth()
-      return (res.data as Record<string, ProviderAuthMethod[]>) ?? {}
+      const data = res.data
+      if (!data || typeof data !== "object" || Array.isArray(data)) {
+        console.error("[Providers] Invalid auth methods response shape:", data)
+        return {}
+      }
+      return data as Record<string, ProviderAuthMethod[]>
     } catch (e) {
       console.error("Failed to fetch auth methods:", e)
       return {}
@@ -304,8 +319,10 @@ export function ProviderProvider(props: ParentProps) {
         providerID,
         auth: { type: "api", key: apiKey },
       })
-      // Dispose instance to reload provider state, then refresh
+      // Dispose instance to reload provider state, then wait for the
+      // server to reinitialize before refetching the provider list.
       await client.instance.dispose()
+      await new Promise((resolve) => setTimeout(resolve, 500))
       await refetchProviders()
       return true
     } catch (e) {
@@ -334,8 +351,10 @@ export function ProviderProvider(props: ParentProps) {
         method: methodIndex,
         code,
       })
-      // Dispose instance to reload provider state, then refresh
+      // Dispose instance to reload provider state, then wait for the
+      // server to reinitialize before refetching the provider list.
       await client.instance.dispose()
+      await new Promise((resolve) => setTimeout(resolve, 500))
       await refetchProviders()
       return true
     } catch (e) {
