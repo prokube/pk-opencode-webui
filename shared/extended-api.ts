@@ -262,7 +262,8 @@ export async function handleExtendedEndpoint(
         config = JSON.parse(jsonContent)
       }
 
-      // Remove the MCP server
+      // Remove the MCP server (only modify the mcp key, preserving all other keys
+      // like disabled_providers, enabled_providers, etc.)
       const mcpConfig = config.mcp as Record<string, unknown> | undefined
       if (mcpConfig && mcpConfig[serverName]) {
         delete mcpConfig[serverName]
@@ -272,8 +273,13 @@ export async function handleExtendedEndpoint(
         return Response.json({ error: "Server not found in config" }, { status: 404 })
       }
 
-      // Write back (as plain JSON since we stripped comments)
-      await fs.promises.writeFile(configPath, JSON.stringify(config, null, 2))
+      // Write back (as plain JSON since we stripped comments).
+      // The full config object is preserved — only mcp[serverName] was deleted above.
+      const output = JSON.stringify(config, null, 2)
+      if (Array.isArray(config.disabled_providers)) {
+        console.log("[ExtAPI] Preserving disabled_providers:", config.disabled_providers)
+      }
+      await fs.promises.writeFile(configPath, output)
       console.log("[ExtAPI] Config saved")
 
       return Response.json({ success: true })
