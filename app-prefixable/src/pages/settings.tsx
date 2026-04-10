@@ -11,7 +11,7 @@ import { ConfirmDialog } from "../components/confirm-dialog"
 import { Button } from "../components/ui/button"
 import { Check, Copy, Plug, GitBranch, Server, Globe, ExternalLink, Key, Search, X, Trash2, BookmarkPlus, Pencil, Palette, Sun, Moon, Monitor, BookOpen, Plus, Save, Volume2, Play, Settings2, Code, Shield, Cpu, Wrench, ChevronDown, ChevronRight, Info } from "lucide-solid"
 import { SOUND_OPTIONS, readSoundSettings, writeSoundSettings, playSound, primeAudioContext, SOUND_STORAGE_KEY, type SoundSettings } from "../utils/sound"
-import { useSavedPrompts } from "../context/saved-prompts"
+import { useSavedPrompts, type PromptScope } from "../context/saved-prompts"
 import { useTheme } from "../context/theme"
 import { useServer } from "../context/server"
 import { ServerDialog } from "../components/server-dialog"
@@ -49,6 +49,7 @@ export function Settings() {
   const [editingPromptId, setEditingPromptId] = createSignal<string | null>(null)
   const [promptTitle, setPromptTitle] = createSignal("")
   const [promptText, setPromptText] = createSignal("")
+  const [promptScope, setPromptScope] = createSignal<PromptScope>("global")
   const [promptToDelete, setPromptToDelete] = createSignal<string | null>(null)
 
   // Sound settings
@@ -601,6 +602,7 @@ Add your project-specific instructions here.
     setEditingPromptId(null)
     setPromptTitle("")
     setPromptText("")
+    setPromptScope(directory ? "project" : "global")
     setPromptDialogOpen(true)
   }
 
@@ -610,6 +612,7 @@ Add your project-specific instructions here.
     setEditingPromptId(id)
     setPromptTitle(prompt.title)
     setPromptText(prompt.text)
+    setPromptScope(prompt.scope)
     setPromptDialogOpen(true)
   }
 
@@ -619,9 +622,16 @@ Add your project-specific instructions here.
     if (!title || !text) return
     const editing = editingPromptId()
     if (editing) {
-      savedPrompts.update(editing, { title, text })
+      const existing = savedPrompts.prompts().find((p) => p.id === editing)
+      if (existing && existing.scope !== promptScope()) {
+        // Scope changed — remove from old store and add to new one
+        savedPrompts.remove(editing)
+        savedPrompts.add(title, text, promptScope())
+      } else {
+        savedPrompts.update(editing, { title, text })
+      }
     } else {
-      savedPrompts.add(title, text)
+      savedPrompts.add(title, text, promptScope())
     }
     setPromptDialogOpen(false)
     setEditingPromptId(null)
@@ -645,7 +655,7 @@ Add your project-specific instructions here.
       { id: "servers", label: "Servers", icon: () => <Globe class="w-4 h-4" />, scope: "Global" },
       { id: "git", label: "Git", icon: () => <GitBranch class="w-4 h-4" />, scope: "Global" },
       { id: "mcp", label: "MCP Servers", icon: () => <Server class="w-4 h-4" />, scope: "Global + Project" },
-      { id: "prompts", label: "Prompts", icon: () => <BookmarkPlus class="w-4 h-4" />, scope: directory ? "Project" : null },
+      { id: "prompts", label: "Prompts", icon: () => <BookmarkPlus class="w-4 h-4" />, scope: directory ? "Global + Project" : "Global" },
       { id: "instructions", label: "Instructions", icon: () => <BookOpen class="w-4 h-4" />, scope: directory ? "Project" : null },
     ]
     // Only show Project Config tab when a project directory is selected
@@ -1760,7 +1770,10 @@ Add your project-specific instructions here.
                   Saved Prompts
                 </h1>
                 <p class="text-sm mt-1" style={{ color: "var(--text-weak)" }}>
-                  Create reusable prompts for quick access from the welcome screen or /prompt command
+                  Create reusable prompts for quick access from the welcome screen or /prompt command.
+                  {directory
+                    ? " Global prompts are available in all projects; project prompts are scoped to this project."
+                    : " Prompts shown here are available in all projects."}
                 </p>
               </header>
 
@@ -1804,8 +1817,19 @@ Add your project-specific instructions here.
                       {(prompt) => (
                         <div class="px-4 py-3 flex items-start justify-between gap-4">
                           <div class="flex-1 min-w-0">
-                            <div class="font-medium text-sm" style={{ color: "var(--text-strong)" }}>
-                              {prompt.title}
+                            <div class="flex items-center gap-2">
+                              <div class="font-medium text-sm truncate" style={{ color: "var(--text-strong)" }}>
+                                {prompt.title}
+                              </div>
+                              <span
+                                class="text-[10px] px-1.5 py-0.5 rounded shrink-0"
+                                style={{
+                                  background: "var(--surface-inset)",
+                                  color: "var(--text-weak)",
+                                }}
+                              >
+                                {prompt.scope === "project" ? "Project" : "Global"}
+                              </span>
                             </div>
                             <p
                               class="text-xs mt-0.5 line-clamp-2"
@@ -2287,6 +2311,9 @@ Add your project-specific instructions here.
           setTitle={setPromptTitle}
           text={promptText}
           setText={setPromptText}
+          scope={promptScope}
+          setScope={setPromptScope}
+          hasProject={!!directory}
           onSave={savePromptDialog}
           onClose={() => setPromptDialogOpen(false)}
         />
@@ -3111,6 +3138,9 @@ function PromptDialog(props: {
   setTitle: (v: string) => void
   text: () => string
   setText: (v: string) => void
+  scope: () => PromptScope
+  setScope: (v: PromptScope) => void
+  hasProject: boolean
   onSave: () => void
   onClose: () => void
 }) {
@@ -3212,6 +3242,43 @@ function PromptDialog(props: {
                   "min-height": "120px",
                 }}
               />
+            </div>
+            <div>
+              <label class="block text-sm font-medium mb-1.5" style={{ color: "var(--text-base)" }}>
+                Scope
+              </label>
+              <div class="flex gap-2">
+                <button
+                  type="button"
+                  onClick={() => props.setScope("global")}
+                  class="flex-1 px-3 py-1.5 rounded-md text-sm font-medium transition-colors"
+                  style={{
+                    background: props.scope() === "global" ? "var(--interactive-base)" : "var(--surface-inset)",
+                    color: props.scope() === "global" ? "white" : "var(--text-base)",
+                    border: props.scope() === "global" ? "1px solid var(--interactive-base)" : "1px solid var(--border-base)",
+                  }}
+                >
+                  Global
+                </button>
+                <button
+                  type="button"
+                  onClick={() => props.setScope("project")}
+                  disabled={!props.hasProject}
+                  class="flex-1 px-3 py-1.5 rounded-md text-sm font-medium transition-colors disabled:opacity-40"
+                  style={{
+                    background: props.scope() === "project" ? "var(--interactive-base)" : "var(--surface-inset)",
+                    color: props.scope() === "project" ? "white" : "var(--text-base)",
+                    border: props.scope() === "project" ? "1px solid var(--interactive-base)" : "1px solid var(--border-base)",
+                  }}
+                >
+                  Project
+                </button>
+              </div>
+              <p class="text-xs mt-1.5" style={{ color: "var(--text-weak)" }}>
+                {props.scope() === "project"
+                  ? "This prompt will only appear in the current project."
+                  : "This prompt will be available in all projects."}
+              </p>
             </div>
           </div>
           <div
