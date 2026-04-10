@@ -50,8 +50,11 @@ RUN curl -fsSL https://bun.sh/install | bash -s "bun-v${BUN_VERSION}" && \
     rm -rf /root/.bun
 
 # Install OpenCode CLI
+# Pin version to ensure reproducible builds. Update by changing OPENCODE_VERSION.
+# Check releases at: https://github.com/anomalyco/opencode/releases
+ARG OPENCODE_VERSION=1.2.6
 ENV SHELL=/bin/bash
-RUN curl -fsSL https://opencode.ai/install | bash && \
+RUN curl -fsSL https://opencode.ai/install | bash -s -- --version "${OPENCODE_VERSION}" && \
     mv /root/.opencode/bin/opencode /usr/local/bin/opencode && \
     rm -rf /root/.opencode
 
