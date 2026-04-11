@@ -602,7 +602,7 @@ Add your project-specific instructions here.
     setEditingPromptId(null)
     setPromptTitle("")
     setPromptText("")
-    setPromptScope(directory ? "project" : "global")
+    setPromptScope(savedPrompts.hasProject() ? "project" : "global")
     setPromptDialogOpen(true)
   }
 
@@ -2316,7 +2316,7 @@ Add your project-specific instructions here.
           setText={setPromptText}
           scope={promptScope}
           setScope={setPromptScope}
-          hasProject={!!directory}
+          hasProject={savedPrompts.hasProject()}
           onSave={savePromptDialog}
           onClose={() => setPromptDialogOpen(false)}
         />

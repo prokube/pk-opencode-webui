@@ -261,7 +261,11 @@ export function SavedPromptsProvider(props: ParentProps & { directory?: Accessor
         saveToStorage(k, updated)
         return updated
       })
-      addGlobal({ ...project, scope: "global" as const })
+      setGlobalPrompts((prev) => {
+        const updated = [{ ...project, scope: "global" as const }, ...prev.filter((p) => p.id !== id)]
+        saveToStorage(GLOBAL_KEY, updated)
+        return updated
+      })
       return
     }
 
@@ -278,7 +282,7 @@ export function SavedPromptsProvider(props: ParentProps & { directory?: Accessor
       return updated
     })
     setProjectPrompts((prev) => {
-      const updated = [{ ...global, scope: "project" as const }, ...prev]
+      const updated = [{ ...global, scope: "project" as const }, ...prev.filter((p) => p.id !== id)]
       saveToStorage(k, updated)
       return updated
     })

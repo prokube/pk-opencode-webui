@@ -241,7 +241,7 @@ export function Session() {
   const [showSavePrompt, setShowSavePrompt] = createSignal(false);
   const [savePromptTitle, setSavePromptTitle] = createSignal("");
   const [savePromptBody, setSavePromptBody] = createSignal("");
-  const [savePromptScope, setSavePromptScope] = createSignal<PromptScope>(directory ? "project" : "global");
+  const [savePromptScope, setSavePromptScope] = createSignal<PromptScope>(savedPrompts.hasProject() ? "project" : "global");
 
   const [fileContext, setFileContext] = createSignal<FileContext[]>([]);
   const [imageAttachments, setImageAttachments] = createSignal<
@@ -2083,7 +2083,7 @@ export function Session() {
                           if (!text) return;
                           setSavePromptTitle(text.slice(0, 30));
                           setSavePromptBody(text);
-                          setSavePromptScope(directory ? "project" : "global");
+                          setSavePromptScope(savedPrompts.hasProject() ? "project" : "global");
                           setShowSavePrompt(true);
                         }}
                         class="p-1.5 rounded transition-colors"
@@ -2310,7 +2310,7 @@ export function Session() {
             setTitle={setSavePromptTitle}
             scope={savePromptScope}
             setScope={setSavePromptScope}
-            hasProject={!!directory}
+            hasProject={savedPrompts.hasProject()}
             onSave={() => {
               const title = savePromptTitle().trim();
               const body = savePromptBody();
