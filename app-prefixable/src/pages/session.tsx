@@ -159,6 +159,7 @@ export function Session() {
   const [loading, setLoading] = createSignal(false);
   const [processing, setProcessing] = createSignal(false);
   const [loadingHistory, setLoadingHistory] = createSignal(false);
+
   // Find the Nth-from-last user message (1-indexed: 1 = last, 2 = second-to-last)
   function getNthLastUserMsg(msgs: DisplayMessage[], n: number) {
     let count = 0;
