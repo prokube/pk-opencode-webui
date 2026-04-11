@@ -21,7 +21,7 @@ import { useMCP } from "../context/mcp";
 import { usePermission } from "../context/permission";
 import { useLayout } from "../context/layout";
 import { useBranding } from "../context/branding";
-import { useSavedPrompts } from "../context/saved-prompts";
+import { useSavedPrompts, type PromptScope } from "../context/saved-prompts";
 import { useTerminal } from "../context/terminal";
 import { useConfig } from "../context/config";
 import { MessageTimeline } from "../components/message-timeline";
@@ -98,6 +98,8 @@ export function Session() {
   const terminal = useTerminal();
   const appConfig = useConfig();
 
+  const [sessionId, setSessionId] = createSignal(params.id);
+
   // Per-session model: reads from providers.sessionModels, falls back to global default
   const sessionModel = createMemo(() => {
     const id = sessionId();
@@ -147,6 +149,7 @@ export function Session() {
       id: p.id,
       title: p.title,
       description: p.text.length > 80 ? p.text.slice(0, 80) + "..." : p.text,
+      group: p.scope === "project" ? "Project" : "Global",
     })),
   );
 
@@ -157,7 +160,6 @@ export function Session() {
   const [loading, setLoading] = createSignal(false);
   const [processing, setProcessing] = createSignal(false);
   const [loadingHistory, setLoadingHistory] = createSignal(false);
-  const [sessionId, setSessionId] = createSignal(params.id);
 
   // Find the Nth-from-last user message (1-indexed: 1 = last, 2 = second-to-last)
   function getNthLastUserMsg(msgs: DisplayMessage[], n: number) {
@@ -240,6 +242,7 @@ export function Session() {
   const [showSavePrompt, setShowSavePrompt] = createSignal(false);
   const [savePromptTitle, setSavePromptTitle] = createSignal("");
   const [savePromptBody, setSavePromptBody] = createSignal("");
+  const [savePromptScope, setSavePromptScope] = createSignal<PromptScope>(savedPrompts.hasProject() ? "project" : "global");
 
   const [fileContext, setFileContext] = createSignal<FileContext[]>([]);
   const [imageAttachments, setImageAttachments] = createSignal<
@@ -1696,11 +1699,22 @@ export function Session() {
                         e.currentTarget.style.background = "var(--background-base)";
                       }}
                     >
-                      <div
-                        class="text-sm font-medium truncate"
-                        style={{ color: "var(--text-strong)" }}
-                      >
-                        {prompt.title}
+                      <div class="flex items-center gap-2">
+                        <div
+                          class="text-sm font-medium truncate"
+                          style={{ color: "var(--text-strong)" }}
+                        >
+                          {prompt.title}
+                        </div>
+                        <span
+                          class="text-[10px] px-1.5 py-0.5 rounded shrink-0"
+                          style={{
+                            background: "var(--surface-inset)",
+                            color: "var(--text-weak)",
+                          }}
+                        >
+                          {prompt.scope === "project" ? "Project" : "Global"}
+                        </span>
                       </div>
                       <div
                         class="text-xs mt-1 line-clamp-2"
@@ -2070,6 +2084,7 @@ export function Session() {
                           if (!text) return;
                           setSavePromptTitle(text.slice(0, 30));
                           setSavePromptBody(text);
+                          setSavePromptScope(savedPrompts.hasProject() ? "project" : "global");
                           setShowSavePrompt(true);
                         }}
                         class="p-1.5 rounded transition-colors"
@@ -2294,11 +2309,14 @@ export function Session() {
           <SavePromptDialog
             title={savePromptTitle}
             setTitle={setSavePromptTitle}
+            scope={savePromptScope}
+            setScope={setSavePromptScope}
+            hasProject={savedPrompts.hasProject()}
             onSave={() => {
               const title = savePromptTitle().trim();
               const body = savePromptBody();
               if (!title || !body) return;
-              savedPrompts.add(title, body);
+              savedPrompts.add(title, body, savePromptScope());
               setShowSavePrompt(false);
               showToast("Prompt saved");
             }}
@@ -2391,6 +2409,9 @@ export function Session() {
 function SavePromptDialog(props: {
   title: () => string
   setTitle: (v: string) => void
+  scope: () => PromptScope
+  setScope: (v: PromptScope) => void
+  hasProject: boolean
   onSave: () => void
   onClose: () => void
 }) {
@@ -2498,6 +2519,43 @@ function SavePromptDialog(props: {
             <p class="text-xs" style={{ color: "var(--text-weak)" }}>
               The current input text will be saved as the prompt body.
             </p>
+            <div>
+              <label
+                class="block text-xs font-medium mb-1"
+                style={{ color: "var(--text-base)" }}
+              >
+                Scope
+              </label>
+              <div class="flex gap-2" role="group" aria-label="Prompt scope">
+                <button
+                  type="button"
+                  onClick={() => props.setScope("global")}
+                  aria-pressed={props.scope() === "global"}
+                  class="flex-1 px-2.5 py-1 rounded-md text-xs font-medium transition-colors"
+                  style={{
+                    background: props.scope() === "global" ? "var(--interactive-base)" : "var(--surface-inset)",
+                    color: props.scope() === "global" ? "white" : "var(--text-base)",
+                    border: props.scope() === "global" ? "1px solid var(--interactive-base)" : "1px solid var(--border-base)",
+                  }}
+                >
+                  Global
+                </button>
+                <button
+                  type="button"
+                  onClick={() => props.setScope("project")}
+                  disabled={!props.hasProject}
+                  aria-pressed={props.scope() === "project"}
+                  class="flex-1 px-2.5 py-1 rounded-md text-xs font-medium transition-colors disabled:opacity-40"
+                  style={{
+                    background: props.scope() === "project" ? "var(--interactive-base)" : "var(--surface-inset)",
+                    color: props.scope() === "project" ? "white" : "var(--text-base)",
+                    border: props.scope() === "project" ? "1px solid var(--interactive-base)" : "1px solid var(--border-base)",
+                  }}
+                >
+                  Project
+                </button>
+              </div>
+            </div>
           </div>
           <div
             class="px-4 py-3 flex justify-end gap-2"
@@ -2534,4 +2592,3 @@ function SavePromptDialog(props: {
     </Portal>
   );
 }
-
