@@ -189,6 +189,12 @@ export function Settings() {
     })
   })
 
+  const settingsRenderError = createMemo(() => {
+    const message = providers.providerError || config.error()
+    if (!message) return null
+    return new Error(message)
+  })
+
   async function retrySettingsSection() {
     await Promise.allSettled([providers.refetch(), config.refresh()])
   }
@@ -790,6 +796,11 @@ Add your project-specific instructions here.
       <div class="flex-1 overflow-y-auto">
         <div class="max-w-2xl p-6 space-y-6">
           <ErrorBoundary fallback={(err, reset) => <SectionErrorFallback error={err} reset={reset} onRetry={retrySettingsSection} />}>
+          {(() => {
+            const err = settingsRenderError()
+            if (!err) return null
+            throw err
+          })()}
           {/* Project header banner */}
           <Show when={directory}>
             <div
