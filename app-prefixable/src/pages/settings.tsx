@@ -624,11 +624,14 @@ Add your project-specific instructions here.
     if (editing) {
       const existing = savedPrompts.prompts().find((p) => p.id === editing)
       if (existing && existing.scope !== promptScope()) {
-        // Scope changed — remove from old store and add to new one
-        savedPrompts.remove(editing)
-        savedPrompts.add(title, text, promptScope())
-      } else {
+        // Scope changed — move across stores while preserving id/createdAt
+        savedPrompts.move(editing, promptScope())
+      }
+      if (existing && (existing.title !== title || existing.text !== text)) {
         savedPrompts.update(editing, { title, text })
+      }
+      if (!existing) {
+        savedPrompts.add(title, text, promptScope())
       }
     } else {
       savedPrompts.add(title, text, promptScope())
@@ -3247,10 +3250,11 @@ function PromptDialog(props: {
               <label class="block text-sm font-medium mb-1.5" style={{ color: "var(--text-base)" }}>
                 Scope
               </label>
-              <div class="flex gap-2">
+              <div class="flex gap-2" role="group" aria-label="Prompt scope">
                 <button
                   type="button"
                   onClick={() => props.setScope("global")}
+                  aria-pressed={props.scope() === "global"}
                   class="flex-1 px-3 py-1.5 rounded-md text-sm font-medium transition-colors"
                   style={{
                     background: props.scope() === "global" ? "var(--interactive-base)" : "var(--surface-inset)",
@@ -3264,6 +3268,7 @@ function PromptDialog(props: {
                   type="button"
                   onClick={() => props.setScope("project")}
                   disabled={!props.hasProject}
+                  aria-pressed={props.scope() === "project"}
                   class="flex-1 px-3 py-1.5 rounded-md text-sm font-medium transition-colors disabled:opacity-40"
                   style={{
                     background: props.scope() === "project" ? "var(--interactive-base)" : "var(--surface-inset)",

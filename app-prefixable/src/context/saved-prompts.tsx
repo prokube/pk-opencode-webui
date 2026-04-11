@@ -30,6 +30,7 @@ interface SavedPromptsContextValue {
   /** Whether there is an active project directory. */
   hasProject: () => boolean
   add: (title: string, text: string, scope?: PromptScope) => void
+  move: (id: string, scope: PromptScope) => void
   update: (id: string, fields: Partial<Pick<SavedPrompt, "title" | "text">>) => void
   remove: (id: string) => void
   reorder: (ids: string[]) => void
@@ -249,6 +250,40 @@ export function SavedPromptsProvider(props: ParentProps & { directory?: Accessor
     })
   }
 
+  function move(id: string, scope: PromptScope) {
+    const project = projectPrompts().find((p) => p.id === id)
+    if (project) {
+      if (scope === "project") return
+      const k = pKey()
+      if (!k) return
+      setProjectPrompts((prev) => {
+        const updated = prev.filter((p) => p.id !== id)
+        saveToStorage(k, updated)
+        return updated
+      })
+      addGlobal({ ...project, scope: "global" as const })
+      return
+    }
+
+    const global = globalPrompts().find((p) => p.id === id)
+    if (!global) return
+    if (scope === "global") return
+
+    const k = pKey()
+    if (!k) return
+
+    setGlobalPrompts((prev) => {
+      const updated = prev.filter((p) => p.id !== id)
+      saveToStorage(GLOBAL_KEY, updated)
+      return updated
+    })
+    setProjectPrompts((prev) => {
+      const updated = [{ ...global, scope: "project" as const }, ...prev]
+      saveToStorage(k, updated)
+      return updated
+    })
+  }
+
   function update(id: string, fields: Partial<Pick<SavedPrompt, "title" | "text">>) {
     // Find which store the prompt belongs to
     if (projectPrompts().some((p) => p.id === id)) {
@@ -288,21 +323,38 @@ export function SavedPromptsProvider(props: ParentProps & { directory?: Accessor
   }
 
   function reorder(ids: string[]) {
-    // Reorder only applies to the merged view — split back by scope and persist
+    // Reorder only applies to visible merged prompts.
+    // Persist per-store ordering without dropping hidden duplicate entries.
     const merged = allPrompts()
     const map = new Map(merged.map((p) => [p.id, p]))
     const reordered = ids.map((id) => map.get(id)).filter(isPrompt)
     const remaining = merged.filter((p) => !ids.includes(p.id))
-    const all = [...reordered, ...remaining]
+    const visible = [...reordered, ...remaining]
+    const rank = new Map(visible.map((p, i) => [p.id, i]))
 
-    const newGlobal = all.filter((p) => p.scope === "global")
-    const newProject = all.filter((p) => p.scope === "project")
+    const reorderStore = (items: SavedPrompt[]) => {
+      const indexed = items.map((p, i) => ({ p, i }))
+      indexed.sort((a, b) => {
+        const ar = rank.get(a.p.id)
+        const br = rank.get(b.p.id)
+        if (ar !== undefined && br !== undefined) {
+          if (ar !== br) return ar - br
+          return a.i - b.i
+        }
+        if (ar !== undefined) return -1
+        if (br !== undefined) return 1
+        return a.i - b.i
+      })
+      return indexed.map((x) => x.p)
+    }
 
+    const newGlobal = reorderStore(globalPrompts())
     setGlobalPrompts(newGlobal)
     saveToStorage(GLOBAL_KEY, newGlobal)
 
     const k = pKey()
     if (k) {
+      const newProject = reorderStore(projectPrompts())
       setProjectPrompts(newProject)
       saveToStorage(k, newProject)
     }
@@ -316,6 +368,7 @@ export function SavedPromptsProvider(props: ParentProps & { directory?: Accessor
         projectPrompts,
         hasProject: () => !!dir(),
         add,
+        move,
         update,
         remove,
         reorder,

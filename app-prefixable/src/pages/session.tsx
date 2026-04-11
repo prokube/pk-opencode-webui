@@ -2525,10 +2525,11 @@ function SavePromptDialog(props: {
               >
                 Scope
               </label>
-              <div class="flex gap-2">
+              <div class="flex gap-2" role="group" aria-label="Prompt scope">
                 <button
                   type="button"
                   onClick={() => props.setScope("global")}
+                  aria-pressed={props.scope() === "global"}
                   class="flex-1 px-2.5 py-1 rounded-md text-xs font-medium transition-colors"
                   style={{
                     background: props.scope() === "global" ? "var(--interactive-base)" : "var(--surface-inset)",
@@ -2542,6 +2543,7 @@ function SavePromptDialog(props: {
                   type="button"
                   onClick={() => props.setScope("project")}
                   disabled={!props.hasProject}
+                  aria-pressed={props.scope() === "project"}
                   class="flex-1 px-2.5 py-1 rounded-md text-xs font-medium transition-colors disabled:opacity-40"
                   style={{
                     background: props.scope() === "project" ? "var(--interactive-base)" : "var(--surface-inset)",
@@ -2589,4 +2591,3 @@ function SavePromptDialog(props: {
     </Portal>
   );
 }
-
