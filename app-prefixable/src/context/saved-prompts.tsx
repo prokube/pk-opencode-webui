@@ -81,11 +81,10 @@ function saveToStorage(key: string, prompts: SavedPrompt[]) {
 const sortNewest = (a: SavedPrompt, b: SavedPrompt) => b.createdAt - a.createdAt
 
 /**
- * One-time migration: if the project key doesn't exist yet but the global key
- * does, copy old global prompts so they appear under the project (as they did
- * in the previous single-key implementation).  This is non-destructive.
+ * Migration helper that backfills missing `scope` tags in both stores.
  *
- * Also tag any un-tagged prompts with the correct scope field.
+ * We intentionally keep legacy prompts in the global store and do not copy
+ * them into project storage.
  */
 function migrateIfNeeded(directory: string) {
   try {
@@ -104,10 +103,7 @@ function migrateIfNeeded(directory: string) {
         }
         if (needsWrite) localStorage.setItem(pKey, JSON.stringify(parsed))
       }
-      return
     }
-    // No project key — nothing to migrate for project-scoped prompts
-    // (old prompts in legacy key become global automatically via loadFromStorage)
   } catch {
     // Ignore storage errors during migration
   }
@@ -143,6 +139,10 @@ function mergePrompts(global: SavedPrompt[], project: SavedPrompt[]): SavedPromp
   const projectIds = new Set(project.map((p) => p.id))
   const dedupedGlobal = global.filter((p) => !projectIds.has(p.id))
   return [...dedupedGlobal, ...project].sort(sortNewest)
+}
+
+function isPrompt(p: SavedPrompt | undefined): p is SavedPrompt {
+  return p !== undefined
 }
 
 export function SavedPromptsProvider(props: ParentProps & { directory?: Accessor<string | undefined> }) {
@@ -192,8 +192,9 @@ export function SavedPromptsProvider(props: ParentProps & { directory?: Accessor
   const [globalPrompts, setGlobalPrompts] = createSignal<SavedPrompt[]>(
     loadFromStorage(GLOBAL_KEY, "global").sort(sortNewest),
   )
+  const initialPKey = pKey()
   const [projectPrompts, setProjectPrompts] = createSignal<SavedPrompt[]>(
-    pKey() ? loadFromStorage(pKey()!, "project").sort(sortNewest) : [],
+    initialPKey ? loadFromStorage(initialPKey, "project").sort(sortNewest) : [],
   )
 
   // Merged view: global + project (deduplicated)
@@ -290,7 +291,7 @@ export function SavedPromptsProvider(props: ParentProps & { directory?: Accessor
     // Reorder only applies to the merged view — split back by scope and persist
     const merged = allPrompts()
     const map = new Map(merged.map((p) => [p.id, p]))
-    const reordered = ids.map((id) => map.get(id)).filter(Boolean) as SavedPrompt[]
+    const reordered = ids.map((id) => map.get(id)).filter(isPrompt)
     const remaining = merged.filter((p) => !ids.includes(p.id))
     const all = [...reordered, ...remaining]
 
