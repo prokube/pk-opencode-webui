@@ -92,6 +92,7 @@ export function ConfigProvider(props: ParentProps) {
       const data = res.data
       if (data && !isValidConfig(data)) {
         console.error("[Config] Unexpected project update response shape:", data)
+        setError("Failed to save project configuration")
         return null
       }
       if (isValidConfig(data)) {
@@ -121,6 +122,7 @@ export function ConfigProvider(props: ParentProps) {
       const data = res.data
       if (data && !isValidConfig(data)) {
         console.error("[Config] Unexpected global update response shape:", data)
+        setError("Failed to save global configuration")
         return null
       }
       if (isValidConfig(data)) {

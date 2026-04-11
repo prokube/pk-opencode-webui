@@ -47,8 +47,11 @@ function SectionErrorFallback(props: { error: unknown; reset: () => void; onRetr
       </div>
       <button
         onClick={async () => {
-          if (props.onRetry) await props.onRetry()
-          props.reset()
+          try {
+            if (props.onRetry) await props.onRetry()
+          } finally {
+            props.reset()
+          }
         }}
         class="px-3 py-1.5 rounded-md text-xs font-medium transition-colors"
         style={{

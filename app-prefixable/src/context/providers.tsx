@@ -439,12 +439,10 @@ export function ProviderProvider(props: ParentProps) {
 
   const value: ProviderContextValue = {
     get providers() {
-      if (providerData.error) throw providerData.error
       const disabled = cfg.global.disabled_providers ?? []
       return (providerData()?.all ?? []).filter((p) => !disabled.includes(p.id))
     },
     get connected() {
-      if (providerData.error) throw providerData.error
       const disabled = cfg.global.disabled_providers ?? []
       return (providerData()?.connected ?? []).filter((id) => !disabled.includes(id))
     },
