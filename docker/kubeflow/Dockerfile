@@ -50,7 +50,9 @@ RUN curl -fsSL https://bun.sh/install | bash -s "bun-v${BUN_VERSION}" && \
     rm -rf /root/.bun
 
 # Install OpenCode CLI
-# Pin version to ensure reproducible builds. Update by changing OPENCODE_VERSION.
+# Pin version to ensure reproducible builds.
+# NOTE: CI overrides this default with `--build-arg OPENCODE_VERSION=...` in
+# `.github/workflows/pk-opencode.yml`, so upgrades must keep both values in sync.
 # Check releases at: https://github.com/anomalyco/opencode/releases
 ARG OPENCODE_VERSION=1.2.6
 ENV SHELL=/bin/bash
