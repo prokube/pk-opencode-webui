@@ -396,7 +396,7 @@ export function ProviderProvider(props: ParentProps) {
       // Dispose instance to reload provider state, then wait for the
       // server to reinitialize and provider state to be observable.
       await client.instance.dispose()
-      return refetchProvidersWithRetry(providerID)
+      return await refetchProvidersWithRetry(providerID)
     } catch (e) {
       console.error("Failed to connect provider:", e)
       return false
@@ -426,7 +426,7 @@ export function ProviderProvider(props: ParentProps) {
       // Dispose instance to reload provider state, then wait for the
       // server to reinitialize and provider state to be observable.
       await client.instance.dispose()
-      return refetchProvidersWithRetry(providerID)
+      return await refetchProvidersWithRetry(providerID)
     } catch (e) {
       console.error("Failed to complete OAuth:", e)
       return false
