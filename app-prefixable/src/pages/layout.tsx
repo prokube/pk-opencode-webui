@@ -55,7 +55,7 @@ import {
 import { useSync } from "../context/sync";
 import { usePermission } from "../context/permission";
 import { useGlobalEvents } from "../context/global-events";
-import { useSavedPrompts } from "../context/saved-prompts";
+import { useSavedPrompts, type PromptScope } from "../context/saved-prompts";
 import { useCommand, isDialogOpen } from "../context/command";
 import { ResizeHandle } from "../components/resize-handle";
 import { ConfirmDialog } from "../components/confirm-dialog";
@@ -122,7 +122,7 @@ export function groupSessionsByDate(
 }
 
 function PromptDropdown(props: {
-  prompts: { id: string; title: string; text: string }[];
+  prompts: { id: string; title: string; text: string; scope: PromptScope }[];
   activeIndex: number;
   onSelect: (text: string) => void;
   onClose: () => void;
@@ -188,7 +188,7 @@ function PromptDropdown(props: {
         <For each={props.prompts}>
           {(prompt, i) => (
             <button
-              class="w-full text-left px-3 py-2 text-sm transition-colors truncate"
+              class="w-full text-left px-3 py-2 text-sm transition-colors flex items-center gap-2"
               style={{
                 background: i() === props.activeIndex ? "var(--surface-inset)" : "transparent",
                 color: i() === props.activeIndex ? "var(--text-interactive-base)" : "var(--text-base)",
@@ -198,7 +198,16 @@ function PromptDropdown(props: {
               onMouseEnter={() => props.onIndexChange(i())}
               onClick={() => props.onSelect(prompt.text)}
             >
-              {prompt.title}
+              <span class="truncate">{prompt.title}</span>
+              <span
+                class="text-[10px] px-1 py-0.5 rounded shrink-0 ml-auto"
+                style={{
+                  background: i() === props.activeIndex ? "rgba(255,255,255,0.15)" : "var(--surface-inset)",
+                  color: i() === props.activeIndex ? "var(--text-interactive-base)" : "var(--text-weak)",
+                }}
+              >
+                {prompt.scope === "project" ? "Project" : "Global"}
+              </span>
             </button>
           )}
         </For>
