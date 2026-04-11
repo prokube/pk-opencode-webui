@@ -79,6 +79,7 @@ interface ProviderContextValue {
   providers: Provider[]
   connected: string[]
   defaults: Record<string, string>
+  providerError: string | null
   authMethods: Record<string, ProviderAuthMethod[]>
   agents: Agent[]
   loading: boolean
@@ -89,7 +90,7 @@ interface ProviderContextValue {
   setSelectedAgent: (agent: string) => void
   getSessionModel: (sessionID: string) => ModelKey | null
   setSessionModel: (sessionID: string, model: ModelKey | null) => void
-  refetch: () => void
+  refetch: () => Promise<void>
   connectProvider: (providerID: string, apiKey: string) => Promise<boolean>
   startOAuth: (providerID: string, methodIndex: number) => Promise<OAuthAuthorization | undefined>
   completeOAuth: (providerID: string, methodIndex: number, code?: string) => Promise<boolean>
@@ -159,33 +160,106 @@ export function ProviderProvider(props: ParentProps) {
     }
   })
 
-  // Validate that a response has the expected ProviderListData shape
-  function isValidProviderListData(data: unknown): data is ProviderListData {
-    if (!data || typeof data !== "object") return false
-    const d = data as Record<string, unknown>
-    return Array.isArray(d.all) && Array.isArray(d.connected)
+  function isRecord(value: unknown): value is Record<string, unknown> {
+    return !!value && typeof value === "object" && !Array.isArray(value)
+  }
+
+  function normalizeModel(providerID: string, modelID: string, model: unknown): Model {
+    if (!isRecord(model)) {
+      throw new Error(`[Providers] Provider "${providerID}" model "${modelID}" must be an object`)
+    }
+    const name = typeof model.name === "string" && model.name ? model.name : modelID
+    const rawLimit = model.limit
+    const limit = isRecord(rawLimit) ? rawLimit : {}
+    return {
+      ...(model as Omit<Model, "id" | "name" | "limit" | "providerID">),
+      id: typeof model.id === "string" && model.id ? model.id : modelID,
+      name,
+      providerID,
+      limit: {
+        context: typeof limit.context === "number" ? limit.context : 0,
+        input: typeof limit.input === "number" ? limit.input : undefined,
+        output: typeof limit.output === "number" ? limit.output : 0,
+      },
+    }
+  }
+
+  function normalizeProviderListData(data: unknown): ProviderListData {
+    if (!isRecord(data)) {
+      throw new Error("[Providers] Provider list response must be an object")
+    }
+    if (!Array.isArray(data.all)) {
+      throw new Error("[Providers] Provider list field \"all\" must be an array")
+    }
+    if (!Array.isArray(data.connected)) {
+      throw new Error("[Providers] Provider list field \"connected\" must be an array")
+    }
+    if (data.default !== undefined && !isRecord(data.default)) {
+      throw new Error("[Providers] Provider list field \"default\" must be an object")
+    }
+
+    const all = data.all.map((entry, i) => {
+      if (!isRecord(entry)) {
+        throw new Error(`[Providers] Provider entry at index ${i} must be an object`)
+      }
+      if (typeof entry.id !== "string" || !entry.id) {
+        throw new Error(`[Providers] Provider entry at index ${i} is missing a string \"id\"`)
+      }
+      if (typeof entry.name !== "string" || !entry.name) {
+        throw new Error(`[Providers] Provider \"${entry.id}\" is missing a string \"name\"`)
+      }
+
+      const rawModels = entry.models
+      if (rawModels === undefined || rawModels === null) {
+        return { ...(entry as Provider), id: entry.id, name: entry.name, models: {} }
+      }
+      if (!isRecord(rawModels)) {
+        throw new Error(`[Providers] Provider \"${entry.id}\" field \"models\" must be an object`)
+      }
+      const models = Object.fromEntries(
+        Object.entries(rawModels).map(([modelID, model]) => [modelID, normalizeModel(entry.id, modelID, model)])
+      )
+      return { ...(entry as Provider), id: entry.id, name: entry.name, models }
+    })
+
+    const connected = data.connected.map((id, i) => {
+      if (typeof id !== "string" || !id) {
+        throw new Error(`[Providers] Connected provider at index ${i} must be a string`)
+      }
+      return id
+    })
+
+    const defaults = Object.fromEntries(
+      Object.entries(data.default ?? {}).map(([k, v]) => {
+        if (typeof v !== "string") {
+          throw new Error(`[Providers] Default model for provider \"${k}\" must be a string`)
+        }
+        return [k, v]
+      })
+    )
+
+    return { all, connected, default: defaults }
+  }
+
+  async function refetchProvidersWithRetry(providerID: string): Promise<boolean> {
+    const delays = [0, 150, 300, 600, 1200]
+    for (const delay of delays) {
+      if (delay > 0) await new Promise((resolve) => setTimeout(resolve, delay))
+      const data = await refetchProviders()
+      if (data?.connected.includes(providerID)) return true
+    }
+    return false
   }
 
   // Fetch providers
   const [providerData, { refetch: refetchProviders }] = createResource(async () => {
     try {
       const res = await client.provider.list()
-      const data = res.data
-      if (!isValidProviderListData(data)) {
-        console.error("[Providers] Invalid provider list response shape:", data)
-        return undefined
-      }
-      // Inject providerID into each model since the SDK response doesn't include it
-      const all = data.all.map((provider) => ({
-        ...provider,
-        models: Object.fromEntries(
-          Object.entries(provider.models ?? {}).map(([k, m]) => [k, { ...m, providerID: provider.id }])
-        ),
-      }))
-      return { ...data, all }
+      return normalizeProviderListData(res.data)
     } catch (e) {
       console.error("Failed to fetch providers:", e)
-      return undefined
+      const msg = e instanceof Error ? e.message : "Failed to fetch providers"
+      throw new Error(msg)
     }
   })
 
@@ -320,11 +394,9 @@ export function ProviderProvider(props: ParentProps) {
         auth: { type: "api", key: apiKey },
       })
       // Dispose instance to reload provider state, then wait for the
-      // server to reinitialize before refetching the provider list.
+      // server to reinitialize and provider state to be observable.
       await client.instance.dispose()
-      await new Promise((resolve) => setTimeout(resolve, 500))
-      await refetchProviders()
-      return true
+      return refetchProvidersWithRetry(providerID)
     } catch (e) {
       console.error("Failed to connect provider:", e)
       return false
@@ -352,33 +424,37 @@ export function ProviderProvider(props: ParentProps) {
         code,
       })
       // Dispose instance to reload provider state, then wait for the
-      // server to reinitialize before refetching the provider list.
+      // server to reinitialize and provider state to be observable.
       await client.instance.dispose()
-      await new Promise((resolve) => setTimeout(resolve, 500))
-      await refetchProviders()
-      return true
+      return refetchProvidersWithRetry(providerID)
     } catch (e) {
       console.error("Failed to complete OAuth:", e)
       return false
     }
   }
 
-  function refetch() {
-    refetchProviders()
-    refetchAgents()
+  async function refetch() {
+    await Promise.all([refetchProviders(), refetchAgents()])
   }
 
   const value: ProviderContextValue = {
     get providers() {
+      if (providerData.error) throw providerData.error
       const disabled = cfg.global.disabled_providers ?? []
       return (providerData()?.all ?? []).filter((p) => !disabled.includes(p.id))
     },
     get connected() {
+      if (providerData.error) throw providerData.error
       const disabled = cfg.global.disabled_providers ?? []
       return (providerData()?.connected ?? []).filter((id) => !disabled.includes(id))
     },
     get defaults() {
       return providerData()?.default ?? {}
+    },
+    get providerError() {
+      const err = providerData.error
+      if (!err) return null
+      return err instanceof Error ? err.message : String(err)
     },
     get authMethods() {
       return authData() ?? {}

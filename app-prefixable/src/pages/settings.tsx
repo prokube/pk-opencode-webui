@@ -18,7 +18,16 @@ import { ServerDialog } from "../components/server-dialog"
 import { writeFile } from "../utils/extended-api"
 import type { Config, PermissionActionConfig } from "../sdk/client"
 
-function SectionErrorFallback(props: { error: Error; reset: () => void }) {
+function getThrowableMessage(error: unknown): string {
+  if (error instanceof Error && error.message) return error.message
+  if (typeof error === "string" && error.trim()) return error
+  if (typeof error === "object" && error && "message" in error && typeof error.message === "string" && error.message.trim()) {
+    return error.message
+  }
+  return "An unexpected error occurred while rendering this section."
+}
+
+function SectionErrorFallback(props: { error: unknown; reset: () => void; onRetry?: () => Promise<void> | void }) {
   return (
     <div
       class="p-4 rounded-lg space-y-3"
@@ -33,11 +42,14 @@ function SectionErrorFallback(props: { error: Error; reset: () => void }) {
           Something went wrong
         </h3>
         <p class="text-xs mt-1" style={{ color: "var(--text-weak)" }}>
-          {props.error.message || "An unexpected error occurred while rendering this section."}
+          {getThrowableMessage(props.error)}
         </p>
       </div>
       <button
-        onClick={props.reset}
+        onClick={async () => {
+          if (props.onRetry) await props.onRetry()
+          props.reset()
+        }}
         class="px-3 py-1.5 rounded-md text-xs font-medium transition-colors"
         style={{
           background: "var(--surface-strong)",
@@ -53,6 +65,7 @@ function SectionErrorFallback(props: { error: Error; reset: () => void }) {
 
 export function Settings() {
   const providers = useProviders()
+  const config = useConfig()
   const mcp = useMCP()
   const { client, global, url, directory } = useSDK()
   const theme = useTheme()
@@ -172,6 +185,10 @@ export function Settings() {
       return a.name.localeCompare(b.name)
     })
   })
+
+  async function retrySettingsSection() {
+    await Promise.allSettled([providers.refetch(), config.refresh()])
+  }
 
   // Load SSH key when Git tab is first accessed
   function onTabChange(tabId: string) {
@@ -769,7 +786,7 @@ Add your project-specific instructions here.
       {/* Content */}
       <div class="flex-1 overflow-y-auto">
         <div class="max-w-2xl p-6 space-y-6">
-          <ErrorBoundary fallback={(err, reset) => <SectionErrorFallback error={err} reset={reset} />}>
+          <ErrorBoundary fallback={(err, reset) => <SectionErrorFallback error={err} reset={reset} onRetry={retrySettingsSection} />}>
           {/* Project header banner */}
           <Show when={directory}>
             <div
