@@ -75,6 +75,16 @@ interface SavedPromptsPayload {
   project: StoredPrompt[]
 }
 
+function validatePromptList(items: unknown[], field: "global" | "project"): StoredPrompt[] {
+  const prompts: StoredPrompt[] = []
+  for (let i = 0; i < items.length; i++) {
+    const item = items[i]
+    if (!isStoredPrompt(item)) throw new Error(`invalid saved prompts response: ${field}[${i}]`)
+    prompts.push(item)
+  }
+  return prompts
+}
+
 function isStoredPrompt(p: unknown): p is StoredPrompt {
   if (!p || typeof p !== "object") return false
   const row = p as Record<string, unknown>
@@ -96,8 +106,8 @@ export async function readSavedPrompts(serverUrl: string, directory?: string): P
   const data = await res.json().catch(() => null)
   if (!data || !Array.isArray(data.global) || !Array.isArray(data.project)) throw new Error("invalid saved prompts response")
   return {
-    global: data.global.filter(isStoredPrompt),
-    project: data.project.filter(isStoredPrompt),
+    global: validatePromptList(data.global, "global"),
+    project: validatePromptList(data.project, "project"),
   }
 }
 

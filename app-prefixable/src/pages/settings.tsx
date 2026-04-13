@@ -53,6 +53,7 @@ export function Settings() {
   const [promptText, setPromptText] = createSignal("")
   const [promptScope, setPromptScope] = createSignal<PromptScope>("global")
   const [promptToDelete, setPromptToDelete] = createSignal<string | null>(null)
+  const [promptSaveError, setPromptSaveError] = createSignal<string | null>(null)
 
   // Sound settings
   const [soundSettings, setSoundSettings] = createSignal<SoundSettings>(readSoundSettings())
@@ -602,6 +603,7 @@ Add your project-specific instructions here.
 
   function openAddPromptDialog() {
     if (savedPrompts.error()) return
+    setPromptSaveError(null)
     setEditingPromptId(null)
     setPromptTitle("")
     setPromptText("")
@@ -612,6 +614,7 @@ Add your project-specific instructions here.
   function openEditPromptDialog(id: string) {
     const prompt = savedPrompts.prompts().find((p) => p.id === id)
     if (!prompt) return
+    setPromptSaveError(null)
     setEditingPromptId(id)
     setPromptTitle(prompt.title)
     setPromptText(prompt.text)
@@ -619,28 +622,50 @@ Add your project-specific instructions here.
     setPromptDialogOpen(true)
   }
 
-  function savePromptDialog() {
+  async function savePromptDialog() {
     if (savedPrompts.error()) return
     const title = promptTitle().trim()
     const text = promptText().trim()
     if (!title || !text) return
+    setPromptSaveError(null)
+
+    const fail = (msg?: string) => {
+      setPromptSaveError(msg || savedPrompts.saveError() || "Failed to save prompts. Please retry.")
+    }
+
     const editing = editingPromptId()
     if (editing) {
       const existing = savedPrompts.prompts().find((p) => p.id === editing)
       if (existing && (existing.title !== title || existing.text !== text)) {
-        savedPrompts.update(editing, { title, text })
+        const ok = await savedPrompts.update(editing, { title, text })
+        if (!ok) {
+          fail()
+          return
+        }
       }
       if (existing && existing.scope !== promptScope()) {
         // Scope changed — move across stores while preserving id/createdAt
         // Update first so text/title changes are retained when moving to
         // a non-active project store.
-        savedPrompts.move(editing, promptScope())
+        const ok = await savedPrompts.move(editing, promptScope())
+        if (!ok) {
+          fail()
+          return
+        }
       }
       if (!existing) {
-        savedPrompts.add(title, text, promptScope())
+        const ok = await savedPrompts.add(title, text, promptScope())
+        if (!ok) {
+          fail()
+          return
+        }
       }
     } else {
-      savedPrompts.add(title, text, promptScope())
+      const ok = await savedPrompts.add(title, text, promptScope())
+      if (!ok) {
+        fail()
+        return
+      }
     }
     setPromptDialogOpen(false)
     setEditingPromptId(null)
@@ -650,10 +675,16 @@ Add your project-specific instructions here.
 
   function confirmPromptDelete() {
     if (savedPrompts.error()) return
+    setPromptSaveError(null)
     const id = promptToDelete()
     if (!id) return
-    savedPrompts.remove(id)
-    setPromptToDelete(null)
+    savedPrompts.remove(id).then((ok) => {
+      if (!ok) {
+        setPromptSaveError(savedPrompts.saveError() || "Failed to delete prompt. Please retry.")
+        return
+      }
+      setPromptToDelete(null)
+    })
   }
 
   // Scope badge type for each tab
@@ -1813,6 +1844,12 @@ Add your project-specific instructions here.
                   </div>
                 </Show>
 
+                <Show when={!savedPrompts.error() && (promptSaveError() || savedPrompts.saveError())}>
+                  <div class="px-4 py-3 text-sm" style={{ color: "var(--interactive-critical)", "border-bottom": "1px solid var(--border-base)" }}>
+                    {promptSaveError() || savedPrompts.saveError()}
+                  </div>
+                </Show>
+
                 <Show when={savedPrompts.loading()}>
                   <div class="p-4">
                     <div class="flex items-center gap-2" style={{ color: "var(--text-weak)" }}>
@@ -2352,6 +2389,7 @@ Add your project-specific instructions here.
           saveDisabled={!!savedPrompts.error()}
           onSave={savePromptDialog}
           onClose={() => setPromptDialogOpen(false)}
+          error={promptSaveError() || savedPrompts.saveError() || null}
         />
       </Show>
 
@@ -3180,8 +3218,9 @@ function PromptDialog(props: {
   canUseProjectScope: boolean
   hasActiveProject: boolean
   saveDisabled: boolean
-  onSave: () => void
+  onSave: () => void | Promise<void>
   onClose: () => void
+  error: string | null
 }) {
   const [container, setContainer] = createSignal<HTMLDivElement>()
   let titleRef: HTMLInputElement | undefined
@@ -3246,6 +3285,19 @@ function PromptDialog(props: {
             </h2>
           </div>
           <div class="p-4 space-y-4">
+            <Show when={props.error}>
+              <div
+                class="px-3 py-2 rounded-md text-sm"
+                style={{
+                  background: "var(--surface-inset)",
+                  border: "1px solid var(--border-base)",
+                  "border-left": "3px solid var(--interactive-critical)",
+                  color: "var(--interactive-critical)",
+                }}
+              >
+                {props.error}
+              </div>
+            </Show>
             <div>
               <label class="block text-sm font-medium mb-1" style={{ color: "var(--text-base)" }}>
                 Title

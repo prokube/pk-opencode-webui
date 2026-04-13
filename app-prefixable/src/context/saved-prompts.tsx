@@ -123,6 +123,29 @@ function mergeUnique(primary: SavedPrompt[], secondary: SavedPrompt[]): SavedPro
   return merged.sort(sortNewest)
 }
 
+function dedupeAcrossScopes(global: SavedPrompt[], project: SavedPrompt[]) {
+  const projectIds = new Set(project.map((p) => p.id))
+  return {
+    global: global.filter((p) => !projectIds.has(p.id)),
+    project,
+  }
+}
+
+function samePrompts(a: SavedPrompt[], b: SavedPrompt[]) {
+  if (a.length !== b.length) return false
+  for (let i = 0; i < a.length; i++) {
+    const x = a[i]
+    const y = b[i]
+    if (!y) return false
+    if (x.id !== y.id) return false
+    if (x.title !== y.title) return false
+    if (x.text !== y.text) return false
+    if (x.createdAt !== y.createdAt) return false
+    if (x.scope !== y.scope) return false
+  }
+  return true
+}
+
 function isPrompt(p: SavedPrompt | undefined): p is SavedPrompt {
   return p !== undefined
 }
@@ -264,9 +287,12 @@ export function SavedPromptsProvider(props: ParentProps & { directory?: Accessor
         if (hasLegacy) {
           const mergedGlobal = mergeUnique(nextGlobal, legacyGlobal)
           const mergedProject = mergeUnique(nextProject, legacyProject)
-          const changed = mergedGlobal.length !== nextGlobal.length || mergedProject.length !== nextProject.length
-          nextGlobal = mergedGlobal
-          nextProject = mergedProject
+          const deduped = dedupeAcrossScopes(mergedGlobal, mergedProject)
+          const changed =
+            !samePrompts(deduped.global, nextGlobal) ||
+            !samePrompts(deduped.project, nextProject)
+          nextGlobal = deduped.global
+          nextProject = deduped.project
           const ok = await writeSavedPrompts(
             basePath.serverUrl,
             d,
@@ -355,7 +381,7 @@ export function SavedPromptsProvider(props: ParentProps & { directory?: Accessor
   function move(id: string, scope: PromptScope) {
     const project = projectPrompts().find((p) => p.id === id)
     if (project) {
-      if (scope === "project") return Promise.resolve(false)
+      if (scope === "project") return Promise.resolve(true)
       if (!targetDirectory()) return Promise.resolve(false)
       return save((state) => ({
         global: [{ ...project, scope: "global" as const }, ...state.global.filter((p) => p.id !== id)],
@@ -365,7 +391,7 @@ export function SavedPromptsProvider(props: ParentProps & { directory?: Accessor
 
     const global = globalPrompts().find((p) => p.id === id)
     if (!global) return Promise.resolve(false)
-    if (scope === "global") return Promise.resolve(false)
+    if (scope === "global") return Promise.resolve(true)
     if (!targetDirectory()) return Promise.resolve(false)
     return save((state) => ({
       global: state.global.filter((p) => p.id !== id),

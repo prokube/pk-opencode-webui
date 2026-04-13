@@ -123,6 +123,16 @@ function sanitizePrompt(p: StoredPrompt, scope: "global" | "project"): StoredPro
   }
 }
 
+async function readPromptScope(path: string, scope: "global" | "project") {
+  try {
+    const prompts = await readPromptFile(path)
+    return { prompts: prompts.map((p) => sanitizePrompt(p, scope)) }
+  } catch (e) {
+    console.error(`[ExtAPI] saved-prompts ${scope} read error:`, e)
+    return { prompts: [] as StoredPrompt[], error: `failed to read ${scope} saved prompts` }
+  }
+}
+
 async function writePromptFile(path: string, prompts: StoredPrompt[]) {
   const parentDir = nodePath.dirname(path)
   await fs.promises.mkdir(parentDir, { recursive: true })
@@ -234,16 +244,30 @@ export async function handleExtendedEndpoint(
     const globalPath = nodePath.join(configDir, "saved-prompts.json")
     const projectPath = validatedDir ? nodePath.join(validatedDir, ".opencode", "saved-prompts.json") : null
 
-    try {
-      const global = (await readPromptFile(globalPath)).map((p) => sanitizePrompt(p, "global"))
-      const project = projectPath
-        ? (await readPromptFile(projectPath)).map((p) => sanitizePrompt(p, "project"))
-        : []
-      return Response.json({ global, project })
-    } catch (e) {
-      console.error("[ExtAPI] saved-prompts read error:", e)
-      return internalError("failed to read saved prompts")
+    const globalResult = await readPromptScope(globalPath, "global")
+    const projectResult = projectPath ? await readPromptScope(projectPath, "project") : { prompts: [] as StoredPrompt[] }
+
+    if (globalResult.error && projectPath && !projectResult.error) {
+      return Response.json({
+        global: globalResult.prompts,
+        project: projectResult.prompts,
+        errors: { global: globalResult.error },
+      })
     }
+
+    if (projectResult.error && !globalResult.error) {
+      return Response.json({
+        global: globalResult.prompts,
+        project: projectResult.prompts,
+        errors: { project: projectResult.error },
+      })
+    }
+
+    if (!globalResult.error && !projectResult.error) {
+      return Response.json({ global: globalResult.prompts, project: projectResult.prompts })
+    }
+
+    return internalError("failed to read saved prompts")
   }
 
   // PUT /api/ext/saved-prompts - Write global + project prompts
