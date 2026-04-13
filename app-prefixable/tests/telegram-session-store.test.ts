@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test"
-import { mkdtemp, rm } from "node:fs/promises"
+import { mkdtemp, readdir, rm } from "node:fs/promises"
 import { join } from "node:path"
 import { tmpdir } from "node:os"
 import { createTelegramSessionStore, telegramSessionKey } from "../../shared/telegram-session-store"
@@ -125,5 +125,9 @@ describe("telegram session store", () => {
     expect(await store.get(key)).toBe("session-recovered")
     expect(await Bun.file(path).exists()).toBe(true)
     expect(await Bun.file(backup).exists()).toBe(false)
+    const stored = JSON.parse(await Bun.file(path).text()) as { sessions?: Record<string, string> }
+    expect(stored.sessions?.[key]).toBe("session-recovered")
+    const leftovers = (await readdir(dir)).filter((entry) => entry.includes("sessions.json.corrupt."))
+    expect(leftovers).toEqual([])
   })
 })

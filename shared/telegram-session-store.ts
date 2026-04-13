@@ -29,11 +29,59 @@ function parseStore(input: string): StoreShape {
   }
 }
 
+function errorCode(error: unknown): string {
+  return error && typeof error === "object" && "code" in error ? String(error.code) : ""
+}
+
+function isReplaceConflict(code: string): boolean {
+  return code === "EEXIST" || code === "EPERM" || code === "ENOTEMPTY" || code === "EACCES"
+}
+
+async function applyBackupStore(path: string, backupPath: string): Promise<boolean> {
+  const direct = await rename(backupPath, path).then(
+    () => true,
+    (error) => {
+      if (isReplaceConflict(errorCode(error))) return false
+      throw error
+    },
+  )
+  if (direct) return true
+
+  const displaced = `${path}.corrupt.${Date.now()}.${Math.random().toString(36).slice(2)}`
+  const moved = await rename(path, displaced).then(
+    () => true,
+    (error) => {
+      const code = errorCode(error)
+      if (code === "ENOENT") return false
+      if (isReplaceConflict(code)) return
+      throw error
+    },
+  )
+  if (moved === undefined) return false
+
+  const applied = await rename(backupPath, path).then(
+    () => true,
+    async (error) => {
+      if (moved) {
+        await rename(displaced, path).catch(() => undefined)
+      }
+      const code = errorCode(error)
+      if (isReplaceConflict(code) || code === "ENOENT") return false
+      throw error
+    },
+  )
+  if (!applied) return false
+  if (moved) {
+    await rm(displaced, { force: true }).catch(() => undefined)
+  }
+  return true
+}
+
 async function readBackupStore(path: string): Promise<StoreShape | undefined> {
   const dir = dirname(path)
   const name = basename(path)
   const entries = await readdir(dir).catch((error) => {
-    const code = error && typeof error === "object" && "code" in error ? String(error.code) : ""
+    const code = errorCode(error)
     if (code === "ENOENT" || code === "ENOTDIR") return []
     throw error
   })
@@ -56,11 +104,8 @@ async function readBackupStore(path: string): Promise<StoreShape | undefined> {
       .catch(() => undefined)
     if (!data) continue
 
-    await rename(backupPath, path).catch((error) => {
-      const code = error && typeof error === "object" && "code" in error ? String(error.code) : ""
-      if (code === "EEXIST" || code === "EPERM" || code === "ENOTEMPTY") return
-      throw error
-    })
+    const applied = await applyBackupStore(path, backupPath)
+    if (!applied) continue
     return data
   }
 
