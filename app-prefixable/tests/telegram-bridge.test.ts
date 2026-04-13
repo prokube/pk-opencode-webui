@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import {
   cacheSession,
   extractReply,
+  joinOpenCodeUrl,
   parseConfig,
   parseMode,
   queueChatUpdate,
@@ -102,6 +103,15 @@ describe("telegram bridge config and cache", () => {
 
     setEnv({ TELEGRAM_BOT_TOKEN: "token", TELEGRAM_MODE: "bad-mode", OPENCODE_API_URL: "http://127.0.0.1:4096" });
     expect(() => parseConfig()).toThrow("Invalid TELEGRAM_MODE");
+  });
+
+  test("joinOpenCodeUrl keeps configured base path with leading slash paths", () => {
+    expect(joinOpenCodeUrl("http://127.0.0.1:4096/notebook/ns/name", "/session").toString()).toBe(
+      "http://127.0.0.1:4096/notebook/ns/name/session",
+    );
+    expect(joinOpenCodeUrl("http://127.0.0.1:4096/proxy/", "/session/abc/message").toString()).toBe(
+      "http://127.0.0.1:4096/proxy/session/abc/message",
+    );
   });
 
   test("extractReply returns fallback text when no text parts exist", () => {

@@ -156,8 +156,16 @@ async function telegramRequest(config: BridgeConfig, method: string, body: Recor
   return retry(`telegram:${method}`, run)
 }
 
+export function joinOpenCodeUrl(openCodeUrl: string, path: string): URL {
+  const url = new URL(openCodeUrl)
+  const basePath = url.pathname.endsWith("/") ? url.pathname : `${url.pathname}/`
+  const nextPath = path.startsWith("/") ? path.slice(1) : path
+  url.pathname = `${basePath}${nextPath}`
+  return url
+}
+
 function opencodeUrl(config: BridgeConfig, path: string): URL {
-  return new URL(path, config.openCodeUrl.endsWith("/") ? config.openCodeUrl : `${config.openCodeUrl}/`)
+  return joinOpenCodeUrl(config.openCodeUrl, path)
 }
 
 async function createSession(config: BridgeConfig): Promise<string> {
