@@ -58,7 +58,7 @@ export async function createSessionWithPrompt(args: {
   text: string;
   agent: string;
   model: ModelKey;
-}): Promise<Session | null> {
+}): Promise<Session> {
   const created = await args.client.session.create({});
   if (!created.data) {
     const text = formatStartError((created as { error?: unknown }).error);

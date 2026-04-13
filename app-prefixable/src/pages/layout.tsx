@@ -1798,7 +1798,8 @@ export function Layout(props: ParentProps) {
       });
       const data = res.data;
       if (!data) {
-        setSessionStartError("Failed to create session: no session data returned.");
+        const msg = formatStartError((res as { error?: unknown }).error);
+        setSessionStartError(`Failed to create session: ${msg}`);
         return;
       }
       if (res.isLeader) {
@@ -1841,10 +1842,6 @@ export function Layout(props: ParentProps) {
         agent: providers.selectedAgent || "build",
         model,
       });
-      if (!res) {
-        setSessionStartError("Failed to create session: no session data returned.");
-        return;
-      }
       setSessions((prev) => [res, ...prev]);
       providers.setSessionModel(res.id, model);
       navigate(`/${dirSlug()}/session/${res.id}`);

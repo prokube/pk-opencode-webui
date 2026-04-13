@@ -381,7 +381,6 @@ export function Session() {
     setShowSlashPopover(false);
     setSlashQuery("");
     setSlashIndex(0);
-    setPromptSent(false); // Reset so pending prompts fire in the new session
     wasProcessing.value = false; // Reset to avoid false notifications
     if (id) {
       // Use sync context to load session data - no local state needed
@@ -428,62 +427,6 @@ export function Session() {
       setProcessing(false);
     }
   }));
-
-  // Auto-send saved prompt stored in sessionStorage by layout's createSessionWithPrompt.
-  // We read from sessionStorage instead of URL params to avoid browser URL length limits.
-  // The stored value is JSON: { text: string, ts: number }.
-  // Guard: the effect may re-run when reactive deps (e.g. providers.connected) update
-  // after the prompt has already been sent. A local signal prevents double sends.
-  const [promptSent, setPromptSent] = createSignal(false);
-  createEffect(() => {
-    if (promptSent()) return;
-    const id = params.id;
-    if (!id) return;
-    const key = `opencode.pendingPrompt.${id}`;
-    const raw = sessionStorage.getItem(key);
-    if (!raw) return;
-    const EXPIRY_MS = 60_000; // 60 seconds
-    const parsed = (() => {
-      try { return JSON.parse(raw) as { text: string; ts: number }; }
-      catch { return null; }
-    })();
-    // Remove malformed or expired entries immediately
-    if (!parsed || !parsed.text || Date.now() - parsed.ts > EXPIRY_MS) {
-      sessionStorage.removeItem(key);
-      return;
-    }
-    const text = parsed.text;
-    // Provider data may not be available yet — the resource fetch is async and
-    // selectedModel is populated from localStorage in an onMount callback that
-    // runs after createEffect. Skip without removing the sessionStorage item so
-    // the effect re-runs once providers finish loading.
-    if (providers.loading || providers.providers.length === 0) return;
-    const model = sessionModel();
-    if (!model) {
-      sessionStorage.removeItem(key);
-      setError("Please select a model before sending messages. Click the model button in the header.");
-      return;
-    }
-    if (!providers.connected.includes(model.providerID)) {
-      sessionStorage.removeItem(key);
-      setError(`Provider "${model.providerID}" is not connected. Please configure it in Settings.`);
-      return;
-    }
-    // All validation passed — mark as sent, clear storage, and send
-    setPromptSent(true);
-    sessionStorage.removeItem(key);
-    setError(null);
-    startProcessing();
-    client.session.promptAsync({
-      sessionID: id,
-      parts: [{ type: "text", text }],
-      agent: providers.selectedAgent || "build",
-      model,
-    }).catch((err: unknown) => {
-      setError(`Failed to send saved prompt: ${formatStartError(err)}`);
-      setProcessing(false);
-    });
-  });
 
   // Get messages from sync context - reactive, automatically updated via SSE
   // Cache the base messages array to avoid recreating on every call
@@ -578,7 +521,8 @@ export function Session() {
             });
             const data = res.data;
             if (!data) {
-              showToast("Failed to create session: no session data returned");
+              const msg = formatStartError((res as { error?: unknown }).error);
+              showToast(`Failed to create session: ${msg}`);
               return;
             }
             console.log("[Command] Created session:", data.id);
@@ -1485,10 +1429,6 @@ export function Session() {
         agent: providers.selectedAgent || "build",
         model,
       });
-      if (!created) {
-        setError("Failed to create session: no session data returned.");
-        return;
-      }
       const sid = created.id;
       setSessionId(sid);
       navigate(`/${dirSlug()}/session/${sid}`, { replace: true });
