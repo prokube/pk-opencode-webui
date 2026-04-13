@@ -58,12 +58,14 @@ export async function createSessionWithPrompt(args: {
   text: string;
   agent: string;
   model: ModelKey;
+  onCreated?: (session: Session) => void | Promise<void>;
 }): Promise<Session> {
   const created = await args.client.session.create({});
   if (!created.data) {
     const text = formatStartError((created as { error?: unknown }).error);
     throw new Error(text === "Unknown error" ? "Failed to create session: no session data returned." : text);
   }
+  await args.onCreated?.(created.data);
   try {
     const prompted = await args.client.session.promptAsync({
       sessionID: created.data.id,

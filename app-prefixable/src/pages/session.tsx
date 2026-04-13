@@ -400,33 +400,27 @@ export function Session() {
           }
         }
       });
-
-      // Check if this session is actually busy
-      client.session
-        .status({})
-        .then((res: { data?: Record<string, { type: string }> }) => {
-          const statuses = res.data;
-          if (!statuses) return;
-          if (statuses[id]) {
-            const isBusy =
-              statuses[id].type === "busy" || statuses[id].type === "retry";
-            console.log(
-              "[Session] Initial status for",
-              id,
-              ":",
-              statuses[id].type,
-              "isBusy:",
-              isBusy,
-            );
-            if (isBusy) wasProcessing.value = true;
-            setProcessing(isBusy);
-          }
-        });
     } else {
       setLoadingHistory(false);
       setProcessing(false);
     }
   }));
+
+  // Mirror processing state from the global status store so status emitted
+  // before this page mounts still initializes the busy indicator correctly.
+  createEffect(() => {
+    const id = sessionId();
+    if (!id) return;
+    const type = events.status[id]?.type;
+    if (type === "busy" || type === "retry") {
+      wasProcessing.value = true;
+      setProcessing(true);
+      return;
+    }
+    if (type === "idle") {
+      setProcessing(false);
+    }
+  });
 
   // Get messages from sync context - reactive, automatically updated via SSE
   // Cache the base messages array to avoid recreating on every call
@@ -1313,6 +1307,7 @@ export function Session() {
     };
     setOptimisticMessage(userMessage);
 
+    const needsSession = !sessionId();
     try {
       let id = sessionId();
 
@@ -1404,8 +1399,11 @@ export function Session() {
       startProcessing();
     } catch (err) {
       console.error("[Session] Error sending message:", err);
+      const msg = needsSession
+        ? "Failed to create session or send message"
+        : "Failed to send message";
       setError(
-        `Failed to create session or send message: ${formatStartError(err)}`,
+        `${msg}: ${formatStartError(err)}`,
       );
     } finally {
       setLoading(false);
@@ -1429,16 +1427,18 @@ export function Session() {
     setError(null);
     setCreatingSession(true);
     try {
-      const created = await createAndSendPrompt({
+      await createAndSendPrompt({
         client,
         text,
         agent: providers.selectedAgent || "build",
         model,
+        onCreated: (created) => {
+          const sid = created.id;
+          setSessionId(sid);
+          navigate(`/${dirSlug()}/session/${sid}`, { replace: true });
+          providers.setSessionModel(sid, model);
+        },
       });
-      const sid = created.id;
-      setSessionId(sid);
-      navigate(`/${dirSlug()}/session/${sid}`, { replace: true });
-      providers.setSessionModel(sid, model);
     } catch (err) {
       setError(`Failed to create session or send saved prompt: ${formatStartError(err)}`);
     } finally {

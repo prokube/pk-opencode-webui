@@ -1841,10 +1841,12 @@ export function Layout(props: ParentProps) {
         text,
         agent: providers.selectedAgent || "build",
         model,
+        onCreated: (created) => {
+          providers.setSessionModel(created.id, model);
+          navigate(`/${dirSlug()}/session/${created.id}`);
+        },
       });
       setSessions((prev) => [res, ...prev]);
-      providers.setSessionModel(res.id, model);
-      navigate(`/${dirSlug()}/session/${res.id}`);
     } catch (e) {
       console.error("Failed to create session for prompt:", e);
       setSessionStartError(`Failed to create session or send saved prompt: ${formatStartError(e)}`);
