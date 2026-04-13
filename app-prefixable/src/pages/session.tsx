@@ -1403,7 +1403,7 @@ export function Session() {
   async function sendFollowupNow(id: string) {
     const dir = params.dir;
     const sid = sessionId();
-    if (!sid || followupSending() || processing()) return;
+    if (!sid || followupSending() || processing() || loading()) return;
     const model = sessionModel();
     if (!model) {
       setError("Please select a model before sending messages. Click the model button in the header.");
@@ -2364,6 +2364,7 @@ export function Session() {
                 items={followups()}
                 sending={followupSending()}
                 processing={processing()}
+                loading={loading()}
                 onSend={sendFollowupNow}
                 onEdit={editFollowup}
               />
