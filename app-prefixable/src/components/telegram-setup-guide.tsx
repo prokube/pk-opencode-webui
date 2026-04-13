@@ -5,14 +5,14 @@ type ChecklistItem = {
   label: string
 }
 
-const checklist: ChecklistItem[] = [
-  { id: "token", label: "Bot token is set with TELEGRAM_BOT_TOKEN or persisted token." },
-  { id: "mode", label: "Bridge mode is selected: polling or webhook." },
-  { id: "api", label: "openCodeUrl points to your reachable OpenCode API." },
-  { id: "path", label: "sessionStorePath points to a persistent writable location." },
-  { id: "webhook", label: "For webhook mode: TELEGRAM_WEBHOOK_URL, TELEGRAM_WEBHOOK_PATH, and HTTPS ingress are configured." },
-  { id: "notify", label: "Notifications are enabled per chat with /notify on after a test message." },
-]
+const checklist = Object.freeze([
+  Object.freeze({ id: "token", label: "Bot token is set with TELEGRAM_BOT_TOKEN or persisted token." }),
+  Object.freeze({ id: "mode", label: "Bridge mode is selected: polling or webhook." }),
+  Object.freeze({ id: "api", label: "openCodeUrl points to your reachable OpenCode API." }),
+  Object.freeze({ id: "path", label: "sessionStorePath points to a persistent writable location." }),
+  Object.freeze({ id: "webhook", label: "For webhook mode: TELEGRAM_WEBHOOK_URL, TELEGRAM_WEBHOOK_PATH, and HTTPS ingress are configured." }),
+  Object.freeze({ id: "notify", label: "Notifications are enabled per chat with /notify on after a test message." }),
+]) as readonly Readonly<ChecklistItem>[]
 
 const commands = ["/notify on", "/notify off", "/notify status", "/new", "/status", "/help"] as const
 const sections = ["Readiness checklist", "Prerequisites", "Setup steps", "Command usage", "Security best practices", "Troubleshooting quick checks"] as const

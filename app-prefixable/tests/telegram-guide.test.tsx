@@ -18,5 +18,11 @@ describe("Telegram setup guide UI", () => {
   test("guide constants include expected quick checks", () => {
     expect(TELEGRAM_GUIDE_COMMANDS).toEqual(expect.arrayContaining(["/new", "/status", "/help", "/notify status"]))
     expect(TELEGRAM_READINESS_CHECKS.length).toBeGreaterThanOrEqual(5)
+    expect(TELEGRAM_READINESS_CHECKS.some((item) => item.id === "webhook")).toBe(true)
+  })
+
+  test("readiness checklist export is immutable", () => {
+    expect(Object.isFrozen(TELEGRAM_READINESS_CHECKS)).toBe(true)
+    expect(TELEGRAM_READINESS_CHECKS.every((item) => Object.isFrozen(item))).toBe(true)
   })
 })
