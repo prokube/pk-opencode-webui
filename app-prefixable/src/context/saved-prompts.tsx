@@ -29,9 +29,19 @@ interface SavedPromptsContextValue {
 }
 
 const GLOBAL_KEY = "opencode.savedPrompts"
+
+function canonicalDirectory(directory: string | undefined): string | undefined {
+  if (!directory) return undefined
+  const trimmed = directory.trim()
+  if (!trimmed) return undefined
+  const normalized = trimmed.replace(/[\\/]+$/, "")
+  if (normalized) return normalized
+  return trimmed
+}
+
 function projectKey(directory: string): string {
-  const normalized = directory.replace(/[\\/]+$/, "")
-  return `opencode.savedPrompts.${normalized}`
+  const normalized = canonicalDirectory(directory)
+  return `opencode.savedPrompts.${normalized || directory}`
 }
 
 const SavedPromptsContext = createContext<SavedPromptsContextValue>()
@@ -127,14 +137,14 @@ export function SavedPromptsProvider(props: ParentProps & { directory?: Accessor
   const recentDirectory = createMemo(() => {
     const first = recent.projects()[0]
     if (!first?.path) return undefined
-    const normalized = first.path.replace(/[\\/]+$/, "")
-    return normalized || undefined
+    return canonicalDirectory(first.path)
   })
 
   const [sticky, setSticky] = createSignal<string | undefined>(
-    props.directory?.() ?? deriveDirectoryFromPathname(),
+    canonicalDirectory(props.directory?.() ?? deriveDirectoryFromPathname()),
   )
   const [loading, setLoading] = createSignal(true)
+  const [loadError, setLoadError] = createSignal(false)
   const [globalPrompts, setGlobalPrompts] = createSignal<SavedPrompt[]>([])
   const [projectPrompts, setProjectPrompts] = createSignal<SavedPrompt[]>([])
   const migratedKeys = new Set<string>()
@@ -148,13 +158,13 @@ export function SavedPromptsProvider(props: ParentProps & { directory?: Accessor
   let pendingClear = false
 
   createEffect(() => {
-    const d = props.directory?.()
+    const d = canonicalDirectory(props.directory?.())
     if (d) {
       pendingClear = false
       setSticky(d)
       return
     }
-    const fromUrl = deriveDirectoryFromPathname()
+    const fromUrl = canonicalDirectory(deriveDirectoryFromPathname())
     if (fromUrl) {
       pendingClear = false
       setSticky(fromUrl)
@@ -165,14 +175,14 @@ export function SavedPromptsProvider(props: ParentProps & { directory?: Accessor
       queueMicrotask(() => {
         if (!pendingClear) return
         if (props.directory?.() !== undefined) return
-        if (deriveDirectoryFromPathname() !== undefined) return
+        if (canonicalDirectory(deriveDirectoryFromPathname()) !== undefined) return
         setSticky(undefined)
       })
     }
   })
 
   const dir = sticky
-  const targetDirectory = () => dir() ?? recentDirectory()
+  const targetDirectory = () => canonicalDirectory(dir() ?? recentDirectory())
 
   const allPrompts = createMemo(() => mergePrompts(globalPrompts(), projectPrompts()))
 
@@ -208,6 +218,7 @@ export function SavedPromptsProvider(props: ParentProps & { directory?: Accessor
       pendingSaves.push({ directory, updater })
       return
     }
+    if (loadError()) return
     enqueueSave(loadVersion, directory, updater)
   }
 
@@ -256,8 +267,14 @@ export function SavedPromptsProvider(props: ParentProps & { directory?: Accessor
 
       setGlobalPrompts(nextGlobal)
       setProjectPrompts(nextProject)
+      setLoadError(false)
     } catch (e) {
       console.error("[saved-prompts] failed to load prompts", e)
+      if (version !== loadVersion) return
+      setGlobalPrompts([])
+      setProjectPrompts([])
+      pendingSaves.splice(0, pendingSaves.length)
+      setLoadError(true)
     } finally {
       if (version !== loadVersion) return
       setLoading(false)
@@ -266,12 +283,20 @@ export function SavedPromptsProvider(props: ParentProps & { directory?: Accessor
 
   createEffect(on(targetDirectory, () => {
     const version = ++loadVersion
+    pendingSaves.splice(0, pendingSaves.length)
     setLoading(true)
+    setLoadError(false)
+    setGlobalPrompts([])
+    setProjectPrompts([])
     loadAndMaybeMigrate(version)
   }))
 
   createEffect(() => {
     if (loading()) return
+    if (loadError()) {
+      pendingSaves.splice(0, pendingSaves.length)
+      return
+    }
     if (pendingSaves.length === 0) return
     const queued = pendingSaves.splice(0, pendingSaves.length)
     const version = loadVersion
@@ -376,7 +401,7 @@ export function SavedPromptsProvider(props: ParentProps & { directory?: Accessor
   }
 
   const hasActiveProject = () => {
-    const active = props.directory?.() ?? deriveDirectoryFromPathname()
+    const active = canonicalDirectory(props.directory?.() ?? deriveDirectoryFromPathname())
     return !!active
   }
 
