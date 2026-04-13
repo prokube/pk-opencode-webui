@@ -35,20 +35,27 @@ async function nearestExistingRealPath(path: string): Promise<string | null> {
   }
 }
 
+function isPathWithinRoot(path: string, root: string): boolean {
+  const relative = nodePath.relative(root, path)
+  if (!relative) return true
+  if (nodePath.isAbsolute(relative)) return false
+  if (relative === "..") return false
+  if (relative.startsWith(`..${nodePath.sep}`)) return false
+  return true
+}
+
 async function validatePath(inputPath: string, allowedRoot: string): Promise<string | null> {
   const resolved = nodePath.resolve(allowedRoot, inputPath)
   const normalizedRoot = nodePath.resolve(allowedRoot)
 
-  if (normalizedRoot === "/") return resolved
-
-  if (resolved !== normalizedRoot && !resolved.startsWith(normalizedRoot + nodePath.sep)) {
+  if (!isPathWithinRoot(resolved, normalizedRoot)) {
     return null
   }
 
   const rootReal = await fs.promises.realpath(normalizedRoot).catch(() => normalizedRoot)
   const targetReal = await nearestExistingRealPath(resolved)
   if (!targetReal) return null
-  if (targetReal !== rootReal && !targetReal.startsWith(rootReal + nodePath.sep)) {
+  if (!isPathWithinRoot(targetReal, rootReal)) {
     return null
   }
 
