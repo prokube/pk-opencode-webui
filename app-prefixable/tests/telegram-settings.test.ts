@@ -71,6 +71,7 @@ describe("telegram settings extended API", () => {
     expect(data.settings.webhookSecretConfigured).toBe(true)
     expect(data.settings.token).toBeUndefined()
     expect(data.settings.webhookSecret).toBeUndefined()
+    expect(data.storage.path).toBeUndefined()
   })
 
   test("PUT validates input and returns field errors", async () => {
@@ -142,6 +143,7 @@ describe("telegram settings extended API", () => {
     expect(updateData.restartRequiredFields).toEqual(
       expect.arrayContaining(["token", "openCodeUrl", "notificationDebounceMs"]),
     )
+    expect(updateData.storage.path).toBeUndefined()
 
     const read = await handleExtendedEndpoint(
       "/api/ext/telegram/settings",
@@ -259,5 +261,57 @@ describe("telegram settings extended API", () => {
     expect(response?.status).toBe(500)
     const data = await response?.json()
     expect(data).toEqual({ error: "failed to update telegram settings" })
+  })
+
+  test("PUT no-op does not rewrite file or bump updatedAt", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "telegram-settings-"))
+    const path = join(dir, "telegram-settings.json")
+    cleanupPaths.push(dir)
+
+    process.env.TELEGRAM_SETTINGS_PATH = path
+
+    const seed = await handleExtendedEndpoint(
+      "/api/ext/telegram/settings",
+      "PUT",
+      new URL("http://127.0.0.1/api/ext/telegram/settings"),
+      new Request("http://127.0.0.1/api/ext/telegram/settings", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          settings: {
+            openCodeUrl: "http://127.0.0.1:4100",
+          },
+        }),
+      }),
+    )
+    expect(seed?.status).toBe(200)
+    const seedData = await seed?.json()
+    const before = await Bun.file(path).text()
+
+    const noop = await handleExtendedEndpoint(
+      "/api/ext/telegram/settings",
+      "PUT",
+      new URL("http://127.0.0.1/api/ext/telegram/settings"),
+      new Request("http://127.0.0.1/api/ext/telegram/settings", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          settings: {
+            openCodeUrl: "http://127.0.0.1:4100/",
+          },
+        }),
+      }),
+    )
+
+    expect(noop?.status).toBe(200)
+    const noopData = await noop?.json()
+    expect(noopData.changedFields).toEqual([])
+    expect(noopData.restartRequired).toBe(false)
+    expect(noopData.restartRequiredFields).toEqual([])
+    expect(noopData.storage.updatedAt).toBe(seedData.storage.updatedAt)
+    expect(noopData.storage.path).toBeUndefined()
+
+    const after = await Bun.file(path).text()
+    expect(after).toBe(before)
   })
 })

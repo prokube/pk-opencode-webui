@@ -33,6 +33,8 @@ type ValidationError = {
   message: string
 }
 
+const updateQueue = new Map<string, Promise<void>>()
+
 export type TelegramBridgeSettings = {
   mode: "polling" | "webhook"
   token: string
@@ -222,6 +224,17 @@ function metadata() {
     runtimeReloadableFields: [] as string[],
     restartRequiredFields: [...telegramSettingFields],
   }
+}
+
+function queueUpdate<T>(path: string, fn: () => Promise<T>) {
+  const tail = (updateQueue.get(path) || Promise.resolve()).catch(() => undefined)
+  const run = tail.then(fn)
+  const settled = run.then(() => undefined, () => undefined)
+  updateQueue.set(path, settled)
+  return run.finally(() => {
+    if (updateQueue.get(path) !== settled) return
+    updateQueue.delete(path)
+  })
 }
 
 function readObject(input: unknown): Record<string, unknown> | undefined {
@@ -481,7 +494,6 @@ export async function readTelegramSettings() {
   return {
     settings: publicSettings(resolved, store),
     storage: {
-      path,
       persisted: Boolean(store),
       updatedAt: store?.updatedAt || null,
     },
@@ -496,37 +508,51 @@ export async function updateTelegramSettings(input: unknown) {
   }
 
   const path = telegramSettingsPath()
-  const current = (await readStore(path)) || {
-    version: 1,
-    updatedAt: new Date().toISOString(),
-    settings: {},
-  }
-  const nextSettings: Partial<Record<TelegramSettingField, string | number>> = { ...current.settings }
-  const changedFields: string[] = []
-
-  for (const field of telegramSettingFields) {
-    if (!(field in normalized.patch)) continue
-    const next = normalized.patch[field]
-    const prev = nextSettings[field]
-    if (next === undefined) {
-      if (prev === undefined) continue
-      delete nextSettings[field]
-      changedFields.push(field)
-      continue
+  return queueUpdate(path, async () => {
+    const current = (await readStore(path)) || {
+      version: 1,
+      updatedAt: new Date().toISOString(),
+      settings: {},
     }
-    if (prev === next) continue
-    nextSettings[field] = next
-    changedFields.push(field)
-  }
+    const nextSettings: Partial<Record<TelegramSettingField, string | number>> = { ...current.settings }
+    const changedFields: string[] = []
 
-  await writeSettings(path, nextSettings)
-  const next = await readTelegramSettings()
-  return {
-    ok: true as const,
-    changedFields,
-    restartRequired: changedFields.length > 0,
-    restartRequiredFields: changedFields,
-    runtimeReloadableFields: [] as string[],
-    ...next,
-  }
+    for (const field of telegramSettingFields) {
+      if (!(field in normalized.patch)) continue
+      const next = normalized.patch[field]
+      const prev = nextSettings[field]
+      if (next === undefined) {
+        if (prev === undefined) continue
+        delete nextSettings[field]
+        changedFields.push(field)
+        continue
+      }
+      if (prev === next) continue
+      nextSettings[field] = next
+      changedFields.push(field)
+    }
+
+    if (changedFields.length === 0) {
+      const next = await readTelegramSettings()
+      return {
+        ok: true as const,
+        changedFields,
+        restartRequired: false,
+        restartRequiredFields: changedFields,
+        runtimeReloadableFields: [] as string[],
+        ...next,
+      }
+    }
+
+    await writeSettings(path, nextSettings)
+    const next = await readTelegramSettings()
+    return {
+      ok: true as const,
+      changedFields,
+      restartRequired: true,
+      restartRequiredFields: changedFields,
+      runtimeReloadableFields: [] as string[],
+      ...next,
+    }
+  })
 }
