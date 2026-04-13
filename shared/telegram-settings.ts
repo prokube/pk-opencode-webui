@@ -74,17 +74,30 @@ function parsePositiveInt(value: string, fallback: number): number {
   return n
 }
 
-function parseUrl(value: string, field: string): string {
-  try {
-    return new URL(value).toString()
-  } catch {
-    throw new Error(`${field} must be a valid URL`)
+function parseUrl(value: string, field: string, source?: string): string {
+  const where = source ? ` (${source})` : ""
+  if (!URL.canParse(value)) {
+    throw new Error(`${field} must be a valid URL${where}`)
   }
+  return new URL(value).toString()
 }
 
-function normalizeLinkBase(value: string): string {
+function normalizeLinkBase(value: string, source?: string): string {
   const base = value.endsWith("/") ? value.slice(0, -1) : value
-  return parseUrl(base, "sessionLinkBase").replace(/\/$/, "")
+  return parseUrl(base, "sessionLinkBase", source).replace(/\/$/, "")
+}
+
+function parsePersistedUrl(value: unknown, field: "openCodeUrl" | "webhookUrl", fallback: string | undefined): string | undefined {
+  if (typeof value !== "string" || !value.trim()) return fallback
+  if (!URL.canParse(value)) return fallback
+  return parseUrl(value, field, `persisted ${field}`)
+}
+
+function parsePersistedLinkBase(value: unknown, fallback: string | undefined): string | undefined {
+  if (typeof value !== "string" || !value.trim()) return fallback
+  const base = value.endsWith("/") ? value.slice(0, -1) : value
+  if (!URL.canParse(base)) return fallback
+  return normalizeLinkBase(value, "persisted sessionLinkBase")
 }
 
 function defaultSessionStorePath() {
@@ -145,13 +158,14 @@ function envDefaults(): TelegramBridgeSettings {
   const opencodeApiUrl = env("OPENCODE_API_URL")
   const apiUrl = env("API_URL")
   const openCodeUrlValue = opencodeApiUrl || apiUrl || "http://127.0.0.1:4096"
+  const openCodeUrlSource = opencodeApiUrl ? "OPENCODE_API_URL" : apiUrl ? "API_URL" : "default openCodeUrl"
   const webhookPath = env("TELEGRAM_WEBHOOK_PATH") || "/webhook"
   const sessionLinkBase = env("TELEGRAM_SESSION_LINK_BASE")
 
   return {
     mode,
     token: env("TELEGRAM_BOT_TOKEN"),
-    openCodeUrl: parseUrl(openCodeUrlValue, "openCodeUrl"),
+    openCodeUrl: parseUrl(openCodeUrlValue, "openCodeUrl", openCodeUrlSource),
     directory: env("OPENCODE_DIRECTORY") || undefined,
     sessionCacheMax: parsePositiveInt(env("TELEGRAM_SESSION_CACHE_MAX") || "", 500),
     sessionCacheTtlMs: parsePositiveInt(env("TELEGRAM_SESSION_CACHE_TTL_MS") || "", 6 * 60 * 60 * 1000),
@@ -159,9 +173,11 @@ function envDefaults(): TelegramBridgeSettings {
     port: parsePort(env("TELEGRAM_BRIDGE_PORT") || "4097"),
     webhookPath: webhookPath.startsWith("/") ? webhookPath : `/${webhookPath}`,
     webhookSecret: env("TELEGRAM_WEBHOOK_SECRET") || undefined,
-    webhookUrl: env("TELEGRAM_WEBHOOK_URL") ? parseUrl(env("TELEGRAM_WEBHOOK_URL"), "webhookUrl") : undefined,
+    webhookUrl: env("TELEGRAM_WEBHOOK_URL")
+      ? parseUrl(env("TELEGRAM_WEBHOOK_URL"), "webhookUrl", "TELEGRAM_WEBHOOK_URL")
+      : undefined,
     sessionStorePath: sanitizeSessionStorePath(env("TELEGRAM_SESSION_STORE_PATH")) || defaultSessionStorePath(),
-    sessionLinkBase: sessionLinkBase ? normalizeLinkBase(sessionLinkBase) : undefined,
+    sessionLinkBase: sessionLinkBase ? normalizeLinkBase(sessionLinkBase, "TELEGRAM_SESSION_LINK_BASE") : undefined,
   }
 }
 
@@ -195,16 +211,9 @@ function applyPersisted(defaults: TelegramBridgeSettings, store: TelegramSetting
   if (!store) return defaults
   const s = store.settings
 
-  const openCodeUrl =
-    typeof s.openCodeUrl === "string" && s.openCodeUrl.trim()
-      ? parseUrl(s.openCodeUrl, "openCodeUrl")
-      : defaults.openCodeUrl
-  const webhookUrl =
-    typeof s.webhookUrl === "string" && s.webhookUrl.trim() ? parseUrl(s.webhookUrl, "webhookUrl") : defaults.webhookUrl
-  const sessionLinkBase =
-    typeof s.sessionLinkBase === "string" && s.sessionLinkBase.trim()
-      ? normalizeLinkBase(s.sessionLinkBase)
-      : defaults.sessionLinkBase
+  const openCodeUrl = parsePersistedUrl(s.openCodeUrl, "openCodeUrl", defaults.openCodeUrl) || defaults.openCodeUrl
+  const webhookUrl = parsePersistedUrl(s.webhookUrl, "webhookUrl", defaults.webhookUrl)
+  const sessionLinkBase = parsePersistedLinkBase(s.sessionLinkBase, defaults.sessionLinkBase)
 
   return {
     mode: s.mode === "polling" || s.mode === "webhook" ? s.mode : defaults.mode,

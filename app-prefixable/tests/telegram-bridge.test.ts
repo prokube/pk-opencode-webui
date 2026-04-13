@@ -173,6 +173,22 @@ describe("telegram bridge config and cache", () => {
     expect(() => parseConfig()).toThrow("Set TELEGRAM_BOT_TOKEN or save token in persisted Telegram settings");
   });
 
+  test("parseConfig includes source in URL parse errors", () => {
+    setEnv({ TELEGRAM_BOT_TOKEN: "token", OPENCODE_API_URL: "bad-url" });
+    expect(() => parseConfig()).toThrow("openCodeUrl must be a valid URL (OPENCODE_API_URL)");
+
+    setEnv({ TELEGRAM_BOT_TOKEN: "token", OPENCODE_API_URL: "http://127.0.0.1:4096", TELEGRAM_WEBHOOK_URL: "bad-url" });
+    expect(() => parseConfig()).toThrow("webhookUrl must be a valid URL (TELEGRAM_WEBHOOK_URL)");
+
+    setEnv({
+      TELEGRAM_BOT_TOKEN: "token",
+      OPENCODE_API_URL: "http://127.0.0.1:4096",
+      TELEGRAM_WEBHOOK_URL: undefined,
+      TELEGRAM_SESSION_LINK_BASE: "bad-url",
+    });
+    expect(() => parseConfig()).toThrow("sessionLinkBase must be a valid URL (TELEGRAM_SESSION_LINK_BASE)");
+  });
+
   test("joinOpenCodeUrl keeps configured base path with leading slash paths", () => {
     expect(joinOpenCodeUrl("http://127.0.0.1:4096/notebook/ns/name", "/session").toString()).toBe(
       "http://127.0.0.1:4096/notebook/ns/name/session",

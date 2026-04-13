@@ -320,4 +320,49 @@ describe("telegram settings extended API", () => {
     const after = await Bun.file(path).text()
     expect(after).toBe(before)
   })
+
+  test("GET keeps valid persisted fields when persisted URL fields are malformed", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "telegram-settings-"))
+    const path = join(dir, "telegram-settings.json")
+    cleanupPaths.push(dir)
+
+    process.env.TELEGRAM_SETTINGS_PATH = path
+    process.env.OPENCODE_API_URL = "http://127.0.0.1:4299"
+    process.env.TELEGRAM_WEBHOOK_URL = "https://hooks.example.com/telegram"
+    process.env.TELEGRAM_SESSION_LINK_BASE = "https://opencode.example.com/notebook"
+
+    await writeFile(
+      path,
+      JSON.stringify(
+        {
+          version: 1,
+          updatedAt: new Date().toISOString(),
+          settings: {
+            token: "persisted-token",
+            openCodeUrl: "not-a-url",
+            webhookUrl: "also-not-a-url",
+            sessionLinkBase: "bad-link-base",
+          },
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    )
+
+    const read = await handleExtendedEndpoint(
+      "/api/ext/telegram/settings",
+      "GET",
+      new URL("http://127.0.0.1/api/ext/telegram/settings"),
+      new Request("http://127.0.0.1/api/ext/telegram/settings"),
+    )
+
+    expect(read?.status).toBe(200)
+    const data = await read?.json()
+    expect(data.settings.tokenConfigured).toBe(true)
+    expect(data.settings.tokenSource).toBe("persisted")
+    expect(data.settings.openCodeUrl).toBe("http://127.0.0.1:4299/")
+    expect(data.settings.webhookUrl).toBe("https://hooks.example.com/telegram")
+    expect(data.settings.sessionLinkBase).toBe("https://opencode.example.com/notebook")
+  })
 })
