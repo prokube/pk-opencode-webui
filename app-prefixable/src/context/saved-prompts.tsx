@@ -162,7 +162,6 @@ export function SavedPromptsProvider(props: ParentProps & { directory?: Accessor
 
   async function save(nextGlobal: SavedPrompt[], nextProject: SavedPrompt[]) {
     const d = targetDirectory()
-    if (!d) return
     const ok = await writeSavedPrompts(
       basePath.serverUrl,
       d,
@@ -188,7 +187,11 @@ export function SavedPromptsProvider(props: ParentProps & { directory?: Accessor
       const legacyGlobal = readLegacyGlobal().sort(sortNewest)
       const legacyProject = readLegacyProject(d).sort(sortNewest)
       const hasLegacy = legacyGlobal.length > 0 || legacyProject.length > 0
-      if (hasLegacy && nextGlobal.length === 0 && nextProject.length === 0) {
+      const needsMigration = hasLegacy && nextGlobal.length === 0 && nextProject.length === 0
+      if (!needsMigration) {
+        migratedKeys.add(migrationKey)
+      }
+      if (needsMigration) {
         nextGlobal = legacyGlobal
         nextProject = legacyProject
         const ok = await writeSavedPrompts(
@@ -199,9 +202,12 @@ export function SavedPromptsProvider(props: ParentProps & { directory?: Accessor
         )
         if (ok) {
           clearLegacy(d)
+          migratedKeys.add(migrationKey)
+        }
+        if (!ok) {
+          console.error("[saved-prompts] failed to migrate prompts from localStorage")
         }
       }
-      migratedKeys.add(migrationKey)
     }
 
     setGlobalPrompts(nextGlobal)
@@ -237,6 +243,7 @@ export function SavedPromptsProvider(props: ParentProps & { directory?: Accessor
     const project = projectPrompts().find((p) => p.id === id)
     if (project) {
       if (scope === "project") return
+      if (!targetDirectory()) return
       const nextProject = projectPrompts().filter((p) => p.id !== id)
       const nextGlobal = [{ ...project, scope: "global" as const }, ...globalPrompts().filter((p) => p.id !== id)]
       save(nextGlobal, nextProject)
@@ -254,6 +261,7 @@ export function SavedPromptsProvider(props: ParentProps & { directory?: Accessor
 
   function update(id: string, fields: Partial<Pick<SavedPrompt, "title" | "text">>) {
     if (projectPrompts().some((p) => p.id === id)) {
+      if (!targetDirectory()) return
       const nextProject = projectPrompts().map((p) => (p.id === id ? { ...p, ...fields } : p))
       save(globalPrompts(), nextProject)
       return
@@ -264,6 +272,7 @@ export function SavedPromptsProvider(props: ParentProps & { directory?: Accessor
 
   function remove(id: string) {
     if (projectPrompts().some((p) => p.id === id)) {
+      if (!targetDirectory()) return
       save(globalPrompts(), projectPrompts().filter((p) => p.id !== id))
       return
     }
