@@ -38,9 +38,14 @@ export function DirectoryLayout(props: ParentProps) {
     }
   })
 
-  // Keep the previous valid directory while params are in a transient state
+  // Keep the previous valid directory while params are in a transient empty state
   // during route updates so providers don't remount between session switches.
-  const directory = createMemo<string | undefined>((prev) => decoded() ?? prev)
+  // If the route contains an explicit invalid directory, return undefined so
+  // the fallback Navigate still takes the user back to home.
+  const directory = createMemo<string | undefined>((prev) => {
+    if (!params.dir) return prev
+    return decoded()
+  })
 
   // Add to recent projects when directory changes
   createEffect(() => {
