@@ -1325,6 +1325,12 @@ export function Session() {
         const data = res.data;
         console.log("[Session] Create response:", data);
         if (!data) {
+          setPendingUserMessageText(null);
+          setOptimisticMessage(null);
+          setInput(text);
+          setFileContext(files);
+          setImageAttachments(images);
+          if (inputRef) applyInputAndAutogrow(inputRef, text);
           setError("Failed to create session: no session data returned.");
           return;
         }
@@ -1757,8 +1763,9 @@ export function Session() {
           <Show when={welcomeError()}>
             <div
               class="mt-4 px-4 py-2 rounded-lg text-sm max-w-2xl"
-              role="alert"
-              aria-live="assertive"
+              role="status"
+              aria-live="polite"
+              aria-atomic="true"
               style={{
                 background: "var(--status-danger-dim)",
                 color: "var(--status-danger-text)",
