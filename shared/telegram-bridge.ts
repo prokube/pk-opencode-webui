@@ -57,6 +57,7 @@ const fallbackPending = new Map<string, TelegramPendingItem[]>()
 const pendingRetentionMs = 3 * 24 * 60 * 60 * 1000
 const pendingMaxItems = 60
 const pendingDigestMax = 8
+let pendingEntrySeq = 0
 
 const telegramCommands = Object.freeze([
   Object.freeze({
@@ -206,22 +207,40 @@ function prunePending(items: TelegramPendingItem[], now: number): TelegramPendin
   const minStamp = now - pendingRetentionMs
   const kept = items
     .filter((item) => item.stampedAt >= minStamp)
-    .sort((a, b) => b.stampedAt - a.stampedAt)
+    .sort((a, b) => {
+      const byTime = b.stampedAt - a.stampedAt
+      if (byTime !== 0) return byTime
+      return a.id.localeCompare(b.id)
+    })
     .slice(0, pendingMaxItems)
   return kept
 }
 
+function pendingAdapter(runtime: Runtime) {
+  if (!runtime.store.pendingGet) return
+  if (!runtime.store.pendingSet) return
+  return {
+    get: runtime.store.pendingGet,
+    set: runtime.store.pendingSet,
+  }
+}
+
 async function pendingGet(runtime: Runtime, key: string): Promise<TelegramPendingItem[]> {
   const now = Date.now()
-  const source = runtime.store.pendingGet
-    ? await runtime.store.pendingGet(key)
+  const adapter = pendingAdapter(runtime)
+  const source = adapter
+    ? await adapter.get(key)
     : fallbackPending.get(key) || []
   const next = prunePending(source, now)
-  if (runtime.store.pendingSet) {
+  if (adapter) {
     const changed = next.length !== source.length || next.some((item, i) => item.id !== source[i]?.id)
     if (changed) {
-      await runtime.store.pendingSet(key, next)
+      await adapter.set(key, next)
     }
+    return next
+  }
+  if (!next.length) {
+    fallbackPending.delete(key)
     return next
   }
   fallbackPending.set(key, next)
@@ -230,8 +249,9 @@ async function pendingGet(runtime: Runtime, key: string): Promise<TelegramPendin
 
 async function pendingSet(runtime: Runtime, key: string, items: TelegramPendingItem[]): Promise<void> {
   const next = prunePending(items, Date.now())
-  if (runtime.store.pendingSet) {
-    await runtime.store.pendingSet(key, next)
+  const adapter = pendingAdapter(runtime)
+  if (adapter) {
+    await adapter.set(key, next)
     return
   }
   if (!next.length) {
@@ -271,22 +291,26 @@ function pendingMessage(items: TelegramPendingItem[]): string {
 }
 
 async function appendPending(runtime: Runtime, chatId: number, entry: TelegramPendingItem) {
-  const key = pendingChatKey(chatId)
-  const items = await pendingGet(runtime, key)
-  const next = [entry, ...items.filter((item) => item.id !== entry.id)]
-  await pendingSet(runtime, key, next)
+  await queueChatUpdate(`pending:${chatId}`, async () => {
+    const key = pendingChatKey(chatId)
+    const items = await pendingGet(runtime, key)
+    const next = [entry, ...items.filter((item) => item.id !== entry.id)]
+    await pendingSet(runtime, key, next)
+  })
 }
 
 async function resolvePendingForSession(runtime: Runtime, chatId: number, sessionId: string) {
-  const key = pendingChatKey(chatId)
-  const items = await pendingGet(runtime, key)
-  const next = items.map((item) => {
-    if (item.sessionId !== sessionId) return item
-    if (item.resolved) return item
-    if (item.kind === "task-finished") return item
-    return { ...item, resolved: true }
+  await queueChatUpdate(`pending:${chatId}`, async () => {
+    const key = pendingChatKey(chatId)
+    const items = await pendingGet(runtime, key)
+    const next = items.map((item) => {
+      if (item.sessionId !== sessionId) return item
+      if (item.resolved) return item
+      if (item.kind === "task-finished") return item
+      return { ...item, resolved: true }
+    })
+    await pendingSet(runtime, key, next)
   })
-  await pendingSet(runtime, key, next)
 }
 
 function sessionLabel(config: BridgeConfig, sessionId: string): string {
@@ -726,13 +750,14 @@ async function notifySessionKeys(runtime: Runtime, sessionId: string, kind: stri
       if (!chats.has(parsed.chatId)) {
         chats.add(parsed.chatId)
         const entry: TelegramPendingItem = {
-          id: `${sessionId}:${kind}:${Date.now()}:${parsed.chatId}`,
+          id: `${sessionId}:${kind}:${Date.now()}:${pendingEntrySeq}:${parsed.chatId}`,
           kind: kind === "task-finished" ? "task-finished" : kind === "permission" ? "permission" : "question",
           sessionId,
           text,
           stampedAt: Date.now(),
           resolved: kind === "task-finished",
         }
+        pendingEntrySeq += 1
         await appendPending(runtime, parsed.chatId, entry)
         if (kind === "task-finished") {
           await resolvePendingForSession(runtime, parsed.chatId, sessionId)
@@ -970,4 +995,5 @@ export function resetSessionCacheForTest() {
   statusBySession.clear()
   fallbackNotifications.clear()
   fallbackPending.clear()
+  pendingEntrySeq = 0
 }
