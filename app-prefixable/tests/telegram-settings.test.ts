@@ -93,6 +93,7 @@ describe("telegram settings extended API", () => {
           settings: {
             mode: "invalid",
             port: 70000,
+            sessionStorePath: "relative/store.json",
           },
         }),
       }),
@@ -105,6 +106,11 @@ describe("telegram settings extended API", () => {
       expect.arrayContaining([
         { field: "mode", message: "mode must be polling or webhook" },
         { field: "port", message: "port must be an integer between 1 and 65535" },
+        {
+          field: "sessionStorePath",
+          message:
+            "sessionStorePath must be an absolute path within OPENCODE_WORKSPACE_ROOT, HOME, OPENCODE_CONFIG_DIR, or the system temp directory",
+        },
       ]),
     )
   })

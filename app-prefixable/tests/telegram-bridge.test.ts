@@ -55,6 +55,7 @@ const envKeys = [
 ] as const;
 
 const envSnapshot = new Map<string, string | undefined>();
+let settingsPathSnapshot: string | undefined;
 
 function setEnv(next: Partial<Record<(typeof envKeys)[number], string | undefined>>) {
   for (const key of envKeys) {
@@ -70,6 +71,11 @@ function setEnv(next: Partial<Record<(typeof envKeys)[number], string | undefine
 describe("telegram bridge config and cache", () => {
   beforeEach(() => {
     resetSessionCacheForTest();
+    settingsPathSnapshot = process.env.TELEGRAM_SETTINGS_PATH;
+    process.env.TELEGRAM_SETTINGS_PATH = join(
+      tmpdir(),
+      `telegram-settings-test-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2)}.json`,
+    );
     for (const key of envKeys) {
       envSnapshot.set(key, process.env[key]);
       delete process.env[key];
@@ -85,6 +91,12 @@ describe("telegram bridge config and cache", () => {
         continue;
       }
       process.env[key] = value;
+    }
+    if (settingsPathSnapshot === undefined) {
+      delete process.env.TELEGRAM_SETTINGS_PATH;
+    }
+    if (settingsPathSnapshot !== undefined) {
+      process.env.TELEGRAM_SETTINGS_PATH = settingsPathSnapshot;
     }
     envSnapshot.clear();
   });
@@ -146,6 +158,17 @@ describe("telegram bridge config and cache", () => {
     setEnv({ TELEGRAM_BOT_TOKEN: "token", TELEGRAM_MODE: "bad-mode", OPENCODE_API_URL: "http://127.0.0.1:4096" });
     expect(() => parseConfig()).toThrow("Invalid TELEGRAM_MODE");
 
+    setEnv({
+      TELEGRAM_BOT_TOKEN: "token",
+      TELEGRAM_SESSION_STORE_PATH: "relative-store.json",
+      OPENCODE_API_URL: "http://127.0.0.1:4096",
+    });
+    expect(parseConfig().sessionStorePath).toBe(join(tmpdir(), "opencode-telegram-sessions.json"));
+
+    process.env.TELEGRAM_SETTINGS_PATH = join(
+      tmpdir(),
+      `telegram-settings-missing-token-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2)}.json`,
+    );
     setEnv({ TELEGRAM_BOT_TOKEN: undefined, OPENCODE_API_URL: "http://127.0.0.1:4096" });
     expect(() => parseConfig()).toThrow("Set TELEGRAM_BOT_TOKEN or save token in persisted Telegram settings");
   });

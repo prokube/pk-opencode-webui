@@ -91,6 +91,45 @@ function defaultSessionStorePath() {
   return nodePath.join(os.tmpdir(), "opencode-telegram-sessions.json")
 }
 
+function errorCode(error: unknown): string {
+  return error && typeof error === "object" && "code" in error ? String(error.code) : ""
+}
+
+function isReplaceConflict(code: string): boolean {
+  return code === "EEXIST" || code === "EPERM" || code === "ENOTEMPTY" || code === "EACCES"
+}
+
+function isWithinRoot(path: string, root: string): boolean {
+  if (root === nodePath.parse(root).root) return true
+  if (path === root) return true
+  return path.startsWith(root + nodePath.sep)
+}
+
+function allowedSessionStoreRoots() {
+  const home = process.env.HOME || os.homedir()
+  const configDir = process.env.OPENCODE_CONFIG_DIR || nodePath.join(home, ".config", "opencode")
+  const roots = [os.tmpdir(), home, configDir, process.env.OPENCODE_WORKSPACE_ROOT || ""]
+  const normalized: string[] = []
+  for (const root of roots) {
+    if (!root) continue
+    const value = nodePath.resolve(root)
+    if (normalized.includes(value)) continue
+    normalized.push(value)
+  }
+  return normalized
+}
+
+function sanitizeSessionStorePath(value: string): string | undefined {
+  const trimmed = value.trim()
+  if (!trimmed) return
+  if (!nodePath.isAbsolute(trimmed)) return
+  const resolved = nodePath.resolve(trimmed)
+  for (const root of allowedSessionStoreRoots()) {
+    if (isWithinRoot(resolved, root)) return resolved
+  }
+  return
+}
+
 function defaultSettingsPath() {
   const home = process.env.HOME || os.homedir()
   const configDir = process.env.OPENCODE_CONFIG_DIR || nodePath.join(home, ".config", "opencode")
@@ -121,7 +160,7 @@ function envDefaults(): TelegramBridgeSettings {
     webhookPath: webhookPath.startsWith("/") ? webhookPath : `/${webhookPath}`,
     webhookSecret: env("TELEGRAM_WEBHOOK_SECRET") || undefined,
     webhookUrl: env("TELEGRAM_WEBHOOK_URL") ? parseUrl(env("TELEGRAM_WEBHOOK_URL"), "webhookUrl") : undefined,
-    sessionStorePath: env("TELEGRAM_SESSION_STORE_PATH") || defaultSessionStorePath(),
+    sessionStorePath: sanitizeSessionStorePath(env("TELEGRAM_SESSION_STORE_PATH")) || defaultSessionStorePath(),
     sessionLinkBase: sessionLinkBase ? normalizeLinkBase(sessionLinkBase) : undefined,
   }
 }
@@ -189,7 +228,9 @@ function applyPersisted(defaults: TelegramBridgeSettings, store: TelegramSetting
     webhookSecret: typeof s.webhookSecret === "string" ? s.webhookSecret || undefined : defaults.webhookSecret,
     webhookUrl,
     sessionStorePath:
-      typeof s.sessionStorePath === "string" && s.sessionStorePath.trim() ? s.sessionStorePath.trim() : defaults.sessionStorePath,
+      typeof s.sessionStorePath === "string" && s.sessionStorePath.trim()
+        ? sanitizeSessionStorePath(s.sessionStorePath) || defaults.sessionStorePath
+        : defaults.sessionStorePath,
     sessionLinkBase,
   }
 }
@@ -426,7 +467,15 @@ function normalizePayload(input: unknown): {
       errors.push({ field: "sessionStorePath", message: "sessionStorePath must be a non-empty string or null" })
     }
     if (typeof raw.sessionStorePath === "string" && raw.sessionStorePath.trim()) {
-      patch.sessionStorePath = raw.sessionStorePath.trim()
+      const next = sanitizeSessionStorePath(raw.sessionStorePath)
+      if (!next) {
+        errors.push({
+          field: "sessionStorePath",
+          message:
+            "sessionStorePath must be an absolute path within OPENCODE_WORKSPACE_ROOT, HOME, OPENCODE_CONFIG_DIR, or the system temp directory",
+        })
+      }
+      if (next) patch.sessionStorePath = next
     }
   }
 
@@ -449,6 +498,7 @@ function normalizePayload(input: unknown): {
 async function writeSettings(path: string, settings: Partial<Record<TelegramSettingField, string | number>>) {
   await fsp.mkdir(nodePath.dirname(path), { recursive: true })
   const tmpPath = nodePath.join(nodePath.dirname(path), `.${nodePath.basename(path)}.${process.pid}.${randomUUID()}.tmp`)
+  const backupPath = `${path}.bak.${Date.now()}.${randomUUID()}`
   const payload: TelegramSettingsStore = {
     version: 1,
     updatedAt: new Date().toISOString(),
@@ -464,8 +514,31 @@ async function writeSettings(path: string, settings: Partial<Record<TelegramSett
   }
   await handle.close()
   await fsp.rename(tmpPath, path).catch(async (error) => {
-    await fsp.unlink(tmpPath).catch(() => undefined)
-    throw error
+    const code = errorCode(error)
+    if (!isReplaceConflict(code)) {
+      await fsp.unlink(tmpPath).catch(() => undefined)
+      throw error
+    }
+
+    const moved = await fsp.rename(path, backupPath).then(
+      () => true,
+      (backupError) => {
+        if (errorCode(backupError) === "ENOENT") return false
+        throw backupError
+      },
+    )
+
+    await fsp.rename(tmpPath, path).catch(async (replaceError) => {
+      if (moved) {
+        await fsp.rename(backupPath, path).catch(() => undefined)
+      }
+      await fsp.unlink(tmpPath).catch(() => undefined)
+      throw replaceError
+    })
+
+    if (moved) {
+      await fsp.unlink(backupPath).catch(() => undefined)
+    }
   })
   await fsp.chmod(path, 0o600).catch(() => undefined)
 }
