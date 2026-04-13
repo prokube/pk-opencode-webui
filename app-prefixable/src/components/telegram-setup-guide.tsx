@@ -17,7 +17,7 @@ const checklist = Object.freeze([
 const commands = ["/notify on", "/notify off", "/notify status", "/new", "/status", "/help"] as const
 const sections = ["Readiness checklist", "Prerequisites", "Setup steps", "Command usage", "Security best practices", "Troubleshooting quick checks"] as const
 const title = "Telegram Setup Guide"
-const requiredVars = ["TELEGRAM_BOT_TOKEN", "TELEGRAM_WEBHOOK_SECRET", "openCodeUrl", "webhookUrl"] as const
+const requiredKeys = ["TELEGRAM_BOT_TOKEN", "TELEGRAM_WEBHOOK_SECRET", "openCodeUrl", "webhookUrl"] as const
 
 export function TelegramSetupGuide() {
   const [done, setDone] = createSignal(new Set<string>())
@@ -169,4 +169,4 @@ export const TELEGRAM_GUIDE_COMMANDS = [...commands]
 export const TELEGRAM_READINESS_CHECKS = checklist
 export const TELEGRAM_GUIDE_SECTIONS = [...sections]
 export const TELEGRAM_GUIDE_TITLE = title
-export const TELEGRAM_GUIDE_REQUIRED_VARIABLES = [...requiredVars]
+export const TELEGRAM_GUIDE_REQUIRED_KEYS = [...requiredKeys]

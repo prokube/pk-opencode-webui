@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { TELEGRAM_GUIDE_COMMANDS, TELEGRAM_GUIDE_REQUIRED_VARIABLES, TELEGRAM_GUIDE_SECTIONS, TELEGRAM_GUIDE_TITLE, TELEGRAM_READINESS_CHECKS } from "../src/components/telegram-setup-guide"
+import { TELEGRAM_GUIDE_COMMANDS, TELEGRAM_GUIDE_REQUIRED_KEYS, TELEGRAM_GUIDE_SECTIONS, TELEGRAM_GUIDE_TITLE, TELEGRAM_READINESS_CHECKS } from "../src/components/telegram-setup-guide"
 import { SETTINGS_BASE_TABS } from "../src/pages/settings-tabs"
 
 describe("Telegram setup guide UI", () => {
@@ -16,7 +16,7 @@ describe("Telegram setup guide UI", () => {
   })
 
   test("guide references required Telegram setup values", () => {
-    expect(TELEGRAM_GUIDE_REQUIRED_VARIABLES).toEqual(
+    expect(TELEGRAM_GUIDE_REQUIRED_KEYS).toEqual(
       expect.arrayContaining(["TELEGRAM_BOT_TOKEN", "TELEGRAM_WEBHOOK_SECRET", "openCodeUrl", "webhookUrl"]),
     )
   })
