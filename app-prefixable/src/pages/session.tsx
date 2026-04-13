@@ -51,6 +51,7 @@ import { sessionQuestionRequest } from "../utils/session-tree-request";
 import { createRootSession } from "../utils/root-session";
 import {
   createSessionWithPrompt as createAndSendPrompt,
+  formatStartError,
   startSessionError,
 } from "../utils/session-start";
 
@@ -479,7 +480,7 @@ export function Session() {
       agent: providers.selectedAgent || "build",
       model,
     }).catch((err: unknown) => {
-      setError(`Failed to send saved prompt: ${err instanceof Error ? err.message : String(err)}`);
+      setError(`Failed to send saved prompt: ${formatStartError(err)}`);
       setProcessing(false);
     });
   });
@@ -583,7 +584,7 @@ export function Session() {
             console.log("[Command] Created session:", data.id);
             navigate(`/${dirSlug()}/session/${data.id}`);
           } catch (err) {
-            showToast(`Failed to create session: ${err instanceof Error ? err.message : String(err)}`);
+            showToast(`Failed to create session: ${formatStartError(err)}`);
           } finally {
             setCreatingSession(false);
           }
@@ -691,7 +692,7 @@ export function Session() {
             });
             showToast("Session compacted");
           } catch (err) {
-            showToast(`Failed to compact session: ${err instanceof Error ? err.message : String(err)}`);
+            showToast(`Failed to compact session: ${formatStartError(err)}`);
           }
         },
       });
@@ -725,7 +726,7 @@ export function Session() {
             }
             refetchSession();
           } catch (err) {
-            showToast(`Failed to share session: ${err instanceof Error ? err.message : String(err)}`);
+            showToast(`Failed to share session: ${formatStartError(err)}`);
           }
         },
       });
@@ -764,7 +765,7 @@ export function Session() {
             showToast("Session unshared");
             refetchSession();
           } catch (err) {
-            showToast(`Failed to unshare session: ${err instanceof Error ? err.message : String(err)}`);
+            showToast(`Failed to unshare session: ${formatStartError(err)}`);
           }
         },
       });
@@ -800,7 +801,7 @@ export function Session() {
             showToast("Messages restored");
             refetchSession();
           } catch (err) {
-            showToast(`Failed to redo messages: ${err instanceof Error ? err.message : String(err)}`);
+            showToast(`Failed to redo messages: ${formatStartError(err)}`);
           }
         },
       });
@@ -844,7 +845,7 @@ export function Session() {
       showToast(count === 1 ? "Undone 1 turn" : `Undone ${count} turns`);
       refetchSession();
     } catch (err) {
-      showToast(`Failed to undo: ${err instanceof Error ? err.message : String(err)}`);
+      showToast(`Failed to undo: ${formatStartError(err)}`);
     }
   }
 
@@ -1454,7 +1455,7 @@ export function Session() {
     } catch (err) {
       console.error("[Session] Error sending message:", err);
       setError(
-        `Failed to send message: ${err instanceof Error ? err.message : String(err)}`,
+        `Failed to send message: ${formatStartError(err)}`,
       );
     } finally {
       setLoading(false);
@@ -1493,7 +1494,7 @@ export function Session() {
       navigate(`/${dirSlug()}/session/${sid}`, { replace: true });
       providers.setSessionModel(sid, model);
     } catch (err) {
-      setError(`Failed to send saved prompt: ${err instanceof Error ? err.message : String(err)}`);
+      setError(`Failed to send saved prompt: ${formatStartError(err)}`);
     } finally {
       setCreatingSession(false);
     }
@@ -1514,14 +1515,8 @@ export function Session() {
     const welcomeError = createMemo(() => {
       const pending = pendingStartError();
       const current = error();
-      if (!pending) return current;
-      if (pending === current) return pending;
-      return current;
-    });
-    const showPendingStartError = createMemo(() => {
-      const pending = pendingStartError();
-      if (!pending) return false;
-      return pending !== error();
+      if (current) return current;
+      return pending;
     });
 
     return (
@@ -1686,7 +1681,7 @@ export function Session() {
                   navigate(url);
                 } catch (e) {
                   console.error("[Welcome] Failed to create session:", e);
-                  setError(`Failed to create session: ${e instanceof Error ? e.message : String(e)}`);
+                  setError(`Failed to create session: ${formatStartError(e)}`);
                 } finally {
                   setCreatingSession(false);
                 }
@@ -1816,20 +1811,6 @@ export function Session() {
                   )}
                 </For>
               </div>
-            </div>
-          </Show>
-
-          <Show when={showPendingStartError()}>
-            <div
-              class="mt-4 px-4 py-2 rounded-lg text-sm max-w-2xl"
-              role="alert"
-              aria-live="assertive"
-              style={{
-                background: "var(--status-danger-dim)",
-                color: "var(--status-danger-text)",
-              }}
-            >
-              {pendingStartError()}
             </div>
           </Show>
 
@@ -2414,7 +2395,7 @@ export function Session() {
                 })
                 .catch((err: unknown) => {
                   setError(
-                    `Failed to fork session: ${err instanceof Error ? err.message : String(err)}`,
+                    `Failed to fork session: ${formatStartError(err)}`,
                   );
                 });
             }}

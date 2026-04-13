@@ -81,6 +81,7 @@ import { sessionHasQuestion, buildChildMap, rootAncestorId } from "../utils/sess
 import { createRootSession } from "../utils/root-session";
 import {
   createSessionWithPrompt as createAndSendPrompt,
+  formatStartError,
   startSessionError,
 } from "../utils/session-start";
 
@@ -1809,7 +1810,7 @@ export function Layout(props: ParentProps) {
       navigate(`/${dirSlug()}/session/${data.id}`);
     } catch (e) {
       console.error("Failed to create session:", e);
-      setSessionStartError(`Failed to create session: ${e instanceof Error ? e.message : String(e)}`);
+      setSessionStartError(`Failed to create session: ${formatStartError(e)}`);
     } finally {
       setCreatingSession(false);
     }
@@ -1849,7 +1850,7 @@ export function Layout(props: ParentProps) {
       navigate(`/${dirSlug()}/session/${res.id}`);
     } catch (e) {
       console.error("Failed to create session for prompt:", e);
-      setSessionStartError(`Failed to send saved prompt: ${e instanceof Error ? e.message : String(e)}`);
+      setSessionStartError(`Failed to send saved prompt: ${formatStartError(e)}`);
     } finally {
       setCreatingSession(false);
     }

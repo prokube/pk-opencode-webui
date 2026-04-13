@@ -13,6 +13,36 @@ interface StartSessionCheck {
   connected: string[];
 }
 
+export function formatStartError(err: unknown): string {
+  if (err instanceof Error && err.message.trim()) return err.message;
+  if (typeof err === "string" && err.trim()) return err;
+  if (typeof err === "number" || typeof err === "boolean" || typeof err === "bigint") {
+    return String(err);
+  }
+  if (!err || typeof err !== "object") return "Unknown error";
+
+  const msg = (err as { message?: unknown }).message;
+  if (typeof msg === "string" && msg.trim()) return msg;
+
+  const nested = (err as { error?: unknown }).error;
+  if (nested !== undefined) {
+    const text = formatStartError(nested);
+    if (text !== "Unknown error") return text;
+  }
+
+  const detail = (err as { detail?: unknown }).detail;
+  if (typeof detail === "string" && detail.trim()) return detail;
+
+  try {
+    const json = JSON.stringify(err);
+    if (json && json !== "{}") return json;
+  } catch {
+    return "Unknown error";
+  }
+
+  return "Unknown error";
+}
+
 export function startSessionError(args: StartSessionCheck) {
   if (args.loading) return "Providers are still loading. Please try again in a moment.";
   if (args.providerCount === 0) return "No providers are available. Please add one in Settings.";
@@ -30,7 +60,10 @@ export async function createSessionWithPrompt(args: {
   model: ModelKey;
 }): Promise<Session | null> {
   const created = await args.client.session.create({});
-  if (!created.data) return null;
+  if (!created.data) {
+    const text = formatStartError((created as { error?: unknown }).error);
+    throw new Error(text === "Unknown error" ? "Failed to create session: no session data returned." : text);
+  }
   try {
     const prompted = await args.client.session.promptAsync({
       sessionID: created.data.id,
@@ -39,11 +72,11 @@ export async function createSessionWithPrompt(args: {
       model: args.model,
     });
     if ("error" in prompted && prompted.error) {
-      throw prompted.error;
+      throw new Error(formatStartError(prompted.error));
     }
   } catch (err) {
     await args.client.session.delete({ sessionID: created.data.id }).catch(() => undefined);
-    throw err;
+    throw new Error(formatStartError(err), { cause: err });
   }
   return created.data;
 }
