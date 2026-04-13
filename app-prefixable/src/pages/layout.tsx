@@ -1787,7 +1787,10 @@ export function Layout(props: ParentProps) {
         scope: directory,
       });
       if (data) {
-        setSessions((prev) => [data as Session, ...prev]);
+        setSessions((prev) => {
+          if (prev.some((s) => s.id === data.id)) return prev;
+          return [data as Session, ...prev];
+        });
         navigate(`/${dirSlug()}/session/${data.id}`);
       }
     } catch (e) {
@@ -1804,7 +1807,10 @@ export function Layout(props: ParentProps) {
         scope: directory,
       });
       if (data) {
-        setSessions((prev) => [data as Session, ...prev]);
+        setSessions((prev) => {
+          if (prev.some((s) => s.id === data.id)) return prev;
+          return [data as Session, ...prev];
+        });
         sessionStorage.setItem(
           `opencode.pendingPrompt.${data.id}`,
           JSON.stringify({ text, ts: Date.now() }),
