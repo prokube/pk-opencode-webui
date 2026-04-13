@@ -218,6 +218,8 @@ The bridge keeps a default OpenCode session per Telegram chat (and sender in sha
 
 In container/Kubernetes deployments, the default OS temp directory is often ephemeral, so set `TELEGRAM_SESSION_STORE_PATH` to a mounted persistent volume location if you need mappings to survive pod/container recreation.
 
+The file-backed session store is single-writer/single-replica only (no cross-process locking). For horizontally scaled or multi-replica deployments, use an external coordinated session store instead of sharing one file.
+
 Supported bot commands:
 - `/new` creates and switches to a fresh session for the current chat mapping.
 - `/status` shows the current mapped session id.

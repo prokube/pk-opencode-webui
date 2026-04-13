@@ -162,6 +162,8 @@ export type TelegramSessionStore = {
 }
 
 export function createTelegramSessionStore(path: string): TelegramSessionStore {
+  // In-memory serialization only coordinates writes within this process.
+  // Cross-process writers need an external coordinated store.
   const sessions = new Map<string, string>()
   const ready = readStore(path)
     .then((data) => {
@@ -231,6 +233,6 @@ export function createTelegramSessionStore(path: string): TelegramSessionStore {
 }
 
 export function telegramSessionKey(chatId: number, userId?: number): string {
-  if (!userId) return `chat:${chatId}`
+  if (userId === undefined || userId === null) return `chat:${chatId}`
   return `chat:${chatId}:user:${userId}`
 }

@@ -40,6 +40,7 @@ describe("telegram session store", () => {
 
   test("telegramSessionKey uses chat-only key without user id", () => {
     expect(telegramSessionKey(123)).toBe("chat:123")
+    expect(telegramSessionKey(123, 0)).toBe("chat:123:user:0")
     expect(telegramSessionKey(123, 456)).toBe("chat:123:user:456")
   })
 
