@@ -66,9 +66,7 @@ function interleaved(value: unknown): ModelMeta["interleaved"] | undefined {
   const data = obj(value)
   if (!data) return undefined
   const field = str(data.field)
-  if (field === undefined || field === "reasoning_content" || field === "reasoning_details") {
-    return { field }
-  }
+  if (field === "reasoning_content" || field === "reasoning_details") return { field }
   return undefined
 }
 
@@ -318,9 +316,18 @@ export function SessionInfo(props: SessionInfoProps) {
   }
 
   const fmtDate = (value: string) => {
+    const dateOnly = value.match(/^(\d{4})-(\d{2})-(\d{2})$/)
+    if (dateOnly) {
+      const y = Number(dateOnly[1])
+      const m = Number(dateOnly[2])
+      const d = Number(dateOnly[3])
+      const date = new Date(Date.UTC(y, m - 1, d))
+      if (date.getUTCFullYear() !== y || date.getUTCMonth() !== m - 1 || date.getUTCDate() !== d) return value
+      return new Intl.DateTimeFormat("en-US", { dateStyle: "medium", timeZone: "UTC" }).format(date)
+    }
     const date = new Date(value)
     if (Number.isNaN(date.getTime())) return value
-    return new Intl.DateTimeFormat("en-US", { dateStyle: "medium" }).format(date)
+    return new Intl.DateTimeFormat("en-US", { dateStyle: "medium", timeZone: "UTC" }).format(date)
   }
 
   const [showModelPopover, setShowModelPopover] = createSignal(false)
