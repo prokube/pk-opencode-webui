@@ -78,7 +78,9 @@ export async function createSessionWithPrompt(args: {
     const cleaned = await args.client.session
       .delete({ sessionID: created.data.id })
       .catch((error) => ({ error }));
-    if (cleaned && typeof cleaned === "object" && "error" in cleaned && cleaned.error) void cleaned.error;
+    if (cleaned && typeof cleaned === "object" && "error" in cleaned && cleaned.error) {
+      console.warn("[session-start] Failed to cleanup session after prompt error:", cleaned.error);
+    }
     throw new Error(formatStartError(err), { cause: err });
   }
   return created.data;

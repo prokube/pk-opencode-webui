@@ -1399,7 +1399,7 @@ export function Session() {
     } catch (err) {
       console.error("[Session] Error sending message:", err);
       setError(
-        `Failed to send message: ${formatStartError(err)}`,
+        `Failed to create session or send message: ${formatStartError(err)}`,
       );
     } finally {
       setLoading(false);
@@ -1434,7 +1434,7 @@ export function Session() {
       navigate(`/${dirSlug()}/session/${sid}`, { replace: true });
       providers.setSessionModel(sid, model);
     } catch (err) {
-      setError(`Failed to send saved prompt: ${formatStartError(err)}`);
+      setError(`Failed to create session or send saved prompt: ${formatStartError(err)}`);
     } finally {
       setCreatingSession(false);
     }

@@ -1847,7 +1847,7 @@ export function Layout(props: ParentProps) {
       navigate(`/${dirSlug()}/session/${res.id}`);
     } catch (e) {
       console.error("Failed to create session for prompt:", e);
-      setSessionStartError(`Failed to send saved prompt: ${formatStartError(e)}`);
+      setSessionStartError(`Failed to create session or send saved prompt: ${formatStartError(e)}`);
     } finally {
       setCreatingSession(false);
     }

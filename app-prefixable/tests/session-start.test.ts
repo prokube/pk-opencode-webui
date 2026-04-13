@@ -129,4 +129,37 @@ describe("createSessionWithPrompt", () => {
     expect(session.id).toBe("s-2");
     expect(deleted).toBe(0);
   });
+
+  test("logs cleanup failure when delete fails", async () => {
+    const lines: unknown[][] = [];
+    const warn = console.warn;
+    console.warn = (...args: unknown[]) => {
+      lines.push(args);
+    };
+
+    const client = {
+      session: {
+        create: async () => ({ data: { id: "s-3" } }),
+        promptAsync: async () => ({ error: { message: "prompt failed" } }),
+        delete: async () => {
+          throw new Error("cleanup failed");
+        },
+      },
+    } as unknown as OpencodeClient;
+
+    try {
+      await expect(
+        createSessionWithPrompt({
+          client,
+          text: "hello",
+          agent: "build",
+          model: { providerID: "openai", modelID: "gpt-4.1" },
+        }),
+      ).rejects.toThrow("prompt failed");
+      expect(lines.length).toBe(1);
+      expect(String(lines[0][0])).toContain("Failed to cleanup session");
+    } finally {
+      console.warn = warn;
+    }
+  });
 });
