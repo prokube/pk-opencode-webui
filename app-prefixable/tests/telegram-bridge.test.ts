@@ -1850,10 +1850,158 @@ describe("telegram bridge config and cache", () => {
 
     const replyCall = calls.find((x) => x.url.includes("/question/req-2/reply"));
     expect(replyCall?.body.answers).toEqual([["I need a custom answer"]]);
+    const replyCalls = calls.filter((x) => x.url.includes("/question/req-2/reply"));
+    expect(replyCalls).toHaveLength(1);
     const sentTexts = calls
       .filter((x) => x.url.includes("/sendMessage"))
       .map((x) => String(x.body.text || ""));
     expect(sentTexts.some((text) => text.includes("That question is no longer pending."))).toBe(true);
+  });
+
+  test("question prompt rejects partial numeric tokens and sends guidance", async () => {
+    const calls: Array<{ url: string; body: Record<string, unknown> }> = [];
+    const originalFetch = globalThis.fetch;
+    const pending = new Map<string, unknown[]>();
+    try {
+      globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        const body = init?.body ? (JSON.parse(String(init.body)) as Record<string, unknown>) : {};
+        calls.push({ url, body });
+        if (url.includes("/sendMessage")) {
+          return new Response(JSON.stringify({ ok: true, result: { message_id: 1 } }), { status: 200 });
+        }
+        if (url.includes("/question/req-parse/reply")) {
+          return new Response(JSON.stringify(true), { status: 200 });
+        }
+        throw new Error(`Unexpected fetch ${url}`);
+      };
+
+      const runtime = {
+        config: {
+          mode: "polling" as const,
+          token: "token",
+          openCodeUrl: "http://127.0.0.1:4096",
+          sessionCacheMax: 10,
+          sessionCacheTtlMs: 10_000,
+          notificationDebounceMs: 0,
+          port: 4097,
+          webhookPath: "/webhook",
+          sessionStorePath: "/tmp/test-store.json",
+        },
+        store: {
+          get: async () => undefined,
+          set: async () => undefined,
+          delete: async () => undefined,
+          questionList: async (name: string) => (pending.get(name) || []) as unknown[],
+          questionUpsert: async (name: string, row: unknown) => {
+            pending.set(name, [row]);
+          },
+          questionDelete: async (name: string, requestId: string) => {
+            const rows = (pending.get(name) || []) as Array<{ requestId?: string }>;
+            pending.set(
+              name,
+              rows.filter((row) => row.requestId !== requestId),
+            );
+          },
+          sessionKeys: async () => ["chat:54:user:1"],
+          notificationGet: async () => true,
+        },
+      };
+
+      await handleBridgeEvent(runtime, {
+        type: "question.asked",
+        properties: {
+          id: "req-parse",
+          sessionID: "session-4",
+          questions: [{ header: "Pick one", options: [{ label: "Alpha" }, { label: "Beta" }], custom: false }],
+        },
+      });
+
+      await handleTextUpdate(runtime, {
+        update_id: 25,
+        message: { message_id: 25, text: "1a", chat: { id: 54 }, from: { id: 1 } },
+      });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+
+    const replyCalls = calls.filter((x) => x.url.includes("/question/req-parse/reply"));
+    expect(replyCalls).toHaveLength(0);
+    const sentTexts = calls
+      .filter((x) => x.url.includes("/sendMessage"))
+      .map((x) => String(x.body.text || ""));
+    const guidance = sentTexts.find((text) => text.includes("Please reply with an option number between 1 and 2"));
+    expect(guidance).toBeDefined();
+    expect(guidance || "").toContain("Question pending:");
+  });
+
+  test("question notifications do not debounce distinct request ids", async () => {
+    const calls: Array<{ url: string; body: Record<string, unknown> }> = [];
+    const originalFetch = globalThis.fetch;
+    const pending = new Map<string, Array<{ requestId: string }>>();
+    try {
+      globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        const body = init?.body ? (JSON.parse(String(init.body)) as Record<string, unknown>) : {};
+        calls.push({ url, body });
+        if (url.includes("/sendMessage")) {
+          return new Response(JSON.stringify({ ok: true, result: { message_id: 1 } }), { status: 200 });
+        }
+        throw new Error(`Unexpected fetch ${url}`);
+      };
+
+      const runtime = {
+        config: {
+          mode: "polling" as const,
+          token: "token",
+          openCodeUrl: "http://127.0.0.1:4096",
+          sessionCacheMax: 10,
+          sessionCacheTtlMs: 10_000,
+          notificationDebounceMs: 60_000,
+          port: 4097,
+          webhookPath: "/webhook",
+          sessionStorePath: "/tmp/test-store.json",
+        },
+        store: {
+          get: async () => undefined,
+          set: async () => undefined,
+          delete: async () => undefined,
+          questionList: async (name: string) => pending.get(name) || [],
+          questionUpsert: async (name: string, row: unknown) => {
+            const next = [...(pending.get(name) || []), row as { requestId: string }];
+            pending.set(name, next);
+          },
+          questionDelete: async () => undefined,
+          sessionKeys: async () => ["chat:77:user:5"],
+          notificationGet: async () => true,
+        },
+      };
+
+      await handleBridgeEvent(runtime, {
+        type: "question.asked",
+        properties: {
+          id: "req-a",
+          sessionID: "session-same",
+          questions: [{ header: "First question" }],
+        },
+      });
+      await handleBridgeEvent(runtime, {
+        type: "question.asked",
+        properties: {
+          id: "req-b",
+          sessionID: "session-same",
+          questions: [{ header: "Second question" }],
+        },
+      });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+
+    const sentTexts = calls
+      .filter((x) => x.url.includes("/sendMessage"))
+      .map((x) => String(x.body.text || ""));
+    expect(sentTexts.filter((text) => text.includes("Question pending:")).length).toBe(2);
+    expect((pending.get("chat:77") || []).map((row) => row.requestId)).toEqual(["req-a", "req-b"]);
   });
 
   test("question reply retries transient OpenCode failures", async () => {

@@ -522,7 +522,12 @@ function parseNumericChoices(input: string): number[] | undefined {
     .map((part) => part.trim())
     .filter(Boolean)
   if (!parts.length) return
-  const values = parts.map((part) => Number.parseInt(part, 10))
+  const values = parts.map((part) => {
+    if (!/^\d+$/.test(part)) return Number.NaN
+    const value = Number.parseInt(part, 10)
+    if (value < 1) return Number.NaN
+    return value
+  })
   if (values.some((value) => !Number.isFinite(value))) return
   return [...new Set(values)]
 }
@@ -668,14 +673,21 @@ function isMissingSession(error: unknown): boolean {
   return false
 }
 
-async function retry<T>(name: string, fn: () => Promise<T>, retries = 2, delayMs = 400): Promise<T> {
+async function retry<T>(
+  name: string,
+  fn: () => Promise<T>,
+  retries = 2,
+  delayMs = 400,
+  shouldRetry: (error: unknown) => boolean = () => true,
+): Promise<T> {
   try {
     return await fn()
   } catch (error) {
+    if (!shouldRetry(error)) throw error
     if (retries <= 0) throw error
     console.warn(`[TelegramBridge] ${name} failed, retrying in ${delayMs}ms`, error)
     await sleep(delayMs)
-    return retry(name, fn, retries - 1, Math.min(delayMs * 2, 4000))
+    return retry(name, fn, retries - 1, Math.min(delayMs * 2, 4000), shouldRetry)
   }
 }
 
@@ -889,7 +901,7 @@ async function sendQuestionReply(
     }
   }
 
-  return retry("opencode:question.reply", run)
+  return retry("opencode:question.reply", run, 2, 400, (error) => !isMissingQuestion(error))
 }
 
 function chunks(input: string, size: number): string[] {
@@ -1071,17 +1083,18 @@ async function notifySessionKeys(runtime: Runtime, sessionId: string, kind: stri
 async function notifyQuestion(runtime: Runtime, sessionId: string, question: TelegramPendingQuestion) {
   if (!runtime.store.sessionKeys) return
   const keys = await runtime.store.sessionKeys(sessionId)
+  const kind = `question:${question.requestId}`
   for (const key of keys) {
     try {
       const parsed = parseTelegramKey(key)
       if (!parsed) continue
       if (!(await notificationEnabled(runtime, notificationKey(parsed.chatId)))) continue
-      if (!shouldNotify(runtime.config, parsed.chatId, "question", sessionId)) continue
+      if (!shouldNotify(runtime.config, parsed.chatId, kind, sessionId)) continue
       await upsertPendingQuestion(runtime, parsed.chatId, question)
       await queueChatUpdate(String(parsed.chatId), async () => {
         await sendTelegramMessage(runtime.config, parsed.chatId, questionPromptText(question))
       })
-      stampNotification(parsed.chatId, "question", sessionId)
+      stampNotification(parsed.chatId, kind, sessionId)
     } catch (error) {
       console.error("[TelegramBridge] outbound question notify failed", { sessionId, key, error })
     }
