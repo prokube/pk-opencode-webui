@@ -72,7 +72,12 @@ function toNumber(value: string): number | undefined {
 }
 
 function isUrl(value: string): boolean {
-  return URL.canParse(value)
+  try {
+    new URL(value)
+    return true
+  } catch {
+    return false
+  }
 }
 
 function asNullable(value: string): string | null {

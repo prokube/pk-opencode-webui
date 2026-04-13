@@ -42,6 +42,8 @@ export function TelegramSettings(props: Props) {
   async function load() {
     setLoading(true)
     setError(null)
+    setSuccess(null)
+    setRestartFields([])
     const res = await fetch(`${props.serverUrl}/api/ext/telegram/settings`).catch(() => null)
     if (!res?.ok) {
       setLoading(false)
@@ -206,13 +208,13 @@ export function TelegramSettings(props: Props) {
                 </h2>
               </div>
               <div class="p-4 space-y-4">
-                <label class="block space-y-1">
-                  <span class="text-sm" style={{ color: "var(--text-base)" }}>Mode</span>
-                  <select class="w-full px-3 py-2 rounded-md text-sm" value={state().mode} onInput={(e) => setField("mode", e.currentTarget.value as TelegramForm["mode"])} style={{ background: "var(--surface-inset)", border: "1px solid var(--border-base)", color: "var(--text-base)" }}>
+                <Field label="Mode">
+                  <select class="w-full px-3 py-2 rounded-md text-sm" value={state().mode} onInput={(e) => setField("mode", e.currentTarget.value as TelegramForm["mode"])} style={{ background: "var(--surface-inset)", border: `1px solid ${fieldError("mode") ? "var(--interactive-critical)" : "var(--border-base)"}`, color: "var(--text-base)" }}>
                     <option value="polling">polling</option>
                     <option value="webhook">webhook</option>
                   </select>
-                </label>
+                  <FieldError text={fieldError("mode")} />
+                </Field>
 
                 <Field label="OpenCode API URL" hint="Base URL used by the Telegram bridge to access OpenCode API.">
                   <input class="w-full px-3 py-2 rounded-md text-sm" value={state().openCodeUrl} onInput={(e) => setField("openCodeUrl", e.currentTarget.value)} style={{ background: "var(--surface-inset)", border: `1px solid ${fieldError("openCodeUrl") ? "var(--interactive-critical)" : "var(--border-base)"}`, color: "var(--text-base)" }} />
@@ -262,7 +264,8 @@ export function TelegramSettings(props: Props) {
                 </Field>
 
                 <Field label="Session store path">
-                  <input class="w-full px-3 py-2 rounded-md text-sm" value={state().sessionStorePath} onInput={(e) => setField("sessionStorePath", e.currentTarget.value)} style={{ background: "var(--surface-inset)", border: "1px solid var(--border-base)", color: "var(--text-base)" }} />
+                  <input class="w-full px-3 py-2 rounded-md text-sm" value={state().sessionStorePath} onInput={(e) => setField("sessionStorePath", e.currentTarget.value)} style={{ background: "var(--surface-inset)", border: `1px solid ${fieldError("sessionStorePath") ? "var(--interactive-critical)" : "var(--border-base)"}`, color: "var(--text-base)" }} />
+                  <FieldError text={fieldError("sessionStorePath")} />
                 </Field>
               </div>
             </section>
