@@ -198,21 +198,21 @@ export function SavedPromptsProvider(props: ParentProps & { directory?: Accessor
   })
 
   const dir = sticky
-  const pKey = () => {
-    const d = dir()
+  const targetDirectory = () => dir() ?? recentProjectDirectory()
+  const resolvedPKey = () => {
+    const d = targetDirectory()
     return d ? projectKey(d) : undefined
   }
-  const targetDirectory = () => dir() ?? recentProjectDirectory()
 
   // Run migration synchronously before initial load so first render has data
-  const initialDir = dir()
+  const initialDir = targetDirectory()
   if (initialDir) migrateIfNeeded(initialDir)
 
   // Load initial data from both stores
   const [globalPrompts, setGlobalPrompts] = createSignal<SavedPrompt[]>(
     loadFromStorage(GLOBAL_KEY, "global").sort(sortNewest),
   )
-  const initialPKey = pKey()
+  const initialPKey = resolvedPKey()
   const [projectPrompts, setProjectPrompts] = createSignal<SavedPrompt[]>(
     initialPKey ? loadFromStorage(initialPKey, "project").sort(sortNewest) : [],
   )
@@ -221,18 +221,18 @@ export function SavedPromptsProvider(props: ParentProps & { directory?: Accessor
   const allPrompts = createMemo(() => mergePrompts(globalPrompts(), projectPrompts()))
 
   // Reload project prompts when the project key changes
-  let prevPKey = pKey()
-  createEffect(on(pKey, (k) => {
+  let prevPKey = resolvedPKey()
+  createEffect(on(resolvedPKey, (k) => {
     if (k === prevPKey) return
     prevPKey = k
-    const d = dir()
+    const d = targetDirectory()
     if (d) migrateIfNeeded(d)
     setProjectPrompts(k ? loadFromStorage(k, "project").sort(sortNewest) : [])
   }))
 
   // Also reload global prompts when the project key changes (migration may
   // have tagged previously-unscoped prompts)
-  createEffect(on(pKey, () => {
+  createEffect(on(resolvedPKey, () => {
     setGlobalPrompts(loadFromStorage(GLOBAL_KEY, "global").sort(sortNewest))
   }))
 
@@ -252,7 +252,7 @@ export function SavedPromptsProvider(props: ParentProps & { directory?: Accessor
         return
       }
       const k = projectKey(target)
-      if (pKey() === k) {
+      if (resolvedPKey() === k) {
         setProjectPrompts((prev) => {
           const updated = [prompt, ...prev]
           saveToStorage(k, updated)
@@ -263,7 +263,7 @@ export function SavedPromptsProvider(props: ParentProps & { directory?: Accessor
       const prev = loadFromStorage(k, "project")
       const updated = [prompt, ...prev]
       saveToStorage(k, updated)
-      if (!pKey()) setProjectPrompts(updated.sort(sortNewest))
+      if (resolvedPKey() === k) setProjectPrompts(updated.sort(sortNewest))
       return
     }
     addGlobal(prompt)
@@ -281,7 +281,7 @@ export function SavedPromptsProvider(props: ParentProps & { directory?: Accessor
     const project = projectPrompts().find((p) => p.id === id)
     if (project) {
       if (scope === "project") return
-      const k = pKey()
+      const k = resolvedPKey()
       if (!k) return
       setProjectPrompts((prev) => {
         const updated = prev.filter((p) => p.id !== id)
@@ -309,7 +309,7 @@ export function SavedPromptsProvider(props: ParentProps & { directory?: Accessor
       saveToStorage(GLOBAL_KEY, updated)
       return updated
     })
-    if (pKey() === k) {
+    if (resolvedPKey() === k) {
       setProjectPrompts((prev) => {
         const updated = [{ ...global, scope: "project" as const }, ...prev.filter((p) => p.id !== id)]
         saveToStorage(k, updated)
@@ -320,13 +320,13 @@ export function SavedPromptsProvider(props: ParentProps & { directory?: Accessor
     const prev = loadFromStorage(k, "project")
     const updated = [{ ...global, scope: "project" as const }, ...prev.filter((p) => p.id !== id)]
     saveToStorage(k, updated)
-    if (!pKey()) setProjectPrompts(updated.sort(sortNewest))
+    if (resolvedPKey() === k) setProjectPrompts(updated.sort(sortNewest))
   }
 
   function update(id: string, fields: Partial<Pick<SavedPrompt, "title" | "text">>) {
     // Find which store the prompt belongs to
     if (projectPrompts().some((p) => p.id === id)) {
-      const k = pKey()
+      const k = resolvedPKey()
       if (!k) return
       setProjectPrompts((prev) => {
         const updated = prev.map((p) => (p.id === id ? { ...p, ...fields } : p))
@@ -345,7 +345,7 @@ export function SavedPromptsProvider(props: ParentProps & { directory?: Accessor
   function remove(id: string) {
     // Remove from whichever store contains it
     if (projectPrompts().some((p) => p.id === id)) {
-      const k = pKey()
+      const k = resolvedPKey()
       if (!k) return
       setProjectPrompts((prev) => {
         const filtered = prev.filter((p) => p.id !== id)
@@ -391,7 +391,7 @@ export function SavedPromptsProvider(props: ParentProps & { directory?: Accessor
     setGlobalPrompts(newGlobal)
     saveToStorage(GLOBAL_KEY, newGlobal)
 
-    const k = pKey()
+    const k = resolvedPKey()
     if (k) {
       const newProject = reorderStore(projectPrompts())
       setProjectPrompts(newProject)
