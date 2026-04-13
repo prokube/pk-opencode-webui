@@ -289,24 +289,24 @@ export function Session() {
   const pendingPermissions = createMemo(() => permission.pendingForSession(sessionId() ?? ""));
   const inputBlocked = createMemo(() => !!pendingQuestion() || pendingPermissions().length > 0);
 
-  function clearFollowupStorageKey() {
+  function clearFollowupStorageKey(dir: string) {
     if (typeof window === "undefined") return;
     try {
-      window.localStorage.removeItem(followupStorageKey(params.dir));
+      window.localStorage.removeItem(followupStorageKey(dir));
     } catch {
       return;
     }
   }
 
-  function readFollowupMap() {
+  function readFollowupMap(dir = params.dir) {
     if (typeof window === "undefined") return {} as Record<string, FollowupItem[] | undefined>;
-    const key = followupStorageKey(params.dir);
+    const key = followupStorageKey(dir);
     try {
       const raw = window.localStorage.getItem(key);
       if (!raw) return {} as Record<string, FollowupItem[] | undefined>;
       const parsed = JSON.parse(raw);
       if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-        clearFollowupStorageKey();
+        clearFollowupStorageKey(dir);
         return {} as Record<string, FollowupItem[] | undefined>;
       }
       const map = {} as Record<string, FollowupItem[] | undefined>;
@@ -317,15 +317,15 @@ export function Session() {
       }
       return map;
     } catch {
-      clearFollowupStorageKey();
+      clearFollowupStorageKey(dir);
       return {} as Record<string, FollowupItem[] | undefined>;
     }
   }
 
-  function writeFollowupMap(map: Record<string, FollowupItem[] | undefined>) {
+  function writeFollowupMap(map: Record<string, FollowupItem[] | undefined>, dir = params.dir) {
     if (typeof window === "undefined") return;
     try {
-      window.localStorage.setItem(followupStorageKey(params.dir), JSON.stringify(map));
+      window.localStorage.setItem(followupStorageKey(dir), JSON.stringify(map));
     } catch {
       return;
     }
@@ -1401,6 +1401,7 @@ export function Session() {
   }
 
   async function sendFollowupNow(id: string) {
+    const dir = params.dir;
     const sid = sessionId();
     if (!sid || followupSending() || processing()) return;
     const model = sessionModel();
@@ -1430,10 +1431,10 @@ export function Session() {
       const next = queued.filter((entry) => entry.id !== id);
       if (sessionId() === sid) setFollowups(next);
 
-      const map = readFollowupMap();
+      const map = readFollowupMap(dir);
       if (next.length === 0) delete map[sid];
       if (next.length > 0) map[sid] = next;
-      writeFollowupMap(map);
+      writeFollowupMap(map, dir);
       startProcessing();
     } catch (err) {
       setPendingUserMessageText(null);
