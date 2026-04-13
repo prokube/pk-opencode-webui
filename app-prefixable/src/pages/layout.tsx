@@ -2199,7 +2199,6 @@ export function Layout(props: ParentProps) {
                 variant="ghost"
                 class={`flex-1 justify-start ${!savedPrompts.loading() && savedPrompts.prompts().length > 0 ? "rounded-r-none" : ""}`}
                 size="sm"
-                disabled={savedPrompts.loading()}
               >
                 <Plus class="w-4 h-4" />
                 <span>New Session</span>

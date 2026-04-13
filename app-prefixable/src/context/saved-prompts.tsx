@@ -21,6 +21,7 @@ interface SavedPromptsContextValue {
   canUseProjectScope: () => boolean
   hasActiveProject: () => boolean
   loading: () => boolean
+  error: () => string | undefined
   add: (title: string, text: string, scope?: PromptScope) => void
   move: (id: string, scope: PromptScope) => void
   update: (id: string, fields: Partial<Pick<SavedPrompt, "title" | "text">>) => void
@@ -34,6 +35,7 @@ function canonicalDirectory(directory: string | undefined): string | undefined {
   if (!directory) return undefined
   const trimmed = directory.trim()
   if (!trimmed) return undefined
+  if (/^[A-Za-z]:[\\/]+$/.test(trimmed)) return `${trimmed.slice(0, 2)}\\`
   const normalized = trimmed.replace(/[\\/]+$/, "")
   if (normalized) return normalized
   return trimmed
@@ -65,7 +67,7 @@ function parseStorage(raw: string | null, fallback: PromptScope): SavedPrompt[] 
       title: p.title,
       text: p.text,
       createdAt: p.createdAt,
-      scope: p.scope === "project" ? "project" : fallback,
+      scope: fallback,
     }))
 }
 
@@ -144,7 +146,7 @@ export function SavedPromptsProvider(props: ParentProps & { directory?: Accessor
     canonicalDirectory(props.directory?.() ?? deriveDirectoryFromPathname()),
   )
   const [loading, setLoading] = createSignal(true)
-  const [loadError, setLoadError] = createSignal(false)
+  const [loadError, setLoadError] = createSignal<string | undefined>()
   const [globalPrompts, setGlobalPrompts] = createSignal<SavedPrompt[]>([])
   const [projectPrompts, setProjectPrompts] = createSignal<SavedPrompt[]>([])
   const migratedKeys = new Set<string>()
@@ -218,7 +220,10 @@ export function SavedPromptsProvider(props: ParentProps & { directory?: Accessor
       pendingSaves.push({ directory, updater })
       return
     }
-    if (loadError()) return
+    if (loadError()) {
+      console.warn("[saved-prompts] skipped save because prompt load failed")
+      return
+    }
     enqueueSave(loadVersion, directory, updater)
   }
 
@@ -267,14 +272,14 @@ export function SavedPromptsProvider(props: ParentProps & { directory?: Accessor
 
       setGlobalPrompts(nextGlobal)
       setProjectPrompts(nextProject)
-      setLoadError(false)
+      setLoadError(undefined)
     } catch (e) {
       console.error("[saved-prompts] failed to load prompts", e)
       if (version !== loadVersion) return
       setGlobalPrompts([])
       setProjectPrompts([])
       pendingSaves.splice(0, pendingSaves.length)
-      setLoadError(true)
+      setLoadError("Failed to load saved prompts")
     } finally {
       if (version !== loadVersion) return
       setLoading(false)
@@ -285,7 +290,7 @@ export function SavedPromptsProvider(props: ParentProps & { directory?: Accessor
     const version = ++loadVersion
     pendingSaves.splice(0, pendingSaves.length)
     setLoading(true)
-    setLoadError(false)
+    setLoadError(undefined)
     setGlobalPrompts([])
     setProjectPrompts([])
     loadAndMaybeMigrate(version)
@@ -414,6 +419,7 @@ export function SavedPromptsProvider(props: ParentProps & { directory?: Accessor
         canUseProjectScope: () => !!targetDirectory(),
         hasActiveProject,
         loading,
+        error: loadError,
         add,
         move,
         update,

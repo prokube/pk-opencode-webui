@@ -601,6 +601,7 @@ Add your project-specific instructions here.
   }
 
   function openAddPromptDialog() {
+    if (savedPrompts.error()) return
     setEditingPromptId(null)
     setPromptTitle("")
     setPromptText("")
@@ -619,6 +620,7 @@ Add your project-specific instructions here.
   }
 
   function savePromptDialog() {
+    if (savedPrompts.error()) return
     const title = promptTitle().trim()
     const text = promptText().trim()
     if (!title || !text) return
@@ -647,6 +649,7 @@ Add your project-specific instructions here.
   }
 
   function confirmPromptDelete() {
+    if (savedPrompts.error()) return
     const id = promptToDelete()
     if (!id) return
     savedPrompts.remove(id)
@@ -1799,10 +1802,16 @@ Add your project-specific instructions here.
                   <h2 class="text-sm font-medium" style={{ color: "var(--text-strong)" }}>
                     Prompts ({savedPrompts.prompts().length})
                   </h2>
-                  <Button onClick={openAddPromptDialog} variant="primary" size="sm" disabled={savedPrompts.loading()}>
+                  <Button onClick={openAddPromptDialog} variant="primary" size="sm" disabled={savedPrompts.loading() || !!savedPrompts.error()}>
                     + Add Prompt
                   </Button>
                 </div>
+
+                <Show when={savedPrompts.error()}>
+                  <div class="px-4 py-3 text-sm" style={{ color: "var(--interactive-critical)", "border-bottom": "1px solid var(--border-base)" }}>
+                    Failed to load saved prompts. Refresh the page and try again.
+                  </div>
+                </Show>
 
                 <Show when={savedPrompts.loading()}>
                   <div class="p-4">
@@ -1813,7 +1822,7 @@ Add your project-specific instructions here.
                   </div>
                 </Show>
 
-                <Show when={!savedPrompts.loading() && savedPrompts.prompts().length === 0}>
+                <Show when={!savedPrompts.loading() && !savedPrompts.error() && savedPrompts.prompts().length === 0}>
                   <div class="p-6 text-center">
                     <p class="text-sm" style={{ color: "var(--text-weak)" }}>
                       No saved prompts yet.
@@ -1828,7 +1837,7 @@ Add your project-specific instructions here.
                   </div>
                 </Show>
 
-                <Show when={!savedPrompts.loading() && savedPrompts.prompts().length > 0}>
+                <Show when={!savedPrompts.loading() && !savedPrompts.error() && savedPrompts.prompts().length > 0}>
                   <div class="divide-y" style={{ "border-color": "var(--border-base)" }}>
                     <For each={savedPrompts.prompts()}>
                       {(prompt) => (

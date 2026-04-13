@@ -241,6 +241,41 @@ describe("OpenCode API Contract", () => {
     });
   });
 
+  // Extended Endpoints
+  describe("Extended API", () => {
+    test("GET /api/ext/saved-prompts returns prompt arrays", async () => {
+      if (skipIfNoServer()) return;
+      const res = await fetch(`${BASE_URL}/api/ext/saved-prompts`);
+      expect(res.status).not.toBe(404);
+      expect(res.ok).toBe(true);
+      const text = await res.text();
+      if (!text.trim()) return;
+      if (text.trim().startsWith("<")) return;
+      const data = JSON.parse(text);
+      expect(Array.isArray(data.global)).toBe(true);
+      expect(Array.isArray(data.project)).toBe(true);
+    });
+
+    test("PUT /api/ext/saved-prompts accepts valid payload", async () => {
+      if (skipIfNoServer()) return;
+      const readRes = await fetch(`${BASE_URL}/api/ext/saved-prompts`);
+      expect(readRes.ok).toBe(true);
+      const readText = await readRes.text();
+      const current = !readText.trim() || readText.trim().startsWith("<") ? {} : JSON.parse(readText);
+      const payload = {
+        global: Array.isArray(current.global) ? current.global : [],
+        project: Array.isArray(current.project) ? current.project : [],
+      };
+      const res = await fetch(`${BASE_URL}/api/ext/saved-prompts`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      expect(res.status).not.toBe(404);
+      expect(res.ok).toBe(true);
+    });
+  });
+
   // SSE Event Endpoint
   describe("Event API", () => {
     test("GET /event returns SSE stream", async () => {

@@ -66,6 +66,10 @@ function getConfigDir(): string {
   return process.env.OPENCODE_CONFIG_DIR || nodePath.join(homeDir, ".config", "opencode")
 }
 
+function internalError(message: string): Response {
+  return Response.json({ error: message }, { status: 500 })
+}
+
 interface StoredPrompt {
   id: string
   title: string
@@ -88,7 +92,14 @@ function isStoredPrompt(p: unknown): p is StoredPrompt {
 function parsePromptList(raw: string): StoredPrompt[] {
   const parsed = JSON.parse(raw)
   if (!Array.isArray(parsed)) throw new Error("saved prompts content must be an array")
-  return parsed.filter(isStoredPrompt)
+  for (const item of parsed) {
+    if (!isStoredPrompt(item)) throw new Error("saved prompts content has invalid entries")
+  }
+  return parsed
+}
+
+function invalidPromptIndex(list: unknown[]): number {
+  return list.findIndex((item) => !isStoredPrompt(item))
 }
 
 async function readPromptFile(path: string): Promise<StoredPrompt[]> {
@@ -231,7 +242,7 @@ export async function handleExtendedEndpoint(
       return Response.json({ global, project })
     } catch (e) {
       console.error("[ExtAPI] saved-prompts read error:", e)
-      return Response.json({ error: String(e) }, { status: 500 })
+      return internalError("failed to read saved prompts")
     }
   }
 
@@ -254,19 +265,24 @@ export async function handleExtendedEndpoint(
 
     const globalPath = nodePath.join(getConfigDir(), "saved-prompts.json")
     const projectPath = validatedDir ? nodePath.join(validatedDir, ".opencode", "saved-prompts.json") : null
-
-    const safeGlobal: StoredPrompt[] = global.filter(isStoredPrompt)
-    const safeProject: StoredPrompt[] = project.filter(isStoredPrompt)
+    const badGlobal = invalidPromptIndex(global)
+    if (badGlobal !== -1) {
+      return Response.json({ error: `global[${badGlobal}] is invalid` }, { status: 400 })
+    }
+    const badProject = invalidPromptIndex(project)
+    if (badProject !== -1) {
+      return Response.json({ error: `project[${badProject}] is invalid` }, { status: 400 })
+    }
 
     try {
-      await writePromptFile(globalPath, safeGlobal.map((p) => sanitizePrompt(p, "global")))
+      await writePromptFile(globalPath, global.map((p) => sanitizePrompt(p, "global")))
       if (projectPath) {
-        await writePromptFile(projectPath, safeProject.map((p) => sanitizePrompt(p, "project")))
+        await writePromptFile(projectPath, project.map((p) => sanitizePrompt(p, "project")))
       }
       return Response.json({ success: true })
     } catch (e) {
       console.error("[ExtAPI] saved-prompts write error:", e)
-      return Response.json({ error: String(e) }, { status: 500 })
+      return internalError("failed to write saved prompts")
     }
   }
 
@@ -382,8 +398,7 @@ export async function handleExtendedEndpoint(
 
     try {
       // Find the global config file
-      const homeDir = process.env.HOME || os.homedir()
-      const configDir = process.env.OPENCODE_CONFIG_DIR || nodePath.join(homeDir, ".config", "opencode")
+      const configDir = getConfigDir()
 
       // Try both .jsonc and .json
       let configPath = nodePath.join(configDir, "opencode.jsonc")
@@ -445,7 +460,7 @@ export async function handleExtendedEndpoint(
       return Response.json({ success: true })
     } catch (e) {
       console.error("[ExtAPI] mcp delete error:", e)
-      return Response.json({ error: String(e) }, { status: 500 })
+      return internalError("failed to update MCP config")
     }
   }
 
@@ -474,7 +489,7 @@ export async function handleExtendedEndpoint(
       return Response.json({ success: true })
     } catch (e) {
       console.error("[ExtAPI] file write error:", e)
-      return Response.json({ error: String(e) }, { status: 500 })
+      return internalError("failed to write file")
     }
   }
 
