@@ -564,10 +564,11 @@ export function Session() {
         onSelect: async () => {
           console.log("[Command] New session - creating...");
           try {
-            const data = await createRootSession(client, {
+            const res = await createRootSession(client, {
               source: "session.command.new",
               scope: directory,
             });
+            const data = res.data;
             if (data) {
               console.log("[Command] Created session:", data.id);
               navigate(`/${dirSlug()}/session/${data.id}`);
@@ -1361,10 +1362,11 @@ export function Session() {
 
       if (!id) {
         console.log("[Session] Creating new session...");
-        const data = await createRootSession(client, {
+        const res = await createRootSession(client, {
           source: "session.send.createIfMissing",
           scope: directory,
         });
+        const data = res.data;
         console.log("[Session] Create response:", data);
         if (!data) throw new Error("Failed to create session");
 
@@ -1457,14 +1459,16 @@ export function Session() {
     }
     setError(null);
     try {
-      const data = await createRootSession(client, {
+      const res = await createRootSession(client, {
         source: "session.savedPrompt.createAndSend",
         scope: directory,
       });
+      const data = res.data;
       if (!data) return;
       const sid = data.id;
       setSessionId(sid);
       navigate(`/${dirSlug()}/session/${sid}`, { replace: true });
+      if (!res.isLeader) return;
       // Store the model for the new session
       providers.setSessionModel(sid, model);
       await client.session.promptAsync({
@@ -1627,10 +1631,11 @@ export function Session() {
                 }
                 try {
                   console.log("[Welcome] Creating session...");
-                  const data = await createRootSession(client, {
+                  const res = await createRootSession(client, {
                     source: "session.welcome.createNewSession",
                     scope: directory,
                   });
+                  const data = res.data;
                   console.log("[Welcome] Create response:", data);
                   if (data) {
                     const url = `/${dirSlug()}/session/${data.id}`;

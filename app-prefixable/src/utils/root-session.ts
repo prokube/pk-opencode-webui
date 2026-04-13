@@ -17,6 +17,11 @@ interface RootSessionTrace {
   error?: string;
 }
 
+export interface RootSessionResult {
+  data: SessionCreateResponse["data"];
+  isLeader: boolean;
+}
+
 declare global {
   interface Window {
     __opencodeRootSessionTrace?: RootSessionTrace[];
@@ -51,7 +56,7 @@ export function createRootSession(
       route: routePath(),
       at: Date.now(),
     });
-    return existing;
+    return existing.then((data) => ({ data, isLeader: false }));
   }
 
   trace({
@@ -88,5 +93,5 @@ export function createRootSession(
     });
 
   inFlight.set(key, req);
-  return req;
+  return req.then((data) => ({ data, isLeader: true }));
 }

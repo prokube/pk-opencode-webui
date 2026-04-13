@@ -57,10 +57,11 @@ export function Home() {
   async function createNewSession() {
     if (!directory) return
     try {
-      const data = await createRootSession(client, {
+      const res = await createRootSession(client, {
         source: "home.createNewSession",
         scope: directory,
       })
+      const data = res.data
       if (data) {
         const slug = base64Encode(directory)
         navigate(`/${slug}/session/${data.id}`)
