@@ -185,25 +185,23 @@ export function SessionInfo(props: SessionInfoProps) {
     const selected = props.sessionModel()
     if (!selected) return null
     const provider = providers.providers.find((p: { id: string; name: string }) => p.id === selected.providerID)
-    if (!provider) return null
-    const model = provider.models[selected.modelID] as ModelInfo | undefined
-    if (!model) return null
+    const model = provider?.models[selected.modelID] as ModelInfo | undefined
     return {
-      providerID: provider.id,
-      providerName: provider.name,
-      modelID: model.id || selected.modelID,
-      modelName: model.name || selected.modelID,
-      family: model.family,
-      status: model.status,
-      releaseDate: model.release_date,
-      contextLimit: model.limit?.context,
-      inputLimit: model.limit?.input,
-      outputLimit: model.limit?.output,
-      capabilities: model.capabilities,
-      costInput: model.cost?.input,
-      costOutput: model.cost?.output,
-      costCacheRead: model.cost?.cache?.read,
-      costCacheWrite: model.cost?.cache?.write,
+      providerID: selected.providerID,
+      providerName: provider?.name || selected.providerID,
+      modelID: model?.id || selected.modelID,
+      modelName: model?.name || selected.modelID,
+      family: model?.family,
+      status: model?.status,
+      releaseDate: model?.release_date,
+      contextLimit: model?.limit?.context,
+      inputLimit: model?.limit?.input,
+      outputLimit: model?.limit?.output,
+      capabilities: model?.capabilities,
+      costInput: model?.cost?.input,
+      costOutput: model?.cost?.output,
+      costCacheRead: model?.cost?.cache?.read,
+      costCacheWrite: model?.cost?.cache?.write,
     }
   })
 
@@ -244,7 +242,6 @@ export function SessionInfo(props: SessionInfoProps) {
   const [showModelPopover, setShowModelPopover] = createSignal(false)
   const [modelPopoverPos, setModelPopoverPos] = createSignal({ top: 0, left: 0 })
   let modelTriggerRef: HTMLButtonElement | undefined
-  let modelPopoverRef: HTMLDivElement | undefined
   let modelPopoverHideTimer: number | undefined
 
   function clearModelPopoverTimer() {
@@ -366,7 +363,7 @@ export function SessionInfo(props: SessionInfoProps) {
               <Portal>
                 <div
                   id="model-info-popover"
-                  ref={modelPopoverRef}
+                  role="tooltip"
                   class="w-80 max-w-[calc(100vw-1rem)] rounded-lg shadow-lg text-xs"
                   style={{
                     position: "fixed",
@@ -424,21 +421,21 @@ export function SessionInfo(props: SessionInfoProps) {
                       </div>
                     </Show>
 
-                    <Show when={meta().contextLimit || meta().inputLimit || meta().outputLimit}>
+                    <Show when={meta().contextLimit !== undefined || meta().inputLimit !== undefined || meta().outputLimit !== undefined}>
                       <div class="pt-1" style={{ "border-top": "1px solid var(--border-base)" }}>
-                        <Show when={meta().contextLimit}>
+                        <Show when={meta().contextLimit !== undefined}>
                           <div class="flex justify-between gap-3">
                             <span class="opacity-60 shrink-0">Context Limit</span>
                             <span class="text-right">{fmt(meta().contextLimit!)}</span>
                           </div>
                         </Show>
-                        <Show when={meta().inputLimit}>
+                        <Show when={meta().inputLimit !== undefined}>
                           <div class="flex justify-between gap-3">
                             <span class="opacity-60 shrink-0">Input Limit</span>
                             <span class="text-right">{fmt(meta().inputLimit!)}</span>
                           </div>
                         </Show>
-                        <Show when={meta().outputLimit}>
+                        <Show when={meta().outputLimit !== undefined}>
                           <div class="flex justify-between gap-3">
                             <span class="opacity-60 shrink-0">Output Limit</span>
                             <span class="text-right">{fmt(meta().outputLimit!)}</span>
