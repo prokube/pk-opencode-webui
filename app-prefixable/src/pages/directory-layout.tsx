@@ -40,7 +40,7 @@ export function DirectoryLayout(props: ParentProps) {
     }
   })
 
-  // Keep the previous valid directory while params are in a transient empty state
+  // Keep the previous directory while params are in a transient empty state
   // during route updates so providers don't remount between session switches.
   // If the route contains an explicit invalid directory, return undefined so
   // the fallback Navigate still takes the user back to home.
