@@ -23,7 +23,9 @@ export function DirectoryLayout(props: ParentProps) {
   const params = useParams<{ dir: string }>()
   const recent = useRecentProjects()
 
-  const directory = createMemo(() => {
+  const decoded = createMemo(() => {
+    if (!params.dir) return undefined
+
     try {
       const decoded = base64Decode(params.dir)
       // Validate the decoded path looks reasonable (starts with / or ~)
@@ -36,6 +38,15 @@ export function DirectoryLayout(props: ParentProps) {
       console.error("[DirectoryLayout] Failed to decode directory:", params.dir, e)
       return undefined
     }
+  })
+
+  // Keep the previous directory while params are in a transient empty state
+  // during route updates so providers don't remount between session switches.
+  // If the route contains an explicit invalid directory, return undefined so
+  // the fallback Navigate still takes the user back to home.
+  const directory = createMemo<string | undefined>((prev) => {
+    if (!params.dir) return prev
+    return decoded()
   })
 
   // Add to recent projects when directory changes
