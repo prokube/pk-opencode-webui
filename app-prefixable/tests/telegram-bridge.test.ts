@@ -446,7 +446,7 @@ describe("telegram bridge config and cache", () => {
     }
   });
 
-  test("handleBridgeEvent retries same chat key when first send fails", async () => {
+  test("handleBridgeEvent does not debounce failed key and still notifies another key in same chat", async () => {
     const calls: Array<{ url: string; body: Record<string, unknown> }> = [];
     const originalFetch = globalThis.fetch;
     let failed = false;

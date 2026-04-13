@@ -38,6 +38,40 @@ describe("telegram session store", () => {
     expect(await third.get(key)).toBeUndefined()
   })
 
+  test("reads and upgrades v1 store while defaulting notifications to off", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "telegram-session-store-"))
+    const path = join(dir, "sessions.json")
+    const keyA = telegramSessionKey(2001, 11)
+    const keyB = telegramSessionKey(2002, 12)
+    const session = "session-v1"
+    files.push(path)
+    files.push(dir)
+
+    await Bun.write(
+      path,
+      `${JSON.stringify({ version: 1, sessions: { [keyA]: session, [keyB]: session } }, null, 2)}\n`,
+    )
+
+    const store = createTelegramSessionStore(path)
+    expect(await store.get(keyA)).toBe(session)
+    expect(await store.get(keyB)).toBe(session)
+    expect(await store.sessionKeys?.(session)).toEqual(expect.arrayContaining([keyA, keyB]))
+    expect(await store.notificationGet?.(keyA)).toBe(false)
+    expect(await store.notificationGet?.(telegramSessionKey(2999, 99))).toBe(false)
+
+    await store.set(telegramSessionKey(2003, 13), "session-new")
+
+    const stored = JSON.parse(await Bun.file(path).text()) as {
+      version?: number
+      sessions?: Record<string, string>
+      notifications?: Record<string, boolean>
+    }
+    expect(stored.version).toBe(2)
+    expect(stored.sessions?.[keyA]).toBe(session)
+    expect(stored.sessions?.[keyB]).toBe(session)
+    expect(stored.notifications).toEqual({})
+  })
+
   test("telegramSessionKey uses chat-only key without user id", () => {
     expect(telegramSessionKey(123)).toBe("chat:123")
     expect(telegramSessionKey(123, 0)).toBe("chat:123:user:0")
