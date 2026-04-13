@@ -19,11 +19,24 @@ export type TelegramPublicSettings = {
 }
 
 export type TelegramMetadata = {
+  fields: Record<string, TelegramFieldMetadata>
+  runtimeReloadableFields: string[]
   restartRequiredFields: string[]
+}
+
+export type TelegramFieldMetadata = {
+  runtimeReloadable: boolean
+  restartRequired: boolean
+}
+
+export type TelegramStorage = {
+  persisted: boolean
+  updatedAt: string | null
 }
 
 export type TelegramSettingsResponse = {
   settings: TelegramPublicSettings
+  storage: TelegramStorage
   metadata: TelegramMetadata
 }
 
@@ -40,8 +53,8 @@ export type TelegramUpdateSuccess = TelegramSettingsResponse & {
 }
 
 export type TelegramUpdateFailure = {
-  ok: false
-  error: string
+  ok?: false
+  error?: string
   errors?: TelegramValidationError[]
 }
 

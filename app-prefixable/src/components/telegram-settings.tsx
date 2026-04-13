@@ -301,17 +301,30 @@ export function TelegramSettings(props: Props) {
             </section>
 
             <div class="flex items-center gap-3">
-              <Button variant="primary" disabled={saving() || !dirty()} onClick={save}>
+              <Button variant="primary" disabled={saving() || !dirty()} onClick={() => void save()}>
                 <Show when={saving()} fallback={<><Save class="w-4 h-4" /> Save Telegram Settings</>}>
                   <Spinner class="w-4 h-4" /> Saving...
                 </Show>
               </Button>
-              <Button variant="secondary" disabled={saving()} onClick={load}>
+              <Button variant="secondary" disabled={saving()} onClick={() => void load()}>
                 <RefreshCw class="w-4 h-4" /> Reload
               </Button>
             </div>
           </>
         )}
+      </Show>
+
+      <Show when={!loading() && !form()}>
+        <div class="space-y-3">
+          <div class="p-3 rounded-md text-sm" role="alert" aria-live="assertive" style={{ background: "var(--surface-inset)", border: "1px solid var(--border-base)", "border-left": "3px solid var(--interactive-critical)", color: "var(--interactive-critical)" }}>
+            {error() || "Unable to load Telegram settings."}
+          </div>
+
+          <Button type="button" variant="outline" onClick={() => void load()}>
+            <RefreshCw class="w-4 h-4 mr-2" />
+            Reload
+          </Button>
+        </div>
       </Show>
     </div>
   )
