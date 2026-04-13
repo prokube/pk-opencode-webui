@@ -32,12 +32,15 @@ export async function createSessionWithPrompt(args: {
   const created = await args.client.session.create({});
   if (!created.data) return null;
   try {
-    await args.client.session.promptAsync({
+    const prompted = await args.client.session.promptAsync({
       sessionID: created.data.id,
       parts: [{ type: "text", text: args.text }],
       agent: args.agent,
       model: args.model,
     });
+    if ("error" in prompted && prompted.error) {
+      throw prompted.error;
+    }
   } catch (err) {
     await args.client.session.delete({ sessionID: created.data.id }).catch(() => undefined);
     throw err;
