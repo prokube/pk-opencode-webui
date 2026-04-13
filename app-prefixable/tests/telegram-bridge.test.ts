@@ -788,6 +788,139 @@ describe("telegram bridge config and cache", () => {
     expect(digest).toContain("Next:");
   });
 
+  test("/pending prunes expired entries and caps retained inbox size", async () => {
+    const calls: Array<{ url: string; body: Record<string, unknown> }> = [];
+    const originalFetch = globalThis.fetch;
+    const key = "chat:77";
+    const now = Date.now();
+    const retained = Array.from({ length: 70 }, (_, i) => ({
+      id: `entry-${i}`,
+      kind: "question" as const,
+      sessionId: "session-1",
+      text: `Question pending: Need input ${i}`,
+      stampedAt: now - i * 1_000,
+      resolved: false,
+    }));
+    const expired = {
+      id: "expired",
+      kind: "permission" as const,
+      sessionId: "session-1",
+      text: "Permission request: old",
+      stampedAt: now - 4 * 24 * 60 * 60 * 1_000,
+      resolved: false,
+    };
+    const pending = new Map<string, Array<typeof retained[number] | typeof expired>>([[key, [...retained, expired]]]);
+
+    try {
+      globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        const body = init?.body ? (JSON.parse(String(init.body)) as Record<string, unknown>) : {};
+        calls.push({ url, body });
+        if (url.includes("/sendMessage")) {
+          return new Response(JSON.stringify({ ok: true, result: { message_id: 1 } }), { status: 200 });
+        }
+        throw new Error(`Unexpected fetch ${url}`);
+      };
+
+      const runtime = {
+        config: {
+          mode: "polling" as const,
+          token: "token",
+          openCodeUrl: "http://127.0.0.1:4096",
+          sessionCacheMax: 10,
+          sessionCacheTtlMs: 10_000,
+          notificationDebounceMs: 20_000,
+          port: 4097,
+          webhookPath: "/webhook",
+          sessionStorePath: "/tmp/test-store.json",
+        },
+        store: {
+          get: async () => undefined,
+          set: async () => undefined,
+          delete: async () => undefined,
+          pendingGet: async (chatKey: string) => pending.get(chatKey) || [],
+          pendingSet: async (chatKey: string, items: Array<typeof retained[number]>) => {
+            pending.set(chatKey, [...items]);
+          },
+        },
+      };
+
+      await handleTextUpdate(runtime, {
+        update_id: 11,
+        message: { message_id: 11, text: "/pending", chat: { id: 77 }, from: { id: 5 } },
+      });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+
+    const next = pending.get(key) || [];
+    expect(next).toHaveLength(60);
+    expect(next.some((item) => item.id === "expired")).toBe(false);
+    const digest = calls
+      .filter((x) => x.url.includes("/sendMessage"))
+      .map((x) => String(x.body.text || ""))
+      .join("\n");
+    expect(digest).toContain("+52 more item(s) retained.");
+  });
+
+  test("/pending response is chunked under Telegram message limits", async () => {
+    const calls: Array<{ url: string; body: Record<string, unknown> }> = [];
+    const originalFetch = globalThis.fetch;
+    const longText = "x".repeat(4500);
+    try {
+      globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        const body = init?.body ? (JSON.parse(String(init.body)) as Record<string, unknown>) : {};
+        calls.push({ url, body });
+        if (url.includes("/sendMessage")) {
+          return new Response(JSON.stringify({ ok: true, result: { message_id: 1 } }), { status: 200 });
+        }
+        throw new Error(`Unexpected fetch ${url}`);
+      };
+
+      const runtime = {
+        config: {
+          mode: "polling" as const,
+          token: "token",
+          openCodeUrl: "http://127.0.0.1:4096",
+          sessionCacheMax: 10,
+          sessionCacheTtlMs: 10_000,
+          notificationDebounceMs: 20_000,
+          port: 4097,
+          webhookPath: "/webhook",
+          sessionStorePath: "/tmp/test-store.json",
+        },
+        store: {
+          get: async () => undefined,
+          set: async () => undefined,
+          delete: async () => undefined,
+          pendingGet: async () => [
+            {
+              id: "entry-1",
+              kind: "question" as const,
+              sessionId: "session-1",
+              text: longText,
+              stampedAt: Date.now(),
+              resolved: false,
+            },
+          ],
+          pendingSet: async () => undefined,
+        },
+      };
+
+      await handleTextUpdate(runtime, {
+        update_id: 12,
+        message: { message_id: 12, text: "/pending", chat: { id: 77 }, from: { id: 5 } },
+      });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+
+    const parts = calls.filter((x) => x.url.includes("/sendMessage")).map((x) => String(x.body.text || ""));
+    expect(parts.length).toBeGreaterThan(1);
+    expect(parts.every((part) => part.length <= 3900)).toBe(true);
+  });
+
   test("handleBridgeEvent does not debounce failed key and still notifies another key in same chat", async () => {
     const calls: Array<{ url: string; body: Record<string, unknown> }> = [];
     const originalFetch = globalThis.fetch;
