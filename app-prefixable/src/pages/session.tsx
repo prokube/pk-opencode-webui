@@ -276,6 +276,15 @@ export function Session() {
   const pendingPermissions = createMemo(() => permission.pendingForSession(sessionId() ?? ""));
   const inputBlocked = createMemo(() => !!pendingQuestion() || pendingPermissions().length > 0);
 
+  function clearFollowupStorageKey() {
+    if (typeof window === "undefined") return;
+    try {
+      window.localStorage.removeItem(followupStorageKey(params.dir));
+    } catch {
+      return;
+    }
+  }
+
   function readFollowupMap() {
     if (typeof window === "undefined") return {} as Record<string, FollowupItem[] | undefined>;
     const key = followupStorageKey(params.dir);
@@ -284,12 +293,12 @@ export function Session() {
       if (!raw) return {} as Record<string, FollowupItem[] | undefined>;
       const parsed = JSON.parse(raw);
       if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-        window.localStorage.removeItem(key);
+        clearFollowupStorageKey();
         return {} as Record<string, FollowupItem[] | undefined>;
       }
       return parsed as Record<string, FollowupItem[] | undefined>;
     } catch {
-      window.localStorage.removeItem(key);
+      clearFollowupStorageKey();
       return {} as Record<string, FollowupItem[] | undefined>;
     }
   }
@@ -1438,7 +1447,7 @@ export function Session() {
 
     const files = fileContext();
     const images = imageAttachments();
-    if ((!text && files.length === 0 && images.length === 0) || loading() || inputBlocked())
+    if ((!text && files.length === 0 && images.length === 0) || loading() || inputBlocked() || !!followupSending())
       return;
 
     if (processing() && text && files.length === 0 && images.length === 0) {
