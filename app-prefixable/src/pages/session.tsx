@@ -1485,7 +1485,7 @@ export function Session() {
         model,
       });
       if (!created) {
-        setError("Failed to send saved prompt: no session data returned.");
+        setError("Failed to create session: no session data returned.");
         return;
       }
       const sid = created.id;
@@ -1510,6 +1510,18 @@ export function Session() {
         model,
         connected: providers.connected,
       });
+    });
+    const welcomeError = createMemo(() => {
+      const pending = pendingStartError();
+      const current = error();
+      if (!pending) return current;
+      if (pending === current) return pending;
+      return current;
+    });
+    const showPendingStartError = createMemo(() => {
+      const pending = pendingStartError();
+      if (!pending) return false;
+      return pending !== error();
     });
 
     return (
@@ -1807,7 +1819,7 @@ export function Session() {
             </div>
           </Show>
 
-          <Show when={pendingStartError()}>
+          <Show when={showPendingStartError()}>
             <div
               class="mt-4 px-4 py-2 rounded-lg text-sm max-w-2xl"
               role="alert"
@@ -1821,7 +1833,7 @@ export function Session() {
             </div>
           </Show>
 
-          <Show when={error()}>
+          <Show when={welcomeError()}>
             <div
               class="mt-4 px-4 py-2 rounded-lg text-sm max-w-2xl"
               role="alert"
@@ -1831,7 +1843,7 @@ export function Session() {
                 color: "var(--status-danger-text)",
               }}
             >
-              {error()}
+              {welcomeError()}
             </div>
           </Show>
 
