@@ -1,7 +1,10 @@
-interface ModelKey {
-  providerID: string;
-  modelID: string;
-}
+import type {
+  OpencodeClient,
+  Session,
+  SessionPromptAsyncData,
+} from "../sdk/client";
+
+type ModelKey = NonNullable<NonNullable<SessionPromptAsyncData["body"]>["model"]>;
 
 interface StartSessionCheck {
   loading: boolean;
@@ -10,20 +13,9 @@ interface StartSessionCheck {
   connected: string[];
 }
 
-interface PromptCreateClient {
-  session: {
-    create: (_args: object) => Promise<{ data?: { id: string } }>;
-    promptAsync: (_args: {
-      sessionID: string;
-      parts: { type: "text"; text: string }[];
-      agent: string;
-      model: ModelKey;
-    }) => Promise<unknown>;
-  };
-}
-
 export function startSessionError(args: StartSessionCheck) {
-  if (args.loading || args.providerCount === 0) return "Providers are still loading. Please try again in a moment.";
+  if (args.loading) return "Providers are still loading. Please try again in a moment.";
+  if (args.providerCount === 0) return "No providers are available. Please add one in Settings.";
   if (!args.model) return "Please select a model before sending messages. Click the model button in the header.";
   if (!args.connected.includes(args.model.providerID)) {
     return `Provider "${args.model.providerID}" is not connected. Please configure it in Settings.`;
@@ -32,18 +24,23 @@ export function startSessionError(args: StartSessionCheck) {
 }
 
 export async function createSessionWithPrompt(args: {
-  client: PromptCreateClient;
+  client: OpencodeClient;
   text: string;
   agent: string;
   model: ModelKey;
-}) {
+}): Promise<Session | null> {
   const created = await args.client.session.create({});
   if (!created.data) return null;
-  await args.client.session.promptAsync({
-    sessionID: created.data.id,
-    parts: [{ type: "text", text: args.text }],
-    agent: args.agent,
-    model: args.model,
-  });
+  try {
+    await args.client.session.promptAsync({
+      sessionID: created.data.id,
+      parts: [{ type: "text", text: args.text }],
+      agent: args.agent,
+      model: args.model,
+    });
+  } catch (err) {
+    await args.client.session.delete({ sessionID: created.data.id }).catch(() => undefined);
+    throw err;
+  }
   return created.data;
 }

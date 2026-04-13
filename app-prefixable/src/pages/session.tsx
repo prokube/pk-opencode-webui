@@ -1494,6 +1494,15 @@ export function Session() {
   // Welcome screen component for when no session is selected
   function WelcomeScreen() {
     const savedPrompts = useSavedPrompts();
+    const pendingStartError = createMemo(() => {
+      const model = sessionModel();
+      return startSessionError({
+        loading: providers.loading,
+        providerCount: providers.providers.length,
+        model,
+        connected: providers.connected,
+      });
+    });
 
     return (
       <div
@@ -1784,6 +1793,18 @@ export function Session() {
                   )}
                 </For>
               </div>
+            </div>
+          </Show>
+
+          <Show when={pendingStartError()}>
+            <div
+              class="mt-4 px-4 py-2 rounded-lg text-sm max-w-2xl"
+              style={{
+                background: "var(--status-danger-dim)",
+                color: "var(--status-danger-text)",
+              }}
+            >
+              {pendingStartError()}
             </div>
           </Show>
 
