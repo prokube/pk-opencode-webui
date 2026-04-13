@@ -576,10 +576,12 @@ export function Session() {
               scope: directory,
             });
             const data = res.data;
-            if (data) {
-              console.log("[Command] Created session:", data.id);
-              navigate(`/${dirSlug()}/session/${data.id}`);
+            if (!data) {
+              showToast("Failed to create session: no session data returned");
+              return;
             }
+            console.log("[Command] Created session:", data.id);
+            navigate(`/${dirSlug()}/session/${data.id}`);
           } catch (err) {
             showToast(`Failed to create session: ${err instanceof Error ? err.message : String(err)}`);
           } finally {
@@ -1377,7 +1379,10 @@ export function Session() {
         });
         const data = res.data;
         console.log("[Session] Create response:", data);
-        if (!data) throw new Error("Failed to create session");
+        if (!data) {
+          setError("Failed to create session: no session data returned.");
+          return;
+        }
 
         id = data.id;
         setSessionId(id);
@@ -1479,7 +1484,10 @@ export function Session() {
         agent: providers.selectedAgent || "build",
         model,
       });
-      if (!created) return;
+      if (!created) {
+        setError("Failed to send saved prompt: no session data returned.");
+        return;
+      }
       const sid = created.id;
       setSessionId(sid);
       navigate(`/${dirSlug()}/session/${sid}`, { replace: true });
@@ -1657,13 +1665,16 @@ export function Session() {
                   });
                   const data = res.data;
                   console.log("[Welcome] Create response:", data);
-                  if (data) {
-                    const url = `/${dirSlug()}/session/${data.id}`;
-                    console.log("[Welcome] Navigating to:", url);
-                    navigate(url);
+                  if (!data) {
+                    setError("Failed to create session: no session data returned.");
+                    return;
                   }
+                  const url = `/${dirSlug()}/session/${data.id}`;
+                  console.log("[Welcome] Navigating to:", url);
+                  navigate(url);
                 } catch (e) {
                   console.error("[Welcome] Failed to create session:", e);
+                  setError(`Failed to create session: ${e instanceof Error ? e.message : String(e)}`);
                 } finally {
                   setCreatingSession(false);
                 }

@@ -1796,15 +1796,17 @@ export function Layout(props: ParentProps) {
         scope: directory,
       });
       const data = res.data;
-      if (data) {
-        if (res.isLeader) {
-          setSessions((prev) => {
-            if (prev.some((s) => s.id === data.id)) return prev;
-            return [data as Session, ...prev];
-          });
-        }
-        navigate(`/${dirSlug()}/session/${data.id}`);
+      if (!data) {
+        setSessionStartError("Failed to create session: no session data returned.");
+        return;
       }
+      if (res.isLeader) {
+        setSessions((prev) => {
+          if (prev.some((s) => s.id === data.id)) return prev;
+          return [data as Session, ...prev];
+        });
+      }
+      navigate(`/${dirSlug()}/session/${data.id}`);
     } catch (e) {
       console.error("Failed to create session:", e);
       setSessionStartError(`Failed to create session: ${e instanceof Error ? e.message : String(e)}`);
@@ -1815,8 +1817,8 @@ export function Layout(props: ParentProps) {
 
   async function createSessionWithPrompt(text: string) {
     if (!directory) return;
-    if (creatingSession()) return;
     setPromptDropdownOpen(false);
+    if (creatingSession()) return;
     const model = providers.selectedModel;
     const err = startSessionError({
       loading: providers.loading,
@@ -1838,7 +1840,10 @@ export function Layout(props: ParentProps) {
         agent: providers.selectedAgent || "build",
         model,
       });
-      if (!res) return;
+      if (!res) {
+        setSessionStartError("Failed to send saved prompt: no session data returned.");
+        return;
+      }
       setSessions((prev) => [res as Session, ...prev]);
       providers.setSessionModel(res.id, model);
       navigate(`/${dirSlug()}/session/${res.id}`);
@@ -2248,6 +2253,7 @@ export function Layout(props: ParentProps) {
               </Button>
               <Show when={!savedPrompts.loading() && savedPrompts.prompts().length > 0}>
                 <button
+                  disabled={creatingSession()}
                   on:click={(e) => {
                     e.stopPropagation();
                     setPromptDropdownIndex(0);
