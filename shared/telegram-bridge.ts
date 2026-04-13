@@ -41,12 +41,79 @@ type CachedSession = {
   expiresAt: number
 }
 
+type TelegramCommand = {
+  name: string
+  description: string
+  help: string
+}
+
 const sessions = new Map<string, CachedSession>()
 const creatingSessions = new Map<string, Promise<string>>()
 const chatQueues = new Map<string, Promise<void>>()
 const eventNotifications = new Map<string, number>()
 const statusBySession = new Map<string, string>()
 const fallbackNotifications = new Map<string, boolean>()
+
+const telegramCommands = Object.freeze([
+  Object.freeze({
+    name: "new",
+    description: "Start a fresh OpenCode session",
+    help: "start and switch to a fresh OpenCode session",
+  }),
+  Object.freeze({
+    name: "status",
+    description: "Show current session mapping",
+    help: "show current session mapping",
+  }),
+  Object.freeze({
+    name: "notify",
+    description: "Control proactive notifications",
+    help: "control proactive notifications for this chat (on|off|status)",
+  }),
+  Object.freeze({
+    name: "help",
+    description: "Show available commands",
+    help: "show this help message",
+  }),
+]) as readonly Readonly<TelegramCommand>[]
+
+function commandName(command: TelegramCommand): string {
+  return `/${command.name}`
+}
+
+function commandNames(): string[] {
+  return telegramCommands.map(commandName)
+}
+
+function commandEntry(name: string): TelegramCommand | undefined {
+  const trimmed = name.startsWith("/") ? name.slice(1) : name
+  return telegramCommands.find((command) => command.name === trimmed)
+}
+
+function commonPrefixLength(a: string, b: string): number {
+  const stop = a.split("").findIndex((ch, idx) => ch !== b[idx])
+  if (stop === -1) return Math.min(a.length, b.length)
+  return stop
+}
+
+function commandSuggestions(name: string): string[] {
+  const input = name.startsWith("/") ? name.slice(1).toLowerCase() : name.toLowerCase()
+  if (!input) return []
+  const ranked = telegramCommands
+    .map((command) => {
+      const prefix = commonPrefixLength(command.name, input)
+      const overlap = command.name.includes(input) || input.includes(command.name) ? 2 : 0
+      return {
+        command,
+        score: prefix + overlap,
+      }
+    })
+    .filter((item) => item.score > 0)
+    .sort((a, b) => b.score - a.score)
+    .slice(0, 2)
+    .map((item) => commandName(item.command))
+  return [...new Set(ranked)]
+}
 
 function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms))
@@ -90,10 +157,7 @@ function parseCommand(text: string): { name: string; args: string[] } | undefine
 function helpText(): string {
   return [
     "Available commands:",
-    "/new - start and switch to a fresh OpenCode session",
-    "/status - show current session mapping",
-    "/notify on|off|status - control proactive notifications for this chat",
-    "/help - show this help message",
+    ...telegramCommands.map((command) => `${commandName(command)} - ${command.help}`),
   ].join("\n")
 }
 
@@ -294,6 +358,15 @@ export function joinOpenCodeUrl(openCodeUrl: string, path: string): URL {
   return url
 }
 
+export async function registerTelegramCommands(config: BridgeConfig) {
+  await telegramRequest(config, "setMyCommands", {
+    commands: telegramCommands.map((command) => ({
+      command: command.name,
+      description: command.description,
+    })),
+  })
+}
+
 function opencodeUrl(config: BridgeConfig, path: string): URL {
   return joinOpenCodeUrl(config.openCodeUrl, path)
 }
@@ -455,23 +528,24 @@ export async function handleTextUpdate(runtime: Runtime, update: TelegramUpdate)
   const runCommand = async () => {
     const command = parseCommand(text)
     if (!command) return false
-    if (command.name === "/help") {
+    const known = commandEntry(command.name)
+    if (known?.name === "help") {
       await sendTelegramMessage(config, chatId, helpText())
       return true
     }
-    if (command.name === "/status") {
+    if (known?.name === "status") {
       const sessionId = await sessionForChat(runtime, key)
       await sendTelegramMessage(config, chatId, `Current session: ${sessionId}`)
       return true
     }
-    if (command.name === "/new") {
+    if (known?.name === "new") {
       const next = await createSession(config)
       await runtime.store.set(key, next)
       cacheSession(config, key, next)
       await sendTelegramMessage(config, chatId, `Started a new session: ${next}`)
       return true
     }
-    if (command.name === "/notify") {
+    if (known?.name === "notify") {
       const mode = command.args[0]?.toLowerCase() || ""
       const notifyKey = notificationKey(chatId)
       if (mode === "on") {
@@ -492,7 +566,11 @@ export async function handleTextUpdate(runtime: Runtime, update: TelegramUpdate)
       await sendTelegramMessage(config, chatId, "Usage: /notify on, /notify off, or /notify status")
       return true
     }
-    await sendTelegramMessage(config, chatId, `Unknown command ${command.name}. Use /help.`)
+    const suggestions = commandSuggestions(command.name)
+    const suggestionText = suggestions.length
+      ? `Try ${suggestions.join(", ")} or use /help.`
+      : `Use /help to view ${commandNames().join(", ")}.`
+    await sendTelegramMessage(config, chatId, `Unknown command ${command.name}. ${suggestionText}`)
     return true
   }
 
@@ -732,6 +810,13 @@ export async function startTelegramBridge() {
   if (config.directory) {
     console.log(`[TelegramBridge] OpenCode directory: ${config.directory}`)
   }
+  await registerTelegramCommands(config)
+    .then(() => {
+      console.log(`[TelegramBridge] Registered bot commands: ${commandNames().join(", ")}`)
+    })
+    .catch((error) => {
+      console.warn("[TelegramBridge] failed to register bot commands", error)
+    })
   if (config.mode === "polling") {
     await Promise.all([runPolling(runtime), runOutboundNotifications(runtime)])
     return
