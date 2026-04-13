@@ -1,5 +1,6 @@
 import { createContext, useContext, createSignal, createEffect, createMemo, on, type ParentProps, type Accessor } from "solid-js"
 import { deriveDirectoryFromPathname } from "../utils/path"
+import { useRecentProjects } from "./recent-projects"
 
 export type PromptScope = "global" | "project"
 
@@ -27,8 +28,10 @@ interface SavedPromptsContextValue {
   globalPrompts: () => SavedPrompt[]
   /** Only project-scoped prompts. */
   projectPrompts: () => SavedPrompt[]
-  /** Whether there is an active project directory. */
-  hasProject: () => boolean
+  /** Whether project scope can be used (active project or recent fallback). */
+  canUseProjectScope: () => boolean
+  /** Whether there is an active project in the current route context. */
+  hasActiveProject: () => boolean
   add: (title: string, text: string, scope?: PromptScope) => void
   move: (id: string, scope: PromptScope) => void
   update: (id: string, fields: Partial<Pick<SavedPrompt, "title" | "text">>) => void
@@ -37,7 +40,6 @@ interface SavedPromptsContextValue {
 }
 
 const GLOBAL_KEY = "opencode.savedPrompts"
-
 function projectKey(directory: string): string {
   const normalized = directory.replace(/[\\/]+$/, "")
   return `opencode.savedPrompts.${normalized}`
@@ -147,6 +149,15 @@ function isPrompt(p: SavedPrompt | undefined): p is SavedPrompt {
 }
 
 export function SavedPromptsProvider(props: ParentProps & { directory?: Accessor<string | undefined> }) {
+  const recent = useRecentProjects()
+
+  const recentDirectory = createMemo(() => {
+    const first = recent.projects()[0]
+    if (!first?.path) return undefined
+    const normalized = first.path.replace(/[\\/]+$/, "")
+    return normalized || undefined
+  })
+
   // Keep a "sticky" directory that survives transient undefined flickers
   // during SolidJS router transitions (e.g. project → project settings).
   const [sticky, setSticky] = createSignal<string | undefined>(
@@ -180,20 +191,21 @@ export function SavedPromptsProvider(props: ParentProps & { directory?: Accessor
   })
 
   const dir = sticky
-  const pKey = () => {
-    const d = dir()
+  const targetDirectory = () => dir() ?? recentDirectory()
+  const resolvedPKey = () => {
+    const d = targetDirectory()
     return d ? projectKey(d) : undefined
   }
 
   // Run migration synchronously before initial load so first render has data
-  const initialDir = dir()
+  const initialDir = targetDirectory()
   if (initialDir) migrateIfNeeded(initialDir)
 
   // Load initial data from both stores
   const [globalPrompts, setGlobalPrompts] = createSignal<SavedPrompt[]>(
     loadFromStorage(GLOBAL_KEY, "global").sort(sortNewest),
   )
-  const initialPKey = pKey()
+  const initialPKey = resolvedPKey()
   const [projectPrompts, setProjectPrompts] = createSignal<SavedPrompt[]>(
     initialPKey ? loadFromStorage(initialPKey, "project").sort(sortNewest) : [],
   )
@@ -202,18 +214,18 @@ export function SavedPromptsProvider(props: ParentProps & { directory?: Accessor
   const allPrompts = createMemo(() => mergePrompts(globalPrompts(), projectPrompts()))
 
   // Reload project prompts when the project key changes
-  let prevPKey = pKey()
-  createEffect(on(pKey, (k) => {
+  let prevPKey = resolvedPKey()
+  createEffect(on(resolvedPKey, (k) => {
     if (k === prevPKey) return
     prevPKey = k
-    const d = dir()
+    const d = targetDirectory()
     if (d) migrateIfNeeded(d)
     setProjectPrompts(k ? loadFromStorage(k, "project").sort(sortNewest) : [])
   }))
 
   // Also reload global prompts when the project key changes (migration may
   // have tagged previously-unscoped prompts)
-  createEffect(on(pKey, () => {
+  createEffect(on(resolvedPKey, () => {
     setGlobalPrompts(loadFromStorage(GLOBAL_KEY, "global").sort(sortNewest))
   }))
 
@@ -226,7 +238,7 @@ export function SavedPromptsProvider(props: ParentProps & { directory?: Accessor
       scope,
     }
     if (scope === "project") {
-      const k = pKey()
+      const k = resolvedPKey()
       if (!k) {
         // Fallback to global if no project context
         addGlobal(prompt)
@@ -237,9 +249,9 @@ export function SavedPromptsProvider(props: ParentProps & { directory?: Accessor
         saveToStorage(k, updated)
         return updated
       })
-    } else {
-      addGlobal(prompt)
+      return
     }
+    addGlobal(prompt)
   }
 
   function addGlobal(prompt: SavedPrompt) {
@@ -254,7 +266,7 @@ export function SavedPromptsProvider(props: ParentProps & { directory?: Accessor
     const project = projectPrompts().find((p) => p.id === id)
     if (project) {
       if (scope === "project") return
-      const k = pKey()
+      const k = resolvedPKey()
       if (!k) return
       setProjectPrompts((prev) => {
         const updated = prev.filter((p) => p.id !== id)
@@ -273,7 +285,7 @@ export function SavedPromptsProvider(props: ParentProps & { directory?: Accessor
     if (!global) return
     if (scope === "global") return
 
-    const k = pKey()
+    const k = resolvedPKey()
     if (!k) return
 
     setGlobalPrompts((prev) => {
@@ -291,7 +303,7 @@ export function SavedPromptsProvider(props: ParentProps & { directory?: Accessor
   function update(id: string, fields: Partial<Pick<SavedPrompt, "title" | "text">>) {
     // Find which store the prompt belongs to
     if (projectPrompts().some((p) => p.id === id)) {
-      const k = pKey()
+      const k = resolvedPKey()
       if (!k) return
       setProjectPrompts((prev) => {
         const updated = prev.map((p) => (p.id === id ? { ...p, ...fields } : p))
@@ -310,7 +322,7 @@ export function SavedPromptsProvider(props: ParentProps & { directory?: Accessor
   function remove(id: string) {
     // Remove from whichever store contains it
     if (projectPrompts().some((p) => p.id === id)) {
-      const k = pKey()
+      const k = resolvedPKey()
       if (!k) return
       setProjectPrompts((prev) => {
         const filtered = prev.filter((p) => p.id !== id)
@@ -356,12 +368,17 @@ export function SavedPromptsProvider(props: ParentProps & { directory?: Accessor
     setGlobalPrompts(newGlobal)
     saveToStorage(GLOBAL_KEY, newGlobal)
 
-    const k = pKey()
+    const k = resolvedPKey()
     if (k) {
       const newProject = reorderStore(projectPrompts())
       setProjectPrompts(newProject)
       saveToStorage(k, newProject)
     }
+  }
+
+  const hasActiveProject = () => {
+    const active = props.directory?.() ?? deriveDirectoryFromPathname()
+    return !!active
   }
 
   return (
@@ -370,7 +387,8 @@ export function SavedPromptsProvider(props: ParentProps & { directory?: Accessor
         prompts: allPrompts,
         globalPrompts,
         projectPrompts,
-        hasProject: () => !!dir(),
+        canUseProjectScope: () => !!targetDirectory(),
+        hasActiveProject,
         add,
         move,
         update,
