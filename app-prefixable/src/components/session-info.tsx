@@ -69,7 +69,7 @@ function interleaved(value: unknown): ModelMeta["interleaved"] | undefined {
   if (field === undefined || field === "reasoning_content" || field === "reasoning_details") {
     return { field }
   }
-  return {}
+  return undefined
 }
 
 function arr(value: unknown) {
@@ -359,8 +359,9 @@ export function SessionInfo(props: SessionInfoProps) {
   createEffect(() => {
     const model = props.sessionModel()
     const key = model ? `${model.providerID}:${model.modelID}` : ""
-    params.id // track session ID
-    key // track selected model
+    const id = params.id
+    void id
+    void key
     setShowTokenPopover(false)
     setShowModelPopover(false)
   })
@@ -460,13 +461,13 @@ export function SessionInfo(props: SessionInfoProps) {
                   class="w-80 max-w-[calc(100vw-1rem)] rounded-lg shadow-lg text-xs"
                   style={{
                     position: "fixed",
-                     top: `${modelPopoverPos().top}px`,
-                     left: `${modelPopoverPos().left}px`,
-                     transform: "translateY(-100%)",
-                     "z-index": "40",
-                     background: "var(--background-base)",
-                     border: "1px solid var(--border-base)",
-                   }}
+                    top: `${modelPopoverPos().top}px`,
+                    left: `${modelPopoverPos().left}px`,
+                    transform: "translateY(-100%)",
+                    "z-index": "40",
+                    background: "var(--background-base)",
+                    border: "1px solid var(--border-base)",
+                  }}
                   onMouseEnter={openModelPopover}
                   onMouseLeave={scheduleModelPopoverHide}
                 >
@@ -623,13 +624,13 @@ export function SessionInfo(props: SessionInfoProps) {
                     class="w-64 rounded-lg shadow-lg text-xs"
                     style={{
                       position: "fixed",
-                       top: `${popoverPos().top}px`,
-                       left: `${popoverPos().left}px`,
-                       transform: "translateY(-100%)",
-                       "z-index": "40",
-                       background: "var(--background-base)",
-                       border: "1px solid var(--border-base)",
-                     }}
+                      top: `${popoverPos().top}px`,
+                      left: `${popoverPos().left}px`,
+                      transform: "translateY(-100%)",
+                      "z-index": "40",
+                      background: "var(--background-base)",
+                      border: "1px solid var(--border-base)",
+                    }}
                   >
                     <div
                       class="px-3 py-2 font-medium"
