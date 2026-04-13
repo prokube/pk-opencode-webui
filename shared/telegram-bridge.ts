@@ -267,8 +267,8 @@ async function sessionForChat(runtime: Runtime, chatKey: string): Promise<string
 
   const created = createSession(config)
     .then((id) => {
-      cacheSession(config, chatKey, id)
       return runtime.store.set(chatKey, id).then(() => {
+        cacheSession(config, chatKey, id)
         creatingSessions.delete(chatKey)
         return id
       })
@@ -366,8 +366,8 @@ export async function handleTextUpdate(runtime: Runtime, update: TelegramUpdate)
     }
     if (command.name === "/new") {
       const next = await createSession(config)
-      cacheSession(config, key, next)
       await runtime.store.set(key, next)
+      cacheSession(config, key, next)
       await sendTelegramMessage(config, chatId, `Started a new session: ${next}`)
       return true
     }

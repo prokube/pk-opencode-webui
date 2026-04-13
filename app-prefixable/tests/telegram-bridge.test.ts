@@ -150,49 +150,51 @@ describe("telegram bridge config and cache", () => {
   test("handleTextUpdate parses whitespace and bot-qualified help command", async () => {
     const calls: Array<{ url: string; body: Record<string, unknown> }> = [];
     const originalFetch = globalThis.fetch;
-    globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
-      const url = String(input);
-      const body = init?.body ? (JSON.parse(String(init.body)) as Record<string, unknown>) : {};
-      calls.push({ url, body });
-      if (url.includes("/sendMessage")) {
-        return new Response(JSON.stringify({ ok: true, result: { message_id: 1 } }), { status: 200 });
-      }
-      throw new Error(`Unexpected fetch ${url}`);
-    };
+    try {
+      globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        const body = init?.body ? (JSON.parse(String(init.body)) as Record<string, unknown>) : {};
+        calls.push({ url, body });
+        if (url.includes("/sendMessage")) {
+          return new Response(JSON.stringify({ ok: true, result: { message_id: 1 } }), { status: 200 });
+        }
+        throw new Error(`Unexpected fetch ${url}`);
+      };
 
-    const map = new Map<string, string>();
-    const runtime = {
-      config: {
-        mode: "polling" as const,
-        token: "token",
-        openCodeUrl: "http://127.0.0.1:4096",
-        sessionCacheMax: 10,
-        sessionCacheTtlMs: 10_000,
-        port: 4097,
-        webhookPath: "/webhook",
-        sessionStorePath: "/tmp/test-store.json",
-      },
-      store: {
-        get: async (key: string) => map.get(key),
-        set: async (key: string, value: string) => {
-          map.set(key, value);
+      const map = new Map<string, string>();
+      const runtime = {
+        config: {
+          mode: "polling" as const,
+          token: "token",
+          openCodeUrl: "http://127.0.0.1:4096",
+          sessionCacheMax: 10,
+          sessionCacheTtlMs: 10_000,
+          port: 4097,
+          webhookPath: "/webhook",
+          sessionStorePath: "/tmp/test-store.json",
         },
-        delete: async (key: string) => {
-          map.delete(key);
+        store: {
+          get: async (key: string) => map.get(key),
+          set: async (key: string, value: string) => {
+            map.set(key, value);
+          },
+          delete: async (key: string) => {
+            map.delete(key);
+          },
         },
-      },
-    };
+      };
 
-    await handleTextUpdate(runtime, {
-      update_id: 1,
-      message: {
-        message_id: 1,
-        text: "/help@prokubebot\nmore",
-        chat: { id: 42 },
-      },
-    });
-
-    globalThis.fetch = originalFetch;
+      await handleTextUpdate(runtime, {
+        update_id: 1,
+        message: {
+          message_id: 1,
+          text: "/help@prokubebot\nmore",
+          chat: { id: 42 },
+        },
+      });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
 
     expect(calls).toHaveLength(1);
     expect(calls[0]?.url).toContain("/sendMessage");
@@ -203,64 +205,202 @@ describe("telegram bridge config and cache", () => {
     const calls: Array<{ url: string; body: Record<string, unknown> }> = [];
     const originalFetch = globalThis.fetch;
     const createdSessions = ["session-1", "session-2"];
-    globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
-      const url = String(input);
-      const body = init?.body ? (JSON.parse(String(init.body)) as Record<string, unknown>) : {};
-      calls.push({ url, body });
-      if (url === "http://127.0.0.1:4096/session") {
-        const id = createdSessions.shift();
-        return new Response(JSON.stringify({ id }), { status: 200 });
-      }
-      if (url.includes("/sendMessage")) {
-        return new Response(JSON.stringify({ ok: true, result: { message_id: 1 } }), { status: 200 });
-      }
-      throw new Error(`Unexpected fetch ${url}`);
-    };
+    try {
+      globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        const body = init?.body ? (JSON.parse(String(init.body)) as Record<string, unknown>) : {};
+        calls.push({ url, body });
+        if (url === "http://127.0.0.1:4096/session") {
+          const id = createdSessions.shift();
+          return new Response(JSON.stringify({ id }), { status: 200 });
+        }
+        if (url.includes("/sendMessage")) {
+          return new Response(JSON.stringify({ ok: true, result: { message_id: 1 } }), { status: 200 });
+        }
+        throw new Error(`Unexpected fetch ${url}`);
+      };
 
+      const map = new Map<string, string>();
+      const runtime = {
+        config: {
+          mode: "polling" as const,
+          token: "token",
+          openCodeUrl: "http://127.0.0.1:4096",
+          sessionCacheMax: 10,
+          sessionCacheTtlMs: 10_000,
+          port: 4097,
+          webhookPath: "/webhook",
+          sessionStorePath: "/tmp/test-store.json",
+        },
+        store: {
+          get: async (key: string) => map.get(key),
+          set: async (key: string, value: string) => {
+            map.set(key, value);
+          },
+          delete: async (key: string) => {
+            map.delete(key);
+          },
+        },
+      };
+
+      await handleTextUpdate(runtime, {
+        update_id: 1,
+        message: { message_id: 1, text: "/status", chat: { id: 7 }, from: { id: 9 } },
+      });
+      await handleTextUpdate(runtime, {
+        update_id: 2,
+        message: { message_id: 2, text: "/new@mybot", chat: { id: 7 }, from: { id: 9 } },
+      });
+      await handleTextUpdate(runtime, {
+        update_id: 3,
+        message: { message_id: 3, text: "/wat", chat: { id: 7 }, from: { id: 9 } },
+      });
+
+      const sentTexts = calls
+        .filter((x) => x.url.includes("/sendMessage"))
+        .map((x) => String(x.body.text || ""));
+      expect(sentTexts[0]).toBe("Current session: session-1");
+      expect(sentTexts[1]).toBe("Started a new session: session-2");
+      expect(sentTexts[2]).toBe("Unknown command /wat. Use /help.");
+      expect(map.get("chat:7:user:9")).toBe("session-2");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test("sessionForChat does not cache new session when store set fails", async () => {
+    const calls: Array<{ url: string; body: Record<string, unknown> }> = [];
+    const originalFetch = globalThis.fetch;
+    const createdSessions = ["session-1", "session-2"];
     const map = new Map<string, string>();
-    const runtime = {
-      config: {
-        mode: "polling" as const,
-        token: "token",
-        openCodeUrl: "http://127.0.0.1:4096",
-        sessionCacheMax: 10,
-        sessionCacheTtlMs: 10_000,
-        port: 4097,
-        webhookPath: "/webhook",
-        sessionStorePath: "/tmp/test-store.json",
-      },
-      store: {
-        get: async (key: string) => map.get(key),
-        set: async (key: string, value: string) => {
-          map.set(key, value);
+    let failSet = true;
+
+    try {
+      globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        const body = init?.body ? (JSON.parse(String(init.body)) as Record<string, unknown>) : {};
+        calls.push({ url, body });
+        if (url === "http://127.0.0.1:4096/session") {
+          const id = createdSessions.shift();
+          return new Response(JSON.stringify({ id }), { status: 200 });
+        }
+        if (url.includes("/sendMessage")) {
+          return new Response(JSON.stringify({ ok: true, result: { message_id: 1 } }), { status: 200 });
+        }
+        throw new Error(`Unexpected fetch ${url}`);
+      };
+
+      const runtime = {
+        config: {
+          mode: "polling" as const,
+          token: "token",
+          openCodeUrl: "http://127.0.0.1:4096",
+          sessionCacheMax: 10,
+          sessionCacheTtlMs: 10_000,
+          port: 4097,
+          webhookPath: "/webhook",
+          sessionStorePath: "/tmp/test-store.json",
         },
-        delete: async (key: string) => {
-          map.delete(key);
+        store: {
+          get: async (key: string) => map.get(key),
+          set: async (key: string, value: string) => {
+            if (failSet) {
+              throw new Error("persist failed");
+            }
+            map.set(key, value);
+          },
+          delete: async (key: string) => {
+            map.delete(key);
+          },
         },
-      },
-    };
+      };
 
-    await handleTextUpdate(runtime, {
-      update_id: 1,
-      message: { message_id: 1, text: "/status", chat: { id: 7 }, from: { id: 9 } },
-    });
-    await handleTextUpdate(runtime, {
-      update_id: 2,
-      message: { message_id: 2, text: "/new@mybot", chat: { id: 7 }, from: { id: 9 } },
-    });
-    await handleTextUpdate(runtime, {
-      update_id: 3,
-      message: { message_id: 3, text: "/wat", chat: { id: 7 }, from: { id: 9 } },
-    });
+      await handleTextUpdate(runtime, {
+        update_id: 1,
+        message: { message_id: 1, text: "/status", chat: { id: 7 }, from: { id: 9 } },
+      });
+      failSet = false;
+      await handleTextUpdate(runtime, {
+        update_id: 2,
+        message: { message_id: 2, text: "/status", chat: { id: 7 }, from: { id: 9 } },
+      });
 
-    globalThis.fetch = originalFetch;
+      const sentTexts = calls
+        .filter((x) => x.url.includes("/sendMessage"))
+        .map((x) => String(x.body.text || ""));
+      expect(sentTexts[0]).toContain("Sorry, I ran into an internal error");
+      expect(sentTexts[1]).toBe("Current session: session-2");
+      expect(map.get("chat:7:user:9")).toBe("session-2");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
 
-    const sentTexts = calls
-      .filter((x) => x.url.includes("/sendMessage"))
-      .map((x) => String(x.body.text || ""));
-    expect(sentTexts[0]).toBe("Current session: session-1");
-    expect(sentTexts[1]).toBe("Started a new session: session-2");
-    expect(sentTexts[2]).toBe("Unknown command /wat. Use /help.");
-    expect(map.get("chat:7:user:9")).toBe("session-2");
+  test("/new does not cache session when store set fails", async () => {
+    const calls: Array<{ url: string; body: Record<string, unknown> }> = [];
+    const originalFetch = globalThis.fetch;
+    const createdSessions = ["session-1", "session-2"];
+    const map = new Map<string, string>();
+    let failSet = true;
+
+    try {
+      globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        const body = init?.body ? (JSON.parse(String(init.body)) as Record<string, unknown>) : {};
+        calls.push({ url, body });
+        if (url === "http://127.0.0.1:4096/session") {
+          const id = createdSessions.shift();
+          return new Response(JSON.stringify({ id }), { status: 200 });
+        }
+        if (url.includes("/sendMessage")) {
+          return new Response(JSON.stringify({ ok: true, result: { message_id: 1 } }), { status: 200 });
+        }
+        throw new Error(`Unexpected fetch ${url}`);
+      };
+
+      const runtime = {
+        config: {
+          mode: "polling" as const,
+          token: "token",
+          openCodeUrl: "http://127.0.0.1:4096",
+          sessionCacheMax: 10,
+          sessionCacheTtlMs: 10_000,
+          port: 4097,
+          webhookPath: "/webhook",
+          sessionStorePath: "/tmp/test-store.json",
+        },
+        store: {
+          get: async (key: string) => map.get(key),
+          set: async (key: string, value: string) => {
+            if (failSet) {
+              throw new Error("persist failed");
+            }
+            map.set(key, value);
+          },
+          delete: async (key: string) => {
+            map.delete(key);
+          },
+        },
+      };
+
+      await handleTextUpdate(runtime, {
+        update_id: 1,
+        message: { message_id: 1, text: "/new", chat: { id: 7 }, from: { id: 9 } },
+      });
+      failSet = false;
+      await handleTextUpdate(runtime, {
+        update_id: 2,
+        message: { message_id: 2, text: "/status", chat: { id: 7 }, from: { id: 9 } },
+      });
+
+      const sentTexts = calls
+        .filter((x) => x.url.includes("/sendMessage"))
+        .map((x) => String(x.body.text || ""));
+      expect(sentTexts[0]).toContain("Sorry, I ran into an internal error");
+      expect(sentTexts[1]).toBe("Current session: session-2");
+      expect(map.get("chat:7:user:9")).toBe("session-2");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
   });
 });
