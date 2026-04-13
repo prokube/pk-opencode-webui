@@ -142,9 +142,34 @@ The container uses s6-overlay with the following structure:
 │   ├── 02-clone-examples       # Clone examples repository (optional)
 │   └── 03-fix-ssh-permissions  # Fix SSH key permissions for mounted keys
 └── services.d/
-    └── opencode/
-        └── run                 # Start API + UI servers
+    ├── opencode/
+    │   └── run                 # Start API + UI servers
+    └── telegram-bridge/
+        └── run                 # Optional Telegram bridge process
 ```
+
+### Telegram bridge (optional)
+
+Set `TELEGRAM_BRIDGE_ENABLED=true` to enable the Telegram bridge service.
+
+Required when enabled:
+- `TELEGRAM_BOT_TOKEN`
+
+Optional:
+- `TELEGRAM_MODE` (`polling` or `webhook`, default `polling`)
+- `OPENCODE_API_URL` (defaults to `API_URL` or `http://127.0.0.1:4096`)
+- `OPENCODE_DIRECTORY`
+- `TELEGRAM_BRIDGE_PORT` (webhook mode)
+- `TELEGRAM_WEBHOOK_PATH` (webhook mode)
+- `TELEGRAM_WEBHOOK_URL` (auto-register webhook if set)
+- `TELEGRAM_WEBHOOK_SECRET` (validated from `x-telegram-bot-api-secret-token` header)
+
+Webhook mode deployment notes:
+- Expose `TELEGRAM_BRIDGE_PORT` on the Notebook service or sidecar Service, then publish it through your cluster ingress.
+- Route incoming traffic to `TELEGRAM_WEBHOOK_PATH` to the same container that runs the `telegram-bridge` s6 service.
+- Set `TELEGRAM_WEBHOOK_URL` to the externally reachable HTTPS URL Telegram can call.
+- If your ingress rewrites paths, keep the external path in `TELEGRAM_WEBHOOK_URL` aligned with the internal `TELEGRAM_WEBHOOK_PATH` target.
+- Set `TELEGRAM_WEBHOOK_SECRET` and ensure your ingress preserves `x-telegram-bot-api-secret-token`.
 
 ## Development
 
