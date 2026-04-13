@@ -1402,7 +1402,7 @@ export function Session() {
 
   async function sendFollowupNow(id: string) {
     const sid = sessionId();
-    if (!sid || followupSending()) return;
+    if (!sid || followupSending() || processing()) return;
     const model = sessionModel();
     if (!model) {
       setError("Please select a model before sending messages. Click the model button in the header.");
@@ -2360,6 +2360,7 @@ export function Session() {
               <FollowupDock
                 items={followups()}
                 sending={followupSending()}
+                processing={processing()}
                 onSend={sendFollowupNow}
                 onEdit={editFollowup}
               />

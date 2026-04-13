@@ -5,6 +5,7 @@ import { Button } from "./ui/button";
 export function FollowupDock(props: {
   items: { id: string; text: string }[];
   sending?: string;
+  processing?: boolean;
   onSend: (id: string) => void;
   onEdit: (id: string) => void;
 }) {
@@ -69,7 +70,7 @@ export function FollowupDock(props: {
                   type="button"
                   size="sm"
                   variant="secondary"
-                  disabled={!!props.sending}
+                  disabled={!!props.sending || !!props.processing}
                   onClick={() => props.onSend(item.id)}
                 >
                   Send now
@@ -78,7 +79,7 @@ export function FollowupDock(props: {
                   type="button"
                   size="sm"
                   variant="ghost"
-                  disabled={!!props.sending}
+                  disabled={!!props.sending || !!props.processing}
                   onClick={() => props.onEdit(item.id)}
                 >
                   Edit
