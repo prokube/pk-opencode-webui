@@ -1821,6 +1821,20 @@ export function Session() {
             </div>
           </Show>
 
+          <Show when={error()}>
+            <div
+              class="mt-4 px-4 py-2 rounded-lg text-sm max-w-2xl"
+              role="alert"
+              aria-live="assertive"
+              style={{
+                background: "var(--status-danger-dim)",
+                color: "var(--status-danger-text)",
+              }}
+            >
+              {error()}
+            </div>
+          </Show>
+
           <p
             class="mt-10 text-sm"
             style={{ color: "var(--text-weak)", opacity: 0.7 }}
