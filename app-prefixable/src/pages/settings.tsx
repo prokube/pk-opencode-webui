@@ -623,12 +623,14 @@ Add your project-specific instructions here.
     const editing = editingPromptId()
     if (editing) {
       const existing = savedPrompts.prompts().find((p) => p.id === editing)
-      if (existing && existing.scope !== promptScope()) {
-        // Scope changed — move across stores while preserving id/createdAt
-        savedPrompts.move(editing, promptScope())
-      }
       if (existing && (existing.title !== title || existing.text !== text)) {
         savedPrompts.update(editing, { title, text })
+      }
+      if (existing && existing.scope !== promptScope()) {
+        // Scope changed — move across stores while preserving id/createdAt
+        // Update first so text/title changes are retained when moving to
+        // a non-active project store.
+        savedPrompts.move(editing, promptScope())
       }
       if (!existing) {
         savedPrompts.add(title, text, promptScope())
