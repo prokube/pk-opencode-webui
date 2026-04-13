@@ -136,8 +136,8 @@ async function writeStore(path: string, data: StoreShape) {
   const body = `${JSON.stringify(data, null, 2)}\n`
   await Bun.write(temp, body)
   const replace = rename(temp, path).catch(async (error) => {
-    const code = error && typeof error === "object" && "code" in error ? String(error.code) : ""
-    if (code !== "EEXIST" && code !== "EPERM" && code !== "ENOTEMPTY" && code !== "EACCES") {
+    const code = errorCode(error)
+    if (!isReplaceConflict(code)) {
       await rm(temp, { force: true }).catch(() => undefined)
       throw error
     }
