@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test"
-import { chmod, mkdtemp, rm } from "node:fs/promises"
+import { mkdtemp, rm } from "node:fs/promises"
 import { join } from "node:path"
 import { tmpdir } from "node:os"
 import { createTelegramSessionStore, telegramSessionKey } from "../../shared/telegram-session-store"
@@ -20,8 +20,10 @@ afterEach(async () => {
 
 describe("telegram session store", () => {
   test("persists mappings across store instances", async () => {
-    const path = `/tmp/telegram-session-store-${Date.now()}-${Math.random().toString(36).slice(2)}.json`
+    const dir = await mkdtemp(join(tmpdir(), "telegram-session-store-"))
+    const path = join(dir, "sessions.json")
     files.push(path)
+    files.push(dir)
     const key = telegramSessionKey(1001, 99)
 
     const first = createTelegramSessionStore(path)
@@ -42,7 +44,11 @@ describe("telegram session store", () => {
   })
 
   test("set rolls back in-memory value when flush fails", async () => {
-    const path = "/dev/null/telegram-session-store.json"
+    const dir = await mkdtemp(join(tmpdir(), "telegram-session-store-"))
+    const blocked = join(dir, "blocked-parent")
+    const path = join(blocked, "telegram-session-store.json")
+    files.push(dir)
+    await Bun.write(blocked, "blocked")
     const store = createTelegramSessionStore(path)
     const key = telegramSessionKey(222, 7)
 
@@ -52,19 +58,19 @@ describe("telegram session store", () => {
 
   test("delete restores in-memory value when flush fails", async () => {
     const dir = await mkdtemp(join(tmpdir(), "telegram-session-store-"))
-    const path = join(dir, "sessions.json")
+    const parent = join(dir, "sessions")
+    const path = join(parent, "store.json")
     files.push(path)
     files.push(dir)
 
     const key = telegramSessionKey(333, 8)
     const store = createTelegramSessionStore(path)
     await store.set(key, "session-a")
-    await chmod(dir, 0o500)
+    await rm(parent, { force: true, recursive: true })
+    await Bun.write(parent, "blocked")
 
     await expect(store.delete(key)).rejects.toThrow()
     expect(await store.get(key)).toBe("session-a")
-
-    await chmod(dir, 0o700)
   })
 
   test("recovers from backup when primary file is missing", async () => {
