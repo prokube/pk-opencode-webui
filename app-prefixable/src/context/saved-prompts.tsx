@@ -140,6 +140,10 @@ export function SavedPromptsProvider(props: ParentProps & { directory?: Accessor
   const migratedKeys = new Set<string>()
   let loadVersion = 0
   let saveQueue = Promise.resolve()
+  const pendingSaves: Array<{
+    directory: string | undefined
+    updater: (state: { global: SavedPrompt[]; project: SavedPrompt[] }) => { global: SavedPrompt[]; project: SavedPrompt[] }
+  }> = []
 
   let pendingClear = false
 
@@ -172,14 +176,18 @@ export function SavedPromptsProvider(props: ParentProps & { directory?: Accessor
 
   const allPrompts = createMemo(() => mergePrompts(globalPrompts(), projectPrompts()))
 
-  function save(updater: (state: { global: SavedPrompt[]; project: SavedPrompt[] }) => { global: SavedPrompt[]; project: SavedPrompt[] }) {
-    const d = targetDirectory()
-    const version = loadVersion
+  function enqueueSave(
+    version: number,
+    directory: string | undefined,
+    updater: (state: { global: SavedPrompt[]; project: SavedPrompt[] }) => { global: SavedPrompt[]; project: SavedPrompt[] },
+  ) {
     saveQueue = saveQueue.catch(() => undefined).then(async () => {
+      if (version !== loadVersion) return
+      if (directory !== targetDirectory()) return
       const next = updater({ global: globalPrompts(), project: projectPrompts() })
       const ok = await writeSavedPrompts(
         basePath.serverUrl,
-        d,
+        directory,
         normalize(next.global, "global"),
         normalize(next.project, "project"),
       )
@@ -188,9 +196,19 @@ export function SavedPromptsProvider(props: ParentProps & { directory?: Accessor
         return
       }
       if (version !== loadVersion) return
+      if (directory !== targetDirectory()) return
       setGlobalPrompts(next.global)
       setProjectPrompts(next.project)
     })
+  }
+
+  function save(updater: (state: { global: SavedPrompt[]; project: SavedPrompt[] }) => { global: SavedPrompt[]; project: SavedPrompt[] }) {
+    const directory = targetDirectory()
+    if (loading()) {
+      pendingSaves.push({ directory, updater })
+      return
+    }
+    enqueueSave(loadVersion, directory, updater)
   }
 
   async function loadAndMaybeMigrate(version: number) {
@@ -251,6 +269,16 @@ export function SavedPromptsProvider(props: ParentProps & { directory?: Accessor
     setLoading(true)
     loadAndMaybeMigrate(version)
   }))
+
+  createEffect(() => {
+    if (loading()) return
+    if (pendingSaves.length === 0) return
+    const queued = pendingSaves.splice(0, pendingSaves.length)
+    const version = loadVersion
+    for (const item of queued) {
+      enqueueSave(version, item.directory, item.updater)
+    }
+  })
 
   function add(title: string, text: string, scope: PromptScope = "global") {
     const prompt: SavedPrompt = {

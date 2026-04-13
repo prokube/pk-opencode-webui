@@ -91,13 +91,10 @@ export async function readSavedPrompts(serverUrl: string, directory?: string): P
   if (directory) params.set("directory", directory)
   const suffix = params.toString() ? `?${params.toString()}` : ""
   const res = await fetch(`${serverUrl}/api/ext/saved-prompts${suffix}`).catch(() => null)
-  if (!res?.ok) {
-    return { global: [], project: [] }
-  }
+  if (!res) throw new Error("failed to fetch saved prompts")
+  if (!res.ok) throw new Error(`saved prompts read failed: ${res.status}`)
   const data = await res.json().catch(() => null)
-  if (!data || !Array.isArray(data.global) || !Array.isArray(data.project)) {
-    return { global: [], project: [] }
-  }
+  if (!data || !Array.isArray(data.global) || !Array.isArray(data.project)) throw new Error("invalid saved prompts response")
   return {
     global: data.global.filter(isStoredPrompt),
     project: data.project.filter(isStoredPrompt),

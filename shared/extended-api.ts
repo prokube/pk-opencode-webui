@@ -87,7 +87,7 @@ function isStoredPrompt(p: unknown): p is StoredPrompt {
 
 function parsePromptList(raw: string): StoredPrompt[] {
   const parsed = JSON.parse(raw)
-  if (!Array.isArray(parsed)) return []
+  if (!Array.isArray(parsed)) throw new Error("saved prompts content must be an array")
   return parsed.filter(isStoredPrompt)
 }
 
@@ -119,6 +119,12 @@ async function writePromptFile(path: string, prompts: StoredPrompt[]) {
   const content = JSON.stringify(prompts, null, 2)
   try {
     await fs.promises.writeFile(tmp, content, "utf-8")
+    if (process.platform === "win32") {
+      await fs.promises.rm(path, { force: true }).catch((e) => {
+        const code = typeof e === "object" && e && "code" in e ? (e as { code?: string }).code : undefined
+        if (code !== "ENOENT") throw e
+      })
+    }
     await fs.promises.rename(tmp, path)
   } catch (e) {
     await fs.promises.unlink(tmp).catch(() => undefined)
