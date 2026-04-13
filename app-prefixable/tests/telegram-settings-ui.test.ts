@@ -109,6 +109,7 @@ describe("telegram settings form helpers", () => {
       sessionCacheTtlMs: "",
       notificationDebounceMs: "",
       port: "",
+      webhookPath: "",
     }
 
     const errors = validateTelegramForm(next)
@@ -117,6 +118,7 @@ describe("telegram settings form helpers", () => {
     expect(errors.sessionCacheTtlMs).toBeUndefined()
     expect(errors.notificationDebounceMs).toBeUndefined()
     expect(errors.port).toBeUndefined()
+    expect(errors.webhookPath).toBeUndefined()
 
     const patch = createTelegramPatch(next, initial)
     expect(patch).toEqual({
@@ -125,6 +127,7 @@ describe("telegram settings form helpers", () => {
       sessionCacheTtlMs: null,
       notificationDebounceMs: null,
       port: null,
+      webhookPath: null,
     })
   })
 })

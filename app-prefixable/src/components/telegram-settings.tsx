@@ -339,7 +339,7 @@ export function TelegramSettings(props: Props) {
             {error() || "Unable to load Telegram settings."}
           </div>
 
-          <Button type="button" variant="outline" onClick={() => void load()}>
+          <Button type="button" variant="secondary" onClick={() => void load()}>
             <RefreshCw class="w-4 h-4 mr-2" />
             Reload
           </Button>

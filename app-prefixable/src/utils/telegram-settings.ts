@@ -181,7 +181,6 @@ export function validateTelegramForm(form: TelegramForm): Record<string, string>
     errors.port = "Must be an integer between 1 and 65535"
   }
 
-  if (!form.webhookPath.trim()) errors.webhookPath = "Webhook path is required"
   if (form.tokenMode === "set" && !form.token.trim()) errors.token = "Token is required when setting a new value"
   if (form.webhookSecretMode === "set" && !form.webhookSecret.trim()) {
     errors.webhookSecret = "Webhook secret is required when setting a new value"
