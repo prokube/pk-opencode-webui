@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { createTelegramForm, createTelegramPatch, validateTelegramForm, type TelegramPublicSettings } from "../src/utils/telegram-settings"
+import { createTelegramForm, createTelegramPatch, normalizeWebhookPathInput, validateTelegramForm, type TelegramPublicSettings } from "../src/utils/telegram-settings"
 
 const seed: TelegramPublicSettings = {
   mode: "polling",
@@ -77,6 +77,12 @@ describe("telegram settings form helpers", () => {
 
     const patch = createTelegramPatch(next, initial)
     expect(patch.webhookPath).toBeUndefined()
+  })
+
+  test("normalizes webhook input for display", () => {
+    expect(normalizeWebhookPathInput("webhook")).toBe("/webhook")
+    expect(normalizeWebhookPathInput(" /webhook ")).toBe("/webhook")
+    expect(normalizeWebhookPathInput("   ")).toBe("")
   })
 
   test("creates clear patch for secret and optional fields", () => {

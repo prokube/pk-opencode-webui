@@ -104,6 +104,10 @@ function normalizeWebhookPath(value: string): string | null {
   return `/${path}`
 }
 
+export function normalizeWebhookPathInput(value: string): string {
+  return normalizeWebhookPath(value) || ""
+}
+
 function addStringPatch(patch: Record<string, string | number | null>, key: string, next: string, prev: string) {
   const nextValue = asNullable(next)
   const prevValue = asNullable(prev)

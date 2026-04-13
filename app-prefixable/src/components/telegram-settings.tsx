@@ -5,6 +5,7 @@ import { Button } from "./ui/button"
 import {
   createTelegramForm,
   createTelegramPatch,
+  normalizeWebhookPathInput,
   type TelegramSettingsResponse,
   type TelegramUpdateFailure,
   type TelegramUpdateSuccess,
@@ -34,6 +35,7 @@ export function TelegramSettings(props: Props) {
   const [success, setSuccess] = createSignal<string | null>(null)
   const [fieldErrors, setFieldErrors] = createSignal<Record<string, string>>({})
   const [restartFields, setRestartFields] = createSignal<string[]>([])
+  const [restartRequiredFields, setRestartRequiredFields] = createSignal<string[]>([])
   const [tokenConfigured, setTokenConfigured] = createSignal(false)
   const [webhookSecretConfigured, setWebhookSecretConfigured] = createSignal(false)
   const [initial, setInitial] = createSignal<TelegramForm | null>(null)
@@ -62,6 +64,7 @@ export function TelegramSettings(props: Props) {
     setForm(next)
     setTokenConfigured(data.settings.tokenConfigured)
     setWebhookSecretConfigured(data.settings.webhookSecretConfigured)
+    setRestartRequiredFields(data.metadata?.restartRequiredFields || [])
     setRestartFields([])
     setFieldErrors({})
     setLoading(false)
@@ -74,6 +77,17 @@ export function TelegramSettings(props: Props) {
     const seed = initial()
     if (!current || !seed) return false
     return Object.keys(createTelegramPatch(current, seed)).length > 0
+  })
+
+  const pendingRestartFields = createMemo(() => {
+    const current = form()
+    const seed = initial()
+    if (!current || !seed) return []
+    const restart = restartRequiredFields()
+    if (!restart.length) return []
+    const changed = Object.keys(createTelegramPatch(current, seed))
+    if (!changed.length) return []
+    return changed.filter((key) => restart.includes(key))
   })
 
   async function save() {
@@ -134,6 +148,7 @@ export function TelegramSettings(props: Props) {
     setForm(next)
     setTokenConfigured(data.settings.tokenConfigured)
     setWebhookSecretConfigured(data.settings.webhookSecretConfigured)
+    setRestartRequiredFields(data.metadata?.restartRequiredFields || [])
     setRestartFields(data.restartRequired ? data.restartRequiredFields : [])
     setFieldErrors({})
     setError(null)
@@ -191,14 +206,16 @@ export function TelegramSettings(props: Props) {
               </div>
             </Show>
 
-            <Show when={restartFields().length > 0}>
+            <Show when={restartFields().length > 0 || pendingRestartFields().length > 0}>
               <div class="p-3 rounded-md text-sm" role="status" aria-live="polite" style={{ background: "var(--surface-inset)", border: "1px solid var(--border-base)", "border-left": "3px solid var(--icon-warning-base)", color: "var(--text-base)" }}>
                 <div class="flex items-center gap-2" style={{ color: "var(--icon-warning-base)" }}>
                   <AlertTriangle class="w-4 h-4" />
                   Restart required
                 </div>
                 <p class="mt-1 text-xs" style={{ color: "var(--text-weak)" }}>
-                  Changed fields: {restartFields().join(", ")}
+                  <Show when={restartFields().length > 0} fallback={<>Will require restart after save: {pendingRestartFields().join(", ")}</>}>
+                    Changed fields: {restartFields().join(", ")}
+                  </Show>
                 </p>
               </div>
             </Show>
@@ -246,7 +263,7 @@ export function TelegramSettings(props: Props) {
                 </div>
 
                 <Field label="Webhook path" hint="Leading '/' is optional and added automatically.">
-                  <input class="w-full px-3 py-2 rounded-md text-sm" value={state().webhookPath} onInput={(e) => setField("webhookPath", e.currentTarget.value)} style={{ background: "var(--surface-inset)", border: `1px solid ${fieldError("webhookPath") ? "var(--interactive-critical)" : "var(--border-base)"}`, color: "var(--text-base)" }} />
+                  <input class="w-full px-3 py-2 rounded-md text-sm" value={state().webhookPath} onInput={(e) => setField("webhookPath", e.currentTarget.value)} onBlur={(e) => setField("webhookPath", normalizeWebhookPathInput(e.currentTarget.value))} style={{ background: "var(--surface-inset)", border: `1px solid ${fieldError("webhookPath") ? "var(--interactive-critical)" : "var(--border-base)"}`, color: "var(--text-base)" }} />
                   <FieldError text={fieldError("webhookPath")} />
                 </Field>
 
