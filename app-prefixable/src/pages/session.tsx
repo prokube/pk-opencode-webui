@@ -278,11 +278,18 @@ export function Session() {
 
   function readFollowupMap() {
     if (typeof window === "undefined") return {} as Record<string, FollowupItem[] | undefined>;
+    const key = followupStorageKey(params.dir);
     try {
-      const raw = window.localStorage.getItem(followupStorageKey(params.dir));
+      const raw = window.localStorage.getItem(key);
       if (!raw) return {} as Record<string, FollowupItem[] | undefined>;
-      return JSON.parse(raw) as Record<string, FollowupItem[] | undefined>;
+      const parsed = JSON.parse(raw);
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+        window.localStorage.removeItem(key);
+        return {} as Record<string, FollowupItem[] | undefined>;
+      }
+      return parsed as Record<string, FollowupItem[] | undefined>;
     } catch {
+      window.localStorage.removeItem(key);
       return {} as Record<string, FollowupItem[] | undefined>;
     }
   }
@@ -1391,7 +1398,12 @@ export function Session() {
         agent: providers.selectedAgent || "build",
         model,
       });
-      removeFollowup(id);
+      const map = readFollowupMap();
+      const next = (map[sid] ?? []).filter((entry) => entry.id !== id);
+      if (next.length === 0) delete map[sid];
+      if (next.length > 0) map[sid] = next;
+      writeFollowupMap(map);
+      if (sessionId() === sid) setFollowups(next);
       startProcessing();
     } catch (err) {
       setPendingUserMessageText(null);
@@ -1431,6 +1443,7 @@ export function Session() {
 
     if (processing() && text && files.length === 0 && images.length === 0) {
       if (!queueFollowup(text)) return;
+      setError(null);
       setInput("");
       setDragHeight(0);
       if (inputRef) inputRef.style.height = "";

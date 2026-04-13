@@ -47,7 +47,7 @@ export function FollowupDock(props: {
           class="w-4 h-4 shrink-0 transition-transform"
           style={{
             color: "var(--text-weak)",
-            transform: collapsed() ? "rotate(180deg)" : "rotate(0deg)",
+            transform: collapsed() ? "rotate(0deg)" : "rotate(180deg)",
           }}
         />
       </button>
