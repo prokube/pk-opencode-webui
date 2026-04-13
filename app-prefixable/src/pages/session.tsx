@@ -1673,7 +1673,14 @@ export function Session() {
           </Show>
 
           {/* Saved Prompts */}
-          <Show when={savedPrompts.prompts().length > 0}>
+          <Show when={savedPrompts.loading()}>
+            <div class="mt-8 w-full max-w-2xl flex items-center gap-2" style={{ color: "var(--text-weak)" }}>
+              <Spinner class="w-4 h-4" />
+              <span class="text-sm">Loading saved prompts...</span>
+            </div>
+          </Show>
+
+          <Show when={!savedPrompts.loading() && savedPrompts.prompts().length > 0}>
             <div class="mt-8 w-full max-w-2xl">
               <h3
                 class="text-sm font-medium mb-3 text-left"
@@ -2240,7 +2247,7 @@ export function Session() {
           <PickerDialog
             title="Insert Saved Prompt"
             placeholder="Filter prompts..."
-            emptyMessage="No saved prompts. Add them in Settings."
+            emptyMessage={savedPrompts.loading() ? "Loading saved prompts..." : "No saved prompts. Add them in Settings."}
             initialFilter={promptPickerFilter()}
             items={promptPickerItems()}
             onSelect={(item) => {

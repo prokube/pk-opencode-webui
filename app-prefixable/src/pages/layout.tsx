@@ -2199,11 +2199,12 @@ export function Layout(props: ParentProps) {
                 variant="ghost"
                 class={`flex-1 justify-start ${savedPrompts.prompts().length > 0 ? "rounded-r-none" : ""}`}
                 size="sm"
+                disabled={savedPrompts.loading()}
               >
                 <Plus class="w-4 h-4" />
                 <span>New Session</span>
               </Button>
-              <Show when={savedPrompts.prompts().length > 0}>
+              <Show when={!savedPrompts.loading() && savedPrompts.prompts().length > 0}>
                 <button
                   on:click={(e) => {
                     e.stopPropagation();

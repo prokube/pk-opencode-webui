@@ -1799,12 +1799,21 @@ Add your project-specific instructions here.
                   <h2 class="text-sm font-medium" style={{ color: "var(--text-strong)" }}>
                     Prompts ({savedPrompts.prompts().length})
                   </h2>
-                  <Button onClick={openAddPromptDialog} variant="primary" size="sm">
+                  <Button onClick={openAddPromptDialog} variant="primary" size="sm" disabled={savedPrompts.loading()}>
                     + Add Prompt
                   </Button>
                 </div>
 
-                <Show when={savedPrompts.prompts().length === 0}>
+                <Show when={savedPrompts.loading()}>
+                  <div class="p-4">
+                    <div class="flex items-center gap-2" style={{ color: "var(--text-weak)" }}>
+                      <Spinner class="w-4 h-4" />
+                      <span class="text-sm">Loading saved prompts...</span>
+                    </div>
+                  </div>
+                </Show>
+
+                <Show when={!savedPrompts.loading() && savedPrompts.prompts().length === 0}>
                   <div class="p-6 text-center">
                     <p class="text-sm" style={{ color: "var(--text-weak)" }}>
                       No saved prompts yet.
@@ -1819,7 +1828,7 @@ Add your project-specific instructions here.
                   </div>
                 </Show>
 
-                <Show when={savedPrompts.prompts().length > 0}>
+                <Show when={!savedPrompts.loading() && savedPrompts.prompts().length > 0}>
                   <div class="divide-y" style={{ "border-color": "var(--border-base)" }}>
                     <For each={savedPrompts.prompts()}>
                       {(prompt) => (

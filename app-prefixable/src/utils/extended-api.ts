@@ -61,3 +61,51 @@ export async function writeFile(serverUrl: string, path: string, content: string
   }
   return true
 }
+
+export interface StoredPrompt {
+  id: string
+  title: string
+  text: string
+  createdAt: number
+  scope: "global" | "project"
+}
+
+interface SavedPromptsPayload {
+  global: StoredPrompt[]
+  project: StoredPrompt[]
+}
+
+export async function readSavedPrompts(serverUrl: string, directory?: string): Promise<SavedPromptsPayload> {
+  const params = new URLSearchParams()
+  if (directory) params.set("directory", directory)
+  const suffix = params.toString() ? `?${params.toString()}` : ""
+  const res = await fetch(`${serverUrl}/api/ext/saved-prompts${suffix}`).catch(() => null)
+  if (!res?.ok) {
+    return { global: [], project: [] }
+  }
+  const data = await res.json().catch(() => null)
+  if (!data || !Array.isArray(data.global) || !Array.isArray(data.project)) {
+    return { global: [], project: [] }
+  }
+  return {
+    global: data.global,
+    project: data.project,
+  }
+}
+
+export async function writeSavedPrompts(
+  serverUrl: string,
+  directory: string | undefined,
+  global: StoredPrompt[],
+  project: StoredPrompt[],
+): Promise<boolean> {
+  const params = new URLSearchParams()
+  if (directory) params.set("directory", directory)
+  const suffix = params.toString() ? `?${params.toString()}` : ""
+  const res = await fetch(`${serverUrl}/api/ext/saved-prompts${suffix}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ global, project }),
+  }).catch(() => null)
+  return !!res?.ok
+}

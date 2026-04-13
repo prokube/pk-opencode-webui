@@ -61,6 +61,59 @@ function getAllowedRoot(): string {
   return process.env.OPENCODE_WORKSPACE_ROOT || process.env.HOME || os.homedir()
 }
 
+function getConfigDir(): string {
+  const homeDir = process.env.HOME || os.homedir()
+  return process.env.OPENCODE_CONFIG_DIR || nodePath.join(homeDir, ".config", "opencode")
+}
+
+interface StoredPrompt {
+  id: string
+  title: string
+  text: string
+  createdAt: number
+  scope?: "global" | "project"
+}
+
+function isStoredPrompt(p: unknown): p is StoredPrompt {
+  if (!p || typeof p !== "object") return false
+  const row = p as Record<string, unknown>
+  if (typeof row.id !== "string") return false
+  if (typeof row.title !== "string") return false
+  if (typeof row.text !== "string") return false
+  if (typeof row.createdAt !== "number") return false
+  if (row.scope !== undefined && row.scope !== "global" && row.scope !== "project") return false
+  return true
+}
+
+function parsePromptList(raw: string): StoredPrompt[] {
+  const parsed = JSON.parse(raw)
+  if (!Array.isArray(parsed)) return []
+  return parsed.filter(
+    (p) =>
+      p &&
+      typeof p.id === "string" &&
+      typeof p.title === "string" &&
+      typeof p.text === "string" &&
+      typeof p.createdAt === "number" &&
+      (p.scope === undefined || p.scope === "global" || p.scope === "project"),
+  )
+}
+
+async function readPromptFile(path: string): Promise<StoredPrompt[]> {
+  try {
+    const content = await fs.promises.readFile(path, "utf-8")
+    return parsePromptList(content)
+  } catch {
+    return []
+  }
+}
+
+async function writePromptFile(path: string, prompts: StoredPrompt[]) {
+  const parentDir = nodePath.dirname(path)
+  await fs.promises.mkdir(parentDir, { recursive: true })
+  await fs.promises.writeFile(path, JSON.stringify(prompts, null, 2), "utf-8")
+}
+
 /**
  * API paths that should be proxied to the OpenCode API server.
  * Extended endpoints (/api/ext/*) are NOT in this list - they're handled separately.
@@ -136,6 +189,63 @@ export async function handleExtendedEndpoint(
       return Response.json({ error: "validation_failed", errors: result.errors }, { status: 400 })
     }
     return Response.json(result)
+  }
+
+  // GET /api/ext/saved-prompts - Read global + project prompts
+  if (path === "/api/ext/saved-prompts" && method === "GET") {
+    const directory = url.searchParams.get("directory")
+    const allowedRoot = getAllowedRoot()
+    const validatedDir = directory ? validatePath(directory, allowedRoot) : null
+    if (directory && !validatedDir) {
+      console.warn("[ExtAPI] saved-prompts read: path outside allowed root:", directory)
+      return Response.json({ error: "directory must be within allowed directory" }, { status: 403 })
+    }
+
+    const configDir = getConfigDir()
+    const globalPath = nodePath.join(configDir, "saved-prompts.json")
+    const projectPath = validatedDir ? nodePath.join(validatedDir, ".opencode", "saved-prompts.json") : null
+
+    const global = (await readPromptFile(globalPath)).map((p) => ({ ...p, scope: "global" as const }))
+    const project = projectPath
+      ? (await readPromptFile(projectPath)).map((p) => ({ ...p, scope: "project" as const }))
+      : []
+
+    return Response.json({ global, project })
+  }
+
+  // PUT /api/ext/saved-prompts - Write global + project prompts
+  if (path === "/api/ext/saved-prompts" && method === "PUT") {
+    const directory = url.searchParams.get("directory")
+    const allowedRoot = getAllowedRoot()
+    const validatedDir = directory ? validatePath(directory, allowedRoot) : null
+    if (directory && !validatedDir) {
+      console.warn("[ExtAPI] saved-prompts write: path outside allowed root:", directory)
+      return Response.json({ error: "directory must be within allowed directory" }, { status: 403 })
+    }
+
+    const body = await req.json().catch(() => null)
+    const global = Array.isArray(body?.global) ? body.global : null
+    const project = Array.isArray(body?.project) ? body.project : null
+    if (!global || !project) {
+      return Response.json({ error: "global and project arrays are required" }, { status: 400 })
+    }
+
+    const globalPath = nodePath.join(getConfigDir(), "saved-prompts.json")
+    const projectPath = validatedDir ? nodePath.join(validatedDir, ".opencode", "saved-prompts.json") : null
+
+    const safeGlobal: StoredPrompt[] = global.filter(isStoredPrompt)
+    const safeProject: StoredPrompt[] = project.filter(isStoredPrompt)
+
+    try {
+      await writePromptFile(globalPath, safeGlobal.map((p) => ({ ...p, scope: "global" as const })))
+      if (projectPath) {
+        await writePromptFile(projectPath, safeProject.map((p) => ({ ...p, scope: "project" as const })))
+      }
+      return Response.json({ success: true })
+    } catch (e) {
+      console.error("[ExtAPI] saved-prompts write error:", e)
+      return Response.json({ error: String(e) }, { status: 500 })
+    }
   }
 
   // POST /api/ext/mkdir - Create directory recursively
