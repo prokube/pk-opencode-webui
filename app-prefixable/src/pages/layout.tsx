@@ -1816,11 +1816,11 @@ export function Layout(props: ParentProps) {
             if (prev.some((s) => s.id === data.id)) return prev;
             return [data as Session, ...prev];
           });
-          sessionStorage.setItem(
-            `opencode.pendingPrompt.${data.id}`,
-            JSON.stringify({ text, ts: Date.now() }),
-          );
         }
+        sessionStorage.setItem(
+          `opencode.pendingPrompt.${data.id}`,
+          JSON.stringify({ text, ts: Date.now() }),
+        );
         navigate(`/${dirSlug()}/session/${data.id}`);
       }
     } catch (e) {

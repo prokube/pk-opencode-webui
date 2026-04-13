@@ -40,13 +40,15 @@ function trace(entry: RootSessionTrace) {
   const logs = window.__opencodeRootSessionTrace ?? [];
   logs.push(entry);
   window.__opencodeRootSessionTrace = logs.slice(-80);
-  console.warn("[SessionCreate]", entry);
+  if (entry.state === "error") {
+    console.warn("[SessionCreate]", entry);
+  }
 }
 
 export function createRootSession(
   client: SessionCreateClient,
   opts: { source: string; scope?: string },
-) {
+): Promise<RootSessionResult> {
   const key = opts.scope ?? "default";
   const existing = inFlight.get(key);
   if (existing) {
