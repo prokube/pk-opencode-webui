@@ -1,9 +1,16 @@
+import { createTelegramSessionStore, telegramSessionKey } from "./telegram-session-store"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
+
 type TelegramUpdate = {
   update_id: number
   message?: {
     message_id: number
     text?: string
     chat?: {
+      id: number
+    }
+    from?: {
       id: number
     }
   }
@@ -20,6 +27,12 @@ type BridgeConfig = {
   webhookPath: string
   webhookSecret?: string
   webhookUrl?: string
+  sessionStorePath: string
+}
+
+type Runtime = {
+  config: BridgeConfig
+  store: ReturnType<typeof createTelegramSessionStore>
 }
 
 type CachedSession = {
@@ -73,6 +86,23 @@ function parsePositiveInt(value: string, fallback: number): number {
   return n
 }
 
+function parseCommand(text: string): { name: string } | undefined {
+  if (!text.startsWith("/")) return
+  const raw = text.split(/\s+/, 1)[0]?.trim()
+  const name = raw?.split("@")[0]?.trim().toLowerCase()
+  if (!name) return
+  return { name }
+}
+
+function helpText(): string {
+  return [
+    "Available commands:",
+    "/new - start and switch to a fresh OpenCode session",
+    "/status - show current session mapping",
+    "/help - show this help message",
+  ].join("\n")
+}
+
 function parseOpenCodeUrl(value: string, source: string): string {
   try {
     const url = new URL(value)
@@ -80,6 +110,10 @@ function parseOpenCodeUrl(value: string, source: string): string {
   } catch {
     throw new Error(`Invalid OpenCode API URL from ${source}: ${value}`)
   }
+}
+
+function defaultSessionStorePath() {
+  return join(tmpdir(), "opencode-telegram-sessions.json")
 }
 
 export function parseConfig(): BridgeConfig {
@@ -97,6 +131,7 @@ export function parseConfig(): BridgeConfig {
   const webhookPath = env("TELEGRAM_WEBHOOK_PATH") || "/webhook"
   const sessionCacheMax = parsePositiveInt(env("TELEGRAM_SESSION_CACHE_MAX") || "", 500)
   const sessionCacheTtlMs = parsePositiveInt(env("TELEGRAM_SESSION_CACHE_TTL_MS") || "", 6 * 60 * 60 * 1000)
+  const sessionStorePath = env("TELEGRAM_SESSION_STORE_PATH") || defaultSessionStorePath()
 
   return {
     mode,
@@ -109,6 +144,7 @@ export function parseConfig(): BridgeConfig {
     webhookPath: webhookPath.startsWith("/") ? webhookPath : `/${webhookPath}`,
     webhookSecret: env("TELEGRAM_WEBHOOK_SECRET") || undefined,
     webhookUrl: env("TELEGRAM_WEBHOOK_URL") || undefined,
+    sessionStorePath,
   }
 }
 
@@ -222,25 +258,33 @@ export function sessionFromCache(config: BridgeConfig, chatId: string): string |
   return cached.id
 }
 
-async function sessionForChat(config: BridgeConfig, chatId: string): Promise<string> {
-  const cached = sessionFromCache(config, chatId)
+async function sessionForChat(runtime: Runtime, chatKey: string): Promise<string> {
+  const config = runtime.config
+  const mapped = await runtime.store.get(chatKey)
+  if (mapped) {
+    cacheSession(config, chatKey, mapped)
+  }
+
+  const cached = sessionFromCache(config, chatKey)
   if (cached) return cached
 
-  const creating = creatingSessions.get(chatId)
+  const creating = creatingSessions.get(chatKey)
   if (creating) return creating
 
   const created = createSession(config)
     .then((id) => {
-      cacheSession(config, chatId, id)
-      creatingSessions.delete(chatId)
-      return id
+      return runtime.store.set(chatKey, id).then(() => {
+        cacheSession(config, chatKey, id)
+        creatingSessions.delete(chatKey)
+        return id
+      })
     })
     .catch((error) => {
-      creatingSessions.delete(chatId)
+      creatingSessions.delete(chatKey)
       throw error
     })
 
-  creatingSessions.set(chatId, created)
+  creatingSessions.set(chatKey, created)
   return created
 }
 
@@ -303,22 +347,52 @@ async function sendTelegramMessage(config: BridgeConfig, chatId: number, text: s
   }
 }
 
-async function handleTextUpdate(config: BridgeConfig, update: TelegramUpdate) {
+export async function handleTextUpdate(runtime: Runtime, update: TelegramUpdate) {
+  const config = runtime.config
   const message = update.message
   const chatId = message?.chat?.id
+  const userId = message?.from?.id
   const text = message?.text?.trim()
 
   if (!chatId || !text) return
 
+  const key = telegramSessionKey(chatId, userId)
+
+  const runCommand = async () => {
+    const command = parseCommand(text)
+    if (!command) return false
+    if (command.name === "/help") {
+      await sendTelegramMessage(config, chatId, helpText())
+      return true
+    }
+    if (command.name === "/status") {
+      const sessionId = await sessionForChat(runtime, key)
+      await sendTelegramMessage(config, chatId, `Current session: ${sessionId}`)
+      return true
+    }
+    if (command.name === "/new") {
+      const next = await createSession(config)
+      await runtime.store.set(key, next)
+      cacheSession(config, key, next)
+      await sendTelegramMessage(config, chatId, `Started a new session: ${next}`)
+      return true
+    }
+    await sendTelegramMessage(config, chatId, `Unknown command ${command.name}. Use /help.`)
+    return true
+  }
+
   try {
-    const key = String(chatId)
-    const sessionId = await sessionForChat(config, key)
+    const handled = await runCommand()
+    if (handled) return
+
+    const sessionId = await sessionForChat(runtime, key)
     const reply = await sendPrompt(config, sessionId, text).catch(async (error) => {
       if (!isMissingSession(error)) {
         throw error
       }
       sessions.delete(key)
-      const next = await sessionForChat(config, key)
+      await runtime.store.delete(key)
+      const next = await sessionForChat(runtime, key)
       return sendPrompt(config, next, text)
     })
     await sendTelegramMessage(config, chatId, reply)
@@ -332,7 +406,8 @@ async function handleTextUpdate(config: BridgeConfig, update: TelegramUpdate) {
   }
 }
 
-async function runPolling(config: BridgeConfig) {
+async function runPolling(runtime: Runtime) {
+  const config = runtime.config
   console.log("[TelegramBridge] mode=polling")
   await telegramRequest(config, "deleteWebhook", {
     drop_pending_updates: false,
@@ -357,8 +432,8 @@ async function runPolling(config: BridgeConfig) {
         offset = Math.max(offset, update.update_id + 1)
         const chatId = update.message?.chat?.id
         const run = !chatId
-          ? handleTextUpdate(config, update)
-          : queueChatUpdate(String(chatId), () => handleTextUpdate(config, update))
+          ? handleTextUpdate(runtime, update)
+          : queueChatUpdate(String(chatId), () => handleTextUpdate(runtime, update))
         runs.push(run)
       }
       if (runs.length) {
@@ -371,7 +446,8 @@ async function runPolling(config: BridgeConfig) {
   }
 }
 
-async function runWebhook(config: BridgeConfig) {
+async function runWebhook(runtime: Runtime) {
+  const config = runtime.config
   if (config.webhookUrl) {
     await telegramRequest(config, "setWebhook", {
       url: config.webhookUrl,
@@ -404,8 +480,8 @@ async function runWebhook(config: BridgeConfig) {
 
       const chatId = update.message?.chat?.id
       const run = !chatId
-        ? handleTextUpdate(config, update)
-        : queueChatUpdate(String(chatId), () => handleTextUpdate(config, update))
+        ? handleTextUpdate(runtime, update)
+        : queueChatUpdate(String(chatId), () => handleTextUpdate(runtime, update))
       void run.catch((error) => {
         console.error("[TelegramBridge] webhook handling failed", error)
       })
@@ -418,16 +494,19 @@ async function runWebhook(config: BridgeConfig) {
 
 export async function startTelegramBridge() {
   const config = parseConfig()
+  const store = createTelegramSessionStore(config.sessionStorePath)
+  const runtime = { config, store }
   console.log(`[TelegramBridge] OpenCode API: ${config.openCodeUrl}`)
+  console.log(`[TelegramBridge] Session store: ${config.sessionStorePath}`)
   if (config.directory) {
     console.log(`[TelegramBridge] OpenCode directory: ${config.directory}`)
   }
   if (config.mode === "polling") {
-    await runPolling(config)
+    await runPolling(runtime)
     return
   }
 
-  await runWebhook(config)
+  await runWebhook(runtime)
 }
 
 export function resetSessionCacheForTest() {
