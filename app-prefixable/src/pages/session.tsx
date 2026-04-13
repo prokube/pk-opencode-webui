@@ -50,6 +50,11 @@ import {
 import { readNotifyMap, writeNotifyMap } from "../utils/notify";
 import { sessionQuestionRequest } from "../utils/session-tree-request";
 import { createRootSession } from "../utils/root-session";
+import {
+  createSessionWithPrompt as createAndSendPrompt,
+  formatStartError,
+  startSessionError,
+} from "../utils/session-start";
 
 const ACCEPTED_TYPES = [
   "image/png",
@@ -184,6 +189,7 @@ export function Session() {
   const [loading, setLoading] = createSignal(false);
   const [processing, setProcessing] = createSignal(false);
   const [loadingHistory, setLoadingHistory] = createSignal(false);
+  const [creatingSession, setCreatingSession] = createSignal(false);
 
   // Find the Nth-from-last user message (1-indexed: 1 = last, 2 = second-to-last)
   function getNthLastUserMsg(msgs: DisplayMessage[], n: number) {
@@ -469,7 +475,6 @@ export function Session() {
     setShowSlashPopover(false);
     setSlashQuery("");
     setSlashIndex(0);
-    setPromptSent(false); // Reset so pending prompts fire in the new session
     wasProcessing.value = false; // Reset to avoid false notifications
     if (id) {
       // Use sync context to load session data - no local state needed
@@ -489,88 +494,26 @@ export function Session() {
           }
         }
       });
-
-      // Check if this session is actually busy
-      client.session
-        .status({})
-        .then((res: { data?: Record<string, { type: string }> }) => {
-          const statuses = res.data;
-          if (!statuses) return;
-          if (statuses[id]) {
-            const isBusy =
-              statuses[id].type === "busy" || statuses[id].type === "retry";
-            console.log(
-              "[Session] Initial status for",
-              id,
-              ":",
-              statuses[id].type,
-              "isBusy:",
-              isBusy,
-            );
-            if (isBusy) wasProcessing.value = true;
-            setProcessing(isBusy);
-          }
-        });
     } else {
       setLoadingHistory(false);
       setProcessing(false);
     }
   }));
 
-  // Auto-send saved prompt stored in sessionStorage by layout's createSessionWithPrompt.
-  // We read from sessionStorage instead of URL params to avoid browser URL length limits.
-  // The stored value is JSON: { text: string, ts: number }.
-  // Guard: the effect may re-run when reactive deps (e.g. providers.connected) update
-  // after the prompt has already been sent. A local signal prevents double sends.
-  const [promptSent, setPromptSent] = createSignal(false);
+  // Mirror processing state from the global status store so status emitted
+  // before this page mounts still initializes the busy indicator correctly.
   createEffect(() => {
-    if (promptSent()) return;
-    const id = params.id;
+    const id = sessionId();
     if (!id) return;
-    const key = `opencode.pendingPrompt.${id}`;
-    const raw = sessionStorage.getItem(key);
-    if (!raw) return;
-    const EXPIRY_MS = 60_000; // 60 seconds
-    const parsed = (() => {
-      try { return JSON.parse(raw) as { text: string; ts: number }; }
-      catch { return null; }
-    })();
-    // Remove malformed or expired entries immediately
-    if (!parsed || !parsed.text || Date.now() - parsed.ts > EXPIRY_MS) {
-      sessionStorage.removeItem(key);
+    const type = events.status[id]?.type;
+    if (type === "busy" || type === "retry") {
+      wasProcessing.value = true;
+      setProcessing(true);
       return;
     }
-    const text = parsed.text;
-    // Provider data may not be available yet — the resource fetch is async and
-    // selectedModel is populated from localStorage in an onMount callback that
-    // runs after createEffect. Skip without removing the sessionStorage item so
-    // the effect re-runs once providers finish loading.
-    if (providers.loading || providers.providers.length === 0) return;
-    const model = sessionModel();
-    if (!model) {
-      sessionStorage.removeItem(key);
-      setError("Please select a model before sending messages. Click the model button in the header.");
-      return;
-    }
-    if (!providers.connected.includes(model.providerID)) {
-      sessionStorage.removeItem(key);
-      setError(`Provider "${model.providerID}" is not connected. Please configure it in Settings.`);
-      return;
-    }
-    // All validation passed — mark as sent, clear storage, and send
-    setPromptSent(true);
-    sessionStorage.removeItem(key);
-    setError(null);
-    startProcessing();
-    client.session.promptAsync({
-      sessionID: id,
-      parts: [{ type: "text", text }],
-      agent: providers.selectedAgent || "build",
-      model,
-    }).catch((err: unknown) => {
-      setError(`Failed to send saved prompt: ${err instanceof Error ? err.message : String(err)}`);
+    if (type === "idle") {
       setProcessing(false);
-    });
+    }
   });
 
   // Get messages from sync context - reactive, automatically updated via SSE
@@ -656,19 +599,26 @@ export function Session() {
         description: "Create a new chat session",
         slash: "new",
         onSelect: async () => {
+          if (creatingSession()) return;
           console.log("[Command] New session - creating...");
+          setCreatingSession(true);
           try {
             const res = await createRootSession(client, {
               source: "session.command.new",
               scope: directory,
             });
             const data = res.data;
-            if (data) {
-              console.log("[Command] Created session:", data.id);
-              navigate(`/${dirSlug()}/session/${data.id}`);
+            if (!data) {
+              const msg = formatStartError((res as { error?: unknown }).error);
+              showToast(`Failed to create session: ${msg}`);
+              return;
             }
+            console.log("[Command] Created session:", data.id);
+            navigate(`/${dirSlug()}/session/${data.id}`);
           } catch (err) {
-            showToast(`Failed to create session: ${err instanceof Error ? err.message : String(err)}`);
+            showToast(`Failed to create session: ${formatStartError(err)}`);
+          } finally {
+            setCreatingSession(false);
           }
         },
       },
@@ -774,7 +724,7 @@ export function Session() {
             });
             showToast("Session compacted");
           } catch (err) {
-            showToast(`Failed to compact session: ${err instanceof Error ? err.message : String(err)}`);
+            showToast(`Failed to compact session: ${formatStartError(err)}`);
           }
         },
       });
@@ -808,7 +758,7 @@ export function Session() {
             }
             refetchSession();
           } catch (err) {
-            showToast(`Failed to share session: ${err instanceof Error ? err.message : String(err)}`);
+            showToast(`Failed to share session: ${formatStartError(err)}`);
           }
         },
       });
@@ -847,7 +797,7 @@ export function Session() {
             showToast("Session unshared");
             refetchSession();
           } catch (err) {
-            showToast(`Failed to unshare session: ${err instanceof Error ? err.message : String(err)}`);
+            showToast(`Failed to unshare session: ${formatStartError(err)}`);
           }
         },
       });
@@ -883,7 +833,7 @@ export function Session() {
             showToast("Messages restored");
             refetchSession();
           } catch (err) {
-            showToast(`Failed to redo messages: ${err instanceof Error ? err.message : String(err)}`);
+            showToast(`Failed to redo messages: ${formatStartError(err)}`);
           }
         },
       });
@@ -927,7 +877,7 @@ export function Session() {
       showToast(count === 1 ? "Undone 1 turn" : `Undone ${count} turns`);
       refetchSession();
     } catch (err) {
-      showToast(`Failed to undo: ${err instanceof Error ? err.message : String(err)}`);
+      showToast(`Failed to undo: ${formatStartError(err)}`);
     }
   }
 
@@ -1517,6 +1467,16 @@ export function Session() {
     const userMessage = optimisticUserMessage(text || "(files attached)", sessionId() || "");
     setOptimisticMessage(userMessage);
 
+    const needsSession = !sessionId();
+    const restoreComposer = () => {
+      setPendingUserMessageText(null);
+      setOptimisticMessage(null);
+      setInput(text);
+      setFileContext(files);
+      setImageAttachments(images);
+      if (inputRef) applyInputAndAutogrow(inputRef, text);
+    };
+    let createdID: string | undefined;
     try {
       let id = sessionId();
 
@@ -1528,9 +1488,14 @@ export function Session() {
         });
         const data = res.data;
         console.log("[Session] Create response:", data);
-        if (!data) throw new Error("Failed to create session");
+        if (!data) {
+          restoreComposer();
+          setError("Failed to create session: no session data returned.");
+          return;
+        }
 
         id = data.id;
+        createdID = id;
         setSessionId(id);
         navigate(`/${dirSlug()}/session/${id}`, { replace: true });
         // Store the model for the new session
@@ -1593,14 +1558,31 @@ export function Session() {
       }
 
       const promptRes = await client.session.promptAsync(promptPayload);
+      if ("error" in promptRes && promptRes.error) {
+        throw new Error(formatStartError(promptRes.error));
+      }
       console.log("[Session] Prompt response:", promptRes);
 
       // Start processing - SSE events will handle updates and completion
       startProcessing();
     } catch (err) {
+      if (createdID) {
+        const cleaned = await client.session
+          .delete({ sessionID: createdID })
+          .catch((error) => ({ error }));
+        if (cleaned && typeof cleaned === "object" && "error" in cleaned && cleaned.error) {
+          console.warn("[Session] Failed to cleanup session after send error:", cleaned.error);
+        }
+        setSessionId(undefined);
+        navigate(`/${dirSlug()}/session`, { replace: true });
+      }
+      restoreComposer();
       console.error("[Session] Error sending message:", err);
+      const msg = needsSession
+        ? "Failed to create session or send message"
+        : "Failed to send message";
       setError(
-        `Failed to send message: ${err instanceof Error ? err.message : String(err)}`,
+        `${msg}: ${formatStartError(err)}`,
       );
     } finally {
       setLoading(false);
@@ -1608,39 +1590,57 @@ export function Session() {
   }
 
   async function createSessionAndSendPrompt(text: string) {
+    if (creatingSession()) return;
     const model = sessionModel();
-    if (!model) {
-      setError("Please select a model before sending messages. Click the model button in the header.");
+    const err = startSessionError({
+      loading: providers.loading,
+      providerCount: providers.providers.length,
+      model,
+      connected: providers.connected,
+    });
+    if (err) {
+      setError(err);
       return;
     }
-    if (!providers.connected.includes(model.providerID)) {
-      setError(`Provider "${model.providerID}" is not connected. Please configure it in Settings.`);
-      return;
-    }
+    if (!model) return;
     setError(null);
+    setCreatingSession(true);
     try {
-      const res = await createRootSession(client, {
-        source: "session.savedPrompt.createAndSend",
-        scope: directory,
+      const created = await createAndSendPrompt({
+        client,
+        text,
+        agent: providers.selectedAgent || "build",
+        model,
       });
-      const data = res.data;
-      if (!data) return;
-      const sid = data.id;
-      sessionStorage.setItem(
-        `opencode.pendingPrompt.${sid}`,
-        JSON.stringify({ text, ts: Date.now() }),
-      );
-      providers.setSessionModel(sid, model);
+      const sid = created.id;
       setSessionId(sid);
+      providers.setSessionModel(sid, model);
       navigate(`/${dirSlug()}/session/${sid}`, { replace: true });
     } catch (err) {
-      setError(`Failed to send saved prompt: ${err instanceof Error ? err.message : String(err)}`);
+      setError(`Failed to create session or send saved prompt: ${formatStartError(err)}`);
+    } finally {
+      setCreatingSession(false);
     }
   }
 
   // Welcome screen component for when no session is selected
   function WelcomeScreen() {
     const savedPrompts = useSavedPrompts();
+    const pendingStartError = createMemo(() => {
+      const model = sessionModel();
+      return startSessionError({
+        loading: providers.loading,
+        providerCount: providers.providers.length,
+        model,
+        connected: providers.connected,
+      });
+    });
+    const welcomeError = createMemo(() => {
+      const pending = pendingStartError();
+      const current = error();
+      if (current) return current;
+      return pending;
+    });
 
     return (
       <div
@@ -1775,6 +1775,7 @@ export function Session() {
           <div class="flex flex-col gap-3 w-full max-w-xs">
             <Button
               onClick={async () => {
+                if (creatingSession()) return;
                 console.log(
                   "[Welcome] New Session clicked, directory:",
                   directory,
@@ -1785,6 +1786,7 @@ export function Session() {
                   console.error("[Welcome] No directory available");
                   return;
                 }
+                setCreatingSession(true);
                 try {
                   console.log("[Welcome] Creating session...");
                   const res = await createRootSession(client, {
@@ -1793,16 +1795,22 @@ export function Session() {
                   });
                   const data = res.data;
                   console.log("[Welcome] Create response:", data);
-                  if (data) {
-                    const url = `/${dirSlug()}/session/${data.id}`;
-                    console.log("[Welcome] Navigating to:", url);
-                    navigate(url);
+                  if (!data) {
+                    setError("Failed to create session: no session data returned.");
+                    return;
                   }
+                  const url = `/${dirSlug()}/session/${data.id}`;
+                  console.log("[Welcome] Navigating to:", url);
+                  navigate(url);
                 } catch (e) {
                   console.error("[Welcome] Failed to create session:", e);
+                  setError(`Failed to create session: ${formatStartError(e)}`);
+                } finally {
+                  setCreatingSession(false);
                 }
               }}
               variant="ghost"
+              disabled={creatingSession()}
               class="w-full"
               size="sm"
             >
@@ -1880,10 +1888,13 @@ export function Session() {
                     <button
                       type="button"
                       onClick={() => createSessionAndSendPrompt(prompt.text)}
+                      disabled={creatingSession()}
                       class="p-3 rounded-lg text-left transition-colors"
                       style={{
                         background: "var(--background-base)",
                         border: "1px solid var(--border-base)",
+                        opacity: creatingSession() ? 0.6 : 1,
+                        cursor: creatingSession() ? "not-allowed" : "pointer",
                       }}
                       onMouseEnter={(e) => {
                         e.currentTarget.style.borderColor = "var(--interactive-base)";
@@ -1923,6 +1934,21 @@ export function Session() {
                   )}
                 </For>
               </div>
+            </div>
+          </Show>
+
+          <Show when={welcomeError()}>
+            <div
+              class="mt-4 px-4 py-2 rounded-lg text-sm max-w-2xl"
+              role="status"
+              aria-live="polite"
+              aria-atomic="true"
+              style={{
+                background: "var(--status-danger-dim)",
+                color: "var(--status-danger-text)",
+              }}
+            >
+              {welcomeError()}
             </div>
           </Show>
 
@@ -2504,7 +2530,7 @@ export function Session() {
                 })
                 .catch((err: unknown) => {
                   setError(
-                    `Failed to fork session: ${err instanceof Error ? err.message : String(err)}`,
+                    `Failed to fork session: ${formatStartError(err)}`,
                   );
                 });
             }}
