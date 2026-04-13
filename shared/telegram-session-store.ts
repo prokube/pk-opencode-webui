@@ -43,6 +43,7 @@ function parsePendingQuestionEntry(value: unknown): TelegramPendingQuestionEntry
     : []
   const multiple = row.multiple === true
   const custom = row.custom !== false
+  if (!header.trim() && !question.trim() && !options.length) return
   return {
     header: header.trim(),
     question: question.trim(),

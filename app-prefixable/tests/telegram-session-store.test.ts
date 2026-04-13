@@ -258,4 +258,32 @@ describe("telegram session store", () => {
     const third = createTelegramSessionStore(path)
     expect(await third.questionList?.("chat:77")).toEqual([])
   })
+
+  test("ignores blank pending question entries while loading store", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "telegram-session-store-"))
+    const path = join(dir, "sessions.json")
+    files.push(path)
+    files.push(dir)
+
+    await Bun.write(
+      path,
+      `${JSON.stringify({
+        version: 2,
+        sessions: {},
+        notifications: {},
+        pending: {
+          "chat:77:user:5": [{
+            requestId: "req-blank",
+            sessionId: "session-a",
+            createdAt: 1,
+            expiresAt: Date.now() + 30_000,
+            questions: [{ header: "   ", question: "", options: ["", "   "], multiple: false, custom: true }],
+          }],
+        },
+      }, null, 2)}\n`,
+    )
+
+    const store = createTelegramSessionStore(path)
+    expect(await store.questionList?.("chat:77:user:5")).toEqual([])
+  })
 })

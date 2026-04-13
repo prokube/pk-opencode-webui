@@ -173,13 +173,18 @@ function helpText(): string {
   ].join("\n")
 }
 
-function parseTelegramKey(key: string): { chatId: number } | undefined {
+function parseTelegramKey(key: string): { chatId: number; userId?: number } | undefined {
   const parts = key.split(":")
   if (parts.length < 2) return
   if (parts[0] !== "chat") return
   const chatId = Number.parseInt(parts[1] || "", 10)
   if (!Number.isFinite(chatId)) return
-  return { chatId }
+  if (parts.length === 2) return { chatId }
+  if (parts.length !== 4) return
+  if (parts[2] !== "user") return
+  const userId = Number.parseInt(parts[3] || "", 10)
+  if (!Number.isFinite(userId)) return
+  return { chatId, userId }
 }
 
 async function notificationEnabled(runtime: Runtime, key: string): Promise<boolean> {
@@ -347,8 +352,8 @@ function questionText(properties: Record<string, unknown>): string {
   return "The assistant is waiting for your answer."
 }
 
-function pendingKey(chatId: number): string {
-  return `chat:${chatId}`
+function pendingKey(chatId: number, userId?: number): string {
+  return telegramSessionKey(chatId, userId)
 }
 
 function trimQuestionList(list: TelegramPendingQuestion[]): TelegramPendingQuestion[] {
@@ -359,8 +364,8 @@ function trimQuestionList(list: TelegramPendingQuestion[]): TelegramPendingQuest
     .slice(-10)
 }
 
-async function readPendingQuestions(runtime: Runtime, chatId: number): Promise<TelegramPendingQuestion[]> {
-  const key = pendingKey(chatId)
+async function readPendingQuestions(runtime: Runtime, chatId: number, userId?: number): Promise<TelegramPendingQuestion[]> {
+  const key = pendingKey(chatId, userId)
   const stored = runtime.store.questionList
     ? await runtime.store.questionList(key)
     : pendingQuestions.get(key) || []
@@ -381,8 +386,7 @@ async function readPendingQuestions(runtime: Runtime, chatId: number): Promise<T
   return []
 }
 
-async function upsertPendingQuestion(runtime: Runtime, chatId: number, question: TelegramPendingQuestion) {
-  const key = pendingKey(chatId)
+async function upsertPendingQuestion(runtime: Runtime, key: string, question: TelegramPendingQuestion) {
   if (runtime.store.questionUpsert) {
     await runtime.store.questionUpsert(key, question)
     return
@@ -397,8 +401,8 @@ async function upsertPendingQuestion(runtime: Runtime, chatId: number, question:
   pendingQuestions.delete(key)
 }
 
-async function deletePendingQuestion(runtime: Runtime, chatId: number, requestId: string) {
-  const key = pendingKey(chatId)
+async function deletePendingQuestion(runtime: Runtime, chatId: number, requestId: string, userId?: number) {
+  const key = pendingKey(chatId, userId)
   if (runtime.store.questionDelete) {
     await runtime.store.questionDelete(key, requestId)
     return
@@ -901,7 +905,17 @@ async function sendQuestionReply(
     }
   }
 
-  return retry("opencode:question.reply", run, 2, 400, (error) => !isMissingQuestion(error))
+  return retry("opencode:question.reply", run, 2, 400, (error) => {
+    if (isMissingQuestion(error)) return false
+    if (!(error instanceof Error)) return true
+    const match = error.message.match(/^OpenCode question reply failed \((\d+)\):/)
+    if (!match) return true
+    const status = Number.parseInt(match[1] || "", 10)
+    if (!Number.isFinite(status)) return true
+    if (status === 408 || status === 429) return true
+    if (status >= 400 && status < 500) return false
+    return true
+  })
 }
 
 function chunks(input: string, size: number): string[] {
@@ -992,7 +1006,7 @@ export async function handleTextUpdate(runtime: Runtime, update: TelegramUpdate)
     const handled = await runCommand()
     if (handled) return
 
-    const queuedQuestions = await readPendingQuestions(runtime, chatId)
+    const queuedQuestions = await readPendingQuestions(runtime, chatId, userId)
     const pending = queuedQuestions[0]
     if (pending) {
       const answers = parseQuestionAnswers(pending, text)
@@ -1002,8 +1016,8 @@ export async function handleTextUpdate(runtime: Runtime, update: TelegramUpdate)
       }
       await sendQuestionReply(config, pending.requestId, answers)
         .then(async () => {
-          await deletePendingQuestion(runtime, chatId, pending.requestId)
-          const remaining = await readPendingQuestions(runtime, chatId)
+          await deletePendingQuestion(runtime, chatId, pending.requestId, userId)
+          const remaining = await readPendingQuestions(runtime, chatId, userId)
           if (remaining.length) {
             const next = remaining[0]
             if (next) {
@@ -1015,7 +1029,7 @@ export async function handleTextUpdate(runtime: Runtime, update: TelegramUpdate)
         })
         .catch(async (error) => {
           if (!isMissingQuestion(error)) throw error
-          await deletePendingQuestion(runtime, chatId, pending.requestId)
+          await deletePendingQuestion(runtime, chatId, pending.requestId, userId)
           await sendTelegramMessage(config, chatId, "That question is no longer pending. Wait for the next prompt or use /status.")
         })
       return
@@ -1090,7 +1104,7 @@ async function notifyQuestion(runtime: Runtime, sessionId: string, question: Tel
       if (!parsed) continue
       if (!(await notificationEnabled(runtime, notificationKey(parsed.chatId)))) continue
       if (!shouldNotify(runtime.config, parsed.chatId, kind, sessionId)) continue
-      await upsertPendingQuestion(runtime, parsed.chatId, question)
+      await upsertPendingQuestion(runtime, key, question)
       await queueChatUpdate(String(parsed.chatId), async () => {
         await sendTelegramMessage(runtime.config, parsed.chatId, questionPromptText(question))
       })
