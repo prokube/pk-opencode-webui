@@ -369,6 +369,7 @@ describe("telegram bridge config and cache", () => {
     expect(calls).toHaveLength(1);
     expect(calls[0]?.url).toContain("/sendMessage");
     expect(String(calls[0]?.body.text || "")).toContain("Available commands:");
+    expect(String(calls[0]?.body.text || "")).toContain("/notify - Control proactive notifications (on|off|status)");
   });
 
   test("handleTextUpdate routes status, new@botname, and unknown commands", async () => {

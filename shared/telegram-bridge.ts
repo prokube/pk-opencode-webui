@@ -43,8 +43,8 @@ type CachedSession = {
 
 type TelegramCommand = {
   name: string
-  description: string
-  help: string
+  text: string
+  args?: string
 }
 
 const sessions = new Map<string, CachedSession>()
@@ -57,23 +57,20 @@ const fallbackNotifications = new Map<string, boolean>()
 const telegramCommands = Object.freeze([
   Object.freeze({
     name: "new",
-    description: "Start a fresh OpenCode session",
-    help: "start and switch to a fresh OpenCode session",
+    text: "Start a fresh OpenCode session",
   }),
   Object.freeze({
     name: "status",
-    description: "Show current session mapping",
-    help: "show current session mapping",
+    text: "Show current session mapping",
   }),
   Object.freeze({
     name: "notify",
-    description: "Control proactive notifications",
-    help: "control proactive notifications for this chat (on|off|status)",
+    text: "Control proactive notifications",
+    args: "on|off|status",
   }),
   Object.freeze({
     name: "help",
-    description: "Show available commands",
-    help: "show this help message",
+    text: "Show available commands",
   }),
 ]) as readonly Readonly<TelegramCommand>[]
 
@@ -155,9 +152,13 @@ function parseCommand(text: string): { name: string; args: string[] } | undefine
 }
 
 function helpText(): string {
+  const lines = telegramCommands.map((command) => {
+    const detail = command.args ? `${command.text} (${command.args})` : command.text
+    return `${commandName(command)} - ${detail}`
+  })
   return [
     "Available commands:",
-    ...telegramCommands.map((command) => `${commandName(command)} - ${command.help}`),
+    ...lines,
   ].join("\n")
 }
 
@@ -362,9 +363,19 @@ export async function registerTelegramCommands(config: BridgeConfig) {
   await telegramRequest(config, "setMyCommands", {
     commands: telegramCommands.map((command) => ({
       command: command.name,
-      description: command.description,
+      description: command.text,
     })),
   })
+}
+
+function registerTelegramCommandsWithoutBlocking(config: BridgeConfig) {
+  void registerTelegramCommands(config)
+    .then(() => {
+      console.log(`[TelegramBridge] Registered bot commands: ${commandNames().join(", ")}`)
+    })
+    .catch((error) => {
+      console.warn("[TelegramBridge] failed to register bot commands", error)
+    })
 }
 
 function opencodeUrl(config: BridgeConfig, path: string): URL {
@@ -810,13 +821,7 @@ export async function startTelegramBridge() {
   if (config.directory) {
     console.log(`[TelegramBridge] OpenCode directory: ${config.directory}`)
   }
-  await registerTelegramCommands(config)
-    .then(() => {
-      console.log(`[TelegramBridge] Registered bot commands: ${commandNames().join(", ")}`)
-    })
-    .catch((error) => {
-      console.warn("[TelegramBridge] failed to register bot commands", error)
-    })
+  registerTelegramCommandsWithoutBlocking(config)
   if (config.mode === "polling") {
     await Promise.all([runPolling(runtime), runOutboundNotifications(runtime)])
     return
