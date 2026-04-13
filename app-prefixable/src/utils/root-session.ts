@@ -1,12 +1,6 @@
-interface SessionCreateResponse {
-  data?: ({ id: string } & Record<string, unknown>) | undefined;
-}
+import type { OpencodeClient, SessionCreateResponse } from "../sdk/client";
 
-interface SessionCreateClient {
-  session: {
-    create: (input: object) => Promise<SessionCreateResponse>;
-  };
-}
+type SessionCreateClient = Pick<OpencodeClient, "session">;
 
 interface RootSessionTrace {
   source: string;
@@ -18,7 +12,7 @@ interface RootSessionTrace {
 }
 
 export interface RootSessionResult {
-  data: SessionCreateResponse["data"];
+  data: SessionCreateResponse | undefined;
   isLeader: boolean;
 }
 
@@ -28,7 +22,7 @@ declare global {
   }
 }
 
-const inFlight = new Map<string, Promise<SessionCreateResponse["data"]>>();
+const inFlight = new Map<string, Promise<SessionCreateResponse | undefined>>();
 
 function routePath() {
   if (typeof window === "undefined") return "server";
@@ -49,7 +43,7 @@ export function createRootSession(
   client: SessionCreateClient,
   opts: { source: string; scope?: string },
 ): Promise<RootSessionResult> {
-  const key = opts.scope ?? "default";
+  const key = opts.scope ?? `route:${routePath()}`;
   const existing = inFlight.get(key);
   if (existing) {
     trace({
