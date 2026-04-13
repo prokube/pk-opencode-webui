@@ -9,6 +9,7 @@
 import * as fs from "node:fs"
 import * as nodePath from "node:path"
 import * as os from "node:os"
+import { readTelegramSettings, updateTelegramSettings } from "./telegram-settings"
 
 /** Resolve the working directory from a query param, falling back to cwd */
 function resolveDir(url: URL): string {
@@ -110,6 +111,27 @@ export async function handleExtendedEndpoint(
   url: URL,
   req: Request,
 ): Promise<Response | undefined> {
+  if (path === "/api/ext/telegram/settings" && method === "GET") {
+    const data = await readTelegramSettings().catch((error) => {
+      console.error("[ExtAPI] telegram settings read error", error)
+      return null
+    })
+    if (!data) {
+      return Response.json({ error: "failed to read telegram settings" }, { status: 500 })
+    }
+    return Response.json(data)
+  }
+
+  if (path === "/api/ext/telegram/settings" && method === "PUT") {
+    const body = await req.json().catch(() => null)
+    const rawSettings = body && typeof body === "object" && !Array.isArray(body) ? (body as Record<string, unknown>).settings : null
+    const result = await updateTelegramSettings(rawSettings)
+    if (!result.ok) {
+      return Response.json({ error: "validation_failed", errors: result.errors }, { status: 400 })
+    }
+    return Response.json(result)
+  }
+
   // POST /api/ext/mkdir - Create directory recursively
   if (path === "/api/ext/mkdir" && method === "POST") {
     try {

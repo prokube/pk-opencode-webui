@@ -1,6 +1,5 @@
 import { createTelegramSessionStore, telegramSessionKey } from "./telegram-session-store"
-import { tmpdir } from "node:os"
-import { join } from "node:path"
+import { loadTelegramBridgeSettings } from "./telegram-settings"
 
 type TelegramUpdate = {
   update_id: number
@@ -49,10 +48,6 @@ const eventNotifications = new Map<string, number>()
 const statusBySession = new Map<string, string>()
 const fallbackNotifications = new Map<string, boolean>()
 
-function env(name: string): string {
-  return process.env[name]?.trim() || ""
-}
-
 function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms))
 }
@@ -79,18 +74,6 @@ export function queueChatUpdate<T>(chatId: string, fn: () => Promise<T>): Promis
   return next
 }
 
-function parsePort(value: string): number {
-  const n = Number.parseInt(value, 10)
-  if (Number.isNaN(n) || n <= 0 || n > 65535) return 4097
-  return n
-}
-
-function parsePositiveInt(value: string, fallback: number): number {
-  const n = Number.parseInt(value, 10)
-  if (Number.isNaN(n) || n <= 0) return fallback
-  return n
-}
-
 function parseCommand(text: string): { name: string; args: string[] } | undefined {
   if (!text.startsWith("/")) return
   const parts = text
@@ -112,18 +95,6 @@ function helpText(): string {
     "/notify on|off|status - control proactive notifications for this chat",
     "/help - show this help message",
   ].join("\n")
-}
-
-function normalizeLinkBase(value: string): string | undefined {
-  if (!value) return
-  const trimmed = value.trim()
-  if (!trimmed) return
-  const base = trimmed.endsWith("/") ? trimmed.slice(0, -1) : trimmed
-  try {
-    return new URL(base).toString().replace(/\/$/, "")
-  } catch {
-    throw new Error(`Invalid TELEGRAM_SESSION_LINK_BASE URL: ${value}`)
-  }
 }
 
 function parseTelegramKey(key: string): { chatId: number } | undefined {
@@ -263,53 +234,12 @@ export function createOutboundSSEParser() {
   }
 }
 
-function parseOpenCodeUrl(value: string, source: string): string {
-  try {
-    const url = new URL(value)
-    return url.toString()
-  } catch {
-    throw new Error(`Invalid OpenCode API URL from ${source}: ${value}`)
-  }
-}
-
-function defaultSessionStorePath() {
-  return join(tmpdir(), "opencode-telegram-sessions.json")
-}
-
 export function parseConfig(): BridgeConfig {
-  const token = env("TELEGRAM_BOT_TOKEN")
-  if (!token) {
+  const settings = loadTelegramBridgeSettings()
+  if (!settings.token) {
     throw new Error("TELEGRAM_BOT_TOKEN is required")
   }
-
-  const mode = parseMode(env("TELEGRAM_MODE") || "polling")
-  const opencodeApiUrl = env("OPENCODE_API_URL")
-  const apiUrl = env("API_URL")
-  const openCodeUrlValue = opencodeApiUrl || apiUrl || "http://127.0.0.1:4096"
-  const openCodeUrlSource = opencodeApiUrl ? "OPENCODE_API_URL" : apiUrl ? "API_URL" : "default"
-  const openCodeUrl = parseOpenCodeUrl(openCodeUrlValue, openCodeUrlSource)
-  const webhookPath = env("TELEGRAM_WEBHOOK_PATH") || "/webhook"
-  const sessionCacheMax = parsePositiveInt(env("TELEGRAM_SESSION_CACHE_MAX") || "", 500)
-  const sessionCacheTtlMs = parsePositiveInt(env("TELEGRAM_SESSION_CACHE_TTL_MS") || "", 6 * 60 * 60 * 1000)
-  const notificationDebounceMs = parsePositiveInt(env("TELEGRAM_NOTIFY_DEBOUNCE_MS") || "", 20_000)
-  const sessionStorePath = env("TELEGRAM_SESSION_STORE_PATH") || defaultSessionStorePath()
-  const sessionLinkBase = normalizeLinkBase(env("TELEGRAM_SESSION_LINK_BASE"))
-
-  return {
-    mode,
-    token,
-    openCodeUrl,
-    sessionLinkBase,
-    directory: env("OPENCODE_DIRECTORY") || undefined,
-    sessionCacheMax,
-    sessionCacheTtlMs,
-    notificationDebounceMs,
-    port: parsePort(env("TELEGRAM_BRIDGE_PORT") || "4097"),
-    webhookPath: webhookPath.startsWith("/") ? webhookPath : `/${webhookPath}`,
-    webhookSecret: env("TELEGRAM_WEBHOOK_SECRET") || undefined,
-    webhookUrl: env("TELEGRAM_WEBHOOK_URL") || undefined,
-    sessionStorePath,
-  }
+  return settings
 }
 
 function isMissingSession(error: unknown): boolean {
