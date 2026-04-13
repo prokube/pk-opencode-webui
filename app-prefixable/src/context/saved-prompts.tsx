@@ -22,11 +22,12 @@ interface SavedPromptsContextValue {
   hasActiveProject: () => boolean
   loading: () => boolean
   error: () => string | undefined
-  add: (title: string, text: string, scope?: PromptScope) => void
-  move: (id: string, scope: PromptScope) => void
-  update: (id: string, fields: Partial<Pick<SavedPrompt, "title" | "text">>) => void
-  remove: (id: string) => void
-  reorder: (ids: string[]) => void
+  saveError: () => string | undefined
+  add: (title: string, text: string, scope?: PromptScope) => Promise<boolean>
+  move: (id: string, scope: PromptScope) => Promise<boolean>
+  update: (id: string, fields: Partial<Pick<SavedPrompt, "title" | "text">>) => Promise<boolean>
+  remove: (id: string) => Promise<boolean>
+  reorder: (ids: string[]) => Promise<boolean>
 }
 
 const GLOBAL_KEY = "opencode.savedPrompts"
@@ -71,7 +72,7 @@ function parseStorage(raw: string | null, sourceScope: PromptScope): SavedPrompt
       title: p.title,
       text: p.text,
       createdAt: p.createdAt,
-      scope: sourceScope,
+      scope: p.scope === "global" || p.scope === "project" ? p.scope : sourceScope,
     }))
 }
 
@@ -151,6 +152,7 @@ export function SavedPromptsProvider(props: ParentProps & { directory?: Accessor
   )
   const [loading, setLoading] = createSignal(true)
   const [loadError, setLoadError] = createSignal<string | undefined>()
+  const [saveError, setSaveError] = createSignal<string | undefined>()
   const [globalPrompts, setGlobalPrompts] = createSignal<SavedPrompt[]>([])
   const [projectPrompts, setProjectPrompts] = createSignal<SavedPrompt[]>([])
   const migratedKeys = new Set<string>()
@@ -159,9 +161,17 @@ export function SavedPromptsProvider(props: ParentProps & { directory?: Accessor
   const pendingSaves: Array<{
     directory: string | undefined
     updater: (state: { global: SavedPrompt[]; project: SavedPrompt[] }) => { global: SavedPrompt[]; project: SavedPrompt[] }
+    resolve: (ok: boolean) => void
   }> = []
 
   let pendingClear = false
+
+  function clearPendingSaves(ok: boolean) {
+    const queued = pendingSaves.splice(0, pendingSaves.length)
+    for (const item of queued) {
+      item.resolve(ok)
+    }
+  }
 
   createEffect(() => {
     const d = canonicalDirectory(props.directory?.())
@@ -197,9 +207,9 @@ export function SavedPromptsProvider(props: ParentProps & { directory?: Accessor
     directory: string | undefined,
     updater: (state: { global: SavedPrompt[]; project: SavedPrompt[] }) => { global: SavedPrompt[]; project: SavedPrompt[] },
   ) {
-    saveQueue = saveQueue.catch(() => undefined).then(async () => {
-      if (version !== loadVersion) return
-      if (directory !== targetDirectory()) return
+    const run = saveQueue.catch(() => undefined).then(async () => {
+      if (version !== loadVersion) return false
+      if (directory !== targetDirectory()) return false
       const next = updater({ global: globalPrompts(), project: projectPrompts() })
       const ok = await writeSavedPrompts(
         basePath.serverUrl,
@@ -208,27 +218,34 @@ export function SavedPromptsProvider(props: ParentProps & { directory?: Accessor
         normalize(next.project, "project"),
       )
       if (!ok) {
+        setSaveError("Failed to save prompts. Please retry.")
         console.error("[saved-prompts] failed to persist prompts")
-        return
+        return false
       }
-      if (version !== loadVersion) return
-      if (directory !== targetDirectory()) return
+      if (version !== loadVersion) return false
+      if (directory !== targetDirectory()) return false
+      setSaveError(undefined)
       setGlobalPrompts(next.global)
       setProjectPrompts(next.project)
+      return true
     })
+    saveQueue = run.then(() => undefined, () => undefined)
+    return run.then((ok) => ok === true)
   }
 
   function save(updater: (state: { global: SavedPrompt[]; project: SavedPrompt[] }) => { global: SavedPrompt[]; project: SavedPrompt[] }) {
     const directory = targetDirectory()
     if (loading()) {
-      pendingSaves.push({ directory, updater })
-      return
+      return new Promise<boolean>((resolve) => {
+        pendingSaves.push({ directory, updater, resolve })
+      })
     }
     if (loadError()) {
       console.warn("[saved-prompts] skipped save because prompt load failed")
-      return
+      return Promise.resolve(false)
     }
-    enqueueSave(loadVersion, directory, updater)
+    setSaveError(undefined)
+    return enqueueSave(loadVersion, directory, updater)
   }
 
   async function loadAndMaybeMigrate(version: number) {
@@ -277,14 +294,16 @@ export function SavedPromptsProvider(props: ParentProps & { directory?: Accessor
       setGlobalPrompts(nextGlobal)
       setProjectPrompts(nextProject)
       setLoadError(undefined)
+      setSaveError(undefined)
     } catch (e) {
       console.error("[saved-prompts] failed to load prompts", e)
       if (version !== loadVersion) return
       setGlobalPrompts([])
       setProjectPrompts([])
-      pendingSaves.splice(0, pendingSaves.length)
+      clearPendingSaves(false)
       const msg = e instanceof Error && e.message ? e.message : "unknown error"
       setLoadError(`Failed to load saved prompts: ${msg}`)
+      setSaveError(undefined)
     } finally {
       if (version !== loadVersion) return
       setLoading(false)
@@ -293,9 +312,10 @@ export function SavedPromptsProvider(props: ParentProps & { directory?: Accessor
 
   createEffect(on(targetDirectory, () => {
     const version = ++loadVersion
-    pendingSaves.splice(0, pendingSaves.length)
+    clearPendingSaves(false)
     setLoading(true)
     setLoadError(undefined)
+    setSaveError(undefined)
     setGlobalPrompts([])
     setProjectPrompts([])
     loadAndMaybeMigrate(version)
@@ -304,14 +324,14 @@ export function SavedPromptsProvider(props: ParentProps & { directory?: Accessor
   createEffect(() => {
     if (loading()) return
     if (loadError()) {
-      pendingSaves.splice(0, pendingSaves.length)
+      clearPendingSaves(false)
       return
     }
     if (pendingSaves.length === 0) return
     const queued = pendingSaves.splice(0, pendingSaves.length)
     const version = loadVersion
     for (const item of queued) {
-      enqueueSave(version, item.directory, item.updater)
+      enqueueSave(version, item.directory, item.updater).then(item.resolve)
     }
   })
 
@@ -325,32 +345,29 @@ export function SavedPromptsProvider(props: ParentProps & { directory?: Accessor
     }
     if (scope === "project") {
       if (!targetDirectory()) {
-        save((state) => ({ global: [{ ...prompt, scope: "global" }, ...state.global], project: state.project }))
-        return
+        return save((state) => ({ global: [{ ...prompt, scope: "global" }, ...state.global], project: state.project }))
       }
-      save((state) => ({ global: state.global, project: [prompt, ...state.project] }))
-      return
+      return save((state) => ({ global: state.global, project: [prompt, ...state.project] }))
     }
-    save((state) => ({ global: [{ ...prompt, scope: "global" }, ...state.global], project: state.project }))
+    return save((state) => ({ global: [{ ...prompt, scope: "global" }, ...state.global], project: state.project }))
   }
 
   function move(id: string, scope: PromptScope) {
     const project = projectPrompts().find((p) => p.id === id)
     if (project) {
-      if (scope === "project") return
-      if (!targetDirectory()) return
-      save((state) => ({
+      if (scope === "project") return Promise.resolve(false)
+      if (!targetDirectory()) return Promise.resolve(false)
+      return save((state) => ({
         global: [{ ...project, scope: "global" as const }, ...state.global.filter((p) => p.id !== id)],
         project: state.project.filter((p) => p.id !== id),
       }))
-      return
     }
 
     const global = globalPrompts().find((p) => p.id === id)
-    if (!global) return
-    if (scope === "global") return
-    if (!targetDirectory()) return
-    save((state) => ({
+    if (!global) return Promise.resolve(false)
+    if (scope === "global") return Promise.resolve(false)
+    if (!targetDirectory()) return Promise.resolve(false)
+    return save((state) => ({
       global: state.global.filter((p) => p.id !== id),
       project: [{ ...global, scope: "project" as const }, ...state.project.filter((p) => p.id !== id)],
     }))
@@ -358,14 +375,13 @@ export function SavedPromptsProvider(props: ParentProps & { directory?: Accessor
 
   function update(id: string, fields: Partial<Pick<SavedPrompt, "title" | "text">>) {
     if (projectPrompts().some((p) => p.id === id)) {
-      if (!targetDirectory()) return
-      save((state) => ({
+      if (!targetDirectory()) return Promise.resolve(false)
+      return save((state) => ({
         global: state.global,
         project: state.project.map((p) => (p.id === id ? { ...p, ...fields } : p)),
       }))
-      return
     }
-    save((state) => ({
+    return save((state) => ({
       global: state.global.map((p) => (p.id === id ? { ...p, ...fields } : p)),
       project: state.project,
     }))
@@ -373,11 +389,10 @@ export function SavedPromptsProvider(props: ParentProps & { directory?: Accessor
 
   function remove(id: string) {
     if (projectPrompts().some((p) => p.id === id)) {
-      if (!targetDirectory()) return
-      save((state) => ({ global: state.global, project: state.project.filter((p) => p.id !== id) }))
-      return
+      if (!targetDirectory()) return Promise.resolve(false)
+      return save((state) => ({ global: state.global, project: state.project.filter((p) => p.id !== id) }))
     }
-    save((state) => ({ global: state.global.filter((p) => p.id !== id), project: state.project }))
+    return save((state) => ({ global: state.global.filter((p) => p.id !== id), project: state.project }))
   }
 
   function reorder(ids: string[]) {
@@ -404,7 +419,7 @@ export function SavedPromptsProvider(props: ParentProps & { directory?: Accessor
       return indexed.map((x) => x.p)
     }
 
-    save((state) => ({
+    return save((state) => ({
       global: reorderStore(state.global),
       project: reorderStore(state.project),
     }))
@@ -425,6 +440,7 @@ export function SavedPromptsProvider(props: ParentProps & { directory?: Accessor
         hasActiveProject,
         loading,
         error: loadError,
+        saveError,
         add,
         move,
         update,

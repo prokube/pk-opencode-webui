@@ -248,10 +248,10 @@ describe("OpenCode API Contract", () => {
       const res = await fetch(`${BASE_URL}/api/ext/saved-prompts`);
       expect(res.status).not.toBe(404);
       expect(res.ok).toBe(true);
-      const text = await res.text();
-      if (!text.trim()) return;
-      if (text.trim().startsWith("<")) return;
-      const data = JSON.parse(text);
+      const contentType = res.headers.get("content-type") ?? "";
+      expect(contentType).toContain("application/json");
+      const data = await res.json();
+      expect(data !== null && typeof data === "object" && !Array.isArray(data)).toBe(true);
       expect(Array.isArray(data.global)).toBe(true);
       expect(Array.isArray(data.project)).toBe(true);
     });
@@ -260,8 +260,10 @@ describe("OpenCode API Contract", () => {
       if (skipIfNoServer()) return;
       const readRes = await fetch(`${BASE_URL}/api/ext/saved-prompts`);
       expect(readRes.ok).toBe(true);
-      const readText = await readRes.text();
-      const current = !readText.trim() || readText.trim().startsWith("<") ? {} : JSON.parse(readText);
+      const readContentType = readRes.headers.get("content-type") ?? "";
+      expect(readContentType).toContain("application/json");
+      const current = await readRes.json();
+      expect(current !== null && typeof current === "object" && !Array.isArray(current)).toBe(true);
       const payload = {
         global: Array.isArray(current.global) ? current.global : [],
         project: Array.isArray(current.project) ? current.project : [],

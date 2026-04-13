@@ -1686,6 +1686,12 @@ export function Session() {
             </div>
           </Show>
 
+          <Show when={!savedPrompts.error() && savedPrompts.saveError()}>
+            <div class="mt-8 w-full max-w-2xl text-sm" style={{ color: "var(--interactive-critical)" }}>
+              {savedPrompts.saveError()}
+            </div>
+          </Show>
+
           <Show when={!savedPrompts.loading() && !savedPrompts.error() && savedPrompts.prompts().length > 0}>
             <div class="mt-8 w-full max-w-2xl">
               <h3
@@ -2095,7 +2101,7 @@ export function Session() {
                       <button
                         type="button"
                         onClick={() => {
-                          if (savedPrompts.error()) return;
+                          if (savedPrompts.loading() || savedPrompts.error()) return;
                           const text = input().trim();
                           if (!text) return;
                           setSavePromptTitle(text.slice(0, 30));
@@ -2103,7 +2109,7 @@ export function Session() {
                           setSavePromptScope(savedPrompts.canUseProjectScope() ? "project" : "global");
                           setShowSavePrompt(true);
                         }}
-                        disabled={!!savedPrompts.error()}
+                        disabled={savedPrompts.loading() || !!savedPrompts.error()}
                         class="p-1.5 rounded transition-colors"
                         style={{ color: "var(--text-weak)" }}
                         onMouseEnter={(e) => {
@@ -2115,7 +2121,7 @@ export function Session() {
                           e.currentTarget.style.background = "transparent";
                           e.currentTarget.style.color = "var(--text-weak)";
                         }}
-                        title="Save as prompt"
+                        title={savedPrompts.loading() ? "Saved prompts are still loading" : "Save as prompt"}
                         aria-label="Save as prompt"
                       >
                         <Bookmark class="w-4 h-4" />
@@ -2330,13 +2336,17 @@ export function Session() {
             setScope={setSavePromptScope}
             canUseProjectScope={savedPrompts.canUseProjectScope()}
             hasActiveProject={savedPrompts.hasActiveProject()}
-            saveDisabled={!!savedPrompts.error()}
-            onSave={() => {
-              if (savedPrompts.error()) return;
+            saveDisabled={savedPrompts.loading() || !!savedPrompts.error()}
+            onSave={async () => {
+              if (savedPrompts.loading() || savedPrompts.error()) return;
               const title = savePromptTitle().trim();
               const body = savePromptBody();
               if (!title || !body) return;
-              savedPrompts.add(title, body, savePromptScope());
+              const ok = await savedPrompts.add(title, body, savePromptScope());
+              if (!ok) {
+                showToast(savedPrompts.saveError() || "Failed to save prompts. Please retry.");
+                return;
+              }
               setShowSavePrompt(false);
               showToast("Prompt saved");
             }}

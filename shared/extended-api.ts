@@ -274,6 +274,9 @@ export async function handleExtendedEndpoint(
     if (badProject !== -1) {
       return Response.json({ error: `project[${badProject}] is invalid` }, { status: 400 })
     }
+    if (project.length > 0 && !validatedDir) {
+      return Response.json({ error: "directory is required for project prompts" }, { status: 400 })
+    }
 
     try {
       await writePromptFile(globalPath, global.map((p) => sanitizePrompt(p, "global")))
