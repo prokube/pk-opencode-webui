@@ -3,7 +3,6 @@ import { Portal } from "solid-js/web"
 import { useParams } from "@solidjs/router"
 import { useSync } from "../context/sync"
 import { useProviders } from "../context/providers"
-import type { ProviderListResponse } from "../sdk/gen/types.gen"
 import { getContextTokens } from "../utils/tokens"
 import { Zap, CornerDownLeft, Square } from "lucide-solid"
 
@@ -12,8 +11,116 @@ interface ModelKey {
   modelID: string
 }
 
-type ProviderEntry = ProviderListResponse["all"][number]
-type ProviderModel = ProviderEntry["models"][string]
+type Tokens = {
+  input?: number
+  output?: number
+  reasoning?: number
+  cache?: { read?: number; write?: number }
+}
+
+type AssistantMeta = {
+  role?: string
+  tokens?: Tokens
+  modelID?: string
+  providerID?: string
+  cost?: number
+}
+
+type ModelMeta = {
+  id?: string
+  name?: string
+  family?: string
+  status?: string
+  release_date?: string
+  limit?: { context?: number; input?: number; output?: number }
+  reasoning?: boolean
+  tool_call?: boolean
+  attachment?: boolean
+  interleaved?: boolean
+  modalities?: { input?: string[]; output?: string[] }
+  cost?: { input?: number; output?: number; cache_read?: number; cache_write?: number }
+}
+
+function obj(value: unknown) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined
+  return value as Record<string, unknown>
+}
+
+function num(value: unknown) {
+  if (typeof value !== "number" || !Number.isFinite(value)) return undefined
+  return value
+}
+
+function str(value: unknown) {
+  if (typeof value !== "string") return undefined
+  return value
+}
+
+function bool(value: unknown) {
+  if (typeof value !== "boolean") return undefined
+  return value
+}
+
+function arr(value: unknown) {
+  if (!Array.isArray(value)) return undefined
+  return value.filter((x): x is string => typeof x === "string")
+}
+
+function assistantMeta(value: unknown): AssistantMeta | undefined {
+  const info = obj(value)
+  if (!info || info.role !== "assistant") return undefined
+  const tokensRaw = obj(info.tokens)
+  const cacheRaw = obj(tokensRaw?.cache)
+  return {
+    role: "assistant",
+    modelID: str(info.modelID),
+    providerID: str(info.providerID),
+    cost: num(info.cost),
+    tokens: {
+      input: num(tokensRaw?.input),
+      output: num(tokensRaw?.output),
+      reasoning: num(tokensRaw?.reasoning),
+      cache: {
+        read: num(cacheRaw?.read),
+        write: num(cacheRaw?.write),
+      },
+    },
+  }
+}
+
+function modelMeta(value: unknown): ModelMeta | undefined {
+  const model = obj(value)
+  if (!model) return undefined
+  const limit = obj(model.limit)
+  const modalities = obj(model.modalities)
+  const cost = obj(model.cost)
+  return {
+    id: str(model.id),
+    name: str(model.name),
+    family: str(model.family),
+    status: str(model.status),
+    release_date: str(model.release_date),
+    limit: {
+      context: num(limit?.context),
+      input: num(limit?.input),
+      output: num(limit?.output),
+    },
+    reasoning: bool(model.reasoning),
+    tool_call: bool(model.tool_call),
+    attachment: bool(model.attachment),
+    interleaved: bool(model.interleaved),
+    modalities: {
+      input: arr(modalities?.input),
+      output: arr(modalities?.output),
+    },
+    cost: {
+      input: num(cost?.input),
+      output: num(cost?.output),
+      cache_read: num(cost?.cache_read),
+      cache_write: num(cost?.cache_write),
+    },
+  }
+}
 
 interface SessionInfoProps {
   input: () => string
@@ -53,16 +160,9 @@ export function SessionInfo(props: SessionInfoProps) {
     // Calculate cumulative cost across all assistant messages
     let totalCost = 0
     for (const msg of msgs) {
-      if (msg.info?.role === "assistant") {
-        totalCost += (msg.info as { cost?: number }).cost || 0
-      }
-    }
-
-    // Type for assistant message info
-    type AssistantInfo = {
-      tokens?: { input?: number; output?: number; reasoning?: number; cache?: { read?: number; write?: number } }
-      modelID?: string
-      providerID?: string
+      const info = assistantMeta(msg.info)
+      if (!info) continue
+      totalCost += info.cost || 0
     }
 
     // Find last assistant message with context tokens (current context state)
@@ -79,8 +179,8 @@ export function SessionInfo(props: SessionInfoProps) {
     } | null = null
     for (let i = msgs.length - 1; i >= 0; i--) {
       const msg = msgs[i]
-      if (msg.info?.role !== "assistant") continue
-      const info = msg.info as AssistantInfo
+      const info = assistantMeta(msg.info)
+      if (!info) continue
       const contextTokens = getContextTokens(info.tokens)
       if (contextTokens > 0) {
         lastAssistant = {
@@ -149,8 +249,8 @@ export function SessionInfo(props: SessionInfoProps) {
   const modelInfo = createMemo(() => {
     const selected = props.sessionModel()
     if (!selected) return null
-    const provider = providers.providers.find((p: { id: string }) => p.id === selected.providerID) as ProviderEntry | undefined
-    const model = provider?.models[selected.modelID] as ProviderModel | undefined
+    const provider = providers.providers.find((p: { id: string }) => p.id === selected.providerID)
+    const model = modelMeta(provider?.models[selected.modelID])
     return {
       providerID: selected.providerID,
       providerName: provider?.name || selected.providerID,
@@ -227,8 +327,9 @@ export function SessionInfo(props: SessionInfoProps) {
     clearModelPopoverTimer()
     if (modelTriggerRef) {
       const rect = modelTriggerRef.getBoundingClientRect()
-      const POPOVER_WIDTH = 320
-      const maxLeft = window.innerWidth - POPOVER_WIDTH - 16
+      const rem = Number.parseFloat(getComputedStyle(document.documentElement).fontSize) || 16
+      const width = Math.min(rem * 20, window.innerWidth - rem)
+      const maxLeft = window.innerWidth - width
       setModelPopoverPos({ top: rect.top - 8, left: Math.max(0, Math.min(rect.left, maxLeft)) })
     }
     setShowModelPopover(true)
@@ -320,7 +421,11 @@ export function SessionInfo(props: SessionInfoProps) {
             ref={modelTriggerRef}
             type="button"
             class="flex items-center gap-1 min-w-0 hover:opacity-80 cursor-pointer"
-            onClick={() => props.onModelClick()}
+            onClick={() => {
+              clearModelPopoverTimer()
+              setShowModelPopover(false)
+              props.onModelClick()
+            }}
             onMouseEnter={openModelPopover}
             onMouseLeave={scheduleModelPopoverHide}
             onFocus={openModelPopover}
@@ -340,13 +445,13 @@ export function SessionInfo(props: SessionInfoProps) {
                   class="w-80 max-w-[calc(100vw-1rem)] rounded-lg shadow-lg text-xs"
                   style={{
                     position: "fixed",
-                    top: `${modelPopoverPos().top}px`,
-                    left: `${modelPopoverPos().left}px`,
-                    transform: "translateY(-100%)",
-                    "z-index": "9999",
-                    background: "var(--background-base)",
-                    border: "1px solid var(--border-base)",
-                  }}
+                     top: `${modelPopoverPos().top}px`,
+                     left: `${modelPopoverPos().left}px`,
+                     transform: "translateY(-100%)",
+                     "z-index": "40",
+                     background: "var(--background-base)",
+                     border: "1px solid var(--border-base)",
+                   }}
                   onMouseEnter={openModelPopover}
                   onMouseLeave={scheduleModelPopoverHide}
                 >
@@ -503,13 +608,13 @@ export function SessionInfo(props: SessionInfoProps) {
                     class="w-64 rounded-lg shadow-lg text-xs"
                     style={{
                       position: "fixed",
-                      top: `${popoverPos().top}px`,
-                      left: `${popoverPos().left}px`,
-                      transform: "translateY(-100%)",
-                      "z-index": "9999",
-                      background: "var(--background-base)",
-                      border: "1px solid var(--border-base)",
-                    }}
+                       top: `${popoverPos().top}px`,
+                       left: `${popoverPos().left}px`,
+                       transform: "translateY(-100%)",
+                       "z-index": "40",
+                       background: "var(--background-base)",
+                       border: "1px solid var(--border-base)",
+                     }}
                   >
                     <div
                       class="px-3 py-2 font-medium"
