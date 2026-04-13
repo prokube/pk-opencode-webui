@@ -17,6 +17,7 @@ const checklist = Object.freeze([
 const commands = ["/notify on", "/notify off", "/notify status", "/new", "/status", "/help"] as const
 const sections = ["Readiness checklist", "Prerequisites", "Setup steps", "Command usage", "Security best practices", "Troubleshooting quick checks"] as const
 const title = "Telegram Setup Guide"
+const requiredVars = ["TELEGRAM_BOT_TOKEN", "TELEGRAM_WEBHOOK_SECRET", "openCodeUrl", "webhookUrl"] as const
 
 export function TelegramSetupGuide() {
   const [done, setDone] = createSignal(new Set<string>())
@@ -37,9 +38,9 @@ export function TelegramSetupGuide() {
   return (
     <div class="space-y-6">
       <header>
-        <h1 class="text-lg font-medium" style={{ color: "var(--text-strong)" }}>
+        <h2 class="text-base font-medium" style={{ color: "var(--text-strong)" }}>
           {title}
-        </h1>
+        </h2>
         <p class="text-sm mt-1" style={{ color: "var(--text-weak)" }}>
           Configure the prokube.ai Telegram bridge with a quick readiness checklist, mode-specific setup, and troubleshooting checks.
         </p>
@@ -72,9 +73,9 @@ export function TelegramSetupGuide() {
           Prerequisites
         </h2>
         <ul class="text-sm space-y-1 list-disc pl-5" style={{ color: "var(--text-base)" }}>
-          <li>Telegram bot created with BotFather and a valid bot token.</li>
+          <li>Create your bot in Telegram with BotFather (`/newbot`) and copy the token into TELEGRAM_BOT_TOKEN.</li>
           <li>Mode choice: polling (default) or webhook.</li>
-          <li>OpenCode API reachable from the bridge via openCodeUrl (from OPENCODE_API_URL or API_URL by default).</li>
+          <li>openCodeUrl should be the API endpoint the bridge can reach from inside your deployment (for example `http://127.0.0.1:4096`).</li>
           <li>Bridge runtime enabled with TELEGRAM_BRIDGE_ENABLED=true in supported deployments.</li>
         </ul>
       </section>
@@ -85,12 +86,16 @@ export function TelegramSetupGuide() {
         </h2>
         <div class="space-y-2 text-sm" style={{ color: "var(--text-base)" }}>
           <p>
-            <strong>Polling mode:</strong> set <code>mode=polling</code> (or TELEGRAM_MODE=polling), configure token, and start the bridge. Polling clears webhook
-            registration automatically.
+            <strong>Bot token:</strong> in BotFather run <code>/token</code> for your bot to rotate/copy credentials, then save the value as <code>TELEGRAM_BOT_TOKEN</code> or set it in the Bot token field.
           </p>
           <p>
-            <strong>Webhook mode:</strong> set <code>mode=webhook</code>, configure <code>webhookUrl</code>, <code>webhookPath</code>, and optional <code>webhookSecret</code>.
-            Expose only HTTPS ingress and forward <code>x-telegram-bot-api-secret-token</code> unchanged.
+            <strong>Webhook secret:</strong> generate a random value (for example <code>openssl rand -hex 32</code>), store it in <code>TELEGRAM_WEBHOOK_SECRET</code>, and configure your ingress to pass Telegram's <code>x-telegram-bot-api-secret-token</code> header unchanged.
+          </p>
+          <p>
+            <strong>URL fields:</strong> set <code>openCodeUrl</code> to the bridge-reachable OpenCode API URL, and set <code>webhookUrl</code> to the public HTTPS URL Telegram can call (for example <code>https://your-domain/telegram/webhook</code>).
+          </p>
+          <p>
+            <strong>Mode:</strong> set <code>mode=polling</code> for local/simple setups, or <code>mode=webhook</code> for production ingress. Polling clears webhook registration automatically.
           </p>
           <p>
             Persisted UI fields map to runtime settings: <code>mode</code>, <code>token</code>, <code>openCodeUrl</code>, <code>directory</code>, <code>sessionCacheMax</code>,
@@ -146,3 +151,4 @@ export const TELEGRAM_GUIDE_COMMANDS = [...commands]
 export const TELEGRAM_READINESS_CHECKS = checklist
 export const TELEGRAM_GUIDE_SECTIONS = [...sections]
 export const TELEGRAM_GUIDE_TITLE = title
+export const TELEGRAM_GUIDE_REQUIRED_VARIABLES = [...requiredVars]

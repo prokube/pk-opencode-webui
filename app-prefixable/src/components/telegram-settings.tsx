@@ -13,6 +13,7 @@ import {
   type TelegramForm,
   validateTelegramForm,
 } from "../utils/telegram-settings"
+import { TelegramSetupGuide } from "./telegram-setup-guide"
 
 type Props = {
   serverUrl: string
@@ -182,6 +183,8 @@ export function TelegramSettings(props: Props) {
           Configure Telegram bridge runtime settings. Saving changes writes persisted values and may require restarting the bridge service.
         </p>
       </header>
+
+      <TelegramSetupGuide />
 
       <Show when={loading()}>
         <div class="flex items-center gap-2" style={{ color: "var(--text-weak)" }}>
