@@ -136,11 +136,14 @@ function parsePromptValue(item: unknown, scope: "global" | "project"): StoredPro
 
 function parsePromptList(raw: string, scope: "global" | "project"): StoredPrompt[] {
   const parsed = JSON.parse(raw)
+  const nestedPrompts = parsed && typeof parsed === "object" ? (parsed as { prompts?: unknown }).prompts : undefined
   const list = Array.isArray(parsed)
     ? parsed
     : parsed && typeof parsed === "object"
-      ? Array.isArray((parsed as { prompts?: unknown[] }).prompts)
-        ? (parsed as { prompts: unknown[] }).prompts
+      ? Array.isArray(nestedPrompts)
+        ? nestedPrompts
+        : nestedPrompts && typeof nestedPrompts === "object" && Array.isArray((nestedPrompts as Record<string, unknown>)[scope])
+          ? ((nestedPrompts as Record<string, unknown>)[scope] as unknown[])
         : Array.isArray((parsed as Record<string, unknown>)[scope])
           ? ((parsed as Record<string, unknown>)[scope] as unknown[])
           : []
@@ -157,8 +160,8 @@ function parsePromptList(raw: string, scope: "global" | "project"): StoredPrompt
   return prompts
 }
 
-function invalidPromptIndex(list: unknown[]): number {
-  return list.findIndex((item) => !parsePromptValue(item, "global"))
+function invalidPromptIndex(list: unknown[], scope: "global" | "project"): number {
+  return list.findIndex((item) => !parsePromptValue(item, scope))
 }
 
 async function readPromptFile(path: string, scope: "global" | "project"): Promise<StoredPrompt[]> {
@@ -332,9 +335,10 @@ export async function handleExtendedEndpoint(
       return Response.json({ error: "directory must be within allowed directory" }, { status: 403 })
     }
 
-    const body = await req.json().catch(() => null)
-    const global = Array.isArray(body?.global) ? body.global : null
-    const project = Array.isArray(body?.project) ? body.project : null
+    const body = (await req.json().catch(() => null)) as unknown
+    const payload = body && typeof body === "object" ? (body as Record<string, unknown>) : null
+    const global = payload && Array.isArray(payload.global) ? payload.global : null
+    const project = payload && Array.isArray(payload.project) ? payload.project : null
     if (!global || !project) {
       return Response.json({ error: "global and project arrays are required" }, { status: 400 })
     }
@@ -342,22 +346,28 @@ export async function handleExtendedEndpoint(
     const configDir = getConfigDir()
     const globalPath = nodePath.join(configDir, "saved-prompts.json")
     const projectPath = validatedDir ? nodePath.join(validatedDir, ".opencode", "saved-prompts.json") : null
-    const badGlobal = invalidPromptIndex(global)
+    const badGlobal = invalidPromptIndex(global, "global")
     if (badGlobal !== -1) {
       return Response.json({ error: `global[${badGlobal}] is invalid` }, { status: 400 })
     }
-    const badProject = invalidPromptIndex(project)
+    const badProject = invalidPromptIndex(project, "project")
     if (badProject !== -1) {
       return Response.json({ error: `project[${badProject}] is invalid` }, { status: 400 })
     }
+    const nextGlobal = global
+      .map((item) => parsePromptValue(item, "global"))
+      .filter((item): item is StoredPrompt => item !== null)
+    const nextProject = project
+      .map((item) => parsePromptValue(item, "project"))
+      .filter((item): item is StoredPrompt => item !== null)
     if (project.length > 0 && !validatedDir) {
       return Response.json({ error: "directory is required for project prompts" }, { status: 400 })
     }
 
     try {
-      await writePromptFile(globalPath, global.map((p) => sanitizePrompt(p, "global")))
+      await writePromptFile(globalPath, nextGlobal.map((p) => sanitizePrompt(p, "global")))
       if (projectPath) {
-        await writePromptFile(projectPath, project.map((p) => sanitizePrompt(p, "project")))
+        await writePromptFile(projectPath, nextProject.map((p) => sanitizePrompt(p, "project")))
       }
       return Response.json({ success: true })
     } catch (e) {
