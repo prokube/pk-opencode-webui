@@ -1,5 +1,6 @@
 import * as fs from "node:fs"
 import * as fsp from "node:fs/promises"
+import { randomUUID } from "node:crypto"
 import * as nodePath from "node:path"
 import * as os from "node:os"
 
@@ -268,7 +269,10 @@ function normalizePayload(input: unknown): {
   }
 
   if ("mode" in raw) {
-    if (typeof raw.mode !== "string") {
+    if (raw.mode === null) {
+      patch.mode = undefined
+    }
+    if (typeof raw.mode !== "string" && raw.mode !== null) {
       errors.push({ field: "mode", message: "mode must be polling or webhook" })
     }
     if (typeof raw.mode === "string") {
@@ -289,9 +293,17 @@ function normalizePayload(input: unknown): {
   }
 
   if ("openCodeUrl" in raw) {
-    const valid = pushUrl(errors, "openCodeUrl", raw.openCodeUrl)
-    if (valid && typeof raw.openCodeUrl === "string" && raw.openCodeUrl.trim()) {
-      patch.openCodeUrl = parseUrl(raw.openCodeUrl.trim(), "openCodeUrl")
+    if (raw.openCodeUrl === null) {
+      patch.openCodeUrl = undefined
+    }
+    if (typeof raw.openCodeUrl === "string") {
+      const valid = pushUrl(errors, "openCodeUrl", raw.openCodeUrl)
+      if (valid && raw.openCodeUrl.trim()) {
+        patch.openCodeUrl = parseUrl(raw.openCodeUrl.trim(), "openCodeUrl")
+      }
+    }
+    if (raw.openCodeUrl !== null && typeof raw.openCodeUrl !== "string") {
+      errors.push({ field: "openCodeUrl", message: "openCodeUrl must be a valid URL or null" })
     }
   }
 
@@ -304,32 +316,50 @@ function normalizePayload(input: unknown): {
   }
 
   if ("sessionCacheMax" in raw) {
-    pushPositive(errors, "sessionCacheMax", raw.sessionCacheMax)
-    if (typeof raw.sessionCacheMax === "number" && Number.isInteger(raw.sessionCacheMax) && raw.sessionCacheMax > 0) {
-      patch.sessionCacheMax = raw.sessionCacheMax
+    if (raw.sessionCacheMax === null) {
+      patch.sessionCacheMax = undefined
+    }
+    if (raw.sessionCacheMax !== null) {
+      pushPositive(errors, "sessionCacheMax", raw.sessionCacheMax)
+      if (typeof raw.sessionCacheMax === "number" && Number.isInteger(raw.sessionCacheMax) && raw.sessionCacheMax > 0) {
+        patch.sessionCacheMax = raw.sessionCacheMax
+      }
     }
   }
 
   if ("sessionCacheTtlMs" in raw) {
-    pushPositive(errors, "sessionCacheTtlMs", raw.sessionCacheTtlMs)
-    if (typeof raw.sessionCacheTtlMs === "number" && Number.isInteger(raw.sessionCacheTtlMs) && raw.sessionCacheTtlMs > 0) {
-      patch.sessionCacheTtlMs = raw.sessionCacheTtlMs
+    if (raw.sessionCacheTtlMs === null) {
+      patch.sessionCacheTtlMs = undefined
+    }
+    if (raw.sessionCacheTtlMs !== null) {
+      pushPositive(errors, "sessionCacheTtlMs", raw.sessionCacheTtlMs)
+      if (typeof raw.sessionCacheTtlMs === "number" && Number.isInteger(raw.sessionCacheTtlMs) && raw.sessionCacheTtlMs > 0) {
+        patch.sessionCacheTtlMs = raw.sessionCacheTtlMs
+      }
     }
   }
 
   if ("notificationDebounceMs" in raw) {
-    pushPositive(errors, "notificationDebounceMs", raw.notificationDebounceMs)
-    if (
-      typeof raw.notificationDebounceMs === "number" &&
-      Number.isInteger(raw.notificationDebounceMs) &&
-      raw.notificationDebounceMs > 0
-    ) {
-      patch.notificationDebounceMs = raw.notificationDebounceMs
+    if (raw.notificationDebounceMs === null) {
+      patch.notificationDebounceMs = undefined
+    }
+    if (raw.notificationDebounceMs !== null) {
+      pushPositive(errors, "notificationDebounceMs", raw.notificationDebounceMs)
+      if (
+        typeof raw.notificationDebounceMs === "number" &&
+        Number.isInteger(raw.notificationDebounceMs) &&
+        raw.notificationDebounceMs > 0
+      ) {
+        patch.notificationDebounceMs = raw.notificationDebounceMs
+      }
     }
   }
 
   if ("port" in raw) {
-    if (typeof raw.port !== "number" || !Number.isInteger(raw.port) || raw.port < 1 || raw.port > 65535) {
+    if (raw.port === null) {
+      patch.port = undefined
+    }
+    if (raw.port !== null && (typeof raw.port !== "number" || !Number.isInteger(raw.port) || raw.port < 1 || raw.port > 65535)) {
       errors.push({ field: "port", message: "port must be an integer between 1 and 65535" })
     }
     if (typeof raw.port === "number" && Number.isInteger(raw.port) && raw.port >= 1 && raw.port <= 65535) {
@@ -338,8 +368,11 @@ function normalizePayload(input: unknown): {
   }
 
   if ("webhookPath" in raw) {
-    if (typeof raw.webhookPath !== "string" || !raw.webhookPath.trim()) {
-      errors.push({ field: "webhookPath", message: "webhookPath must be a non-empty string" })
+    if (raw.webhookPath === null) {
+      patch.webhookPath = undefined
+    }
+    if (raw.webhookPath !== null && (typeof raw.webhookPath !== "string" || !raw.webhookPath.trim())) {
+      errors.push({ field: "webhookPath", message: "webhookPath must be a non-empty string or null" })
     }
     if (typeof raw.webhookPath === "string" && raw.webhookPath.trim()) {
       const value = raw.webhookPath.trim()
@@ -373,8 +406,11 @@ function normalizePayload(input: unknown): {
   }
 
   if ("sessionStorePath" in raw) {
-    if (typeof raw.sessionStorePath !== "string" || !raw.sessionStorePath.trim()) {
-      errors.push({ field: "sessionStorePath", message: "sessionStorePath must be a non-empty string" })
+    if (raw.sessionStorePath === null) {
+      patch.sessionStorePath = undefined
+    }
+    if (raw.sessionStorePath !== null && (typeof raw.sessionStorePath !== "string" || !raw.sessionStorePath.trim())) {
+      errors.push({ field: "sessionStorePath", message: "sessionStorePath must be a non-empty string or null" })
     }
     if (typeof raw.sessionStorePath === "string" && raw.sessionStorePath.trim()) {
       patch.sessionStorePath = raw.sessionStorePath.trim()
@@ -399,15 +435,25 @@ function normalizePayload(input: unknown): {
 
 async function writeSettings(path: string, settings: Partial<Record<TelegramSettingField, string | number>>) {
   await fsp.mkdir(nodePath.dirname(path), { recursive: true })
-  const tmpPath = `${path}.tmp`
+  const tmpPath = nodePath.join(nodePath.dirname(path), `.${nodePath.basename(path)}.${process.pid}.${randomUUID()}.tmp`)
   const payload: TelegramSettingsStore = {
     version: 1,
     updatedAt: new Date().toISOString(),
     settings,
   }
-  await Bun.write(tmpPath, `${JSON.stringify(payload, null, 2)}\n`)
-  await fsp.chmod(tmpPath, 0o600).catch(() => undefined)
-  await fsp.rename(tmpPath, path)
+  const handle = await fsp.open(tmpPath, "wx", 0o600)
+  try {
+    await handle.writeFile(`${JSON.stringify(payload, null, 2)}\n`, "utf-8")
+  } catch (error) {
+    await handle.close().catch(() => undefined)
+    await fsp.unlink(tmpPath).catch(() => undefined)
+    throw error
+  }
+  await handle.close()
+  await fsp.rename(tmpPath, path).catch(async (error) => {
+    await fsp.unlink(tmpPath).catch(() => undefined)
+    throw error
+  })
   await fsp.chmod(path, 0o600).catch(() => undefined)
 }
 

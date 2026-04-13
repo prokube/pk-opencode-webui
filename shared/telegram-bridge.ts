@@ -237,7 +237,7 @@ export function createOutboundSSEParser() {
 export function parseConfig(): BridgeConfig {
   const settings = loadTelegramBridgeSettings()
   if (!settings.token) {
-    throw new Error("TELEGRAM_BOT_TOKEN is required")
+    throw new Error("Telegram token is required. Set TELEGRAM_BOT_TOKEN or save token in persisted Telegram settings.")
   }
   return settings
 }

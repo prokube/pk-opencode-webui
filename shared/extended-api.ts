@@ -125,7 +125,13 @@ export async function handleExtendedEndpoint(
   if (path === "/api/ext/telegram/settings" && method === "PUT") {
     const body = await req.json().catch(() => null)
     const rawSettings = body && typeof body === "object" && !Array.isArray(body) ? (body as Record<string, unknown>).settings : null
-    const result = await updateTelegramSettings(rawSettings)
+    const result = await updateTelegramSettings(rawSettings).catch((error) => {
+      console.error("[ExtAPI] telegram settings update error", error)
+      return null
+    })
+    if (!result) {
+      return Response.json({ error: "failed to update telegram settings" }, { status: 500 })
+    }
     if (!result.ok) {
       return Response.json({ error: "validation_failed", errors: result.errors }, { status: 400 })
     }

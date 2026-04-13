@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test"
-import { mkdtemp, rm } from "node:fs/promises"
+import { mkdtemp, rm, writeFile } from "node:fs/promises"
 import { join } from "node:path"
 import { tmpdir } from "node:os"
 import { handleExtendedEndpoint } from "../../shared/extended-api"
@@ -161,5 +161,103 @@ describe("telegram settings extended API", () => {
       settings?: Record<string, string | number>
     }
     expect(stored.settings?.token).toBe("persisted-secret-token")
+  })
+
+  test("PUT allows null to clear persisted required and numeric fields", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "telegram-settings-"))
+    const path = join(dir, "telegram-settings.json")
+    cleanupPaths.push(dir)
+
+    process.env.TELEGRAM_SETTINGS_PATH = path
+    process.env.TELEGRAM_BOT_TOKEN = "env-token"
+    process.env.OPENCODE_API_URL = "http://127.0.0.1:4299"
+    process.env.TELEGRAM_SESSION_CACHE_MAX = "777"
+    process.env.TELEGRAM_BRIDGE_PORT = "4197"
+
+    const seed = await handleExtendedEndpoint(
+      "/api/ext/telegram/settings",
+      "PUT",
+      new URL("http://127.0.0.1/api/ext/telegram/settings"),
+      new Request("http://127.0.0.1/api/ext/telegram/settings", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          settings: {
+            token: "persisted-token",
+            openCodeUrl: "http://127.0.0.1:4499",
+            sessionCacheMax: 99,
+            port: 5001,
+          },
+        }),
+      }),
+    )
+    expect(seed?.status).toBe(200)
+
+    const clear = await handleExtendedEndpoint(
+      "/api/ext/telegram/settings",
+      "PUT",
+      new URL("http://127.0.0.1/api/ext/telegram/settings"),
+      new Request("http://127.0.0.1/api/ext/telegram/settings", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          settings: {
+            token: null,
+            openCodeUrl: null,
+            sessionCacheMax: null,
+            port: null,
+          },
+        }),
+      }),
+    )
+
+    expect(clear?.status).toBe(200)
+    const clearData = await clear?.json()
+    expect(clearData.changedFields).toEqual(expect.arrayContaining(["token", "openCodeUrl", "sessionCacheMax", "port"]))
+
+    const read = await handleExtendedEndpoint(
+      "/api/ext/telegram/settings",
+      "GET",
+      new URL("http://127.0.0.1/api/ext/telegram/settings"),
+      new Request("http://127.0.0.1/api/ext/telegram/settings"),
+    )
+    expect(read?.status).toBe(200)
+    const data = await read?.json()
+    expect(data.settings.tokenSource).toBe("env")
+    expect(data.settings.openCodeUrl).toBe("http://127.0.0.1:4299/")
+    expect(data.settings.sessionCacheMax).toBe(777)
+    expect(data.settings.port).toBe(4197)
+
+    const stored = JSON.parse(await Bun.file(path).text()) as {
+      settings?: Record<string, string | number>
+    }
+    expect(stored.settings?.token).toBeUndefined()
+    expect(stored.settings?.openCodeUrl).toBeUndefined()
+    expect(stored.settings?.sessionCacheMax).toBeUndefined()
+    expect(stored.settings?.port).toBeUndefined()
+  })
+
+  test("PUT returns 500 when persistence fails", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "telegram-settings-"))
+    cleanupPaths.push(dir)
+    const blocker = join(dir, "blocked")
+    await writeFile(blocker, "file", "utf-8")
+
+    process.env.TELEGRAM_SETTINGS_PATH = join(blocker, "telegram-settings.json")
+
+    const response = await handleExtendedEndpoint(
+      "/api/ext/telegram/settings",
+      "PUT",
+      new URL("http://127.0.0.1/api/ext/telegram/settings"),
+      new Request("http://127.0.0.1/api/ext/telegram/settings", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ settings: { token: "persisted-token" } }),
+      }),
+    )
+
+    expect(response?.status).toBe(500)
+    const data = await response?.json()
+    expect(data).toEqual({ error: "failed to update telegram settings" })
   })
 })
