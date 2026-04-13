@@ -159,6 +159,7 @@ bun install && bun run dev
 | `TELEGRAM_MODE` | `polling` | Telegram bridge mode (`polling` or `webhook`) |
 | `OPENCODE_API_URL` | `API_URL` or `http://127.0.0.1:4096` | OpenCode API URL for bridge |
 | `OPENCODE_DIRECTORY` | _(empty)_ | Optional directory for bridge session API calls |
+| `TELEGRAM_SESSION_STORE_PATH` | `/tmp/opencode-telegram-sessions.json` | Persistent Telegram chat/user to OpenCode session mapping |
 
 ## Deployment
 
@@ -212,6 +213,16 @@ This repository includes a Telegram bridge service (`docker/telegram-bridge.ts`)
 - receives Telegram bot text messages,
 - forwards prompts to OpenCode session APIs,
 - sends assistant responses back to Telegram.
+
+The bridge keeps a default OpenCode session per Telegram chat (and sender in shared chats), persisted to `TELEGRAM_SESSION_STORE_PATH` so mappings survive restarts.
+
+Supported bot commands:
+- `/new` creates and switches to a fresh session for the current chat mapping.
+- `/status` shows the current mapped session id.
+- `/help` shows command help.
+- Unknown commands return a short help hint.
+
+Messages from the same chat are handled through a per-chat queue to avoid cross-reply mixups when users send requests quickly.
 
 The bridge is opt-in and only starts in the Kubeflow image when `TELEGRAM_BRIDGE_ENABLED=true`.
 

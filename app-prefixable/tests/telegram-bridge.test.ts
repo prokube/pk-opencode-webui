@@ -22,6 +22,7 @@ const envKeys = [
   "TELEGRAM_WEBHOOK_PATH",
   "TELEGRAM_WEBHOOK_SECRET",
   "TELEGRAM_WEBHOOK_URL",
+  "TELEGRAM_SESSION_STORE_PATH",
 ] as const;
 
 const envSnapshot = new Map<string, string | undefined>();
@@ -100,6 +101,10 @@ describe("telegram bridge config and cache", () => {
   test("parseConfig uses polling default and rejects invalid TELEGRAM_MODE", () => {
     setEnv({ TELEGRAM_BOT_TOKEN: "token", OPENCODE_API_URL: "http://127.0.0.1:4096" });
     expect(parseConfig().mode).toBe("polling");
+    expect(parseConfig().sessionStorePath).toBe("/tmp/opencode-telegram-sessions.json");
+
+    setEnv({ TELEGRAM_BOT_TOKEN: "token", TELEGRAM_SESSION_STORE_PATH: "/tmp/custom-store.json" });
+    expect(parseConfig().sessionStorePath).toBe("/tmp/custom-store.json");
 
     setEnv({ TELEGRAM_BOT_TOKEN: "token", TELEGRAM_MODE: "bad-mode", OPENCODE_API_URL: "http://127.0.0.1:4096" });
     expect(() => parseConfig()).toThrow("Invalid TELEGRAM_MODE");
@@ -129,6 +134,7 @@ describe("telegram bridge config and cache", () => {
       sessionCacheTtlMs: 10_000,
       port: 4097,
       webhookPath: "/webhook",
+      sessionStorePath: "/tmp/test-store.json",
     };
 
     cacheSession(config, "chat-a", "session-a");
