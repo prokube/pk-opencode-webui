@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -55,6 +56,8 @@ const envKeys = [
 ] as const;
 
 const envSnapshot = new Map<string, string | undefined>();
+let settingsPathSnapshot: string | undefined;
+const testTempDirs: string[] = [];
 
 function setEnv(next: Partial<Record<(typeof envKeys)[number], string | undefined>>) {
   for (const key of envKeys) {
@@ -68,15 +71,19 @@ function setEnv(next: Partial<Record<(typeof envKeys)[number], string | undefine
 }
 
 describe("telegram bridge config and cache", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     resetSessionCacheForTest();
+    settingsPathSnapshot = process.env.TELEGRAM_SETTINGS_PATH;
+    const dir = await mkdtemp(join(tmpdir(), "telegram-settings-test-"));
+    testTempDirs.push(dir);
+    process.env.TELEGRAM_SETTINGS_PATH = join(dir, "telegram-settings.json");
     for (const key of envKeys) {
       envSnapshot.set(key, process.env[key]);
       delete process.env[key];
     }
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     resetSessionCacheForTest();
     for (const key of envKeys) {
       const value = envSnapshot.get(key);
@@ -86,6 +93,14 @@ describe("telegram bridge config and cache", () => {
       }
       process.env[key] = value;
     }
+    if (settingsPathSnapshot === undefined) {
+      delete process.env.TELEGRAM_SETTINGS_PATH;
+    }
+    if (settingsPathSnapshot !== undefined) {
+      process.env.TELEGRAM_SETTINGS_PATH = settingsPathSnapshot;
+    }
+    await Promise.all(testTempDirs.map((dir) => rm(dir, { force: true, recursive: true })));
+    testTempDirs.length = 0;
     envSnapshot.clear();
   });
 
@@ -145,6 +160,86 @@ describe("telegram bridge config and cache", () => {
 
     setEnv({ TELEGRAM_BOT_TOKEN: "token", TELEGRAM_MODE: "bad-mode", OPENCODE_API_URL: "http://127.0.0.1:4096" });
     expect(() => parseConfig()).toThrow("Invalid TELEGRAM_MODE");
+
+    setEnv({
+      TELEGRAM_BOT_TOKEN: "token",
+      TELEGRAM_SESSION_STORE_PATH: "relative-store.json",
+      OPENCODE_API_URL: "http://127.0.0.1:4096",
+    });
+    expect(parseConfig().sessionStorePath).toBe(join(tmpdir(), "opencode-telegram-sessions.json"));
+
+    process.env.TELEGRAM_SETTINGS_PATH = join(testTempDirs[0] || tmpdir(), "telegram-settings-missing-token.json");
+    setEnv({ TELEGRAM_BOT_TOKEN: undefined, OPENCODE_API_URL: "http://127.0.0.1:4096" });
+    expect(() => parseConfig()).toThrow("Set TELEGRAM_BOT_TOKEN or save token in persisted Telegram settings");
+  });
+
+  test("parseConfig includes source in URL parse errors", () => {
+    setEnv({ TELEGRAM_BOT_TOKEN: "token", OPENCODE_API_URL: "bad-url" });
+    expect(() => parseConfig()).toThrow("openCodeUrl must be a valid URL (OPENCODE_API_URL)");
+
+    setEnv({ TELEGRAM_BOT_TOKEN: "token", OPENCODE_API_URL: "http://127.0.0.1:4096", TELEGRAM_WEBHOOK_URL: "bad-url" });
+    expect(() => parseConfig()).toThrow("webhookUrl must be a valid URL (TELEGRAM_WEBHOOK_URL)");
+
+    setEnv({
+      TELEGRAM_BOT_TOKEN: "token",
+      OPENCODE_API_URL: "http://127.0.0.1:4096",
+      TELEGRAM_WEBHOOK_URL: undefined,
+      TELEGRAM_SESSION_LINK_BASE: "bad-url",
+    });
+    expect(() => parseConfig()).toThrow("sessionLinkBase must be a valid URL (TELEGRAM_SESSION_LINK_BASE)");
+  });
+
+  test("parseConfig trims persisted token and recovers from backup when primary missing", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "telegram-bridge-config-"));
+    const path = join(dir, "telegram-settings.json");
+    const backup = `${path}.bak.${Date.now()}.recover`;
+
+    try {
+      process.env.TELEGRAM_SETTINGS_PATH = path;
+      process.env.TELEGRAM_BOT_TOKEN = "env-token";
+      process.env.OPENCODE_API_URL = "http://127.0.0.1:4096";
+
+      await writeFile(
+        path,
+        JSON.stringify(
+          {
+            version: 1,
+            updatedAt: new Date().toISOString(),
+            settings: {
+              token: "\t   ",
+            },
+          },
+          null,
+          2,
+        ),
+        "utf-8",
+      );
+
+      expect(parseConfig().token).toBe("env-token");
+
+      await rm(path, { force: true });
+      await writeFile(
+        backup,
+        JSON.stringify(
+          {
+            version: 1,
+            updatedAt: new Date().toISOString(),
+            settings: {
+              token: "persisted-token",
+            },
+          },
+          null,
+          2,
+        ),
+        "utf-8",
+      );
+
+      expect(parseConfig().token).toBe("persisted-token");
+      expect(await Bun.file(path).exists()).toBe(true);
+      expect(await Bun.file(backup).exists()).toBe(false);
+    } finally {
+      await rm(dir, { force: true, recursive: true }).catch(() => undefined);
+    }
   });
 
   test("joinOpenCodeUrl keeps configured base path with leading slash paths", () => {
