@@ -1844,7 +1844,7 @@ export function Layout(props: ParentProps) {
         setSessionStartError("Failed to send saved prompt: no session data returned.");
         return;
       }
-      setSessions((prev) => [res as Session, ...prev]);
+      setSessions((prev) => [res, ...prev]);
       providers.setSessionModel(res.id, model);
       navigate(`/${dirSlug()}/session/${res.id}`);
     } catch (e) {

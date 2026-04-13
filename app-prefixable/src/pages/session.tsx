@@ -1810,6 +1810,8 @@ export function Session() {
           <Show when={pendingStartError()}>
             <div
               class="mt-4 px-4 py-2 rounded-lg text-sm max-w-2xl"
+              role="alert"
+              aria-live="assertive"
               style={{
                 background: "var(--status-danger-dim)",
                 color: "var(--status-danger-text)",
