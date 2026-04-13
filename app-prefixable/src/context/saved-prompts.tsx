@@ -37,10 +37,26 @@ interface SavedPromptsContextValue {
 }
 
 const GLOBAL_KEY = "opencode.savedPrompts"
+const RECENT_PROJECTS_KEY = "opencode-recent-projects"
 
 function projectKey(directory: string): string {
   const normalized = directory.replace(/[\\/]+$/, "")
   return `opencode.savedPrompts.${normalized}`
+}
+
+function recentProjectDirectory() {
+  try {
+    const stored = localStorage.getItem(RECENT_PROJECTS_KEY)
+    if (!stored) return undefined
+    const parsed = JSON.parse(stored)
+    if (!Array.isArray(parsed)) return undefined
+    const first = parsed[0]
+    if (!first || typeof first.path !== "string") return undefined
+    const normalized = first.path.replace(/[\\/]+$/, "")
+    return normalized || undefined
+  } catch {
+    return undefined
+  }
 }
 
 const SavedPromptsContext = createContext<SavedPromptsContextValue>()
@@ -184,6 +200,7 @@ export function SavedPromptsProvider(props: ParentProps & { directory?: Accessor
     const d = dir()
     return d ? projectKey(d) : undefined
   }
+  const targetDirectory = () => dir() ?? recentProjectDirectory()
 
   // Run migration synchronously before initial load so first render has data
   const initialDir = dir()
@@ -226,20 +243,27 @@ export function SavedPromptsProvider(props: ParentProps & { directory?: Accessor
       scope,
     }
     if (scope === "project") {
-      const k = pKey()
-      if (!k) {
+      const target = targetDirectory()
+      if (!target) {
         // Fallback to global if no project context
         addGlobal(prompt)
         return
       }
-      setProjectPrompts((prev) => {
-        const updated = [prompt, ...prev]
-        saveToStorage(k, updated)
-        return updated
-      })
-    } else {
-      addGlobal(prompt)
+      const k = projectKey(target)
+      if (pKey() === k) {
+        setProjectPrompts((prev) => {
+          const updated = [prompt, ...prev]
+          saveToStorage(k, updated)
+          return updated
+        })
+        return
+      }
+      const prev = loadFromStorage(k, "project")
+      const updated = [prompt, ...prev]
+      saveToStorage(k, updated)
+      return
     }
+    addGlobal(prompt)
   }
 
   function addGlobal(prompt: SavedPrompt) {
@@ -273,19 +297,26 @@ export function SavedPromptsProvider(props: ParentProps & { directory?: Accessor
     if (!global) return
     if (scope === "global") return
 
-    const k = pKey()
-    if (!k) return
+    const target = targetDirectory()
+    if (!target) return
+    const k = projectKey(target)
 
     setGlobalPrompts((prev) => {
       const updated = prev.filter((p) => p.id !== id)
       saveToStorage(GLOBAL_KEY, updated)
       return updated
     })
-    setProjectPrompts((prev) => {
-      const updated = [{ ...global, scope: "project" as const }, ...prev.filter((p) => p.id !== id)]
-      saveToStorage(k, updated)
-      return updated
-    })
+    if (pKey() === k) {
+      setProjectPrompts((prev) => {
+        const updated = [{ ...global, scope: "project" as const }, ...prev.filter((p) => p.id !== id)]
+        saveToStorage(k, updated)
+        return updated
+      })
+      return
+    }
+    const prev = loadFromStorage(k, "project")
+    const updated = [{ ...global, scope: "project" as const }, ...prev.filter((p) => p.id !== id)]
+    saveToStorage(k, updated)
   }
 
   function update(id: string, fields: Partial<Pick<SavedPrompt, "title" | "text">>) {
@@ -370,7 +401,7 @@ export function SavedPromptsProvider(props: ParentProps & { directory?: Accessor
         prompts: allPrompts,
         globalPrompts,
         projectPrompts,
-        hasProject: () => !!dir(),
+        hasProject: () => !!targetDirectory(),
         add,
         move,
         update,

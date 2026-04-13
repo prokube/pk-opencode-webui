@@ -2544,8 +2544,9 @@ function SavePromptDialog(props: {
                   type="button"
                   onClick={() => props.setScope("project")}
                   disabled={!props.hasProject}
+                  title={!props.hasProject ? "Open a project first to use project-scoped prompts" : undefined}
                   aria-pressed={props.scope() === "project"}
-                  class="flex-1 px-2.5 py-1 rounded-md text-xs font-medium transition-colors disabled:opacity-40"
+                  class="flex-1 px-2.5 py-1 rounded-md text-xs font-medium transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
                   style={{
                     background: props.scope() === "project" ? "var(--interactive-base)" : "var(--surface-inset)",
                     color: props.scope() === "project" ? "white" : "var(--text-base)",
@@ -2555,6 +2556,11 @@ function SavePromptDialog(props: {
                   Project
                 </button>
               </div>
+              <Show when={!props.hasProject}>
+                <p class="text-xs mt-1" style={{ color: "var(--text-weak)" }}>
+                  Open a project first to use project-scoped prompts.
+                </p>
+              </Show>
             </div>
           </div>
           <div
