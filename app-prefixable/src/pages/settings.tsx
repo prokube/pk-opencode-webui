@@ -9,14 +9,14 @@ import { useConfig } from "../context/config"
 import { MCPAddDialog } from "../components/mcp-add-dialog"
 import { ConfirmDialog } from "../components/confirm-dialog"
 import { Button } from "../components/ui/button"
-import { Check, Copy, Plug, GitBranch, Server, Globe, ExternalLink, Key, Search, X, Trash2, BookmarkPlus, Pencil, Palette, Sun, Moon, Monitor, BookOpen, Plus, Save, Volume2, Play, Settings2, Code, Shield, Cpu, Wrench, ChevronDown, ChevronRight, Info, MessageCircle } from "lucide-solid"
+import { Check, Copy, Plug, GitBranch, Server, Globe, ExternalLink, Key, Search, X, Trash2, BookmarkPlus, Pencil, Palette, Sun, Moon, Monitor, BookOpen, Plus, Save, Volume2, Play, Settings2, Code, Shield, Cpu, Wrench, ChevronDown, ChevronRight, Info } from "lucide-solid"
 import { SOUND_OPTIONS, readSoundSettings, writeSoundSettings, playSound, primeAudioContext, SOUND_STORAGE_KEY, type SoundSettings } from "../utils/sound"
 import { useSavedPrompts, type PromptScope } from "../context/saved-prompts"
 import { useTheme } from "../context/theme"
 import { useServer } from "../context/server"
 import { ServerDialog } from "../components/server-dialog"
-import { TelegramSetupGuide } from "../components/telegram-setup-guide"
 import { SETTINGS_BASE_TABS } from "./settings-tabs"
+import { TelegramSettings } from "../components/telegram-settings"
 import { writeFile } from "../utils/extended-api"
 import type { Config, PermissionActionConfig } from "../sdk/client"
 
@@ -696,6 +696,7 @@ Add your project-specific instructions here.
       { id: "servers", label: "Servers", icon: () => <Globe class="w-4 h-4" />, scope: "Global" },
       { id: "git", label: "Git", icon: () => <GitBranch class="w-4 h-4" />, scope: "Global" },
       { id: "mcp", label: "MCP Servers", icon: () => <Server class="w-4 h-4" />, scope: "Global + Project" },
+      { id: "telegram", label: "Telegram", icon: () => <Cpu class="w-4 h-4" />, scope: "Global" },
       { id: "prompts", label: "Prompts", icon: () => <BookmarkPlus class="w-4 h-4" />, scope: directory ? "Global + Project" : "Global" },
       { id: "instructions", label: "Instructions", icon: () => <BookOpen class="w-4 h-4" />, scope: directory ? "Project" : null },
     ]
@@ -705,7 +706,6 @@ Add your project-specific instructions here.
     }
     base.push({ id: "appearance", label: "Appearance", icon: () => <Palette class="w-4 h-4" />, scope: null })
     base.push({ id: "sounds", label: "Sounds", icon: () => <Volume2 class="w-4 h-4" />, scope: null })
-    base.push({ id: "telegram", label: "Telegram", icon: () => <MessageCircle class="w-4 h-4" />, scope: "Global" })
     return base
   })
 
@@ -1804,6 +1804,11 @@ Add your project-specific instructions here.
             </div>
           </Show>
 
+          {/* Telegram Tab */}
+          <Show when={activeTab() === "telegram"}>
+            <TelegramSettings serverUrl={basePath.serverUrl} />
+          </Show>
+
           {/* Prompts Tab */}
           <Show when={activeTab() === "prompts"}>
             <div class="space-y-6">
@@ -2351,10 +2356,6 @@ Add your project-specific instructions here.
             </div>
           </Show>
 
-          {/* Telegram Tab */}
-          <Show when={activeTab() === "telegram"}>
-            <TelegramSetupGuide />
-          </Show>
         </div>
       </div>
 
