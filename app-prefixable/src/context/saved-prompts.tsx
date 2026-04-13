@@ -128,6 +128,7 @@ export function SavedPromptsProvider(props: ParentProps & { directory?: Accessor
   const [globalPrompts, setGlobalPrompts] = createSignal<SavedPrompt[]>([])
   const [projectPrompts, setProjectPrompts] = createSignal<SavedPrompt[]>([])
   const migratedKeys = new Set<string>()
+  let loadVersion = 0
 
   let pendingClear = false
 
@@ -176,10 +177,11 @@ export function SavedPromptsProvider(props: ParentProps & { directory?: Accessor
     setProjectPrompts(nextProject)
   }
 
-  async function loadAndMaybeMigrate() {
+  async function loadAndMaybeMigrate(version: number) {
     const d = targetDirectory()
     const migrationKey = d || "__global__"
     const data = await readSavedPrompts(basePath.serverUrl, d)
+    if (version !== loadVersion) return
     let nextGlobal: SavedPrompt[] = (data.global ?? []).map((p) => ({ ...p, scope: "global" as const })).sort(sortNewest)
     let nextProject: SavedPrompt[] = (data.project ?? []).map((p) => ({ ...p, scope: "project" as const })).sort(sortNewest)
 
@@ -200,6 +202,7 @@ export function SavedPromptsProvider(props: ParentProps & { directory?: Accessor
           normalize(nextGlobal, "global"),
           normalize(nextProject, "project"),
         )
+        if (version !== loadVersion) return
         if (ok) {
           clearLegacy(d)
           migratedKeys.add(migrationKey)
@@ -216,8 +219,9 @@ export function SavedPromptsProvider(props: ParentProps & { directory?: Accessor
   }
 
   createEffect(on(targetDirectory, () => {
+    const version = ++loadVersion
     setLoading(true)
-    loadAndMaybeMigrate()
+    loadAndMaybeMigrate(version)
   }))
 
   function add(title: string, text: string, scope: PromptScope = "global") {
