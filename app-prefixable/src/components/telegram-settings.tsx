@@ -48,7 +48,12 @@ export function TelegramSettings(props: Props) {
       setError("Failed to load Telegram settings")
       return
     }
-    const data = (await res.json()) as TelegramSettingsResponse
+    const data = (await res.json().catch(() => null)) as TelegramSettingsResponse | null
+    if (!data?.settings) {
+      setLoading(false)
+      setError("Failed to load Telegram settings")
+      return
+    }
     const next = createTelegramForm(data.settings)
     setInitial(next)
     setForm(next)
@@ -115,7 +120,11 @@ export function TelegramSettings(props: Props) {
       return
     }
 
-    const data = (await res.json()) as TelegramUpdateSuccess
+    const data = (await res.json().catch(() => null)) as TelegramUpdateSuccess | null
+    if (!data?.settings) {
+      setError("Failed to save Telegram settings")
+      return
+    }
     const next = createTelegramForm(data.settings)
     setInitial(next)
     setForm(next)
@@ -166,20 +175,20 @@ export function TelegramSettings(props: Props) {
         {(state) => (
           <>
             <Show when={error()}>
-              <div class="p-3 rounded-md text-sm" style={{ background: "var(--surface-inset)", border: "1px solid var(--border-base)", "border-left": "3px solid var(--interactive-critical)", color: "var(--interactive-critical)" }}>
+              <div class="p-3 rounded-md text-sm" role="alert" aria-live="assertive" style={{ background: "var(--surface-inset)", border: "1px solid var(--border-base)", "border-left": "3px solid var(--interactive-critical)", color: "var(--interactive-critical)" }}>
                 {error()}
               </div>
             </Show>
 
             <Show when={success()}>
-              <div class="p-3 rounded-md text-sm flex items-center gap-2" style={{ background: "var(--surface-inset)", border: "1px solid var(--border-base)", "border-left": "3px solid var(--icon-success-base)", color: "var(--icon-success-base)" }}>
+              <div class="p-3 rounded-md text-sm flex items-center gap-2" role="status" aria-live="polite" style={{ background: "var(--surface-inset)", border: "1px solid var(--border-base)", "border-left": "3px solid var(--icon-success-base)", color: "var(--icon-success-base)" }}>
                 <Check class="w-4 h-4" />
                 {success()}
               </div>
             </Show>
 
             <Show when={restartFields().length > 0}>
-              <div class="p-3 rounded-md text-sm" style={{ background: "var(--surface-inset)", border: "1px solid var(--border-base)", "border-left": "3px solid var(--icon-warning-base)", color: "var(--text-base)" }}>
+              <div class="p-3 rounded-md text-sm" role="status" aria-live="polite" style={{ background: "var(--surface-inset)", border: "1px solid var(--border-base)", "border-left": "3px solid var(--icon-warning-base)", color: "var(--text-base)" }}>
                 <div class="flex items-center gap-2" style={{ color: "var(--icon-warning-base)" }}>
                   <AlertTriangle class="w-4 h-4" />
                   Restart required
@@ -345,13 +354,13 @@ function SecretField(props: {
         <span class="text-xs px-1.5 py-0.5 rounded" style={{ background: "var(--surface-inset)", color: "var(--text-weak)" }}>{status()}</span>
       </div>
       <div class="flex gap-2">
-        <button type="button" class="px-2 py-1 rounded text-xs" onClick={() => props.onModeChange("unchanged")} style={{ background: props.mode === "unchanged" ? "var(--surface-inset)" : "transparent", border: "1px solid var(--border-base)", color: "var(--text-base)" }}>
+        <button type="button" class="px-2 py-1 rounded text-xs" aria-pressed={props.mode === "unchanged"} onClick={() => props.onModeChange("unchanged")} style={{ background: props.mode === "unchanged" ? "var(--surface-inset)" : "transparent", border: "1px solid var(--border-base)", color: "var(--text-base)" }}>
           Keep
         </button>
-        <button type="button" class="px-2 py-1 rounded text-xs" onClick={() => props.onModeChange("set")} style={{ background: props.mode === "set" ? "var(--surface-inset)" : "transparent", border: "1px solid var(--border-base)", color: "var(--text-base)" }}>
+        <button type="button" class="px-2 py-1 rounded text-xs" aria-pressed={props.mode === "set"} onClick={() => props.onModeChange("set")} style={{ background: props.mode === "set" ? "var(--surface-inset)" : "transparent", border: "1px solid var(--border-base)", color: "var(--text-base)" }}>
           {props.configured ? "Replace" : "Set"}
         </button>
-        <button type="button" class="px-2 py-1 rounded text-xs" onClick={() => props.onModeChange("clear")} style={{ background: props.mode === "clear" ? "var(--surface-inset)" : "transparent", border: "1px solid var(--border-base)", color: "var(--text-base)" }}>
+        <button type="button" class="px-2 py-1 rounded text-xs" aria-pressed={props.mode === "clear"} onClick={() => props.onModeChange("clear")} style={{ background: props.mode === "clear" ? "var(--surface-inset)" : "transparent", border: "1px solid var(--border-base)", color: "var(--text-base)" }}>
           Clear
         </button>
       </div>

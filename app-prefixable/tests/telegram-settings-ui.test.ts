@@ -44,6 +44,7 @@ describe("telegram settings form helpers", () => {
       openCodeUrl: "not-a-url",
       port: "99999",
       sessionCacheMax: "0",
+      webhookPath: "webhook",
       tokenMode: "set" as const,
       token: "",
     }
@@ -52,6 +53,7 @@ describe("telegram settings form helpers", () => {
     expect(errors.openCodeUrl).toBe("Enter a valid URL")
     expect(errors.port).toBe("Must be an integer between 1 and 65535")
     expect(errors.sessionCacheMax).toBe("Must be a positive integer")
+    expect(errors.webhookPath).toBe("Webhook path must start with '/'")
     expect(errors.token).toBe("Token is required when setting a new value")
   })
 
