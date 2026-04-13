@@ -313,7 +313,8 @@ export function SessionInfo(props: SessionInfoProps) {
     if (n === 0) return "$0"
     if (n >= 1) return `$${n.toFixed(2)}`
     if (n >= 0.01) return `$${n.toFixed(4)}`
-    return `$${n.toPrecision(3)}`
+    const d = Math.min(12, Math.max(4, Math.ceil(-Math.log10(Math.max(n, Number.MIN_VALUE))) + 2))
+    return `$${n.toFixed(d).replace(/\.?0+$/, "")}`
   }
 
   const fmtDate = (value: string) => {
@@ -356,7 +357,10 @@ export function SessionInfo(props: SessionInfoProps) {
   // Token popover state — reset when session changes
   const [showTokenPopover, setShowTokenPopover] = createSignal(false)
   createEffect(() => {
+    const model = props.sessionModel()
+    const key = model ? `${model.providerID}:${model.modelID}` : ""
     params.id // track session ID
+    key // track selected model
     setShowTokenPopover(false)
     setShowModelPopover(false)
   })
