@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { formatStartError, startSessionError } from "../src/utils/session-start";
+import { createSessionWithPrompt, formatStartError, startSessionError } from "../src/utils/session-start";
+import type { OpencodeClient } from "../src/sdk/client";
 
 describe("formatStartError", () => {
   const cases: { name: string; input: unknown; expected: string }[] = [
@@ -75,4 +76,57 @@ describe("startSessionError", () => {
       expect(startSessionError(c.input)).toBe(c.expected);
     });
   }
+});
+
+describe("createSessionWithPrompt", () => {
+  test("attempts delete when promptAsync returns an error", async () => {
+    let deleted = 0;
+    let deletedID = "";
+    const client = {
+      session: {
+        create: async () => ({ data: { id: "s-1" } }),
+        promptAsync: async () => ({ error: { message: "prompt failed" } }),
+        delete: async (args: { sessionID: string }) => {
+          deleted += 1;
+          deletedID = args.sessionID;
+          return { data: {} };
+        },
+      },
+    } as unknown as OpencodeClient;
+
+    await expect(
+      createSessionWithPrompt({
+        client,
+        text: "hello",
+        agent: "build",
+        model: { providerID: "openai", modelID: "gpt-4.1" },
+      }),
+    ).rejects.toThrow("prompt failed");
+    expect(deleted).toBe(1);
+    expect(deletedID).toBe("s-1");
+  });
+
+  test("does not attempt delete when promptAsync succeeds", async () => {
+    let deleted = 0;
+    const client = {
+      session: {
+        create: async () => ({ data: { id: "s-2" } }),
+        promptAsync: async () => ({ data: {} }),
+        delete: async () => {
+          deleted += 1;
+          return { data: {} };
+        },
+      },
+    } as unknown as OpencodeClient;
+
+    const session = await createSessionWithPrompt({
+      client,
+      text: "hello",
+      agent: "build",
+      model: { providerID: "openai", modelID: "gpt-4.1" },
+    });
+
+    expect(session.id).toBe("s-2");
+    expect(deleted).toBe(0);
+  });
 });

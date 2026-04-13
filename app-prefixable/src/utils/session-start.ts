@@ -75,7 +75,10 @@ export async function createSessionWithPrompt(args: {
       throw new Error(formatStartError(prompted.error));
     }
   } catch (err) {
-    await args.client.session.delete({ sessionID: created.data.id }).catch(() => undefined);
+    const cleaned = await args.client.session
+      .delete({ sessionID: created.data.id })
+      .catch((error) => ({ error }));
+    if (cleaned && typeof cleaned === "object" && "error" in cleaned && cleaned.error) void cleaned.error;
     throw new Error(formatStartError(err), { cause: err });
   }
   return created.data;
