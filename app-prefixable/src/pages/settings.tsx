@@ -1809,7 +1809,7 @@ Add your project-specific instructions here.
 
                 <Show when={savedPrompts.error()}>
                   <div class="px-4 py-3 text-sm" style={{ color: "var(--interactive-critical)", "border-bottom": "1px solid var(--border-base)" }}>
-                    Failed to load saved prompts. Refresh the page and try again.
+                    {savedPrompts.error()}
                   </div>
                 </Show>
 
@@ -1829,6 +1829,7 @@ Add your project-specific instructions here.
                     </p>
                     <button
                       onClick={openAddPromptDialog}
+                      disabled={savedPrompts.loading() || !!savedPrompts.error()}
                       class="mt-2 text-sm hover:underline"
                       style={{ color: "var(--text-interactive-base)" }}
                     >
@@ -1867,6 +1868,7 @@ Add your project-specific instructions here.
                           <div class="flex items-center gap-1 shrink-0">
                             <button
                               onClick={() => openEditPromptDialog(prompt.id)}
+                              disabled={!!savedPrompts.error()}
                               class="p-1.5 rounded transition-colors"
                               style={{ color: "var(--text-weak)" }}
                               onMouseEnter={(e) => {
@@ -1884,6 +1886,7 @@ Add your project-specific instructions here.
                             </button>
                             <button
                               onClick={() => setPromptToDelete(prompt.id)}
+                              disabled={!!savedPrompts.error()}
                               class="p-1.5 rounded transition-colors opacity-50 hover:opacity-100"
                               style={{ color: "var(--icon-critical-base)" }}
                               title="Delete prompt"
@@ -2346,6 +2349,7 @@ Add your project-specific instructions here.
           setScope={setPromptScope}
           canUseProjectScope={savedPrompts.canUseProjectScope()}
           hasActiveProject={savedPrompts.hasActiveProject()}
+          saveDisabled={!!savedPrompts.error()}
           onSave={savePromptDialog}
           onClose={() => setPromptDialogOpen(false)}
         />
@@ -2358,6 +2362,7 @@ Add your project-specific instructions here.
         message="Are you sure you want to delete this saved prompt?"
         confirmLabel="Delete"
         variant="danger"
+        confirmDisabled={!!savedPrompts.error()}
         onConfirm={confirmPromptDelete}
         onCancel={() => setPromptToDelete(null)}
       />
@@ -3174,6 +3179,7 @@ function PromptDialog(props: {
   setScope: (v: PromptScope) => void
   canUseProjectScope: boolean
   hasActiveProject: boolean
+  saveDisabled: boolean
   onSave: () => void
   onClose: () => void
 }) {
@@ -3342,7 +3348,7 @@ function PromptDialog(props: {
             <button
               type="button"
               onClick={props.onSave}
-              disabled={!props.title().trim() || !props.text().trim()}
+              disabled={!props.title().trim() || !props.text().trim() || props.saveDisabled}
               class="px-4 py-2 text-sm font-medium rounded-md transition-colors disabled:opacity-50"
               style={{
                 background: "var(--interactive-base)",

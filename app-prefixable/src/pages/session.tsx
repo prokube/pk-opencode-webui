@@ -1682,7 +1682,7 @@ export function Session() {
 
           <Show when={savedPrompts.error()}>
             <div class="mt-8 w-full max-w-2xl text-sm" style={{ color: "var(--interactive-critical)" }}>
-              Failed to load saved prompts. Open Settings to retry after fixing access issues.
+              {savedPrompts.error()}
             </div>
           </Show>
 
@@ -2255,7 +2255,7 @@ export function Session() {
           <PickerDialog
             title="Insert Saved Prompt"
             placeholder="Filter prompts..."
-            emptyMessage={savedPrompts.loading() ? "Loading saved prompts..." : savedPrompts.error() ? "Saved prompts failed to load. Check Settings and retry." : "No saved prompts. Add them in Settings."}
+            emptyMessage={savedPrompts.loading() ? "Loading saved prompts..." : savedPrompts.error() || "No saved prompts. Add them in Settings."}
             initialFilter={promptPickerFilter()}
             items={promptPickerItems()}
             onSelect={(item) => {

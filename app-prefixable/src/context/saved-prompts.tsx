@@ -35,10 +35,14 @@ function canonicalDirectory(directory: string | undefined): string | undefined {
   if (!directory) return undefined
   const trimmed = directory.trim()
   if (!trimmed) return undefined
-  if (/^[A-Za-z]:[\\/]+$/.test(trimmed)) return `${trimmed.slice(0, 2)}\\`
+  if (trimmed === "/" || trimmed === "\\") return trimmed
+  const drive = trimmed.match(/^([A-Za-z]:)(?:[\\/])?$/)
+  if (drive) return `${drive[1]}\\`
+  const unc = trimmed.match(/^[\\/]{2}([^\\/]+)[\\/]([^\\/]+)(?:[\\/])?$/)
+  if (unc) return `\\\\${unc[1]}\\${unc[2]}\\`
   const normalized = trimmed.replace(/[\\/]+$/, "")
-  if (normalized) return normalized
-  return trimmed
+  if (!normalized) return trimmed[0] === "\\" ? "\\" : "/"
+  return normalized
 }
 
 function projectKey(directory: string): string {
@@ -49,7 +53,7 @@ function projectKey(directory: string): string {
 const SavedPromptsContext = createContext<SavedPromptsContextValue>()
 const sortNewest = (a: SavedPrompt, b: SavedPrompt) => b.createdAt - a.createdAt
 
-function parseStorage(raw: string | null, fallback: PromptScope): SavedPrompt[] {
+function parseStorage(raw: string | null, sourceScope: PromptScope): SavedPrompt[] {
   if (!raw) return []
   const parsed = JSON.parse(raw)
   if (!Array.isArray(parsed)) return []
@@ -67,7 +71,7 @@ function parseStorage(raw: string | null, fallback: PromptScope): SavedPrompt[] 
       title: p.title,
       text: p.text,
       createdAt: p.createdAt,
-      scope: fallback,
+      scope: sourceScope,
     }))
 }
 
@@ -279,7 +283,8 @@ export function SavedPromptsProvider(props: ParentProps & { directory?: Accessor
       setGlobalPrompts([])
       setProjectPrompts([])
       pendingSaves.splice(0, pendingSaves.length)
-      setLoadError("Failed to load saved prompts")
+      const msg = e instanceof Error && e.message ? e.message : "unknown error"
+      setLoadError(`Failed to load saved prompts: ${msg}`)
     } finally {
       if (version !== loadVersion) return
       setLoading(false)

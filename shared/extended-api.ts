@@ -263,7 +263,8 @@ export async function handleExtendedEndpoint(
       return Response.json({ error: "global and project arrays are required" }, { status: 400 })
     }
 
-    const globalPath = nodePath.join(getConfigDir(), "saved-prompts.json")
+    const configDir = getConfigDir()
+    const globalPath = nodePath.join(configDir, "saved-prompts.json")
     const projectPath = validatedDir ? nodePath.join(validatedDir, ".opencode", "saved-prompts.json") : null
     const badGlobal = invalidPromptIndex(global)
     if (badGlobal !== -1) {
