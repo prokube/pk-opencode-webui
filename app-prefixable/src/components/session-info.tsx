@@ -354,7 +354,7 @@ export function SessionInfo(props: SessionInfoProps) {
 
   onCleanup(clearModelPopoverTimer)
 
-  // Token popover state — reset when session changes
+  // Token popover state — reset when session or selected model changes
   const [showTokenPopover, setShowTokenPopover] = createSignal(false)
   createEffect(() => {
     const model = props.sessionModel()
