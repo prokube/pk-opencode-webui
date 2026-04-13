@@ -104,6 +104,7 @@ COPY --from=builder /app/app-prefixable/dist /opt/opencode-ui/dist
 
 # Copy server script (path relative to repo root)
 COPY docker/serve-ui.ts /opt/opencode-ui/serve-ui.ts
+COPY docker/telegram-bridge.ts /opt/opencode-ui/telegram-bridge.ts
 
 # Copy shared modules (for serve-ui.ts imports)
 COPY shared /opt/shared
@@ -116,7 +117,7 @@ COPY docker/kubeflow/start-server.sh /usr/local/bin/start-server.sh
 
 # Set permissions
 # /run must be owned by jovyan for s6-overlay rootless mode
-RUN chmod -R 755 /etc/services.d/opencode /etc/cont-init.d/ && \
+RUN chmod -R 755 /etc/services.d/opencode /etc/services.d/telegram-bridge /etc/cont-init.d/ && \
     chmod +x /usr/local/bin/start-server.sh && \
     chown -R jovyan:jovyan /home/jovyan /tmp_home /opt/opencode-ui /run
 

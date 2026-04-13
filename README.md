@@ -154,6 +154,11 @@ bun install && bun run dev
 | `BRANDING_NAME` | _(empty)_ | Branding text shown as "Powered by {name}" |
 | `BRANDING_URL` | _(empty)_ | URL for the branding link |
 | `BRANDING_ICON` | _(empty)_ | Custom icon URL (HTTP, relative path, or data URI) |
+| `TELEGRAM_BRIDGE_ENABLED` | `false` | Enable optional Telegram bridge service (Kubeflow image) |
+| `TELEGRAM_BOT_TOKEN` | _(required for bridge)_ | Telegram bot token |
+| `TELEGRAM_MODE` | `polling` | Telegram bridge mode (`polling` or `webhook`) |
+| `OPENCODE_API_URL` | `API_URL` or `http://127.0.0.1:4096` | OpenCode API URL for bridge |
+| `OPENCODE_DIRECTORY` | _(empty)_ | Optional directory for bridge session API calls |
 
 ## Deployment
 
@@ -200,6 +205,15 @@ See [docker/kubeflow/README.md](docker/kubeflow/README.md) for Kubeflow deployme
 ### Reverse Proxy Examples
 
 See [examples/](examples/) for nginx and Traefik configurations.
+
+### Telegram Bridge (optional)
+
+This repository includes a Telegram bridge service (`docker/telegram-bridge.ts`) that:
+- receives Telegram bot text messages,
+- forwards prompts to OpenCode session APIs,
+- sends assistant responses back to Telegram.
+
+The bridge is opt-in and only starts in the Kubeflow image when `TELEGRAM_BRIDGE_ENABLED=true`.
 
 ## Architecture
 

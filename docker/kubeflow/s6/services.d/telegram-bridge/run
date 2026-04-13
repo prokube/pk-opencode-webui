@@ -1,0 +1,14 @@
+#!/command/with-contenv sh
+
+if [ "${TELEGRAM_BRIDGE_ENABLED:-false}" != "true" ]; then
+  echo "INFO: Telegram bridge disabled (set TELEGRAM_BRIDGE_ENABLED=true to enable)"
+  exec sleep infinity
+fi
+
+if [ -z "${TELEGRAM_BOT_TOKEN:-}" ]; then
+  echo "ERROR: TELEGRAM_BRIDGE_ENABLED=true but TELEGRAM_BOT_TOKEN is not set"
+  exit 1
+fi
+
+cd /opt/opencode-ui
+exec bun run telegram-bridge.ts

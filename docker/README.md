@@ -71,6 +71,26 @@ A full-featured image for Kubeflow Notebooks that includes:
 
 See [kubeflow/README.md](kubeflow/README.md) for details.
 
+## Telegram Bridge (optional)
+
+Both Docker images now include an optional Telegram bridge runtime at `/opt/opencode-ui/telegram-bridge.ts`.
+
+The bridge forwards Telegram text messages to OpenCode sessions and sends responses back to Telegram.
+
+### Bridge environment variables
+
+| Variable | Default | Description |
+|---|---|---|
+| `TELEGRAM_BRIDGE_ENABLED` | `false` | Enable bridge process (Kubeflow s6 service only) |
+| `TELEGRAM_BOT_TOKEN` | _(required)_ | Telegram bot token from BotFather |
+| `TELEGRAM_MODE` | `polling` | Bridge mode: `polling` or `webhook` |
+| `OPENCODE_API_URL` | `API_URL` or `http://127.0.0.1:4096` | OpenCode API base URL |
+| `OPENCODE_DIRECTORY` | _(empty)_ | Optional OpenCode directory for session requests |
+| `TELEGRAM_BRIDGE_PORT` | `4097` | Webhook listener port (webhook mode only) |
+| `TELEGRAM_WEBHOOK_PATH` | `/webhook` | Webhook endpoint path |
+| `TELEGRAM_WEBHOOK_URL` | _(empty)_ | Public webhook URL to register with Telegram |
+| `TELEGRAM_WEBHOOK_SECRET` | _(empty)_ | Secret token validated from Telegram webhook header |
+
 ### Build
 
 ```bash
