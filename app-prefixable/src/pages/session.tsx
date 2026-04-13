@@ -278,9 +278,9 @@ export function Session() {
 
   function readFollowupMap() {
     if (typeof window === "undefined") return {} as Record<string, FollowupItem[] | undefined>;
-    const raw = window.localStorage.getItem(followupStorageKey(params.dir));
-    if (!raw) return {} as Record<string, FollowupItem[] | undefined>;
     try {
+      const raw = window.localStorage.getItem(followupStorageKey(params.dir));
+      if (!raw) return {} as Record<string, FollowupItem[] | undefined>;
       return JSON.parse(raw) as Record<string, FollowupItem[] | undefined>;
     } catch {
       return {} as Record<string, FollowupItem[] | undefined>;
@@ -289,7 +289,11 @@ export function Session() {
 
   function writeFollowupMap(map: Record<string, FollowupItem[] | undefined>) {
     if (typeof window === "undefined") return;
-    window.localStorage.setItem(followupStorageKey(params.dir), JSON.stringify(map));
+    try {
+      window.localStorage.setItem(followupStorageKey(params.dir), JSON.stringify(map));
+    } catch {
+      return;
+    }
   }
 
   function setSessionFollowups(id: string, list: FollowupItem[]) {
@@ -1390,6 +1394,8 @@ export function Session() {
       removeFollowup(id);
       startProcessing();
     } catch (err) {
+      setPendingUserMessageText(null);
+      setOptimisticMessage(null);
       setError(`Failed to send queued followup: ${err instanceof Error ? err.message : String(err)}`);
     } finally {
       setFollowupSending(undefined);
