@@ -13,6 +13,7 @@ import {
   parseConfig,
   parseMode,
   queueChatUpdate,
+  registerTelegramCommands,
   resetSessionCacheForTest,
   sessionFromCache,
 } from "../../shared/telegram-bridge";
@@ -257,6 +258,42 @@ describe("telegram bridge config and cache", () => {
     );
   });
 
+  test("registerTelegramCommands sends canonical Telegram command payload", async () => {
+    const calls: Array<{ url: string; body: Record<string, unknown> }> = [];
+    const originalFetch = globalThis.fetch;
+    try {
+      globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        const body = init?.body ? (JSON.parse(String(init.body)) as Record<string, unknown>) : {};
+        calls.push({ url, body });
+        return new Response(JSON.stringify({ ok: true, result: true }), { status: 200 });
+      };
+
+      await registerTelegramCommands({
+        mode: "polling",
+        token: "token",
+        openCodeUrl: "http://127.0.0.1:4096",
+        sessionCacheMax: 10,
+        sessionCacheTtlMs: 10_000,
+        notificationDebounceMs: 20_000,
+        port: 4097,
+        webhookPath: "/webhook",
+        sessionStorePath: "/tmp/test-store.json",
+      });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.url).toContain("/setMyCommands");
+    expect(calls[0]?.body.commands).toEqual([
+      { command: "new", description: "Start a fresh OpenCode session" },
+      { command: "status", description: "Show current session mapping" },
+      { command: "notify", description: "Control proactive notifications" },
+      { command: "help", description: "Show available commands" },
+    ]);
+  });
+
   test("cacheSession evicts oldest entries when max size is exceeded", () => {
     const config = {
       mode: "polling" as const,
@@ -332,6 +369,7 @@ describe("telegram bridge config and cache", () => {
     expect(calls).toHaveLength(1);
     expect(calls[0]?.url).toContain("/sendMessage");
     expect(String(calls[0]?.body.text || "")).toContain("Available commands:");
+    expect(String(calls[0]?.body.text || "")).toContain("/notify - Control proactive notifications (on|off|status)");
   });
 
   test("handleTextUpdate routes status, new@botname, and unknown commands", async () => {
@@ -387,7 +425,7 @@ describe("telegram bridge config and cache", () => {
       });
       await handleTextUpdate(runtime, {
         update_id: 3,
-        message: { message_id: 3, text: "/wat", chat: { id: 7 }, from: { id: 9 } },
+        message: { message_id: 3, text: "/statuz", chat: { id: 7 }, from: { id: 9 } },
       });
 
       const sentTexts = calls
@@ -395,7 +433,7 @@ describe("telegram bridge config and cache", () => {
         .map((x) => String(x.body.text || ""));
       expect(sentTexts[0]).toBe("Current session: session-1");
       expect(sentTexts[1]).toBe("Started a new session: session-2");
-      expect(sentTexts[2]).toBe("Unknown command /wat. Use /help.");
+      expect(sentTexts[2]).toBe("Unknown command /statuz. Try /status or use /help.");
       expect(map.get("chat:7:user:9")).toBe("session-2");
     } finally {
       globalThis.fetch = originalFetch;
