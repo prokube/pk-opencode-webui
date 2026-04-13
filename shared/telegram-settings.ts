@@ -112,6 +112,164 @@ function isReplaceConflict(code: string): boolean {
   return code === "EEXIST" || code === "EPERM" || code === "ENOTEMPTY" || code === "EACCES"
 }
 
+function backupStamp(entry: string, name: string): number {
+  return Number(entry.slice(`${name}.bak.`.length).split(".")[0] || "0")
+}
+
+function sortedBackups(entries: string[], name: string): string[] {
+  return entries
+    .filter((entry) => entry.startsWith(`${name}.bak.`))
+    .sort((a, b) => backupStamp(b, name) - backupStamp(a, name))
+}
+
+async function applyBackupStore(path: string, backupPath: string): Promise<boolean> {
+  const direct = await fsp.rename(backupPath, path).then(
+    () => true,
+    (error) => {
+      if (isReplaceConflict(errorCode(error))) return false
+      throw error
+    },
+  )
+  if (direct) return true
+
+  const displaced = `${path}.corrupt.${Date.now()}.${randomUUID()}`
+  const moved = await fsp.rename(path, displaced).then(
+    () => true,
+    (error) => {
+      const code = errorCode(error)
+      if (code === "ENOENT") return false
+      if (isReplaceConflict(code)) return
+      throw error
+    },
+  )
+  if (moved === undefined) return false
+
+  const applied = await fsp.rename(backupPath, path).then(
+    () => true,
+    async (error) => {
+      if (moved) {
+        await fsp.rename(displaced, path).catch(() => undefined)
+      }
+      const code = errorCode(error)
+      if (isReplaceConflict(code) || code === "ENOENT") return false
+      throw error
+    },
+  )
+  if (!applied) return false
+  if (moved) {
+    await fsp.unlink(displaced).catch(() => undefined)
+  }
+  return true
+}
+
+function applyBackupStoreSync(path: string, backupPath: string): boolean {
+  try {
+    fs.renameSync(backupPath, path)
+    return true
+  } catch (error) {
+    const code = errorCode(error)
+    if (!isReplaceConflict(code)) throw error
+  }
+
+  const displaced = `${path}.corrupt.${Date.now()}.${randomUUID()}`
+  const moved = (() => {
+    try {
+      fs.renameSync(path, displaced)
+      return true
+    } catch (error) {
+      const code = errorCode(error)
+      if (code === "ENOENT") return false
+      if (isReplaceConflict(code)) return
+      throw error
+    }
+  })()
+  if (moved === undefined) return false
+
+  try {
+    fs.renameSync(backupPath, path)
+  } catch (error) {
+    if (moved) {
+      try {
+        fs.renameSync(displaced, path)
+      } catch {}
+    }
+    const code = errorCode(error)
+    if (isReplaceConflict(code) || code === "ENOENT") return false
+    throw error
+  }
+
+  if (moved) {
+    try {
+      fs.unlinkSync(displaced)
+    } catch {}
+  }
+  return true
+}
+
+async function readBackupStore(path: string): Promise<TelegramSettingsStore | undefined> {
+  const dir = nodePath.dirname(path)
+  const name = nodePath.basename(path)
+  const entries = await fsp.readdir(dir).catch((error) => {
+    const code = errorCode(error)
+    if (code === "ENOENT" || code === "ENOTDIR") return []
+    throw error
+  })
+
+  for (const entry of sortedBackups(entries, name)) {
+    const backupPath = nodePath.join(dir, entry)
+    const text = await Bun.file(backupPath).text().catch(() => "")
+    if (!text) continue
+    const store = await Promise.resolve()
+      .then(() => parseStore(text))
+      .catch(() => undefined)
+    if (!store) continue
+    const applied = await applyBackupStore(path, backupPath)
+    if (!applied) continue
+    return store
+  }
+
+  return
+}
+
+function readBackupStoreSync(path: string): TelegramSettingsStore | undefined {
+  const dir = nodePath.dirname(path)
+  const name = nodePath.basename(path)
+  const entries = (() => {
+    try {
+      return fs.readdirSync(dir)
+    } catch (error) {
+      const code = errorCode(error)
+      if (code === "ENOENT" || code === "ENOTDIR") return []
+      throw error
+    }
+  })()
+
+  for (const entry of sortedBackups(entries, name)) {
+    const backupPath = nodePath.join(dir, entry)
+    const text = (() => {
+      try {
+        return fs.readFileSync(backupPath, "utf-8")
+      } catch {
+        return ""
+      }
+    })()
+    if (!text) continue
+    const store = (() => {
+      try {
+        return parseStore(text)
+      } catch {
+        return
+      }
+    })()
+    if (!store) continue
+    const applied = applyBackupStoreSync(path, backupPath)
+    if (!applied) continue
+    return store
+  }
+
+  return
+}
+
 function isWithinRoot(path: string, root: string): boolean {
   if (root === nodePath.parse(root).root) return true
   if (path === root) return true
@@ -201,10 +359,11 @@ function parseStore(text: string): TelegramSettingsStore | undefined {
 
 async function readStore(path: string): Promise<TelegramSettingsStore | undefined> {
   const text = await Bun.file(path).text().catch(() => "")
-  if (!text) return
-  return Promise.resolve()
+  const store = await Promise.resolve()
     .then(() => parseStore(text))
     .catch(() => undefined)
+  if (store) return store
+  return readBackupStore(path)
 }
 
 function applyPersisted(defaults: TelegramBridgeSettings, store: TelegramSettingsStore | undefined): TelegramBridgeSettings {
@@ -217,7 +376,7 @@ function applyPersisted(defaults: TelegramBridgeSettings, store: TelegramSetting
 
   return {
     mode: s.mode === "polling" || s.mode === "webhook" ? s.mode : defaults.mode,
-    token: typeof s.token === "string" ? s.token : defaults.token,
+    token: typeof s.token === "string" && s.token.trim() ? s.token.trim() : defaults.token,
     openCodeUrl,
     directory: typeof s.directory === "string" && s.directory.trim() ? s.directory.trim() : defaults.directory,
     sessionCacheMax: typeof s.sessionCacheMax === "number" && s.sessionCacheMax > 0 ? s.sessionCacheMax : defaults.sessionCacheMax,
@@ -234,7 +393,8 @@ function applyPersisted(defaults: TelegramBridgeSettings, store: TelegramSetting
           ? s.webhookPath
           : `/${s.webhookPath}`
         : defaults.webhookPath,
-    webhookSecret: typeof s.webhookSecret === "string" ? s.webhookSecret || undefined : defaults.webhookSecret,
+    webhookSecret:
+      typeof s.webhookSecret === "string" && s.webhookSecret.trim() ? s.webhookSecret.trim() : defaults.webhookSecret,
     webhookUrl,
     sessionStorePath:
       typeof s.sessionStorePath === "string" && s.sessionStorePath.trim()
@@ -246,10 +406,12 @@ function applyPersisted(defaults: TelegramBridgeSettings, store: TelegramSetting
 
 function publicSettings(settings: TelegramBridgeSettings, store: TelegramSettingsStore | undefined) {
   const persisted = store?.settings || {}
+  const persistedToken = typeof persisted.token === "string" && persisted.token.trim()
+  const persistedWebhookSecret = typeof persisted.webhookSecret === "string" && persisted.webhookSecret.trim()
   return {
     mode: settings.mode,
     tokenConfigured: Boolean(settings.token),
-    tokenSource: persisted.token !== undefined ? "persisted" : settings.token ? "env" : "none",
+    tokenSource: persistedToken ? "persisted" : settings.token ? "env" : "none",
     openCodeUrl: settings.openCodeUrl,
     directory: settings.directory || null,
     sessionCacheMax: settings.sessionCacheMax,
@@ -258,7 +420,7 @@ function publicSettings(settings: TelegramBridgeSettings, store: TelegramSetting
     port: settings.port,
     webhookPath: settings.webhookPath,
     webhookSecretConfigured: Boolean(settings.webhookSecret),
-    webhookSecretSource: persisted.webhookSecret !== undefined ? "persisted" : settings.webhookSecret ? "env" : "none",
+    webhookSecretSource: persistedWebhookSecret ? "persisted" : settings.webhookSecret ? "env" : "none",
     webhookUrl: settings.webhookUrl || null,
     sessionStorePath: settings.sessionStorePath,
     sessionLinkBase: settings.sessionLinkBase || null,
@@ -555,12 +717,18 @@ async function writeSettings(path: string, settings: Partial<Record<TelegramSett
 export function loadTelegramBridgeSettings(): TelegramBridgeSettings {
   const defaults = envDefaults()
   const path = telegramSettingsPath()
-  if (!fs.existsSync(path)) return defaults
+  if (!fs.existsSync(path)) {
+    const recovered = readBackupStoreSync(path)
+    if (!recovered) return defaults
+    return applyPersisted(defaults, recovered)
+  }
   try {
     const text = fs.readFileSync(path, "utf-8")
     const store = parseStore(text)
     return applyPersisted(defaults, store)
   } catch {
+    const recovered = readBackupStoreSync(path)
+    if (recovered) return applyPersisted(defaults, recovered)
     return defaults
   }
 }

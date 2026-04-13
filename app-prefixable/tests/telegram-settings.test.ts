@@ -365,4 +365,87 @@ describe("telegram settings extended API", () => {
     expect(data.settings.webhookUrl).toBe("https://hooks.example.com/telegram")
     expect(data.settings.sessionLinkBase).toBe("https://opencode.example.com/notebook")
   })
+
+  test("GET falls back to env when persisted token and webhookSecret are whitespace", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "telegram-settings-"))
+    const path = join(dir, "telegram-settings.json")
+    cleanupPaths.push(dir)
+
+    process.env.TELEGRAM_SETTINGS_PATH = path
+    process.env.TELEGRAM_BOT_TOKEN = "env-token"
+    process.env.TELEGRAM_WEBHOOK_SECRET = "env-secret"
+
+    await writeFile(
+      path,
+      JSON.stringify(
+        {
+          version: 1,
+          updatedAt: new Date().toISOString(),
+          settings: {
+            token: "   ",
+            webhookSecret: "\n\t ",
+          },
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    )
+
+    const read = await handleExtendedEndpoint(
+      "/api/ext/telegram/settings",
+      "GET",
+      new URL("http://127.0.0.1/api/ext/telegram/settings"),
+      new Request("http://127.0.0.1/api/ext/telegram/settings"),
+    )
+
+    expect(read?.status).toBe(200)
+    const data = await read?.json()
+    expect(data.settings.tokenConfigured).toBe(true)
+    expect(data.settings.tokenSource).toBe("env")
+    expect(data.settings.webhookSecretConfigured).toBe(true)
+    expect(data.settings.webhookSecretSource).toBe("env")
+  })
+
+  test("GET recovers persisted settings from backup when primary is missing", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "telegram-settings-"))
+    const path = join(dir, "telegram-settings.json")
+    const backup = `${path}.bak.${Date.now()}.recover`
+    cleanupPaths.push(dir)
+
+    process.env.TELEGRAM_SETTINGS_PATH = path
+
+    await writeFile(
+      backup,
+      JSON.stringify(
+        {
+          version: 1,
+          updatedAt: new Date().toISOString(),
+          settings: {
+            token: "persisted-token",
+            webhookSecret: "persisted-secret",
+          },
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    )
+
+    const read = await handleExtendedEndpoint(
+      "/api/ext/telegram/settings",
+      "GET",
+      new URL("http://127.0.0.1/api/ext/telegram/settings"),
+      new Request("http://127.0.0.1/api/ext/telegram/settings"),
+    )
+
+    expect(read?.status).toBe(200)
+    const data = await read?.json()
+    expect(data.settings.tokenConfigured).toBe(true)
+    expect(data.settings.tokenSource).toBe("persisted")
+    expect(data.settings.webhookSecretConfigured).toBe(true)
+    expect(data.settings.webhookSecretSource).toBe("persisted")
+    expect(await Bun.file(path).exists()).toBe(true)
+    expect(await Bun.file(backup).exists()).toBe(false)
+  })
 })

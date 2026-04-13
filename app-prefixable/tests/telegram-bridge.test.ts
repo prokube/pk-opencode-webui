@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -187,6 +188,59 @@ describe("telegram bridge config and cache", () => {
       TELEGRAM_SESSION_LINK_BASE: "bad-url",
     });
     expect(() => parseConfig()).toThrow("sessionLinkBase must be a valid URL (TELEGRAM_SESSION_LINK_BASE)");
+  });
+
+  test("parseConfig trims persisted token and recovers from backup when primary missing", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "telegram-bridge-config-"));
+    const path = join(dir, "telegram-settings.json");
+    const backup = `${path}.bak.${Date.now()}.recover`;
+
+    try {
+      process.env.TELEGRAM_SETTINGS_PATH = path;
+      process.env.TELEGRAM_BOT_TOKEN = "env-token";
+      process.env.OPENCODE_API_URL = "http://127.0.0.1:4096";
+
+      await writeFile(
+        path,
+        JSON.stringify(
+          {
+            version: 1,
+            updatedAt: new Date().toISOString(),
+            settings: {
+              token: "\t   ",
+            },
+          },
+          null,
+          2,
+        ),
+        "utf-8",
+      );
+
+      expect(parseConfig().token).toBe("env-token");
+
+      await rm(path, { force: true });
+      await writeFile(
+        backup,
+        JSON.stringify(
+          {
+            version: 1,
+            updatedAt: new Date().toISOString(),
+            settings: {
+              token: "persisted-token",
+            },
+          },
+          null,
+          2,
+        ),
+        "utf-8",
+      );
+
+      expect(parseConfig().token).toBe("persisted-token");
+      expect(await Bun.file(path).exists()).toBe(true);
+      expect(await Bun.file(backup).exists()).toBe(false);
+    } finally {
+      await rm(dir, { force: true, recursive: true }).catch(() => undefined);
+    }
   });
 
   test("joinOpenCodeUrl keeps configured base path with leading slash paths", () => {
