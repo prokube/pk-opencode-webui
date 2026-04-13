@@ -1,7 +1,8 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test"
-import { mkdtemp, rm, writeFile } from "node:fs/promises"
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test"
+import { mkdtemp, readdir, rm, writeFile } from "node:fs/promises"
 import { join } from "node:path"
 import { tmpdir } from "node:os"
+import * as fsp from "node:fs/promises"
 import { handleExtendedEndpoint } from "../../shared/extended-api"
 
 const envKeys = [
@@ -245,6 +246,64 @@ describe("telegram settings extended API", () => {
     expect(stored.settings?.port).toBeUndefined()
   })
 
+  test("PUT allows empty string to clear persisted openCodeUrl", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "telegram-settings-"))
+    const path = join(dir, "telegram-settings.json")
+    cleanupPaths.push(dir)
+
+    process.env.TELEGRAM_SETTINGS_PATH = path
+    process.env.OPENCODE_API_URL = "http://127.0.0.1:4299"
+
+    const seed = await handleExtendedEndpoint(
+      "/api/ext/telegram/settings",
+      "PUT",
+      new URL("http://127.0.0.1/api/ext/telegram/settings"),
+      new Request("http://127.0.0.1/api/ext/telegram/settings", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          settings: {
+            openCodeUrl: "http://127.0.0.1:4499",
+          },
+        }),
+      }),
+    )
+    expect(seed?.status).toBe(200)
+
+    const clear = await handleExtendedEndpoint(
+      "/api/ext/telegram/settings",
+      "PUT",
+      new URL("http://127.0.0.1/api/ext/telegram/settings"),
+      new Request("http://127.0.0.1/api/ext/telegram/settings", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          settings: {
+            openCodeUrl: "",
+          },
+        }),
+      }),
+    )
+    expect(clear?.status).toBe(200)
+    const clearData = await clear?.json()
+    expect(clearData.changedFields).toEqual(expect.arrayContaining(["openCodeUrl"]))
+
+    const read = await handleExtendedEndpoint(
+      "/api/ext/telegram/settings",
+      "GET",
+      new URL("http://127.0.0.1/api/ext/telegram/settings"),
+      new Request("http://127.0.0.1/api/ext/telegram/settings"),
+    )
+    expect(read?.status).toBe(200)
+    const data = await read?.json()
+    expect(data.settings.openCodeUrl).toBe("http://127.0.0.1:4299/")
+
+    const stored = JSON.parse(await Bun.file(path).text()) as {
+      settings?: Record<string, string | number>
+    }
+    expect(stored.settings?.openCodeUrl).toBeUndefined()
+  })
+
   test("PUT returns 500 when persistence fails", async () => {
     const dir = await mkdtemp(join(tmpdir(), "telegram-settings-"))
     cleanupPaths.push(dir)
@@ -364,6 +423,106 @@ describe("telegram settings extended API", () => {
     expect(data.settings.openCodeUrl).toBe("http://127.0.0.1:4299/")
     expect(data.settings.webhookUrl).toBe("https://hooks.example.com/telegram")
     expect(data.settings.sessionLinkBase).toBe("https://opencode.example.com/notebook")
+  })
+
+  test("GET accepts persisted URL fields surrounded by whitespace", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "telegram-settings-"))
+    const path = join(dir, "telegram-settings.json")
+    cleanupPaths.push(dir)
+
+    process.env.TELEGRAM_SETTINGS_PATH = path
+    process.env.OPENCODE_API_URL = "http://127.0.0.1:4299"
+    process.env.TELEGRAM_WEBHOOK_URL = "https://hooks.example.com/env"
+
+    await writeFile(
+      path,
+      JSON.stringify(
+        {
+          version: 1,
+          updatedAt: new Date().toISOString(),
+          settings: {
+            openCodeUrl: "  https://persisted.example.com/base  ",
+            webhookUrl: "  https://hooks.example.com/persisted  ",
+          },
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    )
+
+    const read = await handleExtendedEndpoint(
+      "/api/ext/telegram/settings",
+      "GET",
+      new URL("http://127.0.0.1/api/ext/telegram/settings"),
+      new Request("http://127.0.0.1/api/ext/telegram/settings"),
+    )
+
+    expect(read?.status).toBe(200)
+    const data = await read?.json()
+    expect(data.settings.openCodeUrl).toBe("https://persisted.example.com/base")
+    expect(data.settings.webhookUrl).toBe("https://hooks.example.com/persisted")
+  })
+
+  test("PUT cleans temporary file when backup rename fails", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "telegram-settings-"))
+    const path = join(dir, "telegram-settings.json")
+    cleanupPaths.push(dir)
+
+    process.env.TELEGRAM_SETTINGS_PATH = path
+
+    await writeFile(
+      path,
+      JSON.stringify(
+        {
+          version: 1,
+          updatedAt: new Date().toISOString(),
+          settings: {
+            token: "seed",
+          },
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    )
+
+    const realRename = fsp.rename
+    const renameSpy = spyOn(fsp, "rename").mockImplementation(async (from, to) => {
+      const src = String(from)
+      const dest = String(to)
+      if (src.endsWith(".tmp") && dest === path) {
+        const err = new Error("mock replace conflict") as Error & { code?: string }
+        err.code = "EPERM"
+        throw err
+      }
+      if (src === path && dest.includes(`${path}.bak.`)) {
+        const err = new Error("mock backup failure") as Error & { code?: string }
+        err.code = "EPERM"
+        throw err
+      }
+      return realRename(from, to)
+    })
+
+    try {
+      const response = await handleExtendedEndpoint(
+        "/api/ext/telegram/settings",
+        "PUT",
+        new URL("http://127.0.0.1/api/ext/telegram/settings"),
+        new Request("http://127.0.0.1/api/ext/telegram/settings", {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ settings: { token: "changed" } }),
+        }),
+      )
+
+      expect(response?.status).toBe(500)
+      const files = await readdir(dir)
+      const leftovers = files.filter((entry) => entry.startsWith(".telegram-settings.json.") && entry.endsWith(".tmp"))
+      expect(leftovers).toEqual([])
+    } finally {
+      renameSpy.mockRestore()
+    }
   })
 
   test("GET falls back to env when persisted token and webhookSecret are whitespace", async () => {

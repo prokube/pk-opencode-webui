@@ -88,9 +88,11 @@ function normalizeLinkBase(value: string, source?: string): string {
 }
 
 function parsePersistedUrl(value: unknown, field: "openCodeUrl" | "webhookUrl", fallback: string | undefined): string | undefined {
-  if (typeof value !== "string" || !value.trim()) return fallback
-  if (!URL.canParse(value)) return fallback
-  return parseUrl(value, field, `persisted ${field}`)
+  if (typeof value !== "string") return fallback
+  const trimmed = value.trim()
+  if (!trimmed) return fallback
+  if (!URL.canParse(trimmed)) return fallback
+  return parseUrl(trimmed, field, `persisted ${field}`)
 }
 
 function parsePersistedLinkBase(value: unknown, fallback: string | undefined): string | undefined {
@@ -518,16 +520,16 @@ function normalizePayload(input: unknown): {
   }
 
   if ("openCodeUrl" in raw) {
-    if (raw.openCodeUrl === null) {
+    if (raw.openCodeUrl === null || raw.openCodeUrl === "") {
       patch.openCodeUrl = undefined
     }
-    if (typeof raw.openCodeUrl === "string") {
+    if (typeof raw.openCodeUrl === "string" && raw.openCodeUrl.trim()) {
       const valid = pushUrl(errors, "openCodeUrl", raw.openCodeUrl)
-      if (valid && raw.openCodeUrl.trim()) {
+      if (valid) {
         patch.openCodeUrl = parseUrl(raw.openCodeUrl.trim(), "openCodeUrl")
       }
     }
-    if (raw.openCodeUrl !== null && typeof raw.openCodeUrl !== "string") {
+    if (raw.openCodeUrl !== null && raw.openCodeUrl !== "" && typeof raw.openCodeUrl !== "string") {
       errors.push({ field: "openCodeUrl", message: "openCodeUrl must be a valid URL or null" })
     }
   }
@@ -693,8 +695,9 @@ async function writeSettings(path: string, settings: Partial<Record<TelegramSett
 
     const moved = await fsp.rename(path, backupPath).then(
       () => true,
-      (backupError) => {
+      async (backupError) => {
         if (errorCode(backupError) === "ENOENT") return false
+        await fsp.unlink(tmpPath).catch(() => undefined)
         throw backupError
       },
     )
