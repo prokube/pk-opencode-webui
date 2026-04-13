@@ -76,7 +76,7 @@ interface SavedPromptsPayload {
 }
 
 interface SavedPromptsResponse {
-  prompts?: SavedPromptsPayload
+  prompts?: { global?: unknown[]; project?: unknown[] }
   global?: unknown[] | { prompts?: unknown[] }
   project?: unknown[] | { prompts?: unknown[] }
   errors?: { global?: string; project?: string }
