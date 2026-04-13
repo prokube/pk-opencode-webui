@@ -1,6 +1,7 @@
 import { useNavigate } from "@solidjs/router"
 import { useSDK } from "../context/sdk"
 import { base64Encode } from "../utils/path"
+import { createRootSession } from "../utils/root-session"
 import { Plus, Settings } from "lucide-solid"
 import { Button } from "../components/ui/button"
 
@@ -56,10 +57,14 @@ export function Home() {
   async function createNewSession() {
     if (!directory) return
     try {
-      const res = await client.session.create({})
-      if (res.data) {
+      const res = await createRootSession(client, {
+        source: "home.createNewSession",
+        scope: directory,
+      })
+      const data = res.data
+      if (data) {
         const slug = base64Encode(directory)
-        navigate(`/${slug}/session/${res.data.id}`)
+        navigate(`/${slug}/session/${data.id}`)
       }
     } catch (e) {
       console.error("Failed to create session:", e)
