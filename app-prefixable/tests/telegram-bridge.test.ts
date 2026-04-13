@@ -1,4 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
   cacheSession,
   extractReply,
@@ -102,10 +104,10 @@ describe("telegram bridge config and cache", () => {
   test("parseConfig uses polling default and rejects invalid TELEGRAM_MODE", () => {
     setEnv({ TELEGRAM_BOT_TOKEN: "token", OPENCODE_API_URL: "http://127.0.0.1:4096" });
     expect(parseConfig().mode).toBe("polling");
-    expect(parseConfig().sessionStorePath).toBe("/tmp/opencode-telegram-sessions.json");
+    expect(parseConfig().sessionStorePath).toBe(join(tmpdir(), "opencode-telegram-sessions.json"));
 
-    setEnv({ TELEGRAM_BOT_TOKEN: "token", TELEGRAM_SESSION_STORE_PATH: "/tmp/custom-store.json" });
-    expect(parseConfig().sessionStorePath).toBe("/tmp/custom-store.json");
+    setEnv({ TELEGRAM_BOT_TOKEN: "token", TELEGRAM_SESSION_STORE_PATH: join(tmpdir(), "custom-store.json") });
+    expect(parseConfig().sessionStorePath).toBe(join(tmpdir(), "custom-store.json"));
 
     setEnv({ TELEGRAM_BOT_TOKEN: "token", TELEGRAM_MODE: "bad-mode", OPENCODE_API_URL: "http://127.0.0.1:4096" });
     expect(() => parseConfig()).toThrow("Invalid TELEGRAM_MODE");

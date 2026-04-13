@@ -29,14 +29,7 @@ function parseStore(input: string): StoreShape {
   }
 }
 
-async function readStore(path: string): Promise<StoreShape> {
-  const file = Bun.file(path)
-  const exists = await file.exists()
-  if (exists) {
-    const text = await file.text()
-    return parseStore(text)
-  }
-
+async function readBackupStore(path: string): Promise<StoreShape | undefined> {
   const dir = dirname(path)
   const name = basename(path)
   const entries = await readdir(dir).catch((error) => {
@@ -70,6 +63,23 @@ async function readStore(path: string): Promise<StoreShape> {
     })
     return data
   }
+
+  return
+}
+
+async function readStore(path: string): Promise<StoreShape> {
+  const file = Bun.file(path)
+  const exists = await file.exists()
+  if (exists) {
+    const text = await file.text()
+    const data = await Promise.resolve()
+      .then(() => parseStore(text))
+      .catch(() => undefined)
+    if (data) return data
+  }
+
+  const recovered = await readBackupStore(path)
+  if (recovered) return recovered
 
   return emptyStore()
 }

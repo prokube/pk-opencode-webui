@@ -1,4 +1,6 @@
 import { createTelegramSessionStore, telegramSessionKey } from "./telegram-session-store"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
 
 type TelegramUpdate = {
   update_id: number
@@ -110,6 +112,10 @@ function parseOpenCodeUrl(value: string, source: string): string {
   }
 }
 
+function defaultSessionStorePath() {
+  return join(tmpdir(), "opencode-telegram-sessions.json")
+}
+
 export function parseConfig(): BridgeConfig {
   const token = env("TELEGRAM_BOT_TOKEN")
   if (!token) {
@@ -125,7 +131,7 @@ export function parseConfig(): BridgeConfig {
   const webhookPath = env("TELEGRAM_WEBHOOK_PATH") || "/webhook"
   const sessionCacheMax = parsePositiveInt(env("TELEGRAM_SESSION_CACHE_MAX") || "", 500)
   const sessionCacheTtlMs = parsePositiveInt(env("TELEGRAM_SESSION_CACHE_TTL_MS") || "", 6 * 60 * 60 * 1000)
-  const sessionStorePath = env("TELEGRAM_SESSION_STORE_PATH") || "/tmp/opencode-telegram-sessions.json"
+  const sessionStorePath = env("TELEGRAM_SESSION_STORE_PATH") || defaultSessionStorePath()
 
   return {
     mode,

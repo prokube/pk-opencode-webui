@@ -107,4 +107,23 @@ describe("telegram session store", () => {
     expect(await store.get(telegramSessionKey(778, 43))).toBe("session-good")
     expect(await Bun.file(path).exists()).toBe(true)
   })
+
+  test("recovers from backup when primary file is corrupt JSON", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "telegram-session-store-"))
+    const path = join(dir, "sessions.json")
+    const backup = `${path}.bak.${Date.now()}.recover`
+    const key = telegramSessionKey(779, 44)
+    files.push(dir)
+
+    await Bun.write(path, "{invalid json")
+    await Bun.write(
+      backup,
+      `${JSON.stringify({ version: 1, sessions: { [key]: "session-recovered" } }, null, 2)}\n`,
+    )
+
+    const store = createTelegramSessionStore(path)
+    expect(await store.get(key)).toBe("session-recovered")
+    expect(await Bun.file(path).exists()).toBe(true)
+    expect(await Bun.file(backup).exists()).toBe(false)
+  })
 })
