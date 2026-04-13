@@ -864,6 +864,8 @@ describe("telegram bridge config and cache", () => {
   });
 
   test("/pending retention sort is deterministic when timestamps match", async () => {
+    const calls: Array<{ url: string; body: Record<string, unknown> }> = [];
+    const originalFetch = globalThis.fetch;
     const key = "chat:77";
     const now = Date.now();
     const pending = new Map<string, Array<{
@@ -927,13 +929,28 @@ describe("telegram bridge config and cache", () => {
       },
     };
 
-    await handleTextUpdate(runtime, {
-      update_id: 13,
-      message: { message_id: 13, text: "/pending", chat: { id: 77 }, from: { id: 5 } },
-    });
+    try {
+      globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        const body = init?.body ? (JSON.parse(String(init.body)) as Record<string, unknown>) : {};
+        calls.push({ url, body });
+        if (url.includes("/sendMessage")) {
+          return new Response(JSON.stringify({ ok: true, result: { message_id: 1 } }), { status: 200 });
+        }
+        throw new Error(`Unexpected fetch ${url}`);
+      };
+
+      await handleTextUpdate(runtime, {
+        update_id: 13,
+        message: { message_id: 13, text: "/pending", chat: { id: 77 }, from: { id: 5 } },
+      });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
 
     const stored = pending.get(key) || [];
     expect(stored.map((item) => item.id)).toEqual(["a-item", "b-item"]);
+    expect(calls.some((x) => x.url.includes("/sendMessage"))).toBe(true);
   });
 
   test("/pending ignores partial adapter implementations", async () => {
