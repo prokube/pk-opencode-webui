@@ -164,6 +164,13 @@ Optional:
 - `TELEGRAM_WEBHOOK_URL` (auto-register webhook if set)
 - `TELEGRAM_WEBHOOK_SECRET` (validated from `x-telegram-bot-api-secret-token` header)
 
+Webhook mode deployment notes:
+- Expose `TELEGRAM_BRIDGE_PORT` on the Notebook service or sidecar Service, then publish it through your cluster ingress.
+- Route incoming traffic to `TELEGRAM_WEBHOOK_PATH` to the same container that runs the `telegram-bridge` s6 service.
+- Set `TELEGRAM_WEBHOOK_URL` to the externally reachable HTTPS URL Telegram can call.
+- If your ingress rewrites paths, keep the external path in `TELEGRAM_WEBHOOK_URL` aligned with the internal `TELEGRAM_WEBHOOK_PATH` target.
+- Set `TELEGRAM_WEBHOOK_SECRET` and ensure your ingress preserves `x-telegram-bot-api-secret-token`.
+
 ## Development
 
 To iterate on the UI:

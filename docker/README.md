@@ -91,6 +91,15 @@ The bridge forwards Telegram text messages to OpenCode sessions and sends respon
 | `TELEGRAM_WEBHOOK_URL` | _(empty)_ | Public webhook URL to register with Telegram |
 | `TELEGRAM_WEBHOOK_SECRET` | _(empty)_ | Secret token validated from Telegram webhook header |
 
+### Webhook deployment notes
+
+When `TELEGRAM_MODE=webhook`, the bridge runs an HTTP listener inside the container and Telegram must be able to reach it from the public internet.
+
+- Expose `TELEGRAM_BRIDGE_PORT` through your platform ingress/load balancer.
+- Route the public webhook path to the bridge service, including any path prefix from your gateway.
+- Set `TELEGRAM_WEBHOOK_URL` to the full public URL Telegram should call (for example, `https://example.com/telegram/webhook`).
+- Use `TELEGRAM_WEBHOOK_SECRET` and configure your proxy to forward `x-telegram-bot-api-secret-token` unchanged.
+
 ### Build
 
 ```bash

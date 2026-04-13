@@ -279,8 +279,8 @@ async function sendPrompt(config: BridgeConfig, sessionId: string, text: string)
 function chunks(input: string, size: number): string[] {
   if (input.length <= size) return [input]
   const output: string[] = []
-  for (const i of Array.from({ length: Math.ceil(input.length / size) }, (_, idx) => idx)) {
-    output.push(input.slice(i * size, (i + 1) * size))
+  for (let i = 0; i < input.length; i += size) {
+    output.push(input.slice(i, i + size))
   }
   return output
 }
@@ -344,9 +344,17 @@ async function runPolling(config: BridgeConfig) {
         35_000,
       )) as TelegramUpdate[]
 
+      const runs: Promise<void>[] = []
       for (const update of result || []) {
         offset = Math.max(offset, update.update_id + 1)
-        await handleTextUpdate(config, update)
+        const chatId = update.message?.chat?.id
+        const run = !chatId
+          ? handleTextUpdate(config, update)
+          : queueChatUpdate(String(chatId), () => handleTextUpdate(config, update))
+        runs.push(run)
+      }
+      if (runs.length) {
+        await Promise.allSettled(runs)
       }
     } catch (error) {
       console.error("[TelegramBridge] polling error", error)
