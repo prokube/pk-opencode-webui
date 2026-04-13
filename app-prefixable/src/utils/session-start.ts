@@ -65,8 +65,8 @@ export async function createSessionWithPrompt(args: {
     const text = formatStartError((created as { error?: unknown }).error);
     throw new Error(text === "Unknown error" ? "Failed to create session: no session data returned." : text);
   }
-  await args.onCreated?.(created.data);
   try {
+    await args.onCreated?.(created.data);
     const prompted = await args.client.session.promptAsync({
       sessionID: created.data.id,
       parts: [{ type: "text", text: args.text }],

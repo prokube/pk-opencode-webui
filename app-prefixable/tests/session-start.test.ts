@@ -165,4 +165,34 @@ describe("createSessionWithPrompt", () => {
       console.warn = warn;
     }
   });
+
+  test("attempts delete when onCreated throws", async () => {
+    let deleted = 0;
+    let deletedID = "";
+    const client = {
+      session: {
+        create: async () => ({ data: { id: "s-4" } }),
+        promptAsync: async () => ({ data: {} }),
+        delete: async (args: { sessionID: string }) => {
+          deleted += 1;
+          deletedID = args.sessionID;
+          return { data: {} };
+        },
+      },
+    } as unknown as OpencodeClient;
+
+    await expect(
+      createSessionWithPrompt({
+        client,
+        text: "hello",
+        agent: "build",
+        model: { providerID: "openai", modelID: "gpt-4.1" },
+        onCreated: () => {
+          throw new Error("onCreated failed");
+        },
+      }),
+    ).rejects.toThrow("onCreated failed");
+    expect(deleted).toBe(1);
+    expect(deletedID).toBe("s-4");
+  });
 });

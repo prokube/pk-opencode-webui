@@ -1308,6 +1308,15 @@ export function Session() {
     setOptimisticMessage(userMessage);
 
     const needsSession = !sessionId();
+    const restoreComposer = () => {
+      setPendingUserMessageText(null);
+      setOptimisticMessage(null);
+      setInput(text);
+      setFileContext(files);
+      setImageAttachments(images);
+      if (inputRef) applyInputAndAutogrow(inputRef, text);
+    };
+    let createdID: string | undefined;
     try {
       let id = sessionId();
 
@@ -1320,17 +1329,13 @@ export function Session() {
         const data = res.data;
         console.log("[Session] Create response:", data);
         if (!data) {
-          setPendingUserMessageText(null);
-          setOptimisticMessage(null);
-          setInput(text);
-          setFileContext(files);
-          setImageAttachments(images);
-          if (inputRef) applyInputAndAutogrow(inputRef, text);
+          restoreComposer();
           setError("Failed to create session: no session data returned.");
           return;
         }
 
         id = data.id;
+        createdID = id;
         setSessionId(id);
         navigate(`/${dirSlug()}/session/${id}`, { replace: true });
         // Store the model for the new session
@@ -1393,11 +1398,25 @@ export function Session() {
       }
 
       const promptRes = await client.session.promptAsync(promptPayload);
+      if ("error" in promptRes && promptRes.error) {
+        throw new Error(formatStartError(promptRes.error));
+      }
       console.log("[Session] Prompt response:", promptRes);
 
       // Start processing - SSE events will handle updates and completion
       startProcessing();
     } catch (err) {
+      if (createdID) {
+        const cleaned = await client.session
+          .delete({ sessionID: createdID })
+          .catch((error) => ({ error }));
+        if (cleaned && typeof cleaned === "object" && "error" in cleaned && cleaned.error) {
+          console.warn("[Session] Failed to cleanup session after send error:", cleaned.error);
+        }
+        setSessionId(undefined);
+        navigate(`/${dirSlug()}/session`, { replace: true });
+      }
+      restoreComposer();
       console.error("[Session] Error sending message:", err);
       const msg = needsSession
         ? "Failed to create session or send message"
