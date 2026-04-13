@@ -1,12 +1,14 @@
 import { afterEach, describe, expect, test } from "bun:test"
-import { rm } from "node:fs/promises"
+import { chmod, mkdtemp, rm } from "node:fs/promises"
+import { join } from "node:path"
+import { tmpdir } from "node:os"
 import { createTelegramSessionStore, telegramSessionKey } from "../../shared/telegram-session-store"
 
 const files: string[] = []
 
 async function cleanup(path: string) {
-  await rm(path, { force: true }).catch(() => undefined)
-  await rm(`${path}.tmp`, { force: true }).catch(() => undefined)
+  await rm(path, { force: true, recursive: true }).catch(() => undefined)
+  await rm(`${path}.tmp`, { force: true, recursive: true }).catch(() => undefined)
 }
 
 afterEach(async () => {
@@ -37,5 +39,31 @@ describe("telegram session store", () => {
   test("telegramSessionKey uses chat-only key without user id", () => {
     expect(telegramSessionKey(123)).toBe("chat:123")
     expect(telegramSessionKey(123, 456)).toBe("chat:123:user:456")
+  })
+
+  test("set rolls back in-memory value when flush fails", async () => {
+    const path = "/dev/null/telegram-session-store.json"
+    const store = createTelegramSessionStore(path)
+    const key = telegramSessionKey(222, 7)
+
+    await expect(store.set(key, "session-a")).rejects.toThrow()
+    expect(await store.get(key)).toBeUndefined()
+  })
+
+  test("delete restores in-memory value when flush fails", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "telegram-session-store-"))
+    const path = join(dir, "sessions.json")
+    files.push(path)
+    files.push(dir)
+
+    const key = telegramSessionKey(333, 8)
+    const store = createTelegramSessionStore(path)
+    await store.set(key, "session-a")
+    await chmod(dir, 0o500)
+
+    await expect(store.delete(key)).rejects.toThrow()
+    expect(await store.get(key)).toBe("session-a")
+
+    await chmod(dir, 0o700)
   })
 })

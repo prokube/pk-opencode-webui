@@ -1,4 +1,4 @@
-import { mkdir, rename } from "node:fs/promises"
+import { mkdir, rename, rm } from "node:fs/promises"
 import { dirname } from "node:path"
 
 type StoreShape = {
@@ -40,9 +40,27 @@ async function readStore(path: string): Promise<StoreShape> {
 async function writeStore(path: string, data: StoreShape) {
   await mkdir(dirname(path), { recursive: true })
   const temp = `${path}.tmp`
+  const backup = `${path}.bak.${Date.now()}.${Math.random().toString(36).slice(2)}`
   const body = `${JSON.stringify(data, null, 2)}\n`
   await Bun.write(temp, body)
-  await rename(temp, path)
+  const replace = rename(temp, path).catch(async (error) => {
+    const code = error && typeof error === "object" && "code" in error ? String(error.code) : ""
+    if (code !== "EEXIST" && code !== "EPERM" && code !== "ENOTEMPTY") {
+      await rm(temp, { force: true }).catch(() => undefined)
+      throw error
+    }
+    await rename(path, backup)
+    await rename(temp, path).catch(async (renameError) => {
+      await rename(backup, path).catch(() => undefined)
+      await rm(temp, { force: true }).catch(() => undefined)
+      throw renameError
+    })
+    await rm(backup, { force: true }).catch(() => undefined)
+  })
+  await replace.catch(async (error) => {
+    await rm(temp, { force: true }).catch(() => undefined)
+    throw error
+  })
 }
 
 export type TelegramSessionStore = {
@@ -84,15 +102,27 @@ export function createTelegramSessionStore(path: string): TelegramSessionStore {
     },
     async set(key: string, sessionId: string) {
       await ready
-      if (sessions.get(key) === sessionId) return
+      const prev = sessions.get(key)
+      if (prev === sessionId) return
       sessions.set(key, sessionId)
-      await flush()
+      await flush().catch((error) => {
+        if (prev !== undefined) {
+          sessions.set(key, prev)
+          throw error
+        }
+        sessions.delete(key)
+        throw error
+      })
     },
     async delete(key: string) {
       await ready
-      const removed = sessions.delete(key)
-      if (!removed) return
-      await flush()
+      const prev = sessions.get(key)
+      if (prev === undefined) return
+      sessions.delete(key)
+      await flush().catch((error) => {
+        sessions.set(key, prev)
+        throw error
+      })
     },
   }
 }
