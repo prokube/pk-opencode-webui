@@ -88,23 +88,27 @@ function isStoredPrompt(p: unknown): p is StoredPrompt {
 function parsePromptList(raw: string): StoredPrompt[] {
   const parsed = JSON.parse(raw)
   if (!Array.isArray(parsed)) return []
-  return parsed.filter(
-    (p) =>
-      p &&
-      typeof p.id === "string" &&
-      typeof p.title === "string" &&
-      typeof p.text === "string" &&
-      typeof p.createdAt === "number" &&
-      (p.scope === undefined || p.scope === "global" || p.scope === "project"),
-  )
+  return parsed.filter(isStoredPrompt)
 }
 
 async function readPromptFile(path: string): Promise<StoredPrompt[]> {
   try {
     const content = await fs.promises.readFile(path, "utf-8")
     return parsePromptList(content)
-  } catch {
+  } catch (e) {
+    const code = typeof e === "object" && e && "code" in e ? (e as { code?: string }).code : undefined
+    if (code !== "ENOENT") throw e
     return []
+  }
+}
+
+function sanitizePrompt(p: StoredPrompt, scope: "global" | "project"): StoredPrompt {
+  return {
+    id: p.id,
+    title: p.title,
+    text: p.text,
+    createdAt: p.createdAt,
+    scope,
   }
 }
 
@@ -213,12 +217,16 @@ export async function handleExtendedEndpoint(
     const globalPath = nodePath.join(configDir, "saved-prompts.json")
     const projectPath = validatedDir ? nodePath.join(validatedDir, ".opencode", "saved-prompts.json") : null
 
-    const global = (await readPromptFile(globalPath)).map((p) => ({ ...p, scope: "global" as const }))
-    const project = projectPath
-      ? (await readPromptFile(projectPath)).map((p) => ({ ...p, scope: "project" as const }))
-      : []
-
-    return Response.json({ global, project })
+    try {
+      const global = (await readPromptFile(globalPath)).map((p) => sanitizePrompt(p, "global"))
+      const project = projectPath
+        ? (await readPromptFile(projectPath)).map((p) => sanitizePrompt(p, "project"))
+        : []
+      return Response.json({ global, project })
+    } catch (e) {
+      console.error("[ExtAPI] saved-prompts read error:", e)
+      return Response.json({ error: String(e) }, { status: 500 })
+    }
   }
 
   // PUT /api/ext/saved-prompts - Write global + project prompts
@@ -245,9 +253,9 @@ export async function handleExtendedEndpoint(
     const safeProject: StoredPrompt[] = project.filter(isStoredPrompt)
 
     try {
-      await writePromptFile(globalPath, safeGlobal.map((p) => ({ ...p, scope: "global" as const })))
+      await writePromptFile(globalPath, safeGlobal.map((p) => sanitizePrompt(p, "global")))
       if (projectPath) {
-        await writePromptFile(projectPath, safeProject.map((p) => ({ ...p, scope: "project" as const })))
+        await writePromptFile(projectPath, safeProject.map((p) => sanitizePrompt(p, "project")))
       }
       return Response.json({ success: true })
     } catch (e) {

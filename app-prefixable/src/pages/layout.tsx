@@ -2197,7 +2197,7 @@ export function Layout(props: ParentProps) {
                 data-hint-target
                 onClick={createNewSession}
                 variant="ghost"
-                class={`flex-1 justify-start ${savedPrompts.prompts().length > 0 ? "rounded-r-none" : ""}`}
+                class={`flex-1 justify-start ${!savedPrompts.loading() && savedPrompts.prompts().length > 0 ? "rounded-r-none" : ""}`}
                 size="sm"
                 disabled={savedPrompts.loading()}
               >
