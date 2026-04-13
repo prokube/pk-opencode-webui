@@ -20,20 +20,35 @@ function resolveDir(url: URL): string {
  * Validate that a path is safe (within allowed root, no traversal attacks).
  * Returns the normalized absolute path if valid, or null if invalid.
  */
-function validatePath(inputPath: string, allowedRoot: string): string | null {
-  // Resolve to absolute path
+async function nearestExistingRealPath(path: string): Promise<string | null> {
+  let current = nodePath.resolve(path)
+  for (;;) {
+    try {
+      return await fs.promises.realpath(current)
+    } catch (e) {
+      const code = typeof e === "object" && e && "code" in e ? (e as { code?: string }).code : undefined
+      if (code !== "ENOENT") throw e
+      const parent = nodePath.dirname(current)
+      if (parent === current) return null
+      current = parent
+    }
+  }
+}
+
+async function validatePath(inputPath: string, allowedRoot: string): Promise<string | null> {
   const resolved = nodePath.resolve(allowedRoot, inputPath)
   const normalizedRoot = nodePath.resolve(allowedRoot)
 
-  // Handle edge case where root is "/" (filesystem root)
-  if (normalizedRoot === "/") {
-    // When root is /, allow any absolute path (but still normalized)
-    return resolved
+  if (normalizedRoot === "/") return resolved
+
+  if (resolved !== normalizedRoot && !resolved.startsWith(normalizedRoot + nodePath.sep)) {
+    return null
   }
 
-  // Check that resolved path is within allowed root (prevents ../ traversal)
-  // Must either equal the root exactly, or start with root + separator
-  if (resolved !== normalizedRoot && !resolved.startsWith(normalizedRoot + nodePath.sep)) {
+  const rootReal = await fs.promises.realpath(normalizedRoot).catch(() => normalizedRoot)
+  const targetReal = await nearestExistingRealPath(resolved)
+  if (!targetReal) return null
+  if (targetReal !== rootReal && !targetReal.startsWith(rootReal + nodePath.sep)) {
     return null
   }
 
@@ -234,7 +249,7 @@ export async function handleExtendedEndpoint(
   if (path === "/api/ext/saved-prompts" && method === "GET") {
     const directory = url.searchParams.get("directory")
     const allowedRoot = getAllowedRoot()
-    const validatedDir = directory ? validatePath(directory, allowedRoot) : null
+    const validatedDir = directory ? await validatePath(directory, allowedRoot) : null
     if (directory && !validatedDir) {
       console.warn("[ExtAPI] saved-prompts read: path outside allowed root:", directory)
       return Response.json({ error: "directory must be within allowed directory" }, { status: 403 })
@@ -247,34 +262,27 @@ export async function handleExtendedEndpoint(
     const globalResult = await readPromptScope(globalPath, "global")
     const projectResult = projectPath ? await readPromptScope(projectPath, "project") : { prompts: [] as StoredPrompt[] }
 
-    if (globalResult.error && projectPath && !projectResult.error) {
-      return Response.json({
-        global: globalResult.prompts,
-        project: projectResult.prompts,
-        errors: { global: globalResult.error },
-      })
-    }
-
-    if (projectResult.error && !globalResult.error) {
-      return Response.json({
-        global: globalResult.prompts,
-        project: projectResult.prompts,
-        errors: { project: projectResult.error },
-      })
-    }
-
     if (!globalResult.error && !projectResult.error) {
       return Response.json({ global: globalResult.prompts, project: projectResult.prompts })
     }
 
-    return internalError("failed to read saved prompts")
+    return Response.json(
+      {
+        error: "failed to read saved prompts",
+        errors: {
+          ...(globalResult.error ? { global: globalResult.error } : {}),
+          ...(projectResult.error ? { project: projectResult.error } : {}),
+        },
+      },
+      { status: 500 },
+    )
   }
 
   // PUT /api/ext/saved-prompts - Write global + project prompts
   if (path === "/api/ext/saved-prompts" && method === "PUT") {
     const directory = url.searchParams.get("directory")
     const allowedRoot = getAllowedRoot()
-    const validatedDir = directory ? validatePath(directory, allowedRoot) : null
+    const validatedDir = directory ? await validatePath(directory, allowedRoot) : null
     if (directory && !validatedDir) {
       console.warn("[ExtAPI] saved-prompts write: path outside allowed root:", directory)
       return Response.json({ error: "directory must be within allowed directory" }, { status: 403 })
@@ -325,7 +333,7 @@ export async function handleExtendedEndpoint(
 
       // Validate path is within allowed root
       const allowedRoot = getAllowedRoot()
-      const validatedPath = validatePath(dirPath, allowedRoot)
+      const validatedPath = await validatePath(dirPath, allowedRoot)
       if (!validatedPath) {
         console.warn("[ExtAPI] mkdir: path outside allowed root:", dirPath)
         return Response.json({ error: "path must be within allowed directory" }, { status: 403 })
@@ -357,7 +365,7 @@ export async function handleExtendedEndpoint(
 
     // Validate path is within allowed root
     const allowedRoot = getAllowedRoot()
-    const validatedDir = validatePath(directory, allowedRoot)
+    const validatedDir = await validatePath(directory, allowedRoot)
     if (!validatedDir) {
       console.warn("[ExtAPI] list-dirs: path outside allowed root:", directory)
       return Response.json({ error: "directory must be within allowed directory" }, { status: 403 })
@@ -500,7 +508,7 @@ export async function handleExtendedEndpoint(
     }
 
     const allowedRoot = getAllowedRoot()
-    const validatedPath = validatePath(body.path, allowedRoot)
+    const validatedPath = await validatePath(body.path, allowedRoot)
     if (!validatedPath) {
       console.warn("[ExtAPI] file write: path outside allowed root:", body.path)
       return Response.json({ error: "path must be within allowed directory" }, { status: 403 })

@@ -325,15 +325,15 @@ describe("OpenCode API Contract", () => {
 
     test("PUT /api/ext/saved-prompts rejects outside directory", async () => {
       if (skipIfNoServer()) return;
-      const payload = { global: [], project: [] };
+      const payload = { global: "invalid", project: [] };
       const params = new URLSearchParams({ directory: "/tmp" });
       const res = await fetch(`${BASE_URL}/api/ext/saved-prompts?${params.toString()}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
       });
-      expect([200, 403]).toContain(res.status);
-      if (res.status === 403) {
+      expect([400, 403]).toContain(res.status);
+      if (res.status === 400 || res.status === 403) {
         const data = await res.json();
         expect(typeof data?.error).toBe("string");
       }

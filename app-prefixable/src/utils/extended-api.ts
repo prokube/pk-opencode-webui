@@ -75,6 +75,10 @@ interface SavedPromptsPayload {
   project: StoredPrompt[]
 }
 
+interface SavedPromptsResponse extends SavedPromptsPayload {
+  errors?: { global?: string; project?: string }
+}
+
 function validatePromptList(items: unknown[], field: "global" | "project"): StoredPrompt[] {
   const prompts: StoredPrompt[] = []
   for (let i = 0; i < items.length; i++) {
@@ -103,8 +107,9 @@ export async function readSavedPrompts(serverUrl: string, directory?: string): P
   const res = await fetch(`${serverUrl}/api/ext/saved-prompts${suffix}`).catch(() => null)
   if (!res) throw new Error("failed to fetch saved prompts")
   if (!res.ok) throw new Error(`saved prompts read failed: ${res.status}`)
-  const data = await res.json().catch(() => null)
+  const data = (await res.json().catch(() => null)) as SavedPromptsResponse | null
   if (!data || !Array.isArray(data.global) || !Array.isArray(data.project)) throw new Error("invalid saved prompts response")
+  if (data.errors?.global || data.errors?.project) throw new Error("saved prompts response includes read errors")
   return {
     global: validatePromptList(data.global, "global"),
     project: validatePromptList(data.project, "project"),

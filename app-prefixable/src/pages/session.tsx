@@ -2444,11 +2444,23 @@ function SavePromptDialog(props: {
   canUseProjectScope: boolean
   hasActiveProject: boolean
   saveDisabled: boolean
-  onSave: () => void
+  onSave: () => void | Promise<void>
   onClose: () => void
 }) {
   const [container, setContainer] = createSignal<HTMLDivElement>();
+  const [saving, setSaving] = createSignal(false);
   let titleRef: HTMLInputElement | undefined;
+
+  async function handleSave() {
+    if (saving()) return;
+    if (!props.title().trim() || props.saveDisabled) return;
+    setSaving(true);
+    try {
+      await props.onSave();
+    } finally {
+      setSaving(false);
+    }
+  }
 
   createEffect(() => {
     const el = container();
@@ -2543,7 +2555,7 @@ function SavePromptDialog(props: {
                 onKeyDown={(e) => {
                   if (e.key === "Enter") {
                     e.preventDefault();
-                    props.onSave();
+                    void handleSave();
                   }
                 }}
               />
@@ -2621,15 +2633,15 @@ function SavePromptDialog(props: {
             </button>
             <button
               type="button"
-              disabled={!props.title().trim() || props.saveDisabled}
-              onClick={props.onSave}
+              disabled={!props.title().trim() || props.saveDisabled || saving()}
+              onClick={() => void handleSave()}
               class="px-4 py-2 text-sm font-medium rounded-md transition-colors disabled:opacity-50"
               style={{
                 background: "var(--interactive-base)",
                 color: "white",
               }}
             >
-              Save
+              {saving() ? "Saving..." : "Save"}
             </button>
           </div>
         </div>

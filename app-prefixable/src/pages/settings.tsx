@@ -2386,7 +2386,7 @@ Add your project-specific instructions here.
           setScope={setPromptScope}
           canUseProjectScope={savedPrompts.canUseProjectScope()}
           hasActiveProject={savedPrompts.hasActiveProject()}
-          saveDisabled={!!savedPrompts.error()}
+          saveDisabled={savedPrompts.loading() || !!savedPrompts.error()}
           onSave={savePromptDialog}
           onClose={() => setPromptDialogOpen(false)}
           error={promptSaveError() || savedPrompts.saveError() || null}
@@ -3223,7 +3223,19 @@ function PromptDialog(props: {
   error: string | null
 }) {
   const [container, setContainer] = createSignal<HTMLDivElement>()
+  const [saving, setSaving] = createSignal(false)
   let titleRef: HTMLInputElement | undefined
+
+  async function handleSave() {
+    if (saving()) return
+    if (!props.title().trim() || !props.text().trim() || props.saveDisabled) return
+    setSaving(true)
+    try {
+      await props.onSave()
+    } finally {
+      setSaving(false)
+    }
+  }
 
   createEffect(() => {
     const el = container()
@@ -3399,15 +3411,15 @@ function PromptDialog(props: {
             </button>
             <button
               type="button"
-              onClick={props.onSave}
-              disabled={!props.title().trim() || !props.text().trim() || props.saveDisabled}
+              onClick={() => void handleSave()}
+              disabled={!props.title().trim() || !props.text().trim() || props.saveDisabled || saving()}
               class="px-4 py-2 text-sm font-medium rounded-md transition-colors disabled:opacity-50"
               style={{
                 background: "var(--interactive-base)",
                 color: "white",
               }}
             >
-              {props.editing ? "Save Changes" : "Save"}
+              {saving() ? "Saving..." : props.editing ? "Save Changes" : "Save"}
             </button>
           </div>
         </div>
