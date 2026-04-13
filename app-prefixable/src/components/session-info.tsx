@@ -36,7 +36,7 @@ type ModelMeta = {
   reasoning?: boolean
   tool_call?: boolean
   attachment?: boolean
-  interleaved?: boolean
+  interleaved?: boolean | { field?: "reasoning_content" | "reasoning_details" }
   modalities?: { input?: string[]; output?: string[] }
   cost?: { input?: number; output?: number; cache_read?: number; cache_write?: number }
 }
@@ -59,6 +59,17 @@ function str(value: unknown) {
 function bool(value: unknown) {
   if (typeof value !== "boolean") return undefined
   return value
+}
+
+function interleaved(value: unknown): ModelMeta["interleaved"] | undefined {
+  if (value === true) return true
+  const data = obj(value)
+  if (!data) return undefined
+  const field = str(data.field)
+  if (field === undefined || field === "reasoning_content" || field === "reasoning_details") {
+    return { field }
+  }
+  return {}
 }
 
 function arr(value: unknown) {
@@ -108,7 +119,7 @@ function modelMeta(value: unknown): ModelMeta | undefined {
     reasoning: bool(model.reasoning),
     tool_call: bool(model.tool_call),
     attachment: bool(model.attachment),
-    interleaved: bool(model.interleaved),
+    interleaved: interleaved(model.interleaved),
     modalities: {
       input: arr(modalities?.input),
       output: arr(modalities?.output),
