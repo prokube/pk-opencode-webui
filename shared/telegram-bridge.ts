@@ -613,6 +613,15 @@ async function notifySessionKeys(runtime: Runtime, sessionId: string, kind: stri
 
 export async function handleBridgeEvent(runtime: Runtime, event: { type: string; properties: Record<string, unknown> }) {
   const sessionId = typeof event.properties.sessionID === "string" ? event.properties.sessionID : ""
+  if (event.type === "session.deleted") {
+    const info = event.properties.info && typeof event.properties.info === "object"
+      ? event.properties.info as { id?: unknown }
+      : undefined
+    const deletedSessionId = typeof info?.id === "string" ? info.id : sessionId
+    if (!deletedSessionId) return
+    statusBySession.delete(deletedSessionId)
+    return
+  }
   if (!sessionId) return
   if (event.type === "question.asked") {
     await notifySessionKeys(runtime, sessionId, "question", `Question pending: ${questionText(event.properties)}`)
