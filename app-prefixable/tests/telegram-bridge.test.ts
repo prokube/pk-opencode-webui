@@ -4,6 +4,7 @@ import { join } from "node:path";
 import {
   cacheSession,
   createOutboundSSEParser,
+  consumeOutboundEventStream,
   extractReply,
   handleBridgeEvent,
   handleTextUpdate,
@@ -23,6 +24,17 @@ function parseOutboundBlocks(chunks: string[]): string[] {
   }
   blocks.push(...parser.flush());
   return blocks;
+}
+
+function streamFromChunks(chunks: Uint8Array[]) {
+  return new ReadableStream<Uint8Array>({
+    start(controller) {
+      for (const chunk of chunks) {
+        controller.enqueue(chunk);
+      }
+      controller.close();
+    },
+  });
 }
 
 const envKeys = [
@@ -806,5 +818,137 @@ describe("telegram bridge config and cache", () => {
   test("outbound SSE parser normalizes lone CR and detects boundaries", () => {
     const blocks = parseOutboundBlocks(["data: one\r\rdata: two\r\r"]);
     expect(blocks).toEqual(["data: one", "data: two"]);
+  });
+
+  test("consumeOutboundEventStream flushes decoder output before parser flush", async () => {
+    const OriginalDecoder = globalThis.TextDecoder;
+    const NativeDecoder = globalThis.TextDecoder;
+    class FlushOnlyDecoder {
+      private pending: string[] = [];
+
+      decode(input?: AllowSharedBufferSource, options?: TextDecodeOptions) {
+        if (input && options?.stream) {
+          const native = new NativeDecoder();
+          this.pending.push(native.decode(input));
+          return "";
+        }
+        if (input) {
+          const native = new NativeDecoder();
+          return native.decode(input);
+        }
+        return this.pending.join("");
+      }
+    }
+    Object.assign(globalThis, { TextDecoder: FlushOnlyDecoder });
+
+    try {
+      const chunks = [
+        new TextEncoder().encode(
+          'data: {"payload":{"type":"question.asked","properties":{"sessionID":"session-1","questions":[{"header":"Need input"}]}}}\n\n',
+        ),
+      ];
+      const calls: Array<{ url: string; body: Record<string, unknown> }> = [];
+      const originalFetch = globalThis.fetch;
+      try {
+        globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+          const url = String(input);
+          const body = init?.body ? (JSON.parse(String(init.body)) as Record<string, unknown>) : {};
+          calls.push({ url, body });
+          if (url.includes("/sendMessage")) {
+            return new Response(JSON.stringify({ ok: true, result: { message_id: 1 } }), { status: 200 });
+          }
+          throw new Error(`Unexpected fetch ${url}`);
+        };
+
+        const runtime = {
+          config: {
+            mode: "polling" as const,
+            token: "token",
+            openCodeUrl: "http://127.0.0.1:4096",
+            sessionCacheMax: 10,
+            sessionCacheTtlMs: 10_000,
+            notificationDebounceMs: 0,
+            port: 4097,
+            webhookPath: "/webhook",
+            sessionStorePath: "/tmp/test-store.json",
+          },
+          store: {
+            get: async () => undefined,
+            set: async () => undefined,
+            delete: async () => undefined,
+            sessionKeys: async () => ["chat:77:user:5"],
+            notificationGet: async () => true,
+          },
+        };
+
+        await consumeOutboundEventStream(runtime, streamFromChunks(chunks));
+      } finally {
+        globalThis.fetch = originalFetch;
+      }
+
+      const sentTexts = calls
+        .filter((x) => x.url.includes("/sendMessage"))
+        .map((x) => String(x.body.text || ""));
+      expect(sentTexts).toEqual(["Question pending: Need input\n\nOpen session session-1"]);
+    } finally {
+      Object.assign(globalThis, { TextDecoder: OriginalDecoder });
+    }
+  });
+
+  test("consumeOutboundEventStream flushes decoder and handles final event", async () => {
+    const calls: Array<{ url: string; body: Record<string, unknown> }> = [];
+    const originalFetch = globalThis.fetch;
+    const payload = '{"payload":{"type":"question.asked","properties":{"sessionID":"session-1","questions":[{"header":"Need caf\u00e9"}]}}}';
+    const bytes = new TextEncoder().encode(payload);
+    const head = bytes.slice(0, bytes.length - 1);
+    const tail = bytes.slice(bytes.length - 1);
+    const chunks = [
+      new TextEncoder().encode("data: "),
+      head,
+      tail,
+      new TextEncoder().encode("\n\n"),
+    ];
+
+    try {
+      globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        const body = init?.body ? (JSON.parse(String(init.body)) as Record<string, unknown>) : {};
+        calls.push({ url, body });
+        if (url.includes("/sendMessage")) {
+          return new Response(JSON.stringify({ ok: true, result: { message_id: 1 } }), { status: 200 });
+        }
+        throw new Error(`Unexpected fetch ${url}`);
+      };
+
+      const runtime = {
+        config: {
+          mode: "polling" as const,
+          token: "token",
+          openCodeUrl: "http://127.0.0.1:4096",
+          sessionCacheMax: 10,
+          sessionCacheTtlMs: 10_000,
+          notificationDebounceMs: 0,
+          port: 4097,
+          webhookPath: "/webhook",
+          sessionStorePath: "/tmp/test-store.json",
+        },
+        store: {
+          get: async () => undefined,
+          set: async () => undefined,
+          delete: async () => undefined,
+          sessionKeys: async () => ["chat:77:user:5"],
+          notificationGet: async () => true,
+        },
+      };
+
+      await consumeOutboundEventStream(runtime, streamFromChunks(chunks));
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+
+    const sentTexts = calls
+      .filter((x) => x.url.includes("/sendMessage"))
+      .map((x) => String(x.body.text || ""));
+    expect(sentTexts).toEqual(["Question pending: Need caf\u00e9\n\nOpen session session-1"]);
   });
 });

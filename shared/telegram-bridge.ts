@@ -611,6 +611,42 @@ async function notifySessionKeys(runtime: Runtime, sessionId: string, kind: stri
   }
 }
 
+async function handleOutboundBlocks(runtime: Runtime, blocks: string[]) {
+  for (const block of blocks) {
+    const lines = block.split("\n")
+    const dataLines = lines
+      .filter((line) => line.startsWith("data:"))
+      .map((line) => line.slice(5).trimStart())
+    if (!dataLines.length) continue
+    const raw = dataLines.join("\n")
+    const event = await Promise.resolve()
+      .then(() => parseEvent(raw))
+      .catch(() => undefined)
+    if (!event) continue
+    await handleBridgeEvent(runtime, event)
+  }
+}
+
+export async function consumeOutboundEventStream(runtime: Runtime, body: ReadableStream<Uint8Array>) {
+  const reader = body.getReader()
+  const decoder = new TextDecoder()
+  const parser = createOutboundSSEParser()
+  while (true) {
+    const step = await reader.read()
+    if (step.done) break
+    const blocks = parser.push(decoder.decode(step.value, { stream: true }))
+    await handleOutboundBlocks(runtime, blocks)
+  }
+
+  const finalText = decoder.decode()
+  if (finalText) {
+    await handleOutboundBlocks(runtime, parser.push(finalText))
+  }
+
+  const tailBlocks = parser.flush()
+  await handleOutboundBlocks(runtime, tailBlocks)
+}
+
 export async function handleBridgeEvent(runtime: Runtime, event: { type: string; properties: Record<string, unknown> }) {
   const sessionId = typeof event.properties.sessionID === "string" ? event.properties.sessionID : ""
   if (event.type === "session.deleted") {
@@ -663,41 +699,7 @@ async function runOutboundNotifications(runtime: Runtime) {
         throw new Error(`OpenCode event stream failed (${response.status})`)
       }
 
-      const reader = response.body.getReader()
-      const decoder = new TextDecoder()
-      const parser = createOutboundSSEParser()
-      while (true) {
-        const step = await reader.read()
-        if (step.done) break
-        const blocks = parser.push(decoder.decode(step.value, { stream: true }))
-        for (const block of blocks) {
-          const lines = block.split("\n")
-          const dataLines = lines
-            .filter((line) => line.startsWith("data:"))
-            .map((line) => line.slice(5).trimStart())
-          if (!dataLines.length) continue
-          const raw = dataLines.join("\n")
-          const event = await Promise.resolve()
-            .then(() => parseEvent(raw))
-            .catch(() => undefined)
-          if (!event) continue
-          await handleBridgeEvent(runtime, event)
-        }
-      }
-      const tailBlocks = parser.flush()
-      for (const block of tailBlocks) {
-        const lines = block.split("\n")
-        const dataLines = lines
-          .filter((line) => line.startsWith("data:"))
-          .map((line) => line.slice(5).trimStart())
-        if (!dataLines.length) continue
-        const raw = dataLines.join("\n")
-        const event = await Promise.resolve()
-          .then(() => parseEvent(raw))
-          .catch(() => undefined)
-        if (!event) continue
-        await handleBridgeEvent(runtime, event)
-      }
+      await consumeOutboundEventStream(runtime, response.body)
     } catch (error) {
       console.error("[TelegramBridge] outbound event stream error", error)
       await sleep(1500)
