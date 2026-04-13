@@ -29,6 +29,7 @@ type CachedSession = {
 
 const sessions = new Map<string, CachedSession>()
 const creatingSessions = new Map<string, Promise<string>>()
+const chatQueues = new Map<string, Promise<void>>()
 
 function env(name: string): string {
   return process.env[name]?.trim() || ""
@@ -39,10 +40,25 @@ function sleep(ms: number) {
 }
 
 export function parseMode(value: string): "polling" | "webhook" {
-  const mode = value.toLowerCase()
+  const mode = value.trim().toLowerCase()
   if (mode === "polling") return "polling"
   if (mode === "webhook") return "webhook"
   throw new Error(`Invalid TELEGRAM_MODE: ${value}. Expected \"polling\" or \"webhook\"`)
+}
+
+export function queueChatUpdate<T>(chatId: string, fn: () => Promise<T>): Promise<T> {
+  const start = chatQueues.get(chatId) || Promise.resolve()
+  const next = start.catch(() => undefined).then(fn)
+  const tail = next.then(
+    () => undefined,
+    () => undefined,
+  )
+  chatQueues.set(chatId, tail)
+  void tail.finally(() => {
+    if (chatQueues.get(chatId) !== tail) return
+    chatQueues.delete(chatId)
+  })
+  return next
 }
 
 function parsePort(value: string): number {
@@ -370,7 +386,11 @@ async function runWebhook(config: BridgeConfig) {
         return new Response("Bad Request", { status: 400 })
       }
 
-      void handleTextUpdate(config, update).catch((error) => {
+      const chatId = update.message?.chat?.id
+      const run = !chatId
+        ? handleTextUpdate(config, update)
+        : queueChatUpdate(String(chatId), () => handleTextUpdate(config, update))
+      void run.catch((error) => {
         console.error("[TelegramBridge] webhook handling failed", error)
       })
       return Response.json({ ok: true })
@@ -397,4 +417,5 @@ export async function startTelegramBridge() {
 export function resetSessionCacheForTest() {
   sessions.clear()
   creatingSessions.clear()
+  chatQueues.clear()
 }
