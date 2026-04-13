@@ -2,7 +2,9 @@
 
 if [ "${TELEGRAM_BRIDGE_ENABLED:-false}" != "true" ]; then
   echo "INFO: Telegram bridge disabled (set TELEGRAM_BRIDGE_ENABLED=true to enable)"
-  exec sleep infinity
+  while true; do
+    sleep 3600
+  done
 fi
 
 if [ -z "${TELEGRAM_BOT_TOKEN:-}" ]; then

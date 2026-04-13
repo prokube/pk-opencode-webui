@@ -38,9 +38,11 @@ function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms))
 }
 
-function parseMode(value: string): "polling" | "webhook" {
-  if (value.toLowerCase() === "webhook") return "webhook"
-  return "polling"
+export function parseMode(value: string): "polling" | "webhook" {
+  const mode = value.toLowerCase()
+  if (mode === "polling") return "polling"
+  if (mode === "webhook") return "webhook"
+  throw new Error(`Invalid TELEGRAM_MODE: ${value}. Expected \"polling\" or \"webhook\"`)
 }
 
 function parsePort(value: string): number {
@@ -64,7 +66,7 @@ function parseOpenCodeUrl(value: string, source: string): string {
   }
 }
 
-function parseConfig(): BridgeConfig {
+export function parseConfig(): BridgeConfig {
   const token = env("TELEGRAM_BOT_TOKEN")
   if (!token) {
     throw new Error("TELEGRAM_BOT_TOKEN is required")
@@ -168,7 +170,7 @@ async function createSession(config: BridgeConfig): Promise<string> {
   return data.id
 }
 
-function cacheSession(config: BridgeConfig, chatId: string, sessionId: string) {
+export function cacheSession(config: BridgeConfig, chatId: string, sessionId: string) {
   const expiresAt = Date.now() + config.sessionCacheTtlMs
   sessions.delete(chatId)
   sessions.set(chatId, { id: sessionId, expiresAt })
@@ -178,7 +180,7 @@ function cacheSession(config: BridgeConfig, chatId: string, sessionId: string) {
   }
 }
 
-function sessionFromCache(config: BridgeConfig, chatId: string): string | undefined {
+export function sessionFromCache(config: BridgeConfig, chatId: string): string | undefined {
   const now = Date.now()
   for (const [key, value] of sessions) {
     if (value.expiresAt > now) continue
@@ -218,7 +220,7 @@ async function sessionForChat(config: BridgeConfig, chatId: string): Promise<str
   return created
 }
 
-function extractReply(payload: unknown): string {
+export function extractReply(payload: unknown): string {
   const data = payload as {
     parts?: Array<{ type?: string; text?: string }>
   }
@@ -308,6 +310,9 @@ async function handleTextUpdate(config: BridgeConfig, update: TelegramUpdate) {
 
 async function runPolling(config: BridgeConfig) {
   console.log("[TelegramBridge] mode=polling")
+  await telegramRequest(config, "deleteWebhook", {
+    drop_pending_updates: false,
+  })
   let offset = 0
 
   while (true) {
@@ -387,4 +392,9 @@ export async function startTelegramBridge() {
   }
 
   await runWebhook(config)
+}
+
+export function resetSessionCacheForTest() {
+  sessions.clear()
+  creatingSessions.clear()
 }
