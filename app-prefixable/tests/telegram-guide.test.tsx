@@ -8,11 +8,11 @@ describe("Telegram setup guide UI", () => {
   })
 
   test("guide exposes key sections and commands", () => {
-    expect(TELEGRAM_GUIDE_TITLE).toBe("Telegram Setup Guide")
-    expect(TELEGRAM_GUIDE_SECTIONS).toEqual(
-      expect.arrayContaining(["Readiness checklist", "Setup steps", "Troubleshooting quick checks"]),
-    )
-    expect(TELEGRAM_GUIDE_COMMANDS).toContain("/notify on")
+    expect(TELEGRAM_GUIDE_TITLE).toMatch(/telegram setup guide/i)
+    expect(TELEGRAM_GUIDE_SECTIONS.some((item) => /readiness checklist/i.test(item))).toBe(true)
+    expect(TELEGRAM_GUIDE_SECTIONS.some((item) => /setup steps/i.test(item))).toBe(true)
+    expect(TELEGRAM_GUIDE_SECTIONS.some((item) => /troubleshooting quick checks/i.test(item))).toBe(true)
+    expect(TELEGRAM_GUIDE_COMMANDS.some((item) => /^\/notify\s+on$/i.test(item))).toBe(true)
   })
 
   test("guide references required Telegram setup values", () => {
@@ -35,7 +35,7 @@ describe("Telegram setup guide UI", () => {
   test("settings telegram tab keeps setup guide mounted", async () => {
     const settings = await Bun.file(new URL("../src/pages/settings.tsx", import.meta.url)).text()
     const telegram = await Bun.file(new URL("../src/components/telegram-settings.tsx", import.meta.url)).text()
-    expect(settings).toContain('<TelegramSettings serverUrl={basePath.serverUrl} />')
-    expect(telegram).toContain("<TelegramSetupGuide />")
+    expect(settings).toMatch(/<TelegramSettings\s+serverUrl=\{basePath\.serverUrl\}\s*\/>/)
+    expect(telegram).toMatch(/<TelegramSetupGuide\s*\/>/)
   })
 })

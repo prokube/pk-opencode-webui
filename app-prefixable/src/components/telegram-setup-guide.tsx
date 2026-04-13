@@ -48,9 +48,9 @@ export function TelegramSetupGuide() {
 
       <section class="rounded-lg p-4 space-y-3" style={{ background: "var(--background-base)", border: "1px solid var(--border-base)" }}>
         <div class="flex items-center justify-between gap-3">
-          <h2 class="text-sm font-medium" style={{ color: "var(--text-strong)" }}>
+          <h3 class="text-sm font-medium" style={{ color: "var(--text-strong)" }}>
             Readiness checklist
-          </h2>
+          </h3>
           <span class="text-xs px-2 py-1 rounded" style={{ background: "var(--surface-inset)", color: "var(--text-weak)" }}>
             {done().size}/{checklist.length}
           </span>
@@ -69,21 +69,27 @@ export function TelegramSetupGuide() {
       </section>
 
       <section class="rounded-lg p-4 space-y-3" style={{ background: "var(--background-base)", border: "1px solid var(--border-base)" }}>
-        <h2 class="text-sm font-medium" style={{ color: "var(--text-strong)" }}>
+        <h3 class="text-sm font-medium" style={{ color: "var(--text-strong)" }}>
           Prerequisites
-        </h2>
+        </h3>
         <ul class="text-sm space-y-1 list-disc pl-5" style={{ color: "var(--text-base)" }}>
-          <li>Create your bot in Telegram with BotFather (`/newbot`) and copy the token into TELEGRAM_BOT_TOKEN.</li>
+          <li>
+            Create your bot in Telegram with BotFather (<code>/newbot</code>) and copy the token into <code>TELEGRAM_BOT_TOKEN</code>.
+          </li>
           <li>Mode choice: polling (default) or webhook.</li>
-          <li>openCodeUrl should be the API endpoint the bridge can reach from inside your deployment (for example `http://127.0.0.1:4096`).</li>
-          <li>Bridge runtime enabled with TELEGRAM_BRIDGE_ENABLED=true in supported deployments.</li>
+          <li>
+            <code>openCodeUrl</code> should be the API endpoint the bridge can reach from inside your deployment (for example <code>http://127.0.0.1:4096</code>).
+          </li>
+          <li>
+            Bridge runtime enabled with <code>TELEGRAM_BRIDGE_ENABLED=true</code> in supported deployments.
+          </li>
         </ul>
       </section>
 
       <section class="rounded-lg p-4 space-y-3" style={{ background: "var(--background-base)", border: "1px solid var(--border-base)" }}>
-        <h2 class="text-sm font-medium" style={{ color: "var(--text-strong)" }}>
+        <h3 class="text-sm font-medium" style={{ color: "var(--text-strong)" }}>
           Setup steps
-        </h2>
+        </h3>
         <div class="space-y-2 text-sm" style={{ color: "var(--text-base)" }}>
           <p>
             <strong>Bot token:</strong> in BotFather run <code>/token</code> for your bot to rotate/copy credentials, then save the value as <code>TELEGRAM_BOT_TOKEN</code> or set it in the Bot token field.
@@ -106,9 +112,9 @@ export function TelegramSetupGuide() {
       </section>
 
       <section class="rounded-lg p-4 space-y-3" style={{ background: "var(--background-base)", border: "1px solid var(--border-base)" }}>
-        <h2 class="text-sm font-medium" style={{ color: "var(--text-strong)" }}>
+        <h3 class="text-sm font-medium" style={{ color: "var(--text-strong)" }}>
           Command usage
-        </h2>
+        </h3>
         <div class="flex flex-wrap gap-2">
           <For each={commands}>
             {(command) => (
@@ -121,26 +127,38 @@ export function TelegramSetupGuide() {
       </section>
 
       <section class="rounded-lg p-4 space-y-3" style={{ background: "var(--background-base)", border: "1px solid var(--border-base)" }}>
-        <h2 class="text-sm font-medium" style={{ color: "var(--text-strong)" }}>
+        <h3 class="text-sm font-medium" style={{ color: "var(--text-strong)" }}>
           Security best practices
-        </h2>
+        </h3>
         <ul class="text-sm space-y-1 list-disc pl-5" style={{ color: "var(--text-base)" }}>
-          <li>Store TELEGRAM_BOT_TOKEN and TELEGRAM_WEBHOOK_SECRET in a secret manager, never in git.</li>
-          <li>Use HTTPS-only ingress for webhook mode and limit exposure to TELEGRAM_WEBHOOK_PATH.</li>
-          <li>Preserve the x-telegram-bot-api-secret-token header end-to-end when TELEGRAM_WEBHOOK_SECRET is set.</li>
-          <li>Keep sessionStorePath on persistent storage for restart safety in containerized deployments.</li>
+          <li>
+            Store <code>TELEGRAM_BOT_TOKEN</code> and <code>TELEGRAM_WEBHOOK_SECRET</code> in a secret manager, never in git.
+          </li>
+          <li>
+            Use HTTPS-only ingress for webhook mode and limit exposure to <code>TELEGRAM_WEBHOOK_PATH</code>.
+          </li>
+          <li>
+            Preserve the <code>x-telegram-bot-api-secret-token</code> header end-to-end when <code>TELEGRAM_WEBHOOK_SECRET</code> is set.
+          </li>
+          <li>
+            Keep <code>sessionStorePath</code> on persistent storage for restart safety in containerized deployments.
+          </li>
         </ul>
       </section>
 
       <section class="rounded-lg p-4 space-y-3" style={{ background: "var(--background-base)", border: "1px solid var(--border-base)" }}>
-        <h2 class="text-sm font-medium" style={{ color: "var(--text-strong)" }}>
+        <h3 class="text-sm font-medium" style={{ color: "var(--text-strong)" }}>
           Troubleshooting quick checks
-        </h2>
+        </h3>
         <ul class="text-sm space-y-1 list-disc pl-5" style={{ color: "var(--text-base)" }}>
           <li>If replies fail, look for <code>Telegram sendMessage failed</code> and verify token validity and bot chat permissions.</li>
           <li>If outbound alerts stop, check for <code>[TelegramBridge] outbound event stream error</code> and confirm OpenCode event streaming availability.</li>
-          <li>If webhook updates are rejected, verify your secret header and confirm TELEGRAM_WEBHOOK_URL is publicly reachable over HTTPS.</li>
-          <li>If session links are incorrect in alerts, set TELEGRAM_SESSION_LINK_BASE to the public prokube.ai UI base URL.</li>
+          <li>
+            If webhook updates are rejected, verify your secret header and confirm <code>TELEGRAM_WEBHOOK_URL</code> is publicly reachable over HTTPS.
+          </li>
+          <li>
+            If session links are incorrect in alerts, set <code>TELEGRAM_SESSION_LINK_BASE</code> to the public prokube.ai UI base URL.
+          </li>
         </ul>
       </section>
     </div>
