@@ -100,34 +100,71 @@ interface StoredPrompt {
   scope?: "global" | "project"
 }
 
-function isStoredPrompt(p: unknown): p is StoredPrompt {
-  if (!p || typeof p !== "object") return false
-  const row = p as Record<string, unknown>
-  if (typeof row.id !== "string") return false
-  if (typeof row.title !== "string") return false
-  if (typeof row.text !== "string") return false
-  if (typeof row.createdAt !== "number") return false
-  if (row.scope !== undefined && row.scope !== "global" && row.scope !== "project") return false
-  return true
+function parseCreatedAt(value: unknown): number | null {
+  if (typeof value === "number" && Number.isFinite(value)) return value
+  if (typeof value !== "string") return null
+  const trimmed = value.trim()
+  if (!trimmed) return null
+  const numeric = Number(trimmed)
+  if (Number.isFinite(numeric)) return numeric
+  const timestamp = Date.parse(trimmed)
+  if (!Number.isNaN(timestamp)) return timestamp
+  return null
 }
 
-function parsePromptList(raw: string): StoredPrompt[] {
+function parsePromptValue(item: unknown, scope: "global" | "project"): StoredPrompt | null {
+  if (!item || typeof item !== "object") return null
+  const row = item as Record<string, unknown>
+  const id = typeof row.id === "string" ? row.id : null
+  if (id === null) return null
+  const title = typeof row.title === "string" ? row.title : typeof row.name === "string" ? row.name : null
+  if (title === null) return null
+  const text =
+    typeof row.text === "string"
+      ? row.text
+      : typeof row.prompt === "string"
+        ? row.prompt
+        : typeof row.content === "string"
+          ? row.content
+          : null
+  if (text === null) return null
+  const createdAt = parseCreatedAt(row.createdAt ?? row.created ?? row.timestamp)
+  if (createdAt === null) return null
+  const itemScope = row.scope === "global" || row.scope === "project" ? row.scope : scope
+  return { id, title, text, createdAt, scope: itemScope }
+}
+
+function parsePromptList(raw: string, scope: "global" | "project"): StoredPrompt[] {
   const parsed = JSON.parse(raw)
-  if (!Array.isArray(parsed)) throw new Error("saved prompts content must be an array")
-  for (const item of parsed) {
-    if (!isStoredPrompt(item)) throw new Error("saved prompts content has invalid entries")
+  const list = Array.isArray(parsed)
+    ? parsed
+    : parsed && typeof parsed === "object"
+      ? Array.isArray((parsed as { prompts?: unknown[] }).prompts)
+        ? (parsed as { prompts: unknown[] }).prompts
+        : Array.isArray((parsed as Record<string, unknown>)[scope])
+          ? ((parsed as Record<string, unknown>)[scope] as unknown[])
+          : []
+      : []
+  const prompts: StoredPrompt[] = []
+  for (let i = 0; i < list.length; i++) {
+    const prompt = parsePromptValue(list[i], scope)
+    if (!prompt) {
+      console.warn(`[ExtAPI] skipped invalid saved prompt at ${scope}[${i}]`)
+      continue
+    }
+    prompts.push(prompt)
   }
-  return parsed
+  return prompts
 }
 
 function invalidPromptIndex(list: unknown[]): number {
-  return list.findIndex((item) => !isStoredPrompt(item))
+  return list.findIndex((item) => !parsePromptValue(item, "global"))
 }
 
-async function readPromptFile(path: string): Promise<StoredPrompt[]> {
+async function readPromptFile(path: string, scope: "global" | "project"): Promise<StoredPrompt[]> {
   try {
     const content = await fs.promises.readFile(path, "utf-8")
-    return parsePromptList(content)
+    return parsePromptList(content, scope)
   } catch (e) {
     const code = typeof e === "object" && e && "code" in e ? (e as { code?: string }).code : undefined
     if (code !== "ENOENT") throw e
@@ -147,7 +184,7 @@ function sanitizePrompt(p: StoredPrompt, scope: "global" | "project"): StoredPro
 
 async function readPromptScope(path: string, scope: "global" | "project") {
   try {
-    const prompts = await readPromptFile(path)
+    const prompts = await readPromptFile(path, scope)
     return { prompts: prompts.map((p) => sanitizePrompt(p, scope)) }
   } catch (e) {
     console.error(`[ExtAPI] saved-prompts ${scope} read error:`, e)

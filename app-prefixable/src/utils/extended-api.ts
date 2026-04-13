@@ -75,7 +75,10 @@ interface SavedPromptsPayload {
   project: StoredPrompt[]
 }
 
-interface SavedPromptsResponse extends SavedPromptsPayload {
+interface SavedPromptsResponse {
+  prompts?: SavedPromptsPayload
+  global?: unknown[] | { prompts?: unknown[] }
+  project?: unknown[] | { prompts?: unknown[] }
   errors?: { global?: string; project?: string }
 }
 
@@ -83,21 +86,60 @@ function validatePromptList(items: unknown[], field: "global" | "project"): Stor
   const prompts: StoredPrompt[] = []
   for (let i = 0; i < items.length; i++) {
     const item = items[i]
-    if (!isStoredPrompt(item)) throw new Error(`invalid saved prompts response: ${field}[${i}]`)
-    prompts.push(item)
+    const prompt = toStoredPrompt(item, field)
+    if (!prompt) {
+      console.warn(`[extended-api] skipped invalid saved prompt at ${field}[${i}]`)
+      continue
+    }
+    prompts.push(prompt)
   }
   return prompts
 }
 
-function isStoredPrompt(p: unknown): p is StoredPrompt {
-  if (!p || typeof p !== "object") return false
-  const row = p as Record<string, unknown>
-  if (typeof row.id !== "string") return false
-  if (typeof row.title !== "string") return false
-  if (typeof row.text !== "string") return false
-  if (typeof row.createdAt !== "number") return false
-  if (row.scope !== "global" && row.scope !== "project") return false
-  return true
+function parseCreatedAt(value: unknown): number | null {
+  if (typeof value === "number" && Number.isFinite(value)) return value
+  if (typeof value !== "string") return null
+  const trimmed = value.trim()
+  if (!trimmed) return null
+  const numeric = Number(trimmed)
+  if (Number.isFinite(numeric)) return numeric
+  const timestamp = Date.parse(trimmed)
+  if (!Number.isNaN(timestamp)) return timestamp
+  return null
+}
+
+function toStoredPrompt(item: unknown, fallbackScope: "global" | "project"): StoredPrompt | null {
+  if (!item || typeof item !== "object") return null
+  const row = item as Record<string, unknown>
+  const id = typeof row.id === "string" ? row.id : null
+  if (id === null) return null
+  const title = typeof row.title === "string" ? row.title : typeof row.name === "string" ? row.name : null
+  if (title === null) return null
+  const text =
+    typeof row.text === "string"
+      ? row.text
+      : typeof row.prompt === "string"
+        ? row.prompt
+        : typeof row.content === "string"
+          ? row.content
+          : null
+  if (text === null) return null
+  const createdAt = parseCreatedAt(row.createdAt ?? row.created ?? row.timestamp)
+  if (createdAt === null) return null
+  const scope = row.scope === "global" || row.scope === "project" ? row.scope : fallbackScope
+  return { id, title, text, createdAt, scope }
+}
+
+function readPromptArray(data: SavedPromptsResponse, field: "global" | "project"): unknown[] | null {
+  const direct = data[field]
+  if (Array.isArray(direct)) return direct
+  if (direct && typeof direct === "object") {
+    const nested = (direct as { prompts?: unknown }).prompts
+    if (Array.isArray(nested)) return nested
+  }
+  const nested = data.prompts?.[field]
+  if (Array.isArray(nested)) return nested
+  return null
 }
 
 export async function readSavedPrompts(serverUrl: string, directory?: string): Promise<SavedPromptsPayload> {
@@ -108,11 +150,16 @@ export async function readSavedPrompts(serverUrl: string, directory?: string): P
   if (!res) throw new Error("failed to fetch saved prompts")
   if (!res.ok) throw new Error(`saved prompts read failed: ${res.status}`)
   const data = (await res.json().catch(() => null)) as SavedPromptsResponse | null
-  if (!data || !Array.isArray(data.global) || !Array.isArray(data.project)) throw new Error("invalid saved prompts response")
-  if (data.errors?.global || data.errors?.project) throw new Error("saved prompts response includes read errors")
+  if (!data || typeof data !== "object") throw new Error("invalid saved prompts response")
+  const global = readPromptArray(data, "global")
+  const project = readPromptArray(data, "project")
+  if (!global || !project) throw new Error("invalid saved prompts response")
+  if (data.errors?.global || data.errors?.project) {
+    console.warn("[extended-api] saved prompts response includes read warnings", data.errors)
+  }
   return {
-    global: validatePromptList(data.global, "global"),
-    project: validatePromptList(data.project, "project"),
+    global: validatePromptList(global, "global"),
+    project: validatePromptList(project, "project"),
   }
 }
 
