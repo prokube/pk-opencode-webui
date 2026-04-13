@@ -1705,8 +1705,7 @@ export function Layout(props: ParentProps) {
 
           const sess = sync.session.get(sid);
           const nc = notifyCache();
-          const bellSid = rootAncestorId(sync.session.get, sid);
-          if (nc[bellSid] !== true) return;
+          if (nc[sid] !== true) return;
 
           const title = sess?.title || "Task complete";
           fireNotification(sid, title, getSessionSummary(sid), `session-complete-${sid}`);
