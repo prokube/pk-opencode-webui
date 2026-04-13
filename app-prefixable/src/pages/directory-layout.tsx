@@ -24,6 +24,8 @@ export function DirectoryLayout(props: ParentProps) {
   const recent = useRecentProjects()
 
   const decoded = createMemo(() => {
+    if (!params.dir) return undefined
+
     try {
       const decoded = base64Decode(params.dir)
       // Validate the decoded path looks reasonable (starts with / or ~)
