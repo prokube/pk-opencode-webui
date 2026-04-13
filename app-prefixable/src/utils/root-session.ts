@@ -22,6 +22,8 @@ declare global {
   }
 }
 
+const IN_FLIGHT_TTL_MS = 30_000;
+
 const inFlight = new Map<string, Promise<SessionCreateResponse | undefined>>();
 
 function routePath() {
@@ -44,15 +46,15 @@ export function createRootSession(
   opts: { source: string; scope?: string },
 ): Promise<RootSessionResult> {
   const key = opts.scope ?? `route:${routePath()}`;
-  const existing = inFlight.get(key);
-  if (existing) {
+  const current = inFlight.get(key);
+  if (current) {
     trace({
       source: opts.source,
       state: "join",
       route: routePath(),
       at: Date.now(),
     });
-    return existing.then((data) => ({ data, isLeader: false }));
+    return current.then((data) => ({ data, isLeader: false }));
   }
 
   trace({
@@ -85,8 +87,13 @@ export function createRootSession(
       throw err;
     })
     .finally(() => {
-      inFlight.delete(key);
+      if (inFlight.get(key) === req) inFlight.delete(key);
     });
+
+  setTimeout(() => {
+    if (inFlight.get(key) !== req) return;
+    inFlight.delete(key);
+  }, IN_FLIGHT_TTL_MS);
 
   inFlight.set(key, req);
   return req.then((data) => ({ data, isLeader: true }));
