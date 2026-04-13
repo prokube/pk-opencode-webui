@@ -14,13 +14,21 @@ type BridgeConfig = {
   token: string
   openCodeUrl: string
   directory?: string
+  sessionCacheMax: number
+  sessionCacheTtlMs: number
   port: number
   webhookPath: string
   webhookSecret?: string
   webhookUrl?: string
 }
 
-const sessions = new Map<string, string>()
+type CachedSession = {
+  id: string
+  expiresAt: number
+}
+
+const sessions = new Map<string, CachedSession>()
+const creatingSessions = new Map<string, Promise<string>>()
 
 function env(name: string): string {
   return process.env[name]?.trim() || ""
@@ -41,12 +49,18 @@ function parsePort(value: string): number {
   return n
 }
 
-function parseOpenCodeUrl(value: string): string {
+function parsePositiveInt(value: string, fallback: number): number {
+  const n = Number.parseInt(value, 10)
+  if (Number.isNaN(n) || n <= 0) return fallback
+  return n
+}
+
+function parseOpenCodeUrl(value: string, source: string): string {
   try {
     const url = new URL(value)
     return url.toString()
   } catch {
-    throw new Error(`Invalid OPENCODE_API_URL: ${value}`)
+    throw new Error(`Invalid OpenCode API URL from ${source}: ${value}`)
   }
 }
 
@@ -57,14 +71,22 @@ function parseConfig(): BridgeConfig {
   }
 
   const mode = parseMode(env("TELEGRAM_MODE") || "polling")
-  const openCodeUrl = parseOpenCodeUrl(env("OPENCODE_API_URL") || env("API_URL") || "http://127.0.0.1:4096")
+  const opencodeApiUrl = env("OPENCODE_API_URL")
+  const apiUrl = env("API_URL")
+  const openCodeUrlValue = opencodeApiUrl || apiUrl || "http://127.0.0.1:4096"
+  const openCodeUrlSource = opencodeApiUrl ? "OPENCODE_API_URL" : apiUrl ? "API_URL" : "default"
+  const openCodeUrl = parseOpenCodeUrl(openCodeUrlValue, openCodeUrlSource)
   const webhookPath = env("TELEGRAM_WEBHOOK_PATH") || "/webhook"
+  const sessionCacheMax = parsePositiveInt(env("TELEGRAM_SESSION_CACHE_MAX") || "", 500)
+  const sessionCacheTtlMs = parsePositiveInt(env("TELEGRAM_SESSION_CACHE_TTL_MS") || "", 6 * 60 * 60 * 1000)
 
   return {
     mode,
     token,
     openCodeUrl,
     directory: env("OPENCODE_DIRECTORY") || undefined,
+    sessionCacheMax,
+    sessionCacheTtlMs,
     port: parsePort(env("TELEGRAM_BRIDGE_PORT") || "4097"),
     webhookPath: webhookPath.startsWith("/") ? webhookPath : `/${webhookPath}`,
     webhookSecret: env("TELEGRAM_WEBHOOK_SECRET") || undefined,
@@ -146,13 +168,54 @@ async function createSession(config: BridgeConfig): Promise<string> {
   return data.id
 }
 
-async function sessionForChat(config: BridgeConfig, chatId: string): Promise<string> {
+function cacheSession(config: BridgeConfig, chatId: string, sessionId: string) {
+  const expiresAt = Date.now() + config.sessionCacheTtlMs
+  sessions.delete(chatId)
+  sessions.set(chatId, { id: sessionId, expiresAt })
+  for (const key of sessions.keys()) {
+    if (sessions.size <= config.sessionCacheMax) return
+    sessions.delete(key)
+  }
+}
+
+function sessionFromCache(config: BridgeConfig, chatId: string): string | undefined {
+  const now = Date.now()
+  for (const [key, value] of sessions) {
+    if (value.expiresAt > now) continue
+    sessions.delete(key)
+  }
+
   const cached = sessions.get(chatId)
+  if (!cached) return
+  if (cached.expiresAt <= now) {
+    sessions.delete(chatId)
+    return
+  }
+
+  cacheSession(config, chatId, cached.id)
+  return cached.id
+}
+
+async function sessionForChat(config: BridgeConfig, chatId: string): Promise<string> {
+  const cached = sessionFromCache(config, chatId)
   if (cached) return cached
 
-  const id = await createSession(config)
-  sessions.set(chatId, id)
-  return id
+  const creating = creatingSessions.get(chatId)
+  if (creating) return creating
+
+  const created = createSession(config)
+    .then((id) => {
+      cacheSession(config, chatId, id)
+      creatingSessions.delete(chatId)
+      return id
+    })
+    .catch((error) => {
+      creatingSessions.delete(chatId)
+      throw error
+    })
+
+  creatingSessions.set(chatId, created)
+  return created
 }
 
 function extractReply(payload: unknown): string {
@@ -171,8 +234,8 @@ function extractReply(payload: unknown): string {
   return "I finished processing your request, but there was no text response."
 }
 
-async function sendPrompt(config: BridgeConfig, sessionID: string, text: string): Promise<string> {
-  const url = opencodeUrl(config, `/session/${sessionID}/message`)
+async function sendPrompt(config: BridgeConfig, sessionId: string, text: string): Promise<string> {
+  const url = opencodeUrl(config, `/session/${sessionId}/message`)
   if (config.directory) {
     url.searchParams.set("directory", config.directory)
   }
@@ -223,8 +286,8 @@ async function handleTextUpdate(config: BridgeConfig, update: TelegramUpdate) {
 
   try {
     const key = String(chatId)
-    const sessionID = await sessionForChat(config, key)
-    const reply = await sendPrompt(config, sessionID, text).catch(async (error) => {
+    const sessionId = await sessionForChat(config, key)
+    const reply = await sendPrompt(config, sessionId, text).catch(async (error) => {
       if (!isMissingSession(error)) {
         throw error
       }
