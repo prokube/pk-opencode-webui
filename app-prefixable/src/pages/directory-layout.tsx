@@ -23,7 +23,7 @@ export function DirectoryLayout(props: ParentProps) {
   const params = useParams<{ dir: string }>()
   const recent = useRecentProjects()
 
-  const directory = createMemo(() => {
+  const decoded = createMemo(() => {
     try {
       const decoded = base64Decode(params.dir)
       // Validate the decoded path looks reasonable (starts with / or ~)
@@ -37,6 +37,10 @@ export function DirectoryLayout(props: ParentProps) {
       return undefined
     }
   })
+
+  // Keep the previous valid directory while params are in a transient state
+  // during route updates so providers don't remount between session switches.
+  const directory = createMemo<string | undefined>((prev) => decoded() ?? prev)
 
   // Add to recent projects when directory changes
   createEffect(() => {
