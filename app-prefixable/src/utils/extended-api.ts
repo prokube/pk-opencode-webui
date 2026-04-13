@@ -61,3 +61,74 @@ export async function writeFile(serverUrl: string, path: string, content: string
   }
   return true
 }
+
+export interface StoredPrompt {
+  id: string
+  title: string
+  text: string
+  createdAt: number
+  scope: "global" | "project"
+}
+
+interface SavedPromptsPayload {
+  global: StoredPrompt[]
+  project: StoredPrompt[]
+}
+
+interface SavedPromptsResponse extends SavedPromptsPayload {
+  errors?: { global?: string; project?: string }
+}
+
+function validatePromptList(items: unknown[], field: "global" | "project"): StoredPrompt[] {
+  const prompts: StoredPrompt[] = []
+  for (let i = 0; i < items.length; i++) {
+    const item = items[i]
+    if (!isStoredPrompt(item)) throw new Error(`invalid saved prompts response: ${field}[${i}]`)
+    prompts.push(item)
+  }
+  return prompts
+}
+
+function isStoredPrompt(p: unknown): p is StoredPrompt {
+  if (!p || typeof p !== "object") return false
+  const row = p as Record<string, unknown>
+  if (typeof row.id !== "string") return false
+  if (typeof row.title !== "string") return false
+  if (typeof row.text !== "string") return false
+  if (typeof row.createdAt !== "number") return false
+  if (row.scope !== "global" && row.scope !== "project") return false
+  return true
+}
+
+export async function readSavedPrompts(serverUrl: string, directory?: string): Promise<SavedPromptsPayload> {
+  const params = new URLSearchParams()
+  if (directory) params.set("directory", directory)
+  const suffix = params.toString() ? `?${params.toString()}` : ""
+  const res = await fetch(`${serverUrl}/api/ext/saved-prompts${suffix}`).catch(() => null)
+  if (!res) throw new Error("failed to fetch saved prompts")
+  if (!res.ok) throw new Error(`saved prompts read failed: ${res.status}`)
+  const data = (await res.json().catch(() => null)) as SavedPromptsResponse | null
+  if (!data || !Array.isArray(data.global) || !Array.isArray(data.project)) throw new Error("invalid saved prompts response")
+  if (data.errors?.global || data.errors?.project) throw new Error("saved prompts response includes read errors")
+  return {
+    global: validatePromptList(data.global, "global"),
+    project: validatePromptList(data.project, "project"),
+  }
+}
+
+export async function writeSavedPrompts(
+  serverUrl: string,
+  directory: string | undefined,
+  global: StoredPrompt[],
+  project: StoredPrompt[],
+): Promise<boolean> {
+  const params = new URLSearchParams()
+  if (directory) params.set("directory", directory)
+  const suffix = params.toString() ? `?${params.toString()}` : ""
+  const res = await fetch(`${serverUrl}/api/ext/saved-prompts${suffix}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ global, project }),
+  }).catch(() => null)
+  return !!res?.ok
+}

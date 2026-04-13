@@ -2197,13 +2197,13 @@ export function Layout(props: ParentProps) {
                 data-hint-target
                 onClick={createNewSession}
                 variant="ghost"
-                class={`flex-1 justify-start ${savedPrompts.prompts().length > 0 ? "rounded-r-none" : ""}`}
+                class={`flex-1 justify-start ${!savedPrompts.loading() && savedPrompts.prompts().length > 0 ? "rounded-r-none" : ""}`}
                 size="sm"
               >
                 <Plus class="w-4 h-4" />
                 <span>New Session</span>
               </Button>
-              <Show when={savedPrompts.prompts().length > 0}>
+              <Show when={!savedPrompts.loading() && savedPrompts.prompts().length > 0}>
                 <button
                   on:click={(e) => {
                     e.stopPropagation();

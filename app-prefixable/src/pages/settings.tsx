@@ -53,6 +53,7 @@ export function Settings() {
   const [promptText, setPromptText] = createSignal("")
   const [promptScope, setPromptScope] = createSignal<PromptScope>("global")
   const [promptToDelete, setPromptToDelete] = createSignal<string | null>(null)
+  const [promptSaveError, setPromptSaveError] = createSignal<string | null>(null)
 
   // Sound settings
   const [soundSettings, setSoundSettings] = createSignal<SoundSettings>(readSoundSettings())
@@ -601,6 +602,8 @@ Add your project-specific instructions here.
   }
 
   function openAddPromptDialog() {
+    if (savedPrompts.error()) return
+    setPromptSaveError(null)
     setEditingPromptId(null)
     setPromptTitle("")
     setPromptText("")
@@ -611,6 +614,7 @@ Add your project-specific instructions here.
   function openEditPromptDialog(id: string) {
     const prompt = savedPrompts.prompts().find((p) => p.id === id)
     if (!prompt) return
+    setPromptSaveError(null)
     setEditingPromptId(id)
     setPromptTitle(prompt.title)
     setPromptText(prompt.text)
@@ -618,27 +622,50 @@ Add your project-specific instructions here.
     setPromptDialogOpen(true)
   }
 
-  function savePromptDialog() {
+  async function savePromptDialog() {
+    if (savedPrompts.error()) return
     const title = promptTitle().trim()
     const text = promptText().trim()
     if (!title || !text) return
+    setPromptSaveError(null)
+
+    const fail = (msg?: string) => {
+      setPromptSaveError(msg || savedPrompts.saveError() || "Failed to save prompts. Please retry.")
+    }
+
     const editing = editingPromptId()
     if (editing) {
       const existing = savedPrompts.prompts().find((p) => p.id === editing)
       if (existing && (existing.title !== title || existing.text !== text)) {
-        savedPrompts.update(editing, { title, text })
+        const ok = await savedPrompts.update(editing, { title, text })
+        if (!ok) {
+          fail()
+          return
+        }
       }
       if (existing && existing.scope !== promptScope()) {
         // Scope changed — move across stores while preserving id/createdAt
         // Update first so text/title changes are retained when moving to
         // a non-active project store.
-        savedPrompts.move(editing, promptScope())
+        const ok = await savedPrompts.move(editing, promptScope())
+        if (!ok) {
+          fail()
+          return
+        }
       }
       if (!existing) {
-        savedPrompts.add(title, text, promptScope())
+        const ok = await savedPrompts.add(title, text, promptScope())
+        if (!ok) {
+          fail()
+          return
+        }
       }
     } else {
-      savedPrompts.add(title, text, promptScope())
+      const ok = await savedPrompts.add(title, text, promptScope())
+      if (!ok) {
+        fail()
+        return
+      }
     }
     setPromptDialogOpen(false)
     setEditingPromptId(null)
@@ -647,10 +674,17 @@ Add your project-specific instructions here.
   }
 
   function confirmPromptDelete() {
+    if (savedPrompts.error()) return
+    setPromptSaveError(null)
     const id = promptToDelete()
     if (!id) return
-    savedPrompts.remove(id)
-    setPromptToDelete(null)
+    savedPrompts.remove(id).then((ok) => {
+      if (!ok) {
+        setPromptSaveError(savedPrompts.saveError() || "Failed to delete prompt. Please retry.")
+        return
+      }
+      setPromptToDelete(null)
+    })
   }
 
   // Scope badge type for each tab
@@ -1799,18 +1833,40 @@ Add your project-specific instructions here.
                   <h2 class="text-sm font-medium" style={{ color: "var(--text-strong)" }}>
                     Prompts ({savedPrompts.prompts().length})
                   </h2>
-                  <Button onClick={openAddPromptDialog} variant="primary" size="sm">
+                  <Button onClick={openAddPromptDialog} variant="primary" size="sm" disabled={savedPrompts.loading() || !!savedPrompts.error()}>
                     + Add Prompt
                   </Button>
                 </div>
 
-                <Show when={savedPrompts.prompts().length === 0}>
+                <Show when={savedPrompts.error()}>
+                  <div class="px-4 py-3 text-sm" style={{ color: "var(--interactive-critical)", "border-bottom": "1px solid var(--border-base)" }}>
+                    {savedPrompts.error()}
+                  </div>
+                </Show>
+
+                <Show when={!savedPrompts.error() && (promptSaveError() || savedPrompts.saveError())}>
+                  <div class="px-4 py-3 text-sm" style={{ color: "var(--interactive-critical)", "border-bottom": "1px solid var(--border-base)" }}>
+                    {promptSaveError() || savedPrompts.saveError()}
+                  </div>
+                </Show>
+
+                <Show when={savedPrompts.loading()}>
+                  <div class="p-4">
+                    <div class="flex items-center gap-2" style={{ color: "var(--text-weak)" }}>
+                      <Spinner class="w-4 h-4" />
+                      <span class="text-sm">Loading saved prompts...</span>
+                    </div>
+                  </div>
+                </Show>
+
+                <Show when={!savedPrompts.loading() && !savedPrompts.error() && savedPrompts.prompts().length === 0}>
                   <div class="p-6 text-center">
                     <p class="text-sm" style={{ color: "var(--text-weak)" }}>
                       No saved prompts yet.
                     </p>
                     <button
                       onClick={openAddPromptDialog}
+                      disabled={savedPrompts.loading() || !!savedPrompts.error()}
                       class="mt-2 text-sm hover:underline"
                       style={{ color: "var(--text-interactive-base)" }}
                     >
@@ -1819,7 +1875,7 @@ Add your project-specific instructions here.
                   </div>
                 </Show>
 
-                <Show when={savedPrompts.prompts().length > 0}>
+                <Show when={!savedPrompts.loading() && !savedPrompts.error() && savedPrompts.prompts().length > 0}>
                   <div class="divide-y" style={{ "border-color": "var(--border-base)" }}>
                     <For each={savedPrompts.prompts()}>
                       {(prompt) => (
@@ -1849,6 +1905,7 @@ Add your project-specific instructions here.
                           <div class="flex items-center gap-1 shrink-0">
                             <button
                               onClick={() => openEditPromptDialog(prompt.id)}
+                              disabled={!!savedPrompts.error()}
                               class="p-1.5 rounded transition-colors"
                               style={{ color: "var(--text-weak)" }}
                               onMouseEnter={(e) => {
@@ -1866,6 +1923,7 @@ Add your project-specific instructions here.
                             </button>
                             <button
                               onClick={() => setPromptToDelete(prompt.id)}
+                              disabled={!!savedPrompts.error()}
                               class="p-1.5 rounded transition-colors opacity-50 hover:opacity-100"
                               style={{ color: "var(--icon-critical-base)" }}
                               title="Delete prompt"
@@ -2328,8 +2386,10 @@ Add your project-specific instructions here.
           setScope={setPromptScope}
           canUseProjectScope={savedPrompts.canUseProjectScope()}
           hasActiveProject={savedPrompts.hasActiveProject()}
+          saveDisabled={savedPrompts.loading() || !!savedPrompts.error()}
           onSave={savePromptDialog}
           onClose={() => setPromptDialogOpen(false)}
+          error={promptSaveError() || savedPrompts.saveError() || null}
         />
       </Show>
 
@@ -2340,6 +2400,7 @@ Add your project-specific instructions here.
         message="Are you sure you want to delete this saved prompt?"
         confirmLabel="Delete"
         variant="danger"
+        confirmDisabled={!!savedPrompts.error()}
         onConfirm={confirmPromptDelete}
         onCancel={() => setPromptToDelete(null)}
       />
@@ -3156,11 +3217,25 @@ function PromptDialog(props: {
   setScope: (v: PromptScope) => void
   canUseProjectScope: boolean
   hasActiveProject: boolean
-  onSave: () => void
+  saveDisabled: boolean
+  onSave: () => void | Promise<void>
   onClose: () => void
+  error: string | null
 }) {
   const [container, setContainer] = createSignal<HTMLDivElement>()
+  const [saving, setSaving] = createSignal(false)
   let titleRef: HTMLInputElement | undefined
+
+  async function handleSave() {
+    if (saving()) return
+    if (!props.title().trim() || !props.text().trim() || props.saveDisabled) return
+    setSaving(true)
+    try {
+      await props.onSave()
+    } finally {
+      setSaving(false)
+    }
+  }
 
   createEffect(() => {
     const el = container()
@@ -3222,6 +3297,19 @@ function PromptDialog(props: {
             </h2>
           </div>
           <div class="p-4 space-y-4">
+            <Show when={props.error}>
+              <div
+                class="px-3 py-2 rounded-md text-sm"
+                style={{
+                  background: "var(--surface-inset)",
+                  border: "1px solid var(--border-base)",
+                  "border-left": "3px solid var(--interactive-critical)",
+                  color: "var(--interactive-critical)",
+                }}
+              >
+                {props.error}
+              </div>
+            </Show>
             <div>
               <label class="block text-sm font-medium mb-1" style={{ color: "var(--text-base)" }}>
                 Title
@@ -3323,15 +3411,15 @@ function PromptDialog(props: {
             </button>
             <button
               type="button"
-              onClick={props.onSave}
-              disabled={!props.title().trim() || !props.text().trim()}
+              onClick={() => void handleSave()}
+              disabled={!props.title().trim() || !props.text().trim() || props.saveDisabled || saving()}
               class="px-4 py-2 text-sm font-medium rounded-md transition-colors disabled:opacity-50"
               style={{
                 background: "var(--interactive-base)",
                 color: "white",
               }}
             >
-              {props.editing ? "Save Changes" : "Save"}
+              {saving() ? "Saving..." : props.editing ? "Save Changes" : "Save"}
             </button>
           </div>
         </div>

@@ -1,5 +1,7 @@
 import { createContext, useContext, createSignal, createEffect, createMemo, on, type ParentProps, type Accessor } from "solid-js"
+import { useBasePath } from "./base-path"
 import { deriveDirectoryFromPathname } from "../utils/path"
+import { readSavedPrompts, writeSavedPrompts, type StoredPrompt } from "../utils/extended-api"
 import { useRecentProjects } from "./recent-projects"
 
 export type PromptScope = "global" | "project"
@@ -12,168 +14,218 @@ export interface SavedPrompt {
   scope: PromptScope
 }
 
-/** Shape stored in localStorage (scope is optional for backwards compat). */
-interface StoredPrompt {
-  id: string
-  title: string
-  text: string
-  createdAt: number
-  scope?: PromptScope
-}
-
 interface SavedPromptsContextValue {
-  /** All visible prompts (global + project-scoped, sorted newest first). */
   prompts: () => SavedPrompt[]
-  /** Only global prompts. */
   globalPrompts: () => SavedPrompt[]
-  /** Only project-scoped prompts. */
   projectPrompts: () => SavedPrompt[]
-  /** Whether project scope can be used (active project or recent fallback). */
   canUseProjectScope: () => boolean
-  /** Whether there is an active project in the current route context. */
   hasActiveProject: () => boolean
-  add: (title: string, text: string, scope?: PromptScope) => void
-  move: (id: string, scope: PromptScope) => void
-  update: (id: string, fields: Partial<Pick<SavedPrompt, "title" | "text">>) => void
-  remove: (id: string) => void
-  reorder: (ids: string[]) => void
+  loading: () => boolean
+  error: () => string | undefined
+  saveError: () => string | undefined
+  add: (title: string, text: string, scope?: PromptScope) => Promise<boolean>
+  move: (id: string, scope: PromptScope) => Promise<boolean>
+  update: (id: string, fields: Partial<Pick<SavedPrompt, "title" | "text">>) => Promise<boolean>
+  remove: (id: string) => Promise<boolean>
+  reorder: (ids: string[]) => Promise<boolean>
 }
 
 const GLOBAL_KEY = "opencode.savedPrompts"
-function projectKey(directory: string): string {
-  const normalized = directory.replace(/[\\/]+$/, "")
-  return `opencode.savedPrompts.${normalized}`
+
+function canonicalDirectory(directory: string | undefined): string | undefined {
+  if (!directory) return undefined
+  const trimmed = directory.trim()
+  if (!trimmed) return undefined
+  if (trimmed === "/" || trimmed === "\\") return trimmed
+  const drive = trimmed.match(/^([A-Za-z]:)(?:[\\/])?$/)
+  if (drive) return `${drive[1]}\\`
+  const unc = trimmed.match(/^[\\/]{2}([^\\/]+)[\\/]([^\\/]+)(?:[\\/])?$/)
+  if (unc) return `\\\\${unc[1]}\\${unc[2]}\\`
+  const normalized = trimmed.replace(/[\\/]+$/, "")
+  if (!normalized) return trimmed[0] === "\\" ? "\\" : "/"
+  return normalized
+}
+
+function legacyDirectory(directory: string | undefined): string | undefined {
+  if (!directory) return undefined
+  const trimmed = directory.trim()
+  if (!trimmed) return undefined
+  if (trimmed === "/" || trimmed === "\\") return trimmed
+  const normalized = trimmed.replace(/[\\/]+$/, "")
+  if (normalized) return normalized
+  return trimmed[0] === "\\" ? "\\" : "/"
+}
+
+function projectKeys(directory: string | undefined): string[] {
+  const canonical = canonicalDirectory(directory)
+  const legacy = legacyDirectory(directory)
+  if (!canonical && !legacy) return []
+  if (!canonical) return [`opencode.savedPrompts.${legacy}`]
+  if (!legacy) return [`opencode.savedPrompts.${canonical}`]
+  if (canonical === legacy) return [`opencode.savedPrompts.${canonical}`]
+  return [`opencode.savedPrompts.${canonical}`, `opencode.savedPrompts.${legacy}`]
 }
 
 const SavedPromptsContext = createContext<SavedPromptsContextValue>()
+const sortNewest = (a: SavedPrompt, b: SavedPrompt) => b.createdAt - a.createdAt
 
-function loadFromStorage(key: string, defaultScope: PromptScope): SavedPrompt[] {
+function parseStorage(raw: string | null, sourceScope: PromptScope): SavedPrompt[] {
+  if (!raw) return []
+  const parsed = JSON.parse(raw)
+  if (!Array.isArray(parsed)) return []
+  return parsed
+    .filter(
+      (p) =>
+        p &&
+        typeof p.id === "string" &&
+        typeof p.title === "string" &&
+        typeof p.text === "string" &&
+        typeof p.createdAt === "number",
+    )
+    .map((p) => ({
+      id: p.id,
+      title: p.title,
+      text: p.text,
+      createdAt: p.createdAt,
+      scope: p.scope === "global" || p.scope === "project" ? p.scope : sourceScope,
+    }))
+}
+
+function readLegacyGlobal() {
   try {
-    const stored = localStorage.getItem(key)
-    if (!stored) return []
-    const parsed = JSON.parse(stored)
-    if (!Array.isArray(parsed)) return []
-    return (parsed as StoredPrompt[])
-      .filter(
-        (p) =>
-          typeof p.id === "string" &&
-          typeof p.title === "string" &&
-          typeof p.text === "string" &&
-          typeof p.createdAt === "number",
-      )
-      .map((p) => ({
-        id: p.id,
-        title: p.title,
-        text: p.text,
-        createdAt: p.createdAt,
-        scope: p.scope === "global" || p.scope === "project" ? p.scope : defaultScope,
-      }))
+    return parseStorage(localStorage.getItem(GLOBAL_KEY), "global")
   } catch {
     return []
   }
 }
 
-function saveToStorage(key: string, prompts: SavedPrompt[]) {
+function readLegacyProject(directory: string | undefined) {
+  const keys = projectKeys(directory)
+  if (keys.length === 0) return []
+  let prompts: SavedPrompt[] = []
+  for (const key of keys) {
+    try {
+      prompts = mergeUnique(prompts, parseStorage(localStorage.getItem(key), "project"))
+    } catch {
+      // noop
+    }
+  }
+  return prompts
+}
+
+function clearLegacy(directory: string | undefined) {
   try {
-    localStorage.setItem(key, JSON.stringify(prompts))
+    localStorage.removeItem(GLOBAL_KEY)
   } catch {
-    // Ignore storage errors
+    // noop
+  }
+  const keys = projectKeys(directory)
+  for (const key of keys) {
+    try {
+      localStorage.removeItem(key)
+    } catch {
+      // noop
+    }
   }
 }
 
-const sortNewest = (a: SavedPrompt, b: SavedPrompt) => b.createdAt - a.createdAt
-
-/**
- * Migration helper that backfills missing `scope` tags in both stores.
- *
- * We intentionally keep legacy prompts in the global store and do not copy
- * them into project storage.
- */
-function migrateIfNeeded(directory: string) {
-  try {
-    const pKey = projectKey(directory)
-    // Already has project-scoped data — just ensure scope tags exist
-    const existing = localStorage.getItem(pKey)
-    if (existing) {
-      const parsed = JSON.parse(existing)
-      if (Array.isArray(parsed)) {
-        let needsWrite = false
-        for (const p of parsed) {
-          if (!p.scope) {
-            p.scope = "project"
-            needsWrite = true
-          }
-        }
-        if (needsWrite) localStorage.setItem(pKey, JSON.stringify(parsed))
-      }
-    }
-  } catch {
-    // Ignore storage errors during migration
-  }
-
-  // Ensure global key entries have scope tag
-  try {
-    const raw = localStorage.getItem(GLOBAL_KEY)
-    if (raw) {
-      const parsed = JSON.parse(raw)
-      if (Array.isArray(parsed)) {
-        let needsWrite = false
-        for (const p of parsed) {
-          if (!p.scope) {
-            p.scope = "global"
-            needsWrite = true
-          }
-        }
-        if (needsWrite) localStorage.setItem(GLOBAL_KEY, JSON.stringify(parsed))
-      }
-    }
-  } catch {
-    // Ignore
-  }
-}
-
-/**
- * Deduplicate prompts that exist in both the global and project stores
- * (artefact of the old migration that copied everything).  When duplicate
- * IDs are found, keep the project-scoped copy and drop the global one from
- * the merged view — the global store itself is left untouched.
- */
 function mergePrompts(global: SavedPrompt[], project: SavedPrompt[]): SavedPrompt[] {
   const projectIds = new Set(project.map((p) => p.id))
   const dedupedGlobal = global.filter((p) => !projectIds.has(p.id))
   return [...dedupedGlobal, ...project].sort(sortNewest)
 }
 
+function mergeUnique(primary: SavedPrompt[], secondary: SavedPrompt[]): SavedPrompt[] {
+  const byId = new Set(primary.map((p) => p.id))
+  const merged = [...primary]
+  for (const p of secondary) {
+    if (byId.has(p.id)) continue
+    merged.push(p)
+  }
+  return merged.sort(sortNewest)
+}
+
+function dedupeAcrossScopes(global: SavedPrompt[], project: SavedPrompt[]) {
+  const projectIds = new Set(project.map((p) => p.id))
+  return {
+    global: global.filter((p) => !projectIds.has(p.id)),
+    project,
+  }
+}
+
+function samePrompts(a: SavedPrompt[], b: SavedPrompt[]) {
+  if (a.length !== b.length) return false
+  for (let i = 0; i < a.length; i++) {
+    const x = a[i]
+    const y = b[i]
+    if (!y) return false
+    if (x.id !== y.id) return false
+    if (x.title !== y.title) return false
+    if (x.text !== y.text) return false
+    if (x.createdAt !== y.createdAt) return false
+    if (x.scope !== y.scope) return false
+  }
+  return true
+}
+
 function isPrompt(p: SavedPrompt | undefined): p is SavedPrompt {
   return p !== undefined
 }
 
+function normalize(list: SavedPrompt[], scope: PromptScope): StoredPrompt[] {
+  return list.map((p) => ({
+    id: p.id,
+    title: p.title,
+    text: p.text,
+    createdAt: p.createdAt,
+    scope,
+  }))
+}
+
 export function SavedPromptsProvider(props: ParentProps & { directory?: Accessor<string | undefined> }) {
+  const basePath = useBasePath()
   const recent = useRecentProjects()
 
   const recentDirectory = createMemo(() => {
     const first = recent.projects()[0]
     if (!first?.path) return undefined
-    const normalized = first.path.replace(/[\\/]+$/, "")
-    return normalized || undefined
+    return canonicalDirectory(first.path)
   })
 
-  // Keep a "sticky" directory that survives transient undefined flickers
-  // during SolidJS router transitions (e.g. project → project settings).
   const [sticky, setSticky] = createSignal<string | undefined>(
-    props.directory?.() ?? deriveDirectoryFromPathname(),
+    canonicalDirectory(props.directory?.() ?? deriveDirectoryFromPathname()),
   )
+  const [loading, setLoading] = createSignal(true)
+  const [loadError, setLoadError] = createSignal<string | undefined>()
+  const [saveError, setSaveError] = createSignal<string | undefined>()
+  const [globalPrompts, setGlobalPrompts] = createSignal<SavedPrompt[]>([])
+  const [projectPrompts, setProjectPrompts] = createSignal<SavedPrompt[]>([])
+  const migratedKeys = new Set<string>()
+  let loadVersion = 0
+  let saveQueue = Promise.resolve()
+  const pendingSaves: Array<{
+    directory: string | undefined
+    updater: (state: { global: SavedPrompt[]; project: SavedPrompt[] }) => { global: SavedPrompt[]; project: SavedPrompt[] }
+    resolve: (ok: boolean) => void
+  }> = []
 
   let pendingClear = false
 
+  function clearPendingSaves(ok: boolean) {
+    const queued = pendingSaves.splice(0, pendingSaves.length)
+    for (const item of queued) {
+      item.resolve(ok)
+    }
+  }
+
   createEffect(() => {
-    const d = props.directory?.()
+    const d = canonicalDirectory(props.directory?.())
     if (d) {
       pendingClear = false
       setSticky(d)
       return
     }
-    const fromUrl = deriveDirectoryFromPathname()
+    const fromUrl = canonicalDirectory(deriveDirectoryFromPathname())
     if (fromUrl) {
       pendingClear = false
       setSticky(fromUrl)
@@ -184,50 +236,152 @@ export function SavedPromptsProvider(props: ParentProps & { directory?: Accessor
       queueMicrotask(() => {
         if (!pendingClear) return
         if (props.directory?.() !== undefined) return
-        if (deriveDirectoryFromPathname() !== undefined) return
+        if (canonicalDirectory(deriveDirectoryFromPathname()) !== undefined) return
         setSticky(undefined)
       })
     }
   })
 
   const dir = sticky
-  const targetDirectory = () => dir() ?? recentDirectory()
-  const resolvedPKey = () => {
-    const d = targetDirectory()
-    return d ? projectKey(d) : undefined
-  }
+  const targetDirectory = () => canonicalDirectory(dir() ?? recentDirectory())
 
-  // Run migration synchronously before initial load so first render has data
-  const initialDir = targetDirectory()
-  if (initialDir) migrateIfNeeded(initialDir)
-
-  // Load initial data from both stores
-  const [globalPrompts, setGlobalPrompts] = createSignal<SavedPrompt[]>(
-    loadFromStorage(GLOBAL_KEY, "global").sort(sortNewest),
-  )
-  const initialPKey = resolvedPKey()
-  const [projectPrompts, setProjectPrompts] = createSignal<SavedPrompt[]>(
-    initialPKey ? loadFromStorage(initialPKey, "project").sort(sortNewest) : [],
-  )
-
-  // Merged view: global + project (deduplicated)
   const allPrompts = createMemo(() => mergePrompts(globalPrompts(), projectPrompts()))
 
-  // Reload project prompts when the project key changes
-  let prevPKey = resolvedPKey()
-  createEffect(on(resolvedPKey, (k) => {
-    if (k === prevPKey) return
-    prevPKey = k
+  function enqueueSave(
+    version: number,
+    directory: string | undefined,
+    updater: (state: { global: SavedPrompt[]; project: SavedPrompt[] }) => { global: SavedPrompt[]; project: SavedPrompt[] },
+  ) {
+    const run = saveQueue.catch(() => undefined).then(async () => {
+      if (version !== loadVersion) return false
+      if (directory !== targetDirectory()) return false
+      const next = updater({ global: globalPrompts(), project: projectPrompts() })
+      const ok = await writeSavedPrompts(
+        basePath.serverUrl,
+        directory,
+        normalize(next.global, "global"),
+        normalize(next.project, "project"),
+      )
+      if (!ok) {
+        setSaveError("Failed to save prompts. Please retry.")
+        console.error("[saved-prompts] failed to persist prompts")
+        return false
+      }
+      if (version !== loadVersion) return false
+      if (directory !== targetDirectory()) return false
+      setSaveError(undefined)
+      setGlobalPrompts(next.global)
+      setProjectPrompts(next.project)
+      return true
+    })
+    saveQueue = run.then(() => undefined, () => undefined)
+    return run.then((ok) => ok === true)
+  }
+
+  function save(updater: (state: { global: SavedPrompt[]; project: SavedPrompt[] }) => { global: SavedPrompt[]; project: SavedPrompt[] }) {
+    const directory = targetDirectory()
+    if (loading()) {
+      return new Promise<boolean>((resolve) => {
+        pendingSaves.push({ directory, updater, resolve })
+      })
+    }
+    if (loadError()) {
+      console.warn("[saved-prompts] skipped save because prompt load failed")
+      return Promise.resolve(false)
+    }
+    setSaveError(undefined)
+    return enqueueSave(loadVersion, directory, updater)
+  }
+
+  async function loadAndMaybeMigrate(version: number) {
     const d = targetDirectory()
-    if (d) migrateIfNeeded(d)
-    setProjectPrompts(k ? loadFromStorage(k, "project").sort(sortNewest) : [])
+    const migrationKey = d || "__global__"
+    try {
+      const data = await readSavedPrompts(basePath.serverUrl, d)
+      if (version !== loadVersion) return
+      let nextGlobal: SavedPrompt[] = (data.global ?? []).map((p) => ({ ...p, scope: "global" as const })).sort(sortNewest)
+      let nextProject: SavedPrompt[] = (data.project ?? []).map((p) => ({ ...p, scope: "project" as const })).sort(sortNewest)
+
+      if (!migratedKeys.has(migrationKey)) {
+        const legacyGlobal = readLegacyGlobal().sort(sortNewest)
+        const legacyProject = readLegacyProject(d).sort(sortNewest)
+        const hasLegacy = legacyGlobal.length > 0 || legacyProject.length > 0
+        if (hasLegacy) {
+          const mergedGlobal = mergeUnique(nextGlobal, legacyGlobal)
+          const mergedProject = mergeUnique(nextProject, legacyProject)
+          const deduped = dedupeAcrossScopes(mergedGlobal, mergedProject)
+          const changed =
+            !samePrompts(deduped.global, nextGlobal) ||
+            !samePrompts(deduped.project, nextProject)
+          nextGlobal = deduped.global
+          nextProject = deduped.project
+          const ok = await writeSavedPrompts(
+            basePath.serverUrl,
+            d,
+            normalize(nextGlobal, "global"),
+            normalize(nextProject, "project"),
+          )
+          if (version !== loadVersion) return
+          if (ok) {
+            clearLegacy(d)
+            migratedKeys.add(migrationKey)
+          }
+          if (!ok) {
+            console.error("[saved-prompts] failed to migrate prompts from localStorage")
+            if (changed) {
+              nextGlobal = (data.global ?? []).map((p) => ({ ...p, scope: "global" as const })).sort(sortNewest)
+              nextProject = (data.project ?? []).map((p) => ({ ...p, scope: "project" as const })).sort(sortNewest)
+            }
+          }
+        }
+        if (!hasLegacy) {
+          migratedKeys.add(migrationKey)
+        }
+      }
+
+      setGlobalPrompts(nextGlobal)
+      setProjectPrompts(nextProject)
+      setLoadError(undefined)
+      setSaveError(undefined)
+    } catch (e) {
+      console.error("[saved-prompts] failed to load prompts", e)
+      if (version !== loadVersion) return
+      setGlobalPrompts([])
+      setProjectPrompts([])
+      clearPendingSaves(false)
+      const msg = e instanceof Error && e.message ? e.message : "unknown error"
+      setLoadError(`Failed to load saved prompts: ${msg}`)
+      setSaveError(undefined)
+    } finally {
+      if (version !== loadVersion) return
+      setLoading(false)
+    }
+  }
+
+  createEffect(on(targetDirectory, () => {
+    const version = ++loadVersion
+    clearPendingSaves(false)
+    setLoading(true)
+    setLoadError(undefined)
+    setSaveError(undefined)
+    setGlobalPrompts([])
+    setProjectPrompts([])
+    loadAndMaybeMigrate(version)
   }))
 
-  // Also reload global prompts when the project key changes (migration may
-  // have tagged previously-unscoped prompts)
-  createEffect(on(resolvedPKey, () => {
-    setGlobalPrompts(loadFromStorage(GLOBAL_KEY, "global").sort(sortNewest))
-  }))
+  createEffect(() => {
+    if (loading()) return
+    if (loadError()) {
+      clearPendingSaves(false)
+      return
+    }
+    if (pendingSaves.length === 0) return
+    const queued = pendingSaves.splice(0, pendingSaves.length)
+    const version = loadVersion
+    for (const item of queued) {
+      enqueueSave(version, item.directory, item.updater).then(item.resolve)
+    }
+  })
 
   function add(title: string, text: string, scope: PromptScope = "global") {
     const prompt: SavedPrompt = {
@@ -238,109 +392,58 @@ export function SavedPromptsProvider(props: ParentProps & { directory?: Accessor
       scope,
     }
     if (scope === "project") {
-      const k = resolvedPKey()
-      if (!k) {
-        // Fallback to global if no project context
-        addGlobal(prompt)
-        return
+      if (!targetDirectory()) {
+        return save((state) => ({ global: [{ ...prompt, scope: "global" }, ...state.global], project: state.project }))
       }
-      setProjectPrompts((prev) => {
-        const updated = [prompt, ...prev]
-        saveToStorage(k, updated)
-        return updated
-      })
-      return
+      return save((state) => ({ global: state.global, project: [prompt, ...state.project] }))
     }
-    addGlobal(prompt)
-  }
-
-  function addGlobal(prompt: SavedPrompt) {
-    setGlobalPrompts((prev) => {
-      const updated = [{ ...prompt, scope: "global" as const }, ...prev]
-      saveToStorage(GLOBAL_KEY, updated)
-      return updated
-    })
+    return save((state) => ({ global: [{ ...prompt, scope: "global" }, ...state.global], project: state.project }))
   }
 
   function move(id: string, scope: PromptScope) {
     const project = projectPrompts().find((p) => p.id === id)
     if (project) {
-      if (scope === "project") return
-      const k = resolvedPKey()
-      if (!k) return
-      setProjectPrompts((prev) => {
-        const updated = prev.filter((p) => p.id !== id)
-        saveToStorage(k, updated)
-        return updated
-      })
-      setGlobalPrompts((prev) => {
-        const updated = [{ ...project, scope: "global" as const }, ...prev.filter((p) => p.id !== id)]
-        saveToStorage(GLOBAL_KEY, updated)
-        return updated
-      })
-      return
+      if (scope === "project") return Promise.resolve(true)
+      if (!targetDirectory()) return Promise.resolve(false)
+      return save((state) => ({
+        global: [{ ...project, scope: "global" as const }, ...state.global.filter((p) => p.id !== id)],
+        project: state.project.filter((p) => p.id !== id),
+      }))
     }
 
     const global = globalPrompts().find((p) => p.id === id)
-    if (!global) return
-    if (scope === "global") return
-
-    const k = resolvedPKey()
-    if (!k) return
-
-    setGlobalPrompts((prev) => {
-      const updated = prev.filter((p) => p.id !== id)
-      saveToStorage(GLOBAL_KEY, updated)
-      return updated
-    })
-    setProjectPrompts((prev) => {
-      const updated = [{ ...global, scope: "project" as const }, ...prev.filter((p) => p.id !== id)]
-      saveToStorage(k, updated)
-      return updated
-    })
+    if (!global) return Promise.resolve(false)
+    if (scope === "global") return Promise.resolve(true)
+    if (!targetDirectory()) return Promise.resolve(false)
+    return save((state) => ({
+      global: state.global.filter((p) => p.id !== id),
+      project: [{ ...global, scope: "project" as const }, ...state.project.filter((p) => p.id !== id)],
+    }))
   }
 
   function update(id: string, fields: Partial<Pick<SavedPrompt, "title" | "text">>) {
-    // Find which store the prompt belongs to
     if (projectPrompts().some((p) => p.id === id)) {
-      const k = resolvedPKey()
-      if (!k) return
-      setProjectPrompts((prev) => {
-        const updated = prev.map((p) => (p.id === id ? { ...p, ...fields } : p))
-        saveToStorage(k, updated)
-        return updated
-      })
-    } else {
-      setGlobalPrompts((prev) => {
-        const updated = prev.map((p) => (p.id === id ? { ...p, ...fields } : p))
-        saveToStorage(GLOBAL_KEY, updated)
-        return updated
-      })
+      if (!targetDirectory()) return Promise.resolve(false)
+      return save((state) => ({
+        global: state.global,
+        project: state.project.map((p) => (p.id === id ? { ...p, ...fields } : p)),
+      }))
     }
+    return save((state) => ({
+      global: state.global.map((p) => (p.id === id ? { ...p, ...fields } : p)),
+      project: state.project,
+    }))
   }
 
   function remove(id: string) {
-    // Remove from whichever store contains it
     if (projectPrompts().some((p) => p.id === id)) {
-      const k = resolvedPKey()
-      if (!k) return
-      setProjectPrompts((prev) => {
-        const filtered = prev.filter((p) => p.id !== id)
-        saveToStorage(k, filtered)
-        return filtered
-      })
-    } else {
-      setGlobalPrompts((prev) => {
-        const filtered = prev.filter((p) => p.id !== id)
-        saveToStorage(GLOBAL_KEY, filtered)
-        return filtered
-      })
+      if (!targetDirectory()) return Promise.resolve(false)
+      return save((state) => ({ global: state.global, project: state.project.filter((p) => p.id !== id) }))
     }
+    return save((state) => ({ global: state.global.filter((p) => p.id !== id), project: state.project }))
   }
 
   function reorder(ids: string[]) {
-    // Reorder only applies to visible merged prompts.
-    // Persist per-store ordering without dropping hidden duplicate entries.
     const merged = allPrompts()
     const map = new Map(merged.map((p) => [p.id, p]))
     const reordered = ids.map((id) => map.get(id)).filter(isPrompt)
@@ -364,20 +467,14 @@ export function SavedPromptsProvider(props: ParentProps & { directory?: Accessor
       return indexed.map((x) => x.p)
     }
 
-    const newGlobal = reorderStore(globalPrompts())
-    setGlobalPrompts(newGlobal)
-    saveToStorage(GLOBAL_KEY, newGlobal)
-
-    const k = resolvedPKey()
-    if (k) {
-      const newProject = reorderStore(projectPrompts())
-      setProjectPrompts(newProject)
-      saveToStorage(k, newProject)
-    }
+    return save((state) => ({
+      global: reorderStore(state.global),
+      project: reorderStore(state.project),
+    }))
   }
 
   const hasActiveProject = () => {
-    const active = props.directory?.() ?? deriveDirectoryFromPathname()
+    const active = canonicalDirectory(props.directory?.() ?? deriveDirectoryFromPathname())
     return !!active
   }
 
@@ -389,6 +486,9 @@ export function SavedPromptsProvider(props: ParentProps & { directory?: Accessor
         projectPrompts,
         canUseProjectScope: () => !!targetDirectory(),
         hasActiveProject,
+        loading,
+        error: loadError,
+        saveError,
         add,
         move,
         update,

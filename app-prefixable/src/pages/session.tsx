@@ -1673,7 +1673,26 @@ export function Session() {
           </Show>
 
           {/* Saved Prompts */}
-          <Show when={savedPrompts.prompts().length > 0}>
+          <Show when={savedPrompts.loading()}>
+            <div class="mt-8 w-full max-w-2xl flex items-center gap-2" style={{ color: "var(--text-weak)" }}>
+              <Spinner class="w-4 h-4" />
+              <span class="text-sm">Loading saved prompts...</span>
+            </div>
+          </Show>
+
+          <Show when={savedPrompts.error()}>
+            <div class="mt-8 w-full max-w-2xl text-sm" style={{ color: "var(--interactive-critical)" }}>
+              {savedPrompts.error()}
+            </div>
+          </Show>
+
+          <Show when={!savedPrompts.error() && savedPrompts.saveError()}>
+            <div class="mt-8 w-full max-w-2xl text-sm" style={{ color: "var(--interactive-critical)" }}>
+              {savedPrompts.saveError()}
+            </div>
+          </Show>
+
+          <Show when={!savedPrompts.loading() && !savedPrompts.error() && savedPrompts.prompts().length > 0}>
             <div class="mt-8 w-full max-w-2xl">
               <h3
                 class="text-sm font-medium mb-3 text-left"
@@ -2082,6 +2101,7 @@ export function Session() {
                       <button
                         type="button"
                         onClick={() => {
+                          if (savedPrompts.loading() || savedPrompts.error()) return;
                           const text = input().trim();
                           if (!text) return;
                           setSavePromptTitle(text.slice(0, 30));
@@ -2089,6 +2109,7 @@ export function Session() {
                           setSavePromptScope(savedPrompts.canUseProjectScope() ? "project" : "global");
                           setShowSavePrompt(true);
                         }}
+                        disabled={savedPrompts.loading() || !!savedPrompts.error()}
                         class="p-1.5 rounded transition-colors"
                         style={{ color: "var(--text-weak)" }}
                         onMouseEnter={(e) => {
@@ -2100,7 +2121,7 @@ export function Session() {
                           e.currentTarget.style.background = "transparent";
                           e.currentTarget.style.color = "var(--text-weak)";
                         }}
-                        title="Save as prompt"
+                        title={savedPrompts.loading() ? "Saved prompts are still loading" : "Save as prompt"}
                         aria-label="Save as prompt"
                       >
                         <Bookmark class="w-4 h-4" />
@@ -2240,7 +2261,7 @@ export function Session() {
           <PickerDialog
             title="Insert Saved Prompt"
             placeholder="Filter prompts..."
-            emptyMessage="No saved prompts. Add them in Settings."
+            emptyMessage={savedPrompts.loading() ? "Loading saved prompts..." : savedPrompts.error() || "No saved prompts. Add them in Settings."}
             initialFilter={promptPickerFilter()}
             items={promptPickerItems()}
             onSelect={(item) => {
@@ -2315,11 +2336,17 @@ export function Session() {
             setScope={setSavePromptScope}
             canUseProjectScope={savedPrompts.canUseProjectScope()}
             hasActiveProject={savedPrompts.hasActiveProject()}
-            onSave={() => {
+            saveDisabled={savedPrompts.loading() || !!savedPrompts.error()}
+            onSave={async () => {
+              if (savedPrompts.loading() || savedPrompts.error()) return;
               const title = savePromptTitle().trim();
               const body = savePromptBody();
               if (!title || !body) return;
-              savedPrompts.add(title, body, savePromptScope());
+              const ok = await savedPrompts.add(title, body, savePromptScope());
+              if (!ok) {
+                showToast(savedPrompts.saveError() || "Failed to save prompts. Please retry.");
+                return;
+              }
               setShowSavePrompt(false);
               showToast("Prompt saved");
             }}
@@ -2416,11 +2443,24 @@ function SavePromptDialog(props: {
   setScope: (v: PromptScope) => void
   canUseProjectScope: boolean
   hasActiveProject: boolean
-  onSave: () => void
+  saveDisabled: boolean
+  onSave: () => void | Promise<void>
   onClose: () => void
 }) {
   const [container, setContainer] = createSignal<HTMLDivElement>();
+  const [saving, setSaving] = createSignal(false);
   let titleRef: HTMLInputElement | undefined;
+
+  async function handleSave() {
+    if (saving()) return;
+    if (!props.title().trim() || props.saveDisabled) return;
+    setSaving(true);
+    try {
+      await props.onSave();
+    } finally {
+      setSaving(false);
+    }
+  }
 
   createEffect(() => {
     const el = container();
@@ -2515,7 +2555,7 @@ function SavePromptDialog(props: {
                 onKeyDown={(e) => {
                   if (e.key === "Enter") {
                     e.preventDefault();
-                    props.onSave();
+                    void handleSave();
                   }
                 }}
               />
@@ -2593,15 +2633,15 @@ function SavePromptDialog(props: {
             </button>
             <button
               type="button"
-              disabled={!props.title().trim()}
-              onClick={props.onSave}
+              disabled={!props.title().trim() || props.saveDisabled || saving()}
+              onClick={() => void handleSave()}
               class="px-4 py-2 text-sm font-medium rounded-md transition-colors disabled:opacity-50"
               style={{
                 background: "var(--interactive-base)",
                 color: "white",
               }}
             >
-              Save
+              {saving() ? "Saving..." : "Save"}
             </button>
           </div>
         </div>

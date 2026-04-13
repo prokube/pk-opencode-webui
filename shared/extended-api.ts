@@ -20,20 +20,42 @@ function resolveDir(url: URL): string {
  * Validate that a path is safe (within allowed root, no traversal attacks).
  * Returns the normalized absolute path if valid, or null if invalid.
  */
-function validatePath(inputPath: string, allowedRoot: string): string | null {
-  // Resolve to absolute path
+async function nearestExistingRealPath(path: string): Promise<string | null> {
+  let current = nodePath.resolve(path)
+  for (;;) {
+    try {
+      return await fs.promises.realpath(current)
+    } catch (e) {
+      const code = typeof e === "object" && e && "code" in e ? (e as { code?: string }).code : undefined
+      if (code !== "ENOENT") throw e
+      const parent = nodePath.dirname(current)
+      if (parent === current) return null
+      current = parent
+    }
+  }
+}
+
+function isPathWithinRoot(path: string, root: string): boolean {
+  const relative = nodePath.relative(root, path)
+  if (!relative) return true
+  if (nodePath.isAbsolute(relative)) return false
+  if (relative === "..") return false
+  if (relative.startsWith(`..${nodePath.sep}`)) return false
+  return true
+}
+
+async function validatePath(inputPath: string, allowedRoot: string): Promise<string | null> {
   const resolved = nodePath.resolve(allowedRoot, inputPath)
   const normalizedRoot = nodePath.resolve(allowedRoot)
 
-  // Handle edge case where root is "/" (filesystem root)
-  if (normalizedRoot === "/") {
-    // When root is /, allow any absolute path (but still normalized)
-    return resolved
+  if (!isPathWithinRoot(resolved, normalizedRoot)) {
+    return null
   }
 
-  // Check that resolved path is within allowed root (prevents ../ traversal)
-  // Must either equal the root exactly, or start with root + separator
-  if (resolved !== normalizedRoot && !resolved.startsWith(normalizedRoot + nodePath.sep)) {
+  const rootReal = await fs.promises.realpath(normalizedRoot).catch(() => normalizedRoot)
+  const targetReal = await nearestExistingRealPath(resolved)
+  if (!targetReal) return null
+  if (!isPathWithinRoot(targetReal, rootReal)) {
     return null
   }
 
@@ -59,6 +81,98 @@ function isValidServerName(name: string): boolean {
  */
 function getAllowedRoot(): string {
   return process.env.OPENCODE_WORKSPACE_ROOT || process.env.HOME || os.homedir()
+}
+
+function getConfigDir(): string {
+  const homeDir = process.env.HOME || os.homedir()
+  return process.env.OPENCODE_CONFIG_DIR || nodePath.join(homeDir, ".config", "opencode")
+}
+
+function internalError(message: string): Response {
+  return Response.json({ error: message }, { status: 500 })
+}
+
+interface StoredPrompt {
+  id: string
+  title: string
+  text: string
+  createdAt: number
+  scope?: "global" | "project"
+}
+
+function isStoredPrompt(p: unknown): p is StoredPrompt {
+  if (!p || typeof p !== "object") return false
+  const row = p as Record<string, unknown>
+  if (typeof row.id !== "string") return false
+  if (typeof row.title !== "string") return false
+  if (typeof row.text !== "string") return false
+  if (typeof row.createdAt !== "number") return false
+  if (row.scope !== undefined && row.scope !== "global" && row.scope !== "project") return false
+  return true
+}
+
+function parsePromptList(raw: string): StoredPrompt[] {
+  const parsed = JSON.parse(raw)
+  if (!Array.isArray(parsed)) throw new Error("saved prompts content must be an array")
+  for (const item of parsed) {
+    if (!isStoredPrompt(item)) throw new Error("saved prompts content has invalid entries")
+  }
+  return parsed
+}
+
+function invalidPromptIndex(list: unknown[]): number {
+  return list.findIndex((item) => !isStoredPrompt(item))
+}
+
+async function readPromptFile(path: string): Promise<StoredPrompt[]> {
+  try {
+    const content = await fs.promises.readFile(path, "utf-8")
+    return parsePromptList(content)
+  } catch (e) {
+    const code = typeof e === "object" && e && "code" in e ? (e as { code?: string }).code : undefined
+    if (code !== "ENOENT") throw e
+    return []
+  }
+}
+
+function sanitizePrompt(p: StoredPrompt, scope: "global" | "project"): StoredPrompt {
+  return {
+    id: p.id,
+    title: p.title,
+    text: p.text,
+    createdAt: p.createdAt,
+    scope,
+  }
+}
+
+async function readPromptScope(path: string, scope: "global" | "project") {
+  try {
+    const prompts = await readPromptFile(path)
+    return { prompts: prompts.map((p) => sanitizePrompt(p, scope)) }
+  } catch (e) {
+    console.error(`[ExtAPI] saved-prompts ${scope} read error:`, e)
+    return { prompts: [] as StoredPrompt[], error: `failed to read ${scope} saved prompts` }
+  }
+}
+
+async function writePromptFile(path: string, prompts: StoredPrompt[]) {
+  const parentDir = nodePath.dirname(path)
+  await fs.promises.mkdir(parentDir, { recursive: true })
+  const tmp = `${path}.tmp-${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}`
+  const content = JSON.stringify(prompts, null, 2)
+  try {
+    await fs.promises.writeFile(tmp, content, "utf-8")
+    if (process.platform === "win32") {
+      await fs.promises.rm(path, { force: true }).catch((e) => {
+        const code = typeof e === "object" && e && "code" in e ? (e as { code?: string }).code : undefined
+        if (code !== "ENOENT") throw e
+      })
+    }
+    await fs.promises.rename(tmp, path)
+  } catch (e) {
+    await fs.promises.unlink(tmp).catch(() => undefined)
+    throw e
+  }
 }
 
 /**
@@ -138,6 +252,83 @@ export async function handleExtendedEndpoint(
     return Response.json(result)
   }
 
+  // GET /api/ext/saved-prompts - Read global + project prompts
+  if (path === "/api/ext/saved-prompts" && method === "GET") {
+    const directory = url.searchParams.get("directory")
+    const allowedRoot = getAllowedRoot()
+    const validatedDir = directory ? await validatePath(directory, allowedRoot) : null
+    if (directory && !validatedDir) {
+      console.warn("[ExtAPI] saved-prompts read: path outside allowed root:", directory)
+      return Response.json({ error: "directory must be within allowed directory" }, { status: 403 })
+    }
+
+    const configDir = getConfigDir()
+    const globalPath = nodePath.join(configDir, "saved-prompts.json")
+    const projectPath = validatedDir ? nodePath.join(validatedDir, ".opencode", "saved-prompts.json") : null
+
+    const globalResult = await readPromptScope(globalPath, "global")
+    const projectResult = projectPath ? await readPromptScope(projectPath, "project") : { prompts: [] as StoredPrompt[] }
+
+    if (!globalResult.error && !projectResult.error) {
+      return Response.json({ global: globalResult.prompts, project: projectResult.prompts })
+    }
+
+    return Response.json(
+      {
+        error: "failed to read saved prompts",
+        errors: {
+          ...(globalResult.error ? { global: globalResult.error } : {}),
+          ...(projectResult.error ? { project: projectResult.error } : {}),
+        },
+      },
+      { status: 500 },
+    )
+  }
+
+  // PUT /api/ext/saved-prompts - Write global + project prompts
+  if (path === "/api/ext/saved-prompts" && method === "PUT") {
+    const directory = url.searchParams.get("directory")
+    const allowedRoot = getAllowedRoot()
+    const validatedDir = directory ? await validatePath(directory, allowedRoot) : null
+    if (directory && !validatedDir) {
+      console.warn("[ExtAPI] saved-prompts write: path outside allowed root:", directory)
+      return Response.json({ error: "directory must be within allowed directory" }, { status: 403 })
+    }
+
+    const body = await req.json().catch(() => null)
+    const global = Array.isArray(body?.global) ? body.global : null
+    const project = Array.isArray(body?.project) ? body.project : null
+    if (!global || !project) {
+      return Response.json({ error: "global and project arrays are required" }, { status: 400 })
+    }
+
+    const configDir = getConfigDir()
+    const globalPath = nodePath.join(configDir, "saved-prompts.json")
+    const projectPath = validatedDir ? nodePath.join(validatedDir, ".opencode", "saved-prompts.json") : null
+    const badGlobal = invalidPromptIndex(global)
+    if (badGlobal !== -1) {
+      return Response.json({ error: `global[${badGlobal}] is invalid` }, { status: 400 })
+    }
+    const badProject = invalidPromptIndex(project)
+    if (badProject !== -1) {
+      return Response.json({ error: `project[${badProject}] is invalid` }, { status: 400 })
+    }
+    if (project.length > 0 && !validatedDir) {
+      return Response.json({ error: "directory is required for project prompts" }, { status: 400 })
+    }
+
+    try {
+      await writePromptFile(globalPath, global.map((p) => sanitizePrompt(p, "global")))
+      if (projectPath) {
+        await writePromptFile(projectPath, project.map((p) => sanitizePrompt(p, "project")))
+      }
+      return Response.json({ success: true })
+    } catch (e) {
+      console.error("[ExtAPI] saved-prompts write error:", e)
+      return internalError("failed to write saved prompts")
+    }
+  }
+
   // POST /api/ext/mkdir - Create directory recursively
   if (path === "/api/ext/mkdir" && method === "POST") {
     try {
@@ -149,7 +340,7 @@ export async function handleExtendedEndpoint(
 
       // Validate path is within allowed root
       const allowedRoot = getAllowedRoot()
-      const validatedPath = validatePath(dirPath, allowedRoot)
+      const validatedPath = await validatePath(dirPath, allowedRoot)
       if (!validatedPath) {
         console.warn("[ExtAPI] mkdir: path outside allowed root:", dirPath)
         return Response.json({ error: "path must be within allowed directory" }, { status: 403 })
@@ -181,7 +372,7 @@ export async function handleExtendedEndpoint(
 
     // Validate path is within allowed root
     const allowedRoot = getAllowedRoot()
-    const validatedDir = validatePath(directory, allowedRoot)
+    const validatedDir = await validatePath(directory, allowedRoot)
     if (!validatedDir) {
       console.warn("[ExtAPI] list-dirs: path outside allowed root:", directory)
       return Response.json({ error: "directory must be within allowed directory" }, { status: 403 })
@@ -250,8 +441,7 @@ export async function handleExtendedEndpoint(
 
     try {
       // Find the global config file
-      const homeDir = process.env.HOME || os.homedir()
-      const configDir = process.env.OPENCODE_CONFIG_DIR || nodePath.join(homeDir, ".config", "opencode")
+      const configDir = getConfigDir()
 
       // Try both .jsonc and .json
       let configPath = nodePath.join(configDir, "opencode.jsonc")
@@ -313,7 +503,7 @@ export async function handleExtendedEndpoint(
       return Response.json({ success: true })
     } catch (e) {
       console.error("[ExtAPI] mcp delete error:", e)
-      return Response.json({ error: String(e) }, { status: 500 })
+      return internalError("failed to update MCP config")
     }
   }
 
@@ -325,7 +515,7 @@ export async function handleExtendedEndpoint(
     }
 
     const allowedRoot = getAllowedRoot()
-    const validatedPath = validatePath(body.path, allowedRoot)
+    const validatedPath = await validatePath(body.path, allowedRoot)
     if (!validatedPath) {
       console.warn("[ExtAPI] file write: path outside allowed root:", body.path)
       return Response.json({ error: "path must be within allowed directory" }, { status: 403 })
@@ -342,7 +532,7 @@ export async function handleExtendedEndpoint(
       return Response.json({ success: true })
     } catch (e) {
       console.error("[ExtAPI] file write error:", e)
-      return Response.json({ error: String(e) }, { status: 500 })
+      return internalError("failed to write file")
     }
   }
 
