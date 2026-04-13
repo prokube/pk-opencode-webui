@@ -412,7 +412,9 @@ export function createTelegramSessionStore(path: string): TelegramSessionStore {
     },
     async questionList(key: string) {
       await ready
-      return pending.get(key) || []
+      const rows = pending.get(key)
+      if (!rows) return []
+      return [...rows]
     },
     async questionUpsert(key: string, question: TelegramPendingQuestion) {
       await ready

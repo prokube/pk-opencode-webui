@@ -15,6 +15,7 @@ import {
   queueChatUpdate,
   registerTelegramCommands,
   resetSessionCacheForTest,
+  setRetryDelayForTest,
   sessionFromCache,
 } from "../../shared/telegram-bridge";
 
@@ -2237,10 +2238,14 @@ describe("telegram bridge config and cache", () => {
 
   test("question reply retries transient OpenCode failures", async () => {
     const calls: Array<{ url: string; body: Record<string, unknown> }> = [];
+    const waits: number[] = [];
     const originalFetch = globalThis.fetch;
     const pending = new Map<string, unknown[]>();
     let failures = 0;
     try {
+      setRetryDelayForTest(async (ms: number) => {
+        waits.push(ms);
+      });
       globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
         const url = String(input);
         const body = init?.body ? (JSON.parse(String(init.body)) as Record<string, unknown>) : {};
@@ -2309,6 +2314,7 @@ describe("telegram bridge config and cache", () => {
 
     const replyCalls = calls.filter((x) => x.url.includes("/question/req-retry/reply"));
     expect(replyCalls).toHaveLength(3);
+    expect(waits).toEqual([400, 800]);
     const sentTexts = calls
       .filter((x) => x.url.includes("/sendMessage"))
       .map((x) => String(x.body.text || ""));

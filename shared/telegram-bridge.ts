@@ -127,6 +127,8 @@ function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms))
 }
 
+let retryDelay = sleep
+
 export function parseMode(value: string): "polling" | "webhook" {
   const mode = value.trim().toLowerCase()
   if (mode === "polling") return "polling"
@@ -690,9 +692,13 @@ async function retry<T>(
     if (!shouldRetry(error)) throw error
     if (retries <= 0) throw error
     console.warn(`[TelegramBridge] ${name} failed, retrying in ${delayMs}ms`, error)
-    await sleep(delayMs)
+    await retryDelay(delayMs)
     return retry(name, fn, retries - 1, Math.min(delayMs * 2, 4000), shouldRetry)
   }
+}
+
+export function setRetryDelayForTest(next?: (ms: number) => Promise<void>) {
+  retryDelay = next || sleep
 }
 
 async function telegramRequest(config: BridgeConfig, method: string, body: Record<string, unknown>, timeoutMs = 10_000) {
@@ -1332,6 +1338,7 @@ export async function startTelegramBridge() {
 }
 
 export function resetSessionCacheForTest() {
+  setRetryDelayForTest()
   sessions.clear()
   creatingSessions.clear()
   chatQueues.clear()

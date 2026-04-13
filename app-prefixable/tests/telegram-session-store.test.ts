@@ -286,4 +286,34 @@ describe("telegram session store", () => {
     const store = createTelegramSessionStore(path)
     expect(await store.questionList?.("chat:77:user:5")).toEqual([])
   })
+
+  test("questionList returns defensive copy of pending queue", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "telegram-session-store-"))
+    const path = join(dir, "sessions.json")
+    files.push(path)
+    files.push(dir)
+
+    const store = createTelegramSessionStore(path)
+    await store.questionUpsert?.("chat:90:user:1", {
+      requestId: "req-copy",
+      sessionId: "session-copy",
+      createdAt: 1,
+      expiresAt: Date.now() + 30_000,
+      questions: [
+        {
+          header: "Pick",
+          question: "Pick",
+          options: ["A"],
+          multiple: false,
+          custom: true,
+        },
+      ],
+    })
+
+    const first = await store.questionList?.("chat:90:user:1")
+    first?.pop()
+
+    const second = await store.questionList?.("chat:90:user:1")
+    expect(second?.map((row) => row.requestId)).toEqual(["req-copy"])
+  })
 })
