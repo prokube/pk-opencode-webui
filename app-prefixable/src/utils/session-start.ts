@@ -12,7 +12,7 @@ interface StartSessionCheck {
 
 interface PromptCreateClient {
   session: {
-    create: (_args: {}) => Promise<{ data?: { id: string } }>;
+    create: (_args: object) => Promise<{ data?: { id: string } }>;
     promptAsync: (_args: {
       sessionID: string;
       parts: { type: "text"; text: string }[];

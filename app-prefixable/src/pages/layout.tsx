@@ -2274,6 +2274,8 @@ export function Layout(props: ParentProps) {
             <Show when={sessionStartError()}>
               <div
                 class="mt-2 px-3 py-2 rounded-md text-xs"
+                role="alert"
+                aria-live="assertive"
                 style={{
                   background: "var(--status-danger-dim)",
                   color: "var(--status-danger-text)",
