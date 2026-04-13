@@ -86,8 +86,8 @@ function parsePositiveInt(value: string, fallback: number): number {
 
 function parseCommand(text: string): { name: string } | undefined {
   if (!text.startsWith("/")) return
-  const [raw] = text.split(" ")
-  const name = raw.split("@")[0]?.toLowerCase()
+  const raw = text.split(/\s+/, 1)[0]?.trim()
+  const name = raw?.split("@")[0]?.trim().toLowerCase()
   if (!name) return
   return { name }
 }
@@ -341,7 +341,7 @@ async function sendTelegramMessage(config: BridgeConfig, chatId: number, text: s
   }
 }
 
-async function handleTextUpdate(runtime: Runtime, update: TelegramUpdate) {
+export async function handleTextUpdate(runtime: Runtime, update: TelegramUpdate) {
   const config = runtime.config
   const message = update.message
   const chatId = message?.chat?.id

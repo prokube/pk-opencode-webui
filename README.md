@@ -159,7 +159,7 @@ bun install && bun run dev
 | `TELEGRAM_MODE` | `polling` | Telegram bridge mode (`polling` or `webhook`) |
 | `OPENCODE_API_URL` | `API_URL` or `http://127.0.0.1:4096` | OpenCode API URL for bridge |
 | `OPENCODE_DIRECTORY` | _(empty)_ | Optional directory for bridge session API calls |
-| `TELEGRAM_SESSION_STORE_PATH` | `/tmp/opencode-telegram-sessions.json` | Persistent Telegram chat/user to OpenCode session mapping |
+| `TELEGRAM_SESSION_STORE_PATH` | `/tmp/opencode-telegram-sessions.json` | Telegram chat/user to OpenCode session mapping file; set this to a mounted persistent volume path in Kubernetes for restart-safe persistence |
 
 ## Deployment
 
@@ -215,6 +215,8 @@ This repository includes a Telegram bridge service (`docker/telegram-bridge.ts`)
 - sends assistant responses back to Telegram.
 
 The bridge keeps a default OpenCode session per Telegram chat (and sender in shared chats), persisted to `TELEGRAM_SESSION_STORE_PATH` so mappings survive restarts.
+
+In container/Kubernetes deployments, `/tmp` is often ephemeral, so set `TELEGRAM_SESSION_STORE_PATH` to a mounted persistent volume location if you need mappings to survive pod/container recreation.
 
 Supported bot commands:
 - `/new` creates and switches to a fresh session for the current chat mapping.
