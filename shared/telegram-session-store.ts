@@ -74,9 +74,7 @@ export function createTelegramSessionStore(path: string): TelegramSessionStore {
       () => writeStore(path, payload),
       () => writeStore(path, payload),
     )
-    return writes.catch((error) => {
-      console.error("[TelegramBridge] session store write failed", { path, error })
-    })
+    return writes
   }
 
   return {
