@@ -11,6 +11,45 @@ interface ModelKey {
   modelID: string
 }
 
+interface ModelInfo {
+  id: string
+  name: string
+  family?: string
+  status?: "alpha" | "beta" | "deprecated" | "active"
+  release_date?: string
+  limit?: {
+    context?: number
+    input?: number
+    output?: number
+  }
+  capabilities?: {
+    reasoning?: boolean
+    toolcall?: boolean
+    attachment?: boolean
+    interleaved?: boolean | { field: "reasoning_content" | "reasoning_details" }
+    input?: {
+      audio?: boolean
+      image?: boolean
+      video?: boolean
+      pdf?: boolean
+    }
+    output?: {
+      audio?: boolean
+      image?: boolean
+      video?: boolean
+      pdf?: boolean
+    }
+  }
+  cost?: {
+    input?: number
+    output?: number
+    cache?: {
+      read?: number
+      write?: number
+    }
+  }
+}
+
 interface SessionInfoProps {
   input: () => string
   loading: () => boolean
@@ -142,11 +181,102 @@ export function SessionInfo(props: SessionInfoProps) {
     return model?.name || selected.modelID
   })
 
+  const modelInfo = createMemo(() => {
+    const selected = props.sessionModel()
+    if (!selected) return null
+    const provider = providers.providers.find((p: { id: string; name: string }) => p.id === selected.providerID)
+    if (!provider) return null
+    const model = provider.models[selected.modelID] as ModelInfo | undefined
+    if (!model) return null
+    return {
+      providerID: provider.id,
+      providerName: provider.name,
+      modelID: model.id || selected.modelID,
+      modelName: model.name || selected.modelID,
+      family: model.family,
+      status: model.status,
+      releaseDate: model.release_date,
+      contextLimit: model.limit?.context,
+      inputLimit: model.limit?.input,
+      outputLimit: model.limit?.output,
+      capabilities: model.capabilities,
+      costInput: model.cost?.input,
+      costOutput: model.cost?.output,
+      costCacheRead: model.cost?.cache?.read,
+      costCacheWrite: model.cost?.cache?.write,
+    }
+  })
+
+  const modelCapabilities = createMemo(() => {
+    const meta = modelInfo()
+    if (!meta?.capabilities) return ""
+    const list = [
+      meta.capabilities.reasoning ? "reasoning" : "",
+      meta.capabilities.toolcall ? "tools" : "",
+      meta.capabilities.attachment ? "attachments" : "",
+      meta.capabilities.interleaved ? "interleaved" : "",
+      meta.capabilities.input?.image ? "image input" : "",
+      meta.capabilities.input?.audio ? "audio input" : "",
+      meta.capabilities.input?.video ? "video input" : "",
+      meta.capabilities.input?.pdf ? "pdf input" : "",
+      meta.capabilities.output?.image ? "image output" : "",
+      meta.capabilities.output?.audio ? "audio output" : "",
+      meta.capabilities.output?.video ? "video output" : "",
+      meta.capabilities.output?.pdf ? "pdf output" : "",
+    ].filter(Boolean)
+    return list.join(", ")
+  })
+
+  const fmtMoney = (n: number) => {
+    if (!Number.isFinite(n)) return ""
+    if (n === 0) return "$0"
+    if (n >= 1) return `$${n.toFixed(2)}`
+    if (n >= 0.01) return `$${n.toFixed(4)}`
+    return `$${n.toPrecision(3)}`
+  }
+
+  const fmtDate = (value: string) => {
+    const date = new Date(value)
+    if (Number.isNaN(date.getTime())) return value
+    return new Intl.DateTimeFormat("en-US", { dateStyle: "medium" }).format(date)
+  }
+
+  const [showModelPopover, setShowModelPopover] = createSignal(false)
+  const [modelPopoverPos, setModelPopoverPos] = createSignal({ top: 0, left: 0 })
+  let modelTriggerRef: HTMLButtonElement | undefined
+  let modelPopoverRef: HTMLDivElement | undefined
+  let modelPopoverHideTimer: number | undefined
+
+  function clearModelPopoverTimer() {
+    if (!modelPopoverHideTimer) return
+    window.clearTimeout(modelPopoverHideTimer)
+    modelPopoverHideTimer = undefined
+  }
+
+  function openModelPopover() {
+    clearModelPopoverTimer()
+    if (modelTriggerRef) {
+      const rect = modelTriggerRef.getBoundingClientRect()
+      const POPOVER_WIDTH = 320
+      const maxLeft = window.innerWidth - POPOVER_WIDTH - 16
+      setModelPopoverPos({ top: rect.top - 8, left: Math.max(0, Math.min(rect.left, maxLeft)) })
+    }
+    setShowModelPopover(true)
+  }
+
+  function scheduleModelPopoverHide() {
+    clearModelPopoverTimer()
+    modelPopoverHideTimer = window.setTimeout(() => setShowModelPopover(false), 120)
+  }
+
+  onCleanup(clearModelPopoverTimer)
+
   // Token popover state — reset when session changes
   const [showTokenPopover, setShowTokenPopover] = createSignal(false)
   createEffect(() => {
     params.id // track session ID
     setShowTokenPopover(false)
+    setShowModelPopover(false)
   })
   const [popoverPos, setPopoverPos] = createSignal({ top: 0, left: 0 })
   let triggerRef: HTMLButtonElement | undefined
@@ -217,13 +347,148 @@ export function SessionInfo(props: SessionInfoProps) {
         {/* Model */}
         <Show when={props.sessionModel()}>
           <button
+            ref={modelTriggerRef}
             type="button"
             class="flex items-center gap-1 min-w-0 hover:opacity-80 cursor-pointer"
             onClick={() => props.onModelClick()}
+            onMouseEnter={openModelPopover}
+            onMouseLeave={scheduleModelPopoverHide}
+            onFocus={openModelPopover}
+            onBlur={scheduleModelPopoverHide}
+            aria-describedby={showModelPopover() ? "model-info-popover" : undefined}
           >
             <span class="opacity-60 shrink-0">Model:</span>
             <span class="truncate" style={{ color: "var(--text-base)" }}>{modelLabel()}</span>
           </button>
+
+          <Show when={showModelPopover() && modelInfo()}>
+            {(meta) => (
+              <Portal>
+                <div
+                  id="model-info-popover"
+                  ref={modelPopoverRef}
+                  class="w-80 max-w-[calc(100vw-1rem)] rounded-lg shadow-lg text-xs"
+                  style={{
+                    position: "fixed",
+                    top: `${modelPopoverPos().top}px`,
+                    left: `${modelPopoverPos().left}px`,
+                    transform: "translateY(-100%)",
+                    "z-index": "9999",
+                    background: "var(--background-base)",
+                    border: "1px solid var(--border-base)",
+                  }}
+                  onMouseEnter={openModelPopover}
+                  onMouseLeave={scheduleModelPopoverHide}
+                >
+                  <div
+                    class="px-3 py-2 font-medium"
+                    style={{
+                      color: "var(--text-strong)",
+                      "border-bottom": "1px solid var(--border-base)",
+                      background: "var(--surface-inset)",
+                      "border-radius": "0.5rem 0.5rem 0 0",
+                    }}
+                  >
+                    Model Details
+                  </div>
+                  <div class="px-3 py-2 space-y-1.5" style={{ color: "var(--text-base)" }}>
+                    <div class="flex justify-between gap-3">
+                      <span class="opacity-60 shrink-0">Provider</span>
+                      <span class="text-right break-all">{meta().providerName} ({meta().providerID})</span>
+                    </div>
+                    <div class="flex justify-between gap-3">
+                      <span class="opacity-60 shrink-0">Model ID</span>
+                      <span class="text-right break-all">{meta().modelID}</span>
+                    </div>
+                    <div class="flex justify-between gap-3">
+                      <span class="opacity-60 shrink-0">Name</span>
+                      <span class="text-right break-all">{meta().modelName}</span>
+                    </div>
+
+                    <Show when={meta().family}>
+                      <div class="flex justify-between gap-3">
+                        <span class="opacity-60 shrink-0">Family</span>
+                        <span class="text-right">{meta().family}</span>
+                      </div>
+                    </Show>
+                    <Show when={meta().status}>
+                      <div class="flex justify-between gap-3">
+                        <span class="opacity-60 shrink-0">Status</span>
+                        <span class="text-right capitalize">{meta().status}</span>
+                      </div>
+                    </Show>
+                    <Show when={meta().releaseDate}>
+                      <div class="flex justify-between gap-3">
+                        <span class="opacity-60 shrink-0">Release</span>
+                        <span class="text-right">{fmtDate(meta().releaseDate!)}</span>
+                      </div>
+                    </Show>
+
+                    <Show when={meta().contextLimit || meta().inputLimit || meta().outputLimit}>
+                      <div class="pt-1" style={{ "border-top": "1px solid var(--border-base)" }}>
+                        <Show when={meta().contextLimit}>
+                          <div class="flex justify-between gap-3">
+                            <span class="opacity-60 shrink-0">Context Limit</span>
+                            <span class="text-right">{fmt(meta().contextLimit!)}</span>
+                          </div>
+                        </Show>
+                        <Show when={meta().inputLimit}>
+                          <div class="flex justify-between gap-3">
+                            <span class="opacity-60 shrink-0">Input Limit</span>
+                            <span class="text-right">{fmt(meta().inputLimit!)}</span>
+                          </div>
+                        </Show>
+                        <Show when={meta().outputLimit}>
+                          <div class="flex justify-between gap-3">
+                            <span class="opacity-60 shrink-0">Output Limit</span>
+                            <span class="text-right">{fmt(meta().outputLimit!)}</span>
+                          </div>
+                        </Show>
+                      </div>
+                    </Show>
+
+                    <Show when={modelCapabilities()}>
+                      <div class="pt-1" style={{ "border-top": "1px solid var(--border-base)" }}>
+                        <div class="flex justify-between gap-3">
+                          <span class="opacity-60 shrink-0">Capabilities</span>
+                          <span class="text-right">{modelCapabilities()}</span>
+                        </div>
+                      </div>
+                    </Show>
+
+                    <Show when={meta().costInput !== undefined || meta().costOutput !== undefined || meta().costCacheRead !== undefined || meta().costCacheWrite !== undefined}>
+                      <div class="pt-1" style={{ "border-top": "1px solid var(--border-base)" }}>
+                        <Show when={meta().costInput !== undefined}>
+                          <div class="flex justify-between gap-3">
+                            <span class="opacity-60 shrink-0">Cost Input</span>
+                            <span class="text-right">{fmtMoney(meta().costInput!)}</span>
+                          </div>
+                        </Show>
+                        <Show when={meta().costOutput !== undefined}>
+                          <div class="flex justify-between gap-3">
+                            <span class="opacity-60 shrink-0">Cost Output</span>
+                            <span class="text-right">{fmtMoney(meta().costOutput!)}</span>
+                          </div>
+                        </Show>
+                        <Show when={meta().costCacheRead !== undefined}>
+                          <div class="flex justify-between gap-3">
+                            <span class="opacity-60 shrink-0">Cost Cache Read</span>
+                            <span class="text-right">{fmtMoney(meta().costCacheRead!)}</span>
+                          </div>
+                        </Show>
+                        <Show when={meta().costCacheWrite !== undefined}>
+                          <div class="flex justify-between gap-3">
+                            <span class="opacity-60 shrink-0">Cost Cache Write</span>
+                            <span class="text-right">{fmtMoney(meta().costCacheWrite!)}</span>
+                          </div>
+                        </Show>
+                      </div>
+                    </Show>
+                  </div>
+                </div>
+              </Portal>
+            )}
+          </Show>
         </Show>
 
         {/* Token Usage */}
