@@ -35,6 +35,7 @@ import { SessionSidebar } from "../components/session-sidebar";
 import { ReviewPanel } from "../components/review-panel";
 import { SessionHeader } from "../components/session-header";
 import { ResizeHandle } from "../components/resize-handle";
+import { FollowupDock } from "../components/followup-dock";
 import { base64Encode, base64Decode } from "../utils/path";
 import type { Part, QuestionRequest, TextPart } from "../sdk/client";
 import type { DisplayMessage } from "../types/message";
@@ -82,6 +83,15 @@ const drafts = new Map<string, SessionDraft>();
 // pair. Uses "__new__" as sentinel when there is no session id yet.
 function draftKey(dir: string, id?: string) {
   return `${dir}:${id ?? "__new__"}`;
+}
+
+interface FollowupItem {
+  id: string;
+  text: string;
+}
+
+function followupStorageKey(dir: string) {
+  return `opencode.followup.${dir}`;
 }
 
 export function Session() {
@@ -251,6 +261,8 @@ export function Session() {
   const [imageAttachments, setImageAttachments] = createSignal<
     ImageAttachment[]
   >([]);
+  const [followups, setFollowups] = createSignal<FollowupItem[]>([]);
+  const [followupSending, setFollowupSending] = createSignal<string | undefined>();
   const [error, setError] = createSignal<string | null>(null);
   // Use session tree walk to find pending questions from this session or any descendant.
   // This surfaces child/grandchild session questions in the parent session view.
@@ -263,6 +275,47 @@ export function Session() {
 
   const pendingPermissions = createMemo(() => permission.pendingForSession(sessionId() ?? ""));
   const inputBlocked = createMemo(() => !!pendingQuestion() || pendingPermissions().length > 0);
+
+  function readFollowupMap() {
+    if (typeof window === "undefined") return {} as Record<string, FollowupItem[] | undefined>;
+    const raw = window.localStorage.getItem(followupStorageKey(params.dir));
+    if (!raw) return {} as Record<string, FollowupItem[] | undefined>;
+    try {
+      return JSON.parse(raw) as Record<string, FollowupItem[] | undefined>;
+    } catch {
+      return {} as Record<string, FollowupItem[] | undefined>;
+    }
+  }
+
+  function writeFollowupMap(map: Record<string, FollowupItem[] | undefined>) {
+    if (typeof window === "undefined") return;
+    window.localStorage.setItem(followupStorageKey(params.dir), JSON.stringify(map));
+  }
+
+  function setSessionFollowups(id: string, list: FollowupItem[]) {
+    const map = readFollowupMap();
+    if (list.length === 0) delete map[id];
+    if (list.length > 0) map[id] = list;
+    writeFollowupMap(map);
+    setFollowups(list);
+  }
+
+  function queueFollowup(text: string) {
+    const id = sessionId();
+    if (!id) return false;
+    const next = [...followups(), { id: crypto.randomUUID(), text }];
+    setSessionFollowups(id, next);
+    return true;
+  }
+
+  function removeFollowup(id: string) {
+    const sid = sessionId();
+    if (!sid) return;
+    setSessionFollowups(
+      sid,
+      followups().filter((item) => item.id !== id),
+    );
+  }
 
   // Double-Escape to abort: track last Escape press timestamp
   const lastEsc = { ts: 0 };
@@ -364,6 +417,8 @@ export function Session() {
 
     setSessionId(id);
     setPendingUserMessageText(null); // Clear pending text on session change
+    setFollowupSending(undefined);
+    setFollowups(id ? readFollowupMap()[id] ?? [] : []);
 
     // Restore draft for the new session (or clear if none saved)
     const saved = drafts.get(key);
@@ -1290,6 +1345,64 @@ export function Session() {
     }
   }
 
+  function optimisticUserMessage(text: string, sid: string) {
+    return {
+      id: crypto.randomUUID(),
+      role: "user",
+      parts: [
+        {
+          id: crypto.randomUUID(),
+          sessionID: sid,
+          messageID: "",
+          type: "text",
+          text,
+        },
+      ] as Part[],
+    } satisfies DisplayMessage;
+  }
+
+  async function sendFollowupNow(id: string) {
+    const sid = sessionId();
+    if (!sid || followupSending()) return;
+    const model = sessionModel();
+    if (!model) {
+      setError("Please select a model before sending messages. Click the model button in the header.");
+      return;
+    }
+    if (!providers.connected.includes(model.providerID)) {
+      setError(`Provider "${model.providerID}" is not connected. Please configure it in Settings.`);
+      return;
+    }
+    const item = followups().find((entry) => entry.id === id);
+    if (!item) return;
+    setFollowupSending(id);
+    setError(null);
+    setPendingUserMessageText(item.text);
+    setOptimisticMessage(optimisticUserMessage(item.text, sid));
+
+    try {
+      await client.session.promptAsync({
+        sessionID: sid,
+        parts: [{ type: "text", text: item.text }],
+        agent: providers.selectedAgent || "build",
+        model,
+      });
+      removeFollowup(id);
+      startProcessing();
+    } catch (err) {
+      setError(`Failed to send queued followup: ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      setFollowupSending(undefined);
+    }
+  }
+
+  function editFollowup(id: string) {
+    const item = followups().find((entry) => entry.id === id);
+    if (!item || !inputRef) return;
+    applyInputAndAutogrow(inputRef, item.text);
+    removeFollowup(id);
+  }
+
   async function sendMessage(e: SubmitEvent) {
     e.preventDefault();
     const text = input().trim();
@@ -1309,6 +1422,15 @@ export function Session() {
     const images = imageAttachments();
     if ((!text && files.length === 0 && images.length === 0) || loading() || inputBlocked())
       return;
+
+    if (processing() && text && files.length === 0 && images.length === 0) {
+      if (!queueFollowup(text)) return;
+      setInput("");
+      setDragHeight(0);
+      if (inputRef) inputRef.style.height = "";
+      drafts.delete(draftKey(params.dir, sessionId()));
+      return;
+    }
 
     // Require explicit model selection to avoid OpenCode auto-selecting a broken provider
     const model = sessionModel();
@@ -1342,19 +1464,7 @@ export function Session() {
     setPendingUserMessageText(text);
 
     // Optimistic update - show user message immediately while waiting for server
-    const userMessage: DisplayMessage = {
-      id: crypto.randomUUID(),
-      role: "user",
-      parts: [
-        {
-          id: crypto.randomUUID(),
-          sessionID: sessionId() || "",
-          messageID: "",
-          type: "text",
-          text: text || "(files attached)",
-        },
-      ] as Part[],
-    };
+    const userMessage = optimisticUserMessage(text || "(files attached)", sessionId() || "");
     setOptimisticMessage(userMessage);
 
     try {
@@ -2198,6 +2308,15 @@ export function Session() {
                 </div>
               </div>
             </form>
+
+            <Show when={followups().length > 0}>
+              <FollowupDock
+                items={followups()}
+                sending={followupSending()}
+                onSend={sendFollowupNow}
+                onEdit={editFollowup}
+              />
+            </Show>
           </div>
         </div>
 
