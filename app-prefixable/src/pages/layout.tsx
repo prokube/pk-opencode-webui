@@ -1841,12 +1841,13 @@ export function Layout(props: ParentProps) {
         text,
         agent: providers.selectedAgent || "build",
         model,
-        onCreated: (created) => {
-          providers.setSessionModel(created.id, model);
-          navigate(`/${dirSlug()}/session/${created.id}`);
-        },
       });
-      setSessions((prev) => [res, ...prev]);
+      providers.setSessionModel(res.id, model);
+      setSessions((prev) => {
+        if (prev.some((s) => s.id === res.id)) return prev;
+        return [res, ...prev];
+      });
+      navigate(`/${dirSlug()}/session/${res.id}`);
     } catch (e) {
       console.error("Failed to create session for prompt:", e);
       setSessionStartError(`Failed to create session or send saved prompt: ${formatStartError(e)}`);
@@ -2245,7 +2246,6 @@ export function Layout(props: ParentProps) {
                 variant="ghost"
                 class={`flex-1 justify-start ${!savedPrompts.loading() && savedPrompts.prompts().length > 0 ? "rounded-r-none" : ""}`}
                 disabled={creatingSession()}
-                class={`flex-1 justify-start ${!savedPrompts.loading() && savedPrompts.prompts().length > 0 ? "rounded-r-none" : ""}`}
                 size="sm"
               >
                 <Plus class="w-4 h-4" />

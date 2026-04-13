@@ -1446,18 +1446,16 @@ export function Session() {
     setError(null);
     setCreatingSession(true);
     try {
-      await createAndSendPrompt({
+      const created = await createAndSendPrompt({
         client,
         text,
         agent: providers.selectedAgent || "build",
         model,
-        onCreated: (created) => {
-          const sid = created.id;
-          setSessionId(sid);
-          navigate(`/${dirSlug()}/session/${sid}`, { replace: true });
-          providers.setSessionModel(sid, model);
-        },
       });
+      const sid = created.id;
+      setSessionId(sid);
+      providers.setSessionModel(sid, model);
+      navigate(`/${dirSlug()}/session/${sid}`, { replace: true });
     } catch (err) {
       setError(`Failed to create session or send saved prompt: ${formatStartError(err)}`);
     } finally {

@@ -166,16 +166,18 @@ describe("createSessionWithPrompt", () => {
     }
   });
 
-  test("attempts delete when onCreated throws", async () => {
+  test("does not attempt delete when onCreated throws after prompt success", async () => {
     let deleted = 0;
-    let deletedID = "";
+    let prompted = 0;
     const client = {
       session: {
         create: async () => ({ data: { id: "s-4" } }),
-        promptAsync: async () => ({ data: {} }),
-        delete: async (args: { sessionID: string }) => {
+        promptAsync: async () => {
+          prompted += 1;
+          return { data: {} };
+        },
+        delete: async () => {
           deleted += 1;
-          deletedID = args.sessionID;
           return { data: {} };
         },
       },
@@ -192,7 +194,36 @@ describe("createSessionWithPrompt", () => {
         },
       }),
     ).rejects.toThrow("onCreated failed");
-    expect(deleted).toBe(1);
-    expect(deletedID).toBe("s-4");
+    expect(prompted).toBe(1);
+    expect(deleted).toBe(0);
+  });
+
+  test("calls onCreated only after prompt succeeds", async () => {
+    const steps: string[] = [];
+    const client = {
+      session: {
+        create: async () => ({ data: { id: "s-5" } }),
+        promptAsync: async () => {
+          steps.push("prompt");
+          return { data: {} };
+        },
+        delete: async () => {
+          steps.push("delete");
+          return { data: {} };
+        },
+      },
+    } as unknown as OpencodeClient;
+
+    await createSessionWithPrompt({
+      client,
+      text: "hello",
+      agent: "build",
+      model: { providerID: "openai", modelID: "gpt-4.1" },
+      onCreated: () => {
+        steps.push("created");
+      },
+    });
+
+    expect(steps).toEqual(["prompt", "created"]);
   });
 });
