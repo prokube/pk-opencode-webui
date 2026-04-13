@@ -94,6 +94,19 @@ function followupStorageKey(dir: string) {
   return `opencode.followup.${dir}`;
 }
 
+function normalizeFollowupList(value: unknown) {
+  if (!Array.isArray(value)) return;
+  const next: FollowupItem[] = [];
+  for (const item of value) {
+    if (!item || typeof item !== "object" || Array.isArray(item)) continue;
+    const id = (item as { id?: unknown }).id;
+    const text = (item as { text?: unknown }).text;
+    if (typeof id !== "string" || typeof text !== "string") continue;
+    next.push({ id, text });
+  }
+  return next;
+}
+
 export function Session() {
   const params = useParams<{ dir: string; id?: string }>();
   const navigate = useNavigate();
@@ -296,7 +309,13 @@ export function Session() {
         clearFollowupStorageKey();
         return {} as Record<string, FollowupItem[] | undefined>;
       }
-      return parsed as Record<string, FollowupItem[] | undefined>;
+      const map = {} as Record<string, FollowupItem[] | undefined>;
+      for (const [id, value] of Object.entries(parsed)) {
+        const list = normalizeFollowupList(value);
+        if (!list) continue;
+        map[id] = list;
+      }
+      return map;
     } catch {
       clearFollowupStorageKey();
       return {} as Record<string, FollowupItem[] | undefined>;
