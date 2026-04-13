@@ -3,6 +3,7 @@ import { Portal } from "solid-js/web"
 import { useParams } from "@solidjs/router"
 import { useSync } from "../context/sync"
 import { useProviders } from "../context/providers"
+import type { ProviderListResponse } from "../sdk/gen/types.gen"
 import { getContextTokens } from "../utils/tokens"
 import { Zap, CornerDownLeft, Square } from "lucide-solid"
 
@@ -11,44 +12,8 @@ interface ModelKey {
   modelID: string
 }
 
-interface ModelInfo {
-  id: string
-  name: string
-  family?: string
-  status?: "alpha" | "beta" | "deprecated" | "active"
-  release_date?: string
-  limit?: {
-    context?: number
-    input?: number
-    output?: number
-  }
-  capabilities?: {
-    reasoning?: boolean
-    toolcall?: boolean
-    attachment?: boolean
-    interleaved?: boolean | { field: "reasoning_content" | "reasoning_details" }
-    input?: {
-      audio?: boolean
-      image?: boolean
-      video?: boolean
-      pdf?: boolean
-    }
-    output?: {
-      audio?: boolean
-      image?: boolean
-      video?: boolean
-      pdf?: boolean
-    }
-  }
-  cost?: {
-    input?: number
-    output?: number
-    cache?: {
-      read?: number
-      write?: number
-    }
-  }
-}
+type ProviderEntry = ProviderListResponse["all"][number]
+type ProviderModel = ProviderEntry["models"][string]
 
 interface SessionInfoProps {
   input: () => string
@@ -184,8 +149,8 @@ export function SessionInfo(props: SessionInfoProps) {
   const modelInfo = createMemo(() => {
     const selected = props.sessionModel()
     if (!selected) return null
-    const provider = providers.providers.find((p: { id: string; name: string }) => p.id === selected.providerID)
-    const model = provider?.models[selected.modelID] as ModelInfo | undefined
+    const provider = providers.providers.find((p: { id: string }) => p.id === selected.providerID) as ProviderEntry | undefined
+    const model = provider?.models[selected.modelID] as ProviderModel | undefined
     return {
       providerID: selected.providerID,
       providerName: provider?.name || selected.providerID,
@@ -197,30 +162,37 @@ export function SessionInfo(props: SessionInfoProps) {
       contextLimit: model?.limit?.context,
       inputLimit: model?.limit?.input,
       outputLimit: model?.limit?.output,
-      capabilities: model?.capabilities,
+      reasoning: model?.reasoning,
+      toolCall: model?.tool_call,
+      attachment: model?.attachment,
+      interleaved: model?.interleaved,
+      modalitiesInput: model?.modalities?.input,
+      modalitiesOutput: model?.modalities?.output,
       costInput: model?.cost?.input,
       costOutput: model?.cost?.output,
-      costCacheRead: model?.cost?.cache?.read,
-      costCacheWrite: model?.cost?.cache?.write,
+      costCacheRead: model?.cost?.cache_read,
+      costCacheWrite: model?.cost?.cache_write,
     }
   })
 
   const modelCapabilities = createMemo(() => {
     const meta = modelInfo()
-    if (!meta?.capabilities) return ""
+    if (!meta) return ""
+    const input = meta.modalitiesInput ?? []
+    const output = meta.modalitiesOutput ?? []
     const list = [
-      meta.capabilities.reasoning ? "reasoning" : "",
-      meta.capabilities.toolcall ? "tools" : "",
-      meta.capabilities.attachment ? "attachments" : "",
-      meta.capabilities.interleaved ? "interleaved" : "",
-      meta.capabilities.input?.image ? "image input" : "",
-      meta.capabilities.input?.audio ? "audio input" : "",
-      meta.capabilities.input?.video ? "video input" : "",
-      meta.capabilities.input?.pdf ? "pdf input" : "",
-      meta.capabilities.output?.image ? "image output" : "",
-      meta.capabilities.output?.audio ? "audio output" : "",
-      meta.capabilities.output?.video ? "video output" : "",
-      meta.capabilities.output?.pdf ? "pdf output" : "",
+      meta.reasoning ? "reasoning" : "",
+      meta.toolCall ? "tools" : "",
+      meta.attachment ? "attachments" : "",
+      meta.interleaved ? "interleaved" : "",
+      input.includes("image") ? "image input" : "",
+      input.includes("audio") ? "audio input" : "",
+      input.includes("video") ? "video input" : "",
+      input.includes("pdf") ? "pdf input" : "",
+      output.includes("image") ? "image output" : "",
+      output.includes("audio") ? "audio output" : "",
+      output.includes("video") ? "video output" : "",
+      output.includes("pdf") ? "pdf output" : "",
     ].filter(Boolean)
     return list.join(", ")
   })
@@ -241,6 +213,7 @@ export function SessionInfo(props: SessionInfoProps) {
 
   const [showModelPopover, setShowModelPopover] = createSignal(false)
   const [modelPopoverPos, setModelPopoverPos] = createSignal({ top: 0, left: 0 })
+  const hasModelPopover = createMemo(() => showModelPopover() && !!modelInfo())
   let modelTriggerRef: HTMLButtonElement | undefined
   let modelPopoverHideTimer: number | undefined
 
@@ -352,13 +325,13 @@ export function SessionInfo(props: SessionInfoProps) {
             onMouseLeave={scheduleModelPopoverHide}
             onFocus={openModelPopover}
             onBlur={scheduleModelPopoverHide}
-            aria-describedby={showModelPopover() ? "model-info-popover" : undefined}
+            aria-describedby={hasModelPopover() ? "model-info-popover" : undefined}
           >
             <span class="opacity-60 shrink-0">Model:</span>
             <span class="truncate" style={{ color: "var(--text-base)" }}>{modelLabel()}</span>
           </button>
 
-          <Show when={showModelPopover() && modelInfo()}>
+          <Show when={hasModelPopover() && modelInfo()}>
             {(meta) => (
               <Portal>
                 <div
