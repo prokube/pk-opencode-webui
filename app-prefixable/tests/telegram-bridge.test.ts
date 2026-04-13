@@ -1635,7 +1635,10 @@ describe("telegram bridge config and cache", () => {
       const sentTexts = calls
         .filter((x) => x.url.includes("/sendMessage"))
         .map((x) => String(x.body.text || ""));
-      expect(sentTexts).toEqual(["Question pending: Need input\n\nOpen session session-1"]);
+      expect(sentTexts).toHaveLength(1);
+      expect(sentTexts[0]).toContain("Question pending:");
+      expect(sentTexts[0]).toContain("Need input");
+      expect(sentTexts[0]).toContain("Open session session-1");
     } finally {
       Object.assign(globalThis, { TextDecoder: OriginalDecoder });
     }
@@ -1695,6 +1698,241 @@ describe("telegram bridge config and cache", () => {
     const sentTexts = calls
       .filter((x) => x.url.includes("/sendMessage"))
       .map((x) => String(x.body.text || ""));
-    expect(sentTexts).toEqual(["Question pending: Need caf\u00e9\n\nOpen session session-1"]);
+    expect(sentTexts).toHaveLength(1);
+    expect(sentTexts[0]).toContain("Question pending:");
+    expect(sentTexts[0]).toContain("Need caf\u00e9");
+    expect(sentTexts[0]).toContain("Open session session-1");
+  });
+
+  test("question prompt supports choice reply index and sends answer to OpenCode", async () => {
+    const calls: Array<{ url: string; body: Record<string, unknown> }> = [];
+    const originalFetch = globalThis.fetch;
+    const pending = new Map<string, unknown[]>();
+    const key = "chat:77";
+    try {
+      globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        const body = init?.body ? (JSON.parse(String(init.body)) as Record<string, unknown>) : {};
+        calls.push({ url, body });
+        if (url.includes("/sendMessage")) {
+          return new Response(JSON.stringify({ ok: true, result: { message_id: 1 } }), { status: 200 });
+        }
+        if (url.includes("/question/req-1/reply")) {
+          return new Response(JSON.stringify(true), { status: 200 });
+        }
+        throw new Error(`Unexpected fetch ${url}`);
+      };
+
+      const runtime = {
+        config: {
+          mode: "polling" as const,
+          token: "token",
+          openCodeUrl: "http://127.0.0.1:4096",
+          sessionCacheMax: 10,
+          sessionCacheTtlMs: 10_000,
+          notificationDebounceMs: 0,
+          port: 4097,
+          webhookPath: "/webhook",
+          sessionStorePath: "/tmp/test-store.json",
+        },
+        store: {
+          get: async () => undefined,
+          set: async () => undefined,
+          delete: async () => undefined,
+          questionList: async (name: string) => (pending.get(name) || []) as unknown[],
+          questionUpsert: async (name: string, row: unknown) => {
+            pending.set(name, [row]);
+          },
+          questionDelete: async (name: string, requestId: string) => {
+            const rows = (pending.get(name) || []) as Array<{ requestId?: string }>;
+            pending.set(
+              name,
+              rows.filter((row) => row.requestId !== requestId),
+            );
+          },
+          sessionKeys: async () => ["chat:77:user:5"],
+          notificationGet: async () => true,
+        },
+      };
+
+      await handleBridgeEvent(runtime, {
+        type: "question.asked",
+        properties: {
+          id: "req-1",
+          sessionID: "session-1",
+          questions: [{ header: "Pick one", options: [{ label: "Alpha" }, { label: "Beta" }] }],
+        },
+      });
+
+      await handleTextUpdate(runtime, {
+        update_id: 2,
+        message: { message_id: 2, text: "2", chat: { id: 77 }, from: { id: 5 } },
+      });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+
+    const replyCall = calls.find((x) => x.url.includes("/question/req-1/reply"));
+    expect(replyCall?.body.answers).toEqual([["Beta"]]);
+    const sentTexts = calls
+      .filter((x) => x.url.includes("/sendMessage"))
+      .map((x) => String(x.body.text || ""));
+    expect(sentTexts.some((text) => text.includes("1) Alpha"))).toBe(true);
+    expect(sentTexts.some((text) => text.includes("Thanks, your answer was sent."))).toBe(true);
+  });
+
+  test("question prompt accepts custom text, rejects stale, and keeps bridge running", async () => {
+    const calls: Array<{ url: string; body: Record<string, unknown> }> = [];
+    const originalFetch = globalThis.fetch;
+    const pending = new Map<string, unknown[]>();
+    try {
+      globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        const body = init?.body ? (JSON.parse(String(init.body)) as Record<string, unknown>) : {};
+        calls.push({ url, body });
+        if (url.includes("/sendMessage")) {
+          return new Response(JSON.stringify({ ok: true, result: { message_id: 1 } }), { status: 200 });
+        }
+        if (url.includes("/question/req-2/reply")) {
+          return new Response("not found", { status: 404 });
+        }
+        throw new Error(`Unexpected fetch ${url}`);
+      };
+
+      const runtime = {
+        config: {
+          mode: "polling" as const,
+          token: "token",
+          openCodeUrl: "http://127.0.0.1:4096",
+          sessionCacheMax: 10,
+          sessionCacheTtlMs: 10_000,
+          notificationDebounceMs: 0,
+          port: 4097,
+          webhookPath: "/webhook",
+          sessionStorePath: "/tmp/test-store.json",
+        },
+        store: {
+          get: async () => undefined,
+          set: async () => undefined,
+          delete: async () => undefined,
+          questionList: async (name: string) => (pending.get(name) || []) as unknown[],
+          questionUpsert: async (name: string, row: unknown) => {
+            pending.set(name, [row]);
+          },
+          questionDelete: async (name: string, requestId: string) => {
+            const rows = (pending.get(name) || []) as Array<{ requestId?: string }>;
+            pending.set(
+              name,
+              rows.filter((row) => row.requestId !== requestId),
+            );
+          },
+          sessionKeys: async () => ["chat:66:user:2"],
+          notificationGet: async () => true,
+        },
+      };
+
+      await handleBridgeEvent(runtime, {
+        type: "question.asked",
+        properties: {
+          id: "req-2",
+          sessionID: "session-2",
+          questions: [{ header: "Need details", options: [{ label: "Yes" }, { label: "No" }], custom: true }],
+        },
+      });
+
+      await handleTextUpdate(runtime, {
+        update_id: 10,
+        message: { message_id: 10, text: "I need a custom answer", chat: { id: 66 }, from: { id: 2 } },
+      });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+
+    const replyCall = calls.find((x) => x.url.includes("/question/req-2/reply"));
+    expect(replyCall?.body.answers).toEqual([["I need a custom answer"]]);
+    const sentTexts = calls
+      .filter((x) => x.url.includes("/sendMessage"))
+      .map((x) => String(x.body.text || ""));
+    expect(sentTexts.some((text) => text.includes("That question is no longer pending."))).toBe(true);
+  });
+
+  test("question reply retries transient OpenCode failures", async () => {
+    const calls: Array<{ url: string; body: Record<string, unknown> }> = [];
+    const originalFetch = globalThis.fetch;
+    const pending = new Map<string, unknown[]>();
+    let failures = 0;
+    try {
+      globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        const body = init?.body ? (JSON.parse(String(init.body)) as Record<string, unknown>) : {};
+        calls.push({ url, body });
+        if (url.includes("/sendMessage")) {
+          return new Response(JSON.stringify({ ok: true, result: { message_id: 1 } }), { status: 200 });
+        }
+        if (url.includes("/question/req-retry/reply")) {
+          failures += 1;
+          if (failures < 3) {
+            return new Response("temporary", { status: 500 });
+          }
+          return new Response(JSON.stringify(true), { status: 200 });
+        }
+        throw new Error(`Unexpected fetch ${url}`);
+      };
+
+      const runtime = {
+        config: {
+          mode: "polling" as const,
+          token: "token",
+          openCodeUrl: "http://127.0.0.1:4096",
+          sessionCacheMax: 10,
+          sessionCacheTtlMs: 10_000,
+          notificationDebounceMs: 0,
+          port: 4097,
+          webhookPath: "/webhook",
+          sessionStorePath: "/tmp/test-store.json",
+        },
+        store: {
+          get: async () => undefined,
+          set: async () => undefined,
+          delete: async () => undefined,
+          questionList: async (name: string) => (pending.get(name) || []) as unknown[],
+          questionUpsert: async (name: string, row: unknown) => {
+            pending.set(name, [row]);
+          },
+          questionDelete: async (name: string, requestId: string) => {
+            const rows = (pending.get(name) || []) as Array<{ requestId?: string }>;
+            pending.set(
+              name,
+              rows.filter((row) => row.requestId !== requestId),
+            );
+          },
+          sessionKeys: async () => ["chat:55:user:1"],
+          notificationGet: async () => true,
+        },
+      };
+
+      await handleBridgeEvent(runtime, {
+        type: "question.asked",
+        properties: {
+          id: "req-retry",
+          sessionID: "session-3",
+          questions: [{ header: "Pick", options: [{ label: "One" }] }],
+        },
+      });
+
+      await handleTextUpdate(runtime, {
+        update_id: 20,
+        message: { message_id: 20, text: "1", chat: { id: 55 }, from: { id: 1 } },
+      });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+
+    const replyCalls = calls.filter((x) => x.url.includes("/question/req-retry/reply"));
+    expect(replyCalls).toHaveLength(3);
+    const sentTexts = calls
+      .filter((x) => x.url.includes("/sendMessage"))
+      .map((x) => String(x.body.text || ""));
+    expect(sentTexts.some((text) => text.includes("Thanks, your answer was sent."))).toBe(true);
   });
 });
