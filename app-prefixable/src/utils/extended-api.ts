@@ -75,6 +75,17 @@ interface SavedPromptsPayload {
   project: StoredPrompt[]
 }
 
+function isStoredPrompt(p: unknown): p is StoredPrompt {
+  if (!p || typeof p !== "object") return false
+  const row = p as Record<string, unknown>
+  if (typeof row.id !== "string") return false
+  if (typeof row.title !== "string") return false
+  if (typeof row.text !== "string") return false
+  if (typeof row.createdAt !== "number") return false
+  if (row.scope !== "global" && row.scope !== "project") return false
+  return true
+}
+
 export async function readSavedPrompts(serverUrl: string, directory?: string): Promise<SavedPromptsPayload> {
   const params = new URLSearchParams()
   if (directory) params.set("directory", directory)
@@ -88,8 +99,8 @@ export async function readSavedPrompts(serverUrl: string, directory?: string): P
     return { global: [], project: [] }
   }
   return {
-    global: data.global,
-    project: data.project,
+    global: data.global.filter(isStoredPrompt),
+    project: data.project.filter(isStoredPrompt),
   }
 }
 
