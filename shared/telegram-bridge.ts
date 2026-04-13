@@ -1,4 +1,4 @@
-import { createTelegramSessionStore, telegramSessionKey } from "./telegram-session-store"
+import { createTelegramSessionStore, telegramSessionKey, type TelegramPendingItem } from "./telegram-session-store"
 import { loadTelegramBridgeSettings } from "./telegram-settings"
 
 type TelegramUpdate = {
@@ -53,6 +53,10 @@ const chatQueues = new Map<string, Promise<void>>()
 const eventNotifications = new Map<string, number>()
 const statusBySession = new Map<string, string>()
 const fallbackNotifications = new Map<string, boolean>()
+const fallbackPending = new Map<string, TelegramPendingItem[]>()
+const pendingRetentionMs = 3 * 24 * 60 * 60 * 1000
+const pendingMaxItems = 60
+const pendingDigestMax = 8
 
 const telegramCommands = Object.freeze([
   Object.freeze({
@@ -67,6 +71,14 @@ const telegramCommands = Object.freeze([
     name: "notify",
     text: "Control proactive notifications",
     args: "on|off|status",
+  }),
+  Object.freeze({
+    name: "pending",
+    text: "Show pending inbox items",
+  }),
+  Object.freeze({
+    name: "inbox",
+    text: "Alias for /pending",
   }),
   Object.freeze({
     name: "help",
@@ -188,6 +200,93 @@ async function setNotificationEnabled(runtime: Runtime, key: string, enabled: bo
     return
   }
   fallbackNotifications.delete(key)
+}
+
+function prunePending(items: TelegramPendingItem[], now: number): TelegramPendingItem[] {
+  const minStamp = now - pendingRetentionMs
+  const kept = items
+    .filter((item) => item.stampedAt >= minStamp)
+    .sort((a, b) => b.stampedAt - a.stampedAt)
+    .slice(0, pendingMaxItems)
+  return kept
+}
+
+async function pendingGet(runtime: Runtime, key: string): Promise<TelegramPendingItem[]> {
+  const now = Date.now()
+  const source = runtime.store.pendingGet
+    ? await runtime.store.pendingGet(key)
+    : fallbackPending.get(key) || []
+  const next = prunePending(source, now)
+  if (runtime.store.pendingSet) {
+    const changed = next.length !== source.length || next.some((item, i) => item.id !== source[i]?.id)
+    if (changed) {
+      await runtime.store.pendingSet(key, next)
+    }
+    return next
+  }
+  fallbackPending.set(key, next)
+  return next
+}
+
+async function pendingSet(runtime: Runtime, key: string, items: TelegramPendingItem[]): Promise<void> {
+  const next = prunePending(items, Date.now())
+  if (runtime.store.pendingSet) {
+    await runtime.store.pendingSet(key, next)
+    return
+  }
+  if (!next.length) {
+    fallbackPending.delete(key)
+    return
+  }
+  fallbackPending.set(key, next)
+}
+
+function pendingChatKey(chatId: number): string {
+  return telegramSessionKey(chatId)
+}
+
+function pendingHint(item: TelegramPendingItem): string {
+  if (item.kind === "question") return "reply with the needed answer, or use /status"
+  if (item.kind === "permission") return "review in chat and reply to approve or deny"
+  return "use /status for details"
+}
+
+function pendingMessage(items: TelegramPendingItem[]): string {
+  const actionable = items.filter((item) => !item.resolved && item.kind !== "task-finished")
+  const finished = items.filter((item) => item.kind === "task-finished").slice(0, 3)
+  if (!actionable.length && !finished.length) {
+    return "Pending inbox is clear for this chat. Use /status for your current session or /new to start one."
+  }
+  const combined = [...actionable, ...finished].slice(0, pendingDigestMax)
+  const lines = combined.map((item, index) => {
+    const mins = Math.max(1, Math.round((Date.now() - item.stampedAt) / 60_000))
+    const label = item.kind === "task-finished" ? "finished" : item.kind
+    return `${index + 1}. [${label}] ${item.text} (${mins}m ago, session ${item.sessionId})`
+  })
+  const first = combined[0]
+  const hint = first ? pendingHint(first) : "use /status"
+  const more = actionable.length + finished.length - combined.length
+  const extra = more > 0 ? `\n+${more} more item(s) retained.` : ""
+  return `Pending inbox for this chat:\n${lines.join("\n")}\n\nNext: ${hint}.${extra}`
+}
+
+async function appendPending(runtime: Runtime, chatId: number, entry: TelegramPendingItem) {
+  const key = pendingChatKey(chatId)
+  const items = await pendingGet(runtime, key)
+  const next = [entry, ...items.filter((item) => item.id !== entry.id)]
+  await pendingSet(runtime, key, next)
+}
+
+async function resolvePendingForSession(runtime: Runtime, chatId: number, sessionId: string) {
+  const key = pendingChatKey(chatId)
+  const items = await pendingGet(runtime, key)
+  const next = items.map((item) => {
+    if (item.sessionId !== sessionId) return item
+    if (item.resolved) return item
+    if (item.kind === "task-finished") return item
+    return { ...item, resolved: true }
+  })
+  await pendingSet(runtime, key, next)
 }
 
 function sessionLabel(config: BridgeConfig, sessionId: string): string {
@@ -577,6 +676,11 @@ export async function handleTextUpdate(runtime: Runtime, update: TelegramUpdate)
       await sendTelegramMessage(config, chatId, "Usage: /notify on, /notify off, or /notify status")
       return true
     }
+    if (known?.name === "pending" || known?.name === "inbox") {
+      const items = await pendingGet(runtime, pendingChatKey(chatId))
+      await sendTelegramMessage(config, chatId, pendingMessage(items))
+      return true
+    }
     const suggestions = commandSuggestions(command.name)
     const suggestionText = suggestions.length
       ? `Try ${suggestions.join(", ")} or use /help.`
@@ -590,6 +694,7 @@ export async function handleTextUpdate(runtime: Runtime, update: TelegramUpdate)
     if (handled) return
 
     const sessionId = await sessionForChat(runtime, key)
+    await resolvePendingForSession(runtime, chatId, sessionId)
     const reply = await sendPrompt(config, sessionId, text).catch(async (error) => {
       if (!isMissingSession(error)) {
         throw error
@@ -613,10 +718,26 @@ export async function handleTextUpdate(runtime: Runtime, update: TelegramUpdate)
 async function notifySessionKeys(runtime: Runtime, sessionId: string, kind: string, text: string) {
   if (!runtime.store.sessionKeys) return
   const keys = await runtime.store.sessionKeys(sessionId)
+  const chats = new Set<number>()
   for (const key of keys) {
     try {
       const parsed = parseTelegramKey(key)
       if (!parsed) continue
+      if (!chats.has(parsed.chatId)) {
+        chats.add(parsed.chatId)
+        const entry: TelegramPendingItem = {
+          id: `${sessionId}:${kind}:${Date.now()}:${parsed.chatId}`,
+          kind: kind === "task-finished" ? "task-finished" : kind === "permission" ? "permission" : "question",
+          sessionId,
+          text,
+          stampedAt: Date.now(),
+          resolved: kind === "task-finished",
+        }
+        await appendPending(runtime, parsed.chatId, entry)
+        if (kind === "task-finished") {
+          await resolvePendingForSession(runtime, parsed.chatId, sessionId)
+        }
+      }
       if (!(await notificationEnabled(runtime, notificationKey(parsed.chatId)))) continue
       if (!shouldNotify(runtime.config, parsed.chatId, kind, sessionId)) continue
       const message = `${text}\n\nOpen ${sessionLabel(runtime.config, sessionId)}`
@@ -675,6 +796,17 @@ export async function handleBridgeEvent(runtime: Runtime, event: { type: string;
     const deletedSessionId = typeof info?.id === "string" ? info.id : sessionId
     if (!deletedSessionId) return
     statusBySession.delete(deletedSessionId)
+    if (runtime.store.sessionKeys) {
+      const keys = await runtime.store.sessionKeys(deletedSessionId)
+      const chats = new Set<number>()
+      for (const key of keys) {
+        const parsed = parseTelegramKey(key)
+        if (!parsed) continue
+        if (chats.has(parsed.chatId)) continue
+        chats.add(parsed.chatId)
+        await resolvePendingForSession(runtime, parsed.chatId, deletedSessionId)
+      }
+    }
     return
   }
   if (!sessionId) return
@@ -837,4 +969,5 @@ export function resetSessionCacheForTest() {
   eventNotifications.clear()
   statusBySession.clear()
   fallbackNotifications.clear()
+  fallbackPending.clear()
 }

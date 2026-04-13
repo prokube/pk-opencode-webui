@@ -65,11 +65,13 @@ describe("telegram session store", () => {
       version?: number
       sessions?: Record<string, string>
       notifications?: Record<string, boolean>
+      inbox?: Record<string, unknown>
     }
-    expect(stored.version).toBe(2)
+    expect(stored.version).toBe(3)
     expect(stored.sessions?.[keyA]).toBe(session)
     expect(stored.sessions?.[keyB]).toBe(session)
     expect(stored.notifications).toEqual({})
+    expect(stored.inbox).toEqual({})
   })
 
   test("telegramSessionKey uses chat-only key without user id", () => {
@@ -183,6 +185,32 @@ describe("telegram session store", () => {
     expect(await second.notificationGet?.(key)).toBe(false)
   })
 
+  test("persists pending inbox entries across restarts", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "telegram-session-store-"))
+    const path = join(dir, "sessions.json")
+    const key = telegramSessionKey(881)
+    files.push(path)
+    files.push(dir)
+
+    const first = createTelegramSessionStore(path)
+    await first.pendingSet?.(key, [
+      {
+        id: "entry-1",
+        kind: "question",
+        sessionId: "session-a",
+        text: "Question pending: Need input",
+        stampedAt: Date.now(),
+        resolved: false,
+      },
+    ])
+
+    const second = createTelegramSessionStore(path)
+    const entries = await second.pendingGet?.(key)
+    expect(entries).toHaveLength(1)
+    expect(entries?.[0]?.id).toBe("entry-1")
+    expect(entries?.[0]?.kind).toBe("question")
+  })
+
   test("sessionKeys returns all mappings for a session", async () => {
     const dir = await mkdtemp(join(tmpdir(), "telegram-session-store-"))
     const path = join(dir, "sessions.json")
@@ -196,5 +224,28 @@ describe("telegram session store", () => {
 
     const keys = await first.sessionKeys?.("session-a")
     expect(keys?.sort()).toEqual([telegramSessionKey(400, 1), telegramSessionKey(401, 2)])
+  })
+
+  test("persists pending inbox entries across store instances", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "telegram-session-store-"))
+    const path = join(dir, "sessions.json")
+    const key = telegramSessionKey(505)
+    files.push(path)
+    files.push(dir)
+
+    const entry = {
+      id: "pending-1",
+      kind: "question" as const,
+      sessionId: "session-505",
+      text: "Question pending: Confirm deployment window",
+      stampedAt: Date.now(),
+      resolved: false,
+    }
+
+    const first = createTelegramSessionStore(path)
+    await first.pendingSet?.(key, [entry])
+
+    const second = createTelegramSessionStore(path)
+    expect(await second.pendingGet?.(key)).toEqual([entry])
   })
 })
