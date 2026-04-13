@@ -46,9 +46,24 @@ function canonicalDirectory(directory: string | undefined): string | undefined {
   return normalized
 }
 
-function projectKey(directory: string): string {
-  const normalized = canonicalDirectory(directory)
-  return `opencode.savedPrompts.${normalized || directory}`
+function legacyDirectory(directory: string | undefined): string | undefined {
+  if (!directory) return undefined
+  const trimmed = directory.trim()
+  if (!trimmed) return undefined
+  if (trimmed === "/" || trimmed === "\\") return trimmed
+  const normalized = trimmed.replace(/[\\/]+$/, "")
+  if (normalized) return normalized
+  return trimmed[0] === "\\" ? "\\" : "/"
+}
+
+function projectKeys(directory: string | undefined): string[] {
+  const canonical = canonicalDirectory(directory)
+  const legacy = legacyDirectory(directory)
+  if (!canonical && !legacy) return []
+  if (!canonical) return [`opencode.savedPrompts.${legacy}`]
+  if (!legacy) return [`opencode.savedPrompts.${canonical}`]
+  if (canonical === legacy) return [`opencode.savedPrompts.${canonical}`]
+  return [`opencode.savedPrompts.${canonical}`, `opencode.savedPrompts.${legacy}`]
 }
 
 const SavedPromptsContext = createContext<SavedPromptsContextValue>()
@@ -85,12 +100,17 @@ function readLegacyGlobal() {
 }
 
 function readLegacyProject(directory: string | undefined) {
-  if (!directory) return []
-  try {
-    return parseStorage(localStorage.getItem(projectKey(directory)), "project")
-  } catch {
-    return []
+  const keys = projectKeys(directory)
+  if (keys.length === 0) return []
+  let prompts: SavedPrompt[] = []
+  for (const key of keys) {
+    try {
+      prompts = mergeUnique(prompts, parseStorage(localStorage.getItem(key), "project"))
+    } catch {
+      // noop
+    }
   }
+  return prompts
 }
 
 function clearLegacy(directory: string | undefined) {
@@ -99,11 +119,13 @@ function clearLegacy(directory: string | undefined) {
   } catch {
     // noop
   }
-  if (!directory) return
-  try {
-    localStorage.removeItem(projectKey(directory))
-  } catch {
-    // noop
+  const keys = projectKeys(directory)
+  for (const key of keys) {
+    try {
+      localStorage.removeItem(key)
+    } catch {
+      // noop
+    }
   }
 }
 
