@@ -11,6 +11,126 @@ interface ModelKey {
   modelID: string
 }
 
+type Tokens = {
+  input?: number
+  output?: number
+  reasoning?: number
+  cache?: { read?: number; write?: number }
+}
+
+type AssistantMeta = {
+  role?: string
+  tokens?: Tokens
+  modelID?: string
+  providerID?: string
+  cost?: number
+}
+
+type ModelMeta = {
+  id?: string
+  name?: string
+  family?: string
+  status?: string
+  release_date?: string
+  limit?: { context?: number; input?: number; output?: number }
+  reasoning?: boolean
+  tool_call?: boolean
+  attachment?: boolean
+  interleaved?: boolean | { field?: "reasoning_content" | "reasoning_details" }
+  modalities?: { input?: string[]; output?: string[] }
+  cost?: { input?: number; output?: number; cache_read?: number; cache_write?: number }
+}
+
+function obj(value: unknown) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined
+  return value as Record<string, unknown>
+}
+
+function num(value: unknown) {
+  if (typeof value !== "number" || !Number.isFinite(value)) return undefined
+  return value
+}
+
+function str(value: unknown) {
+  if (typeof value !== "string") return undefined
+  return value
+}
+
+function bool(value: unknown) {
+  if (typeof value !== "boolean") return undefined
+  return value
+}
+
+function interleaved(value: unknown): ModelMeta["interleaved"] | undefined {
+  if (value === true) return true
+  const data = obj(value)
+  if (!data) return undefined
+  const field = str(data.field)
+  if (field === "reasoning_content" || field === "reasoning_details") return { field }
+  return undefined
+}
+
+function arr(value: unknown) {
+  if (!Array.isArray(value)) return undefined
+  return value.filter((x): x is string => typeof x === "string")
+}
+
+function assistantMeta(value: unknown): AssistantMeta | undefined {
+  const info = obj(value)
+  if (!info || info.role !== "assistant") return undefined
+  const tokensRaw = obj(info.tokens)
+  const cacheRaw = obj(tokensRaw?.cache)
+  return {
+    role: "assistant",
+    modelID: str(info.modelID),
+    providerID: str(info.providerID),
+    cost: num(info.cost),
+    tokens: {
+      input: num(tokensRaw?.input),
+      output: num(tokensRaw?.output),
+      reasoning: num(tokensRaw?.reasoning),
+      cache: {
+        read: num(cacheRaw?.read),
+        write: num(cacheRaw?.write),
+      },
+    },
+  }
+}
+
+function modelMeta(value: unknown): ModelMeta | undefined {
+  const model = obj(value)
+  if (!model) return undefined
+  const limit = obj(model.limit)
+  const modalities = obj(model.modalities)
+  const cost = obj(model.cost)
+  return {
+    id: str(model.id),
+    name: str(model.name),
+    family: str(model.family),
+    status: str(model.status),
+    release_date: str(model.release_date),
+    limit: {
+      context: num(limit?.context),
+      input: num(limit?.input),
+      output: num(limit?.output),
+    },
+    reasoning: bool(model.reasoning),
+    tool_call: bool(model.tool_call),
+    attachment: bool(model.attachment),
+    interleaved: interleaved(model.interleaved),
+    modalities: {
+      input: arr(modalities?.input),
+      output: arr(modalities?.output),
+    },
+    cost: {
+      input: num(cost?.input),
+      output: num(cost?.output),
+      cache_read: num(cost?.cache_read),
+      cache_write: num(cost?.cache_write),
+    },
+  }
+}
+
 interface SessionInfoProps {
   input: () => string
   loading: () => boolean
@@ -49,16 +169,9 @@ export function SessionInfo(props: SessionInfoProps) {
     // Calculate cumulative cost across all assistant messages
     let totalCost = 0
     for (const msg of msgs) {
-      if (msg.info?.role === "assistant") {
-        totalCost += (msg.info as { cost?: number }).cost || 0
-      }
-    }
-
-    // Type for assistant message info
-    type AssistantInfo = {
-      tokens?: { input?: number; output?: number; reasoning?: number; cache?: { read?: number; write?: number } }
-      modelID?: string
-      providerID?: string
+      const info = assistantMeta(msg.info)
+      if (!info) continue
+      totalCost += info.cost || 0
     }
 
     // Find last assistant message with context tokens (current context state)
@@ -75,8 +188,8 @@ export function SessionInfo(props: SessionInfoProps) {
     } | null = null
     for (let i = msgs.length - 1; i >= 0; i--) {
       const msg = msgs[i]
-      if (msg.info?.role !== "assistant") continue
-      const info = msg.info as AssistantInfo
+      const info = assistantMeta(msg.info)
+      if (!info) continue
       const contextTokens = getContextTokens(info.tokens)
       if (contextTokens > 0) {
         lastAssistant = {
@@ -142,11 +255,122 @@ export function SessionInfo(props: SessionInfoProps) {
     return model?.name || selected.modelID
   })
 
-  // Token popover state — reset when session changes
+  const modelInfo = createMemo(() => {
+    const selected = props.sessionModel()
+    if (!selected) return null
+    const provider = providers.providers.find((p: { id: string }) => p.id === selected.providerID)
+    const model = modelMeta(provider?.models[selected.modelID])
+    return {
+      providerID: selected.providerID,
+      providerName: provider?.name || selected.providerID,
+      modelID: model?.id || selected.modelID,
+      modelName: model?.name || selected.modelID,
+      family: model?.family,
+      status: model?.status,
+      releaseDate: model?.release_date,
+      contextLimit: model?.limit?.context,
+      inputLimit: model?.limit?.input,
+      outputLimit: model?.limit?.output,
+      reasoning: model?.reasoning,
+      toolCall: model?.tool_call,
+      attachment: model?.attachment,
+      interleaved: model?.interleaved,
+      modalitiesInput: model?.modalities?.input,
+      modalitiesOutput: model?.modalities?.output,
+      costInput: model?.cost?.input,
+      costOutput: model?.cost?.output,
+      costCacheRead: model?.cost?.cache_read,
+      costCacheWrite: model?.cost?.cache_write,
+    }
+  })
+
+  const modelCapabilities = createMemo(() => {
+    const meta = modelInfo()
+    if (!meta) return ""
+    const input = meta.modalitiesInput ?? []
+    const output = meta.modalitiesOutput ?? []
+    const list = [
+      meta.reasoning ? "reasoning" : "",
+      meta.toolCall ? "tools" : "",
+      meta.attachment ? "attachments" : "",
+      meta.interleaved ? "interleaved" : "",
+      input.includes("image") ? "image input" : "",
+      input.includes("audio") ? "audio input" : "",
+      input.includes("video") ? "video input" : "",
+      input.includes("pdf") ? "pdf input" : "",
+      output.includes("image") ? "image output" : "",
+      output.includes("audio") ? "audio output" : "",
+      output.includes("video") ? "video output" : "",
+      output.includes("pdf") ? "pdf output" : "",
+    ].filter(Boolean)
+    return list.join(", ")
+  })
+
+  const fmtMoney = (n: number) => {
+    if (!Number.isFinite(n)) return ""
+    if (n === 0) return "$0"
+    if (n >= 1) return `$${n.toFixed(2)}`
+    if (n >= 0.01) return `$${n.toFixed(4)}`
+    const d = Math.min(12, Math.max(4, Math.ceil(-Math.log10(Math.max(n, Number.MIN_VALUE))) + 2))
+    return `$${n.toFixed(d).replace(/\.?0+$/, "")}`
+  }
+
+  const fmtDate = (value: string) => {
+    const dateOnly = value.match(/^(\d{4})-(\d{2})-(\d{2})$/)
+    if (dateOnly) {
+      const y = Number(dateOnly[1])
+      const m = Number(dateOnly[2])
+      const d = Number(dateOnly[3])
+      const date = new Date(Date.UTC(y, m - 1, d))
+      if (date.getUTCFullYear() !== y || date.getUTCMonth() !== m - 1 || date.getUTCDate() !== d) return value
+      return new Intl.DateTimeFormat("en-US", { dateStyle: "medium", timeZone: "UTC" }).format(date)
+    }
+    const date = new Date(value)
+    if (Number.isNaN(date.getTime())) return value
+    return new Intl.DateTimeFormat("en-US", { dateStyle: "medium", timeZone: "UTC" }).format(date)
+  }
+
+  const [showModelPopover, setShowModelPopover] = createSignal(false)
+  const [modelPopoverPos, setModelPopoverPos] = createSignal({ top: 0, left: 0 })
+  const hasModelPopover = createMemo(() => showModelPopover() && !!modelInfo())
+  let modelTriggerRef: HTMLButtonElement | undefined
+  let modelPopoverHideTimer: number | undefined
+
+  function clearModelPopoverTimer() {
+    if (!modelPopoverHideTimer) return
+    window.clearTimeout(modelPopoverHideTimer)
+    modelPopoverHideTimer = undefined
+  }
+
+  function openModelPopover() {
+    clearModelPopoverTimer()
+    if (modelTriggerRef) {
+      const rect = modelTriggerRef.getBoundingClientRect()
+      const rem = Number.parseFloat(getComputedStyle(document.documentElement).fontSize) || 16
+      const width = Math.min(rem * 20, window.innerWidth - rem)
+      const maxLeft = window.innerWidth - width
+      setModelPopoverPos({ top: rect.top - 8, left: Math.max(0, Math.min(rect.left, maxLeft)) })
+    }
+    setShowModelPopover(true)
+  }
+
+  function scheduleModelPopoverHide() {
+    clearModelPopoverTimer()
+    modelPopoverHideTimer = window.setTimeout(() => setShowModelPopover(false), 120)
+  }
+
+  onCleanup(clearModelPopoverTimer)
+
+  // Token popover state — reset when session or selected model changes
   const [showTokenPopover, setShowTokenPopover] = createSignal(false)
   createEffect(() => {
-    params.id // track session ID
+    const model = props.sessionModel()
+    const key = model ? `${model.providerID}:${model.modelID}` : ""
+    const id = params.id
+    void id
+    void key
     setShowTokenPopover(false)
+    setShowModelPopover(false)
   })
   const [popoverPos, setPopoverPos] = createSignal({ top: 0, left: 0 })
   let triggerRef: HTMLButtonElement | undefined
@@ -217,13 +441,152 @@ export function SessionInfo(props: SessionInfoProps) {
         {/* Model */}
         <Show when={props.sessionModel()}>
           <button
+            ref={modelTriggerRef}
             type="button"
             class="flex items-center gap-1 min-w-0 hover:opacity-80 cursor-pointer"
-            onClick={() => props.onModelClick()}
+            onClick={() => {
+              clearModelPopoverTimer()
+              setShowModelPopover(false)
+              props.onModelClick()
+            }}
+            onMouseEnter={openModelPopover}
+            onMouseLeave={scheduleModelPopoverHide}
+            onFocus={openModelPopover}
+            onBlur={scheduleModelPopoverHide}
+            aria-describedby={hasModelPopover() ? "model-info-popover" : undefined}
           >
             <span class="opacity-60 shrink-0">Model:</span>
             <span class="truncate" style={{ color: "var(--text-base)" }}>{modelLabel()}</span>
           </button>
+
+          <Show when={hasModelPopover() && modelInfo()}>
+            {(meta) => (
+              <Portal>
+                <div
+                  id="model-info-popover"
+                  role="tooltip"
+                  class="w-80 max-w-[calc(100vw-1rem)] rounded-lg shadow-lg text-xs"
+                  style={{
+                    position: "fixed",
+                    top: `${modelPopoverPos().top}px`,
+                    left: `${modelPopoverPos().left}px`,
+                    transform: "translateY(-100%)",
+                    "z-index": "40",
+                    background: "var(--background-base)",
+                    border: "1px solid var(--border-base)",
+                  }}
+                  onMouseEnter={openModelPopover}
+                  onMouseLeave={scheduleModelPopoverHide}
+                >
+                  <div
+                    class="px-3 py-2 font-medium"
+                    style={{
+                      color: "var(--text-strong)",
+                      "border-bottom": "1px solid var(--border-base)",
+                      background: "var(--surface-inset)",
+                      "border-radius": "0.5rem 0.5rem 0 0",
+                    }}
+                  >
+                    Model Details
+                  </div>
+                  <div class="px-3 py-2 space-y-1.5" style={{ color: "var(--text-base)" }}>
+                    <div class="flex justify-between gap-3">
+                      <span class="opacity-60 shrink-0">Provider</span>
+                      <span class="text-right break-all">{meta().providerName} ({meta().providerID})</span>
+                    </div>
+                    <div class="flex justify-between gap-3">
+                      <span class="opacity-60 shrink-0">Model ID</span>
+                      <span class="text-right break-all">{meta().modelID}</span>
+                    </div>
+                    <div class="flex justify-between gap-3">
+                      <span class="opacity-60 shrink-0">Name</span>
+                      <span class="text-right break-all">{meta().modelName}</span>
+                    </div>
+
+                    <Show when={meta().family}>
+                      <div class="flex justify-between gap-3">
+                        <span class="opacity-60 shrink-0">Family</span>
+                        <span class="text-right">{meta().family}</span>
+                      </div>
+                    </Show>
+                    <Show when={meta().status}>
+                      <div class="flex justify-between gap-3">
+                        <span class="opacity-60 shrink-0">Status</span>
+                        <span class="text-right capitalize">{meta().status}</span>
+                      </div>
+                    </Show>
+                    <Show when={meta().releaseDate}>
+                      <div class="flex justify-between gap-3">
+                        <span class="opacity-60 shrink-0">Release</span>
+                        <span class="text-right">{fmtDate(meta().releaseDate!)}</span>
+                      </div>
+                    </Show>
+
+                    <Show when={meta().contextLimit !== undefined || meta().inputLimit !== undefined || meta().outputLimit !== undefined}>
+                      <div class="pt-1" style={{ "border-top": "1px solid var(--border-base)" }}>
+                        <Show when={meta().contextLimit !== undefined}>
+                          <div class="flex justify-between gap-3">
+                            <span class="opacity-60 shrink-0">Context Limit</span>
+                            <span class="text-right">{fmt(meta().contextLimit!)}</span>
+                          </div>
+                        </Show>
+                        <Show when={meta().inputLimit !== undefined}>
+                          <div class="flex justify-between gap-3">
+                            <span class="opacity-60 shrink-0">Input Limit</span>
+                            <span class="text-right">{fmt(meta().inputLimit!)}</span>
+                          </div>
+                        </Show>
+                        <Show when={meta().outputLimit !== undefined}>
+                          <div class="flex justify-between gap-3">
+                            <span class="opacity-60 shrink-0">Output Limit</span>
+                            <span class="text-right">{fmt(meta().outputLimit!)}</span>
+                          </div>
+                        </Show>
+                      </div>
+                    </Show>
+
+                    <Show when={modelCapabilities()}>
+                      <div class="pt-1" style={{ "border-top": "1px solid var(--border-base)" }}>
+                        <div class="flex justify-between gap-3">
+                          <span class="opacity-60 shrink-0">Capabilities</span>
+                          <span class="text-right">{modelCapabilities()}</span>
+                        </div>
+                      </div>
+                    </Show>
+
+                    <Show when={meta().costInput !== undefined || meta().costOutput !== undefined || meta().costCacheRead !== undefined || meta().costCacheWrite !== undefined}>
+                      <div class="pt-1" style={{ "border-top": "1px solid var(--border-base)" }}>
+                        <Show when={meta().costInput !== undefined}>
+                          <div class="flex justify-between gap-3">
+                            <span class="opacity-60 shrink-0">Cost Input</span>
+                            <span class="text-right">{fmtMoney(meta().costInput!)}</span>
+                          </div>
+                        </Show>
+                        <Show when={meta().costOutput !== undefined}>
+                          <div class="flex justify-between gap-3">
+                            <span class="opacity-60 shrink-0">Cost Output</span>
+                            <span class="text-right">{fmtMoney(meta().costOutput!)}</span>
+                          </div>
+                        </Show>
+                        <Show when={meta().costCacheRead !== undefined}>
+                          <div class="flex justify-between gap-3">
+                            <span class="opacity-60 shrink-0">Cost Cache Read</span>
+                            <span class="text-right">{fmtMoney(meta().costCacheRead!)}</span>
+                          </div>
+                        </Show>
+                        <Show when={meta().costCacheWrite !== undefined}>
+                          <div class="flex justify-between gap-3">
+                            <span class="opacity-60 shrink-0">Cost Cache Write</span>
+                            <span class="text-right">{fmtMoney(meta().costCacheWrite!)}</span>
+                          </div>
+                        </Show>
+                      </div>
+                    </Show>
+                  </div>
+                </div>
+              </Portal>
+            )}
+          </Show>
         </Show>
 
         {/* Token Usage */}
@@ -271,7 +634,7 @@ export function SessionInfo(props: SessionInfoProps) {
                       top: `${popoverPos().top}px`,
                       left: `${popoverPos().left}px`,
                       transform: "translateY(-100%)",
-                      "z-index": "9999",
+                      "z-index": "40",
                       background: "var(--background-base)",
                       border: "1px solid var(--border-base)",
                     }}
