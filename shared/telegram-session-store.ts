@@ -2,14 +2,16 @@ import { mkdir, readdir, rename, rm } from "node:fs/promises"
 import { basename, dirname, join } from "node:path"
 
 type StoreShape = {
-  version: 1
+  version: 2
   sessions: Record<string, string>
+  notifications: Record<string, boolean>
 }
 
 function emptyStore(): StoreShape {
   return {
-    version: 1,
+    version: 2,
     sessions: {},
+    notifications: {},
   }
 }
 
@@ -17,15 +19,23 @@ function parseStore(input: string): StoreShape {
   if (!input.trim()) return emptyStore()
   const data = JSON.parse(input) as Partial<StoreShape>
   const sessions = data.sessions && typeof data.sessions === "object" ? data.sessions : {}
+  const notifications = data.notifications && typeof data.notifications === "object" ? data.notifications : {}
   const out: Record<string, string> = {}
+  const notifyOut: Record<string, boolean> = {}
   for (const key of Object.keys(sessions)) {
     const value = sessions[key]
     if (typeof value !== "string" || !value) continue
     out[key] = value
   }
+  for (const key of Object.keys(notifications)) {
+    const value = notifications[key]
+    if (typeof value !== "boolean") continue
+    notifyOut[key] = value
+  }
   return {
-    version: 1,
+    version: 2,
     sessions: out,
+    notifications: notifyOut,
   }
 }
 
@@ -159,16 +169,51 @@ export type TelegramSessionStore = {
   get: (key: string) => Promise<string | undefined>
   set: (key: string, sessionId: string) => Promise<void>
   delete: (key: string) => Promise<void>
+  sessionKeys?: (sessionId: string) => Promise<string[]>
+  notificationGet?: (key: string) => Promise<boolean>
+  notificationSet?: (key: string, enabled: boolean) => Promise<void>
 }
 
 export function createTelegramSessionStore(path: string): TelegramSessionStore {
   // In-memory serialization only coordinates writes within this process.
   // Cross-process writers need an external coordinated store.
   const sessions = new Map<string, string>()
+  const sessionIndex = new Map<string, Set<string>>()
+  const notifications = new Map<string, boolean>()
+
+  function indexAdd(sessionId: string, key: string) {
+    const set = sessionIndex.get(sessionId)
+    if (set) {
+      set.add(key)
+      return
+    }
+    sessionIndex.set(sessionId, new Set([key]))
+  }
+
+  function indexDelete(sessionId: string, key: string) {
+    const set = sessionIndex.get(sessionId)
+    if (!set) return
+    set.delete(key)
+    if (set.size > 0) return
+    sessionIndex.delete(sessionId)
+  }
+
+  function indexReplace(key: string, prev: string | undefined, next: string | undefined) {
+    if (prev !== undefined && prev !== next) {
+      indexDelete(prev, key)
+    }
+    if (next !== undefined && next !== prev) {
+      indexAdd(next, key)
+    }
+  }
   const ready = readStore(path)
     .then((data) => {
       for (const [key, value] of Object.entries(data.sessions)) {
         sessions.set(key, value)
+        indexAdd(value, key)
+      }
+      for (const [key, value] of Object.entries(data.notifications)) {
+        notifications.set(key, value)
       }
     })
     .catch((error) => {
@@ -180,8 +225,9 @@ export function createTelegramSessionStore(path: string): TelegramSessionStore {
 
   function flush() {
     const payload: StoreShape = {
-      version: 1,
+      version: 2,
       sessions: Object.fromEntries(sessions),
+      notifications: Object.fromEntries(notifications),
     }
     writes = writes.then(
       () => writeStore(path, payload),
@@ -207,12 +253,15 @@ export function createTelegramSessionStore(path: string): TelegramSessionStore {
         const prev = sessions.get(key)
         if (prev === sessionId) return
         sessions.set(key, sessionId)
+        indexReplace(key, prev, sessionId)
         await flush().catch((error) => {
           if (prev !== undefined) {
             sessions.set(key, prev)
+            indexReplace(key, sessionId, prev)
             throw error
           }
           sessions.delete(key)
+          indexReplace(key, sessionId, undefined)
           throw error
         })
       })
@@ -223,8 +272,36 @@ export function createTelegramSessionStore(path: string): TelegramSessionStore {
         const prev = sessions.get(key)
         if (prev === undefined) return
         sessions.delete(key)
+        indexReplace(key, prev, undefined)
         await flush().catch((error) => {
           sessions.set(key, prev)
+          indexReplace(key, undefined, prev)
+          throw error
+        })
+      })
+    },
+    async sessionKeys(sessionId: string) {
+      await ready
+      const keys = sessionIndex.get(sessionId)
+      if (!keys) return []
+      return Array.from(keys)
+    },
+    async notificationGet(key: string) {
+      await ready
+      return notifications.get(key) === true
+    },
+    async notificationSet(key: string, enabled: boolean) {
+      await ready
+      await run(async () => {
+        const prev = notifications.get(key)
+        if (enabled) notifications.set(key, true)
+        if (!enabled) notifications.delete(key)
+        await flush().catch((error) => {
+          if (prev === undefined) {
+            notifications.delete(key)
+            throw error
+          }
+          notifications.set(key, prev)
           throw error
         })
       })

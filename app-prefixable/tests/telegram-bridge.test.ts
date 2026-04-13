@@ -3,7 +3,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   cacheSession,
+  createOutboundSSEParser,
+  consumeOutboundEventStream,
   extractReply,
+  handleBridgeEvent,
   handleTextUpdate,
   joinOpenCodeUrl,
   parseConfig,
@@ -12,6 +15,27 @@ import {
   resetSessionCacheForTest,
   sessionFromCache,
 } from "../../shared/telegram-bridge";
+
+function parseOutboundBlocks(chunks: string[]): string[] {
+  const parser = createOutboundSSEParser();
+  const blocks: string[] = [];
+  for (const chunk of chunks) {
+    blocks.push(...parser.push(chunk));
+  }
+  blocks.push(...parser.flush());
+  return blocks;
+}
+
+function streamFromChunks(chunks: Uint8Array[]) {
+  return new ReadableStream<Uint8Array>({
+    start(controller) {
+      for (const chunk of chunks) {
+        controller.enqueue(chunk);
+      }
+      controller.close();
+    },
+  });
+}
 
 const envKeys = [
   "TELEGRAM_BOT_TOKEN",
@@ -26,6 +50,8 @@ const envKeys = [
   "TELEGRAM_WEBHOOK_SECRET",
   "TELEGRAM_WEBHOOK_URL",
   "TELEGRAM_SESSION_STORE_PATH",
+  "TELEGRAM_SESSION_LINK_BASE",
+  "TELEGRAM_NOTIFY_DEBOUNCE_MS",
 ] as const;
 
 const envSnapshot = new Map<string, string | undefined>();
@@ -105,9 +131,17 @@ describe("telegram bridge config and cache", () => {
     setEnv({ TELEGRAM_BOT_TOKEN: "token", OPENCODE_API_URL: "http://127.0.0.1:4096" });
     expect(parseConfig().mode).toBe("polling");
     expect(parseConfig().sessionStorePath).toBe(join(tmpdir(), "opencode-telegram-sessions.json"));
+    expect(parseConfig().notificationDebounceMs).toBe(20_000);
 
-    setEnv({ TELEGRAM_BOT_TOKEN: "token", TELEGRAM_SESSION_STORE_PATH: join(tmpdir(), "custom-store.json") });
+    setEnv({
+      TELEGRAM_BOT_TOKEN: "token",
+      TELEGRAM_SESSION_STORE_PATH: join(tmpdir(), "custom-store.json"),
+      TELEGRAM_SESSION_LINK_BASE: "https://opencode.example.com/notebook",
+      TELEGRAM_NOTIFY_DEBOUNCE_MS: "5000",
+    });
     expect(parseConfig().sessionStorePath).toBe(join(tmpdir(), "custom-store.json"));
+    expect(parseConfig().sessionLinkBase).toBe("https://opencode.example.com/notebook");
+    expect(parseConfig().notificationDebounceMs).toBe(5000);
 
     setEnv({ TELEGRAM_BOT_TOKEN: "token", TELEGRAM_MODE: "bad-mode", OPENCODE_API_URL: "http://127.0.0.1:4096" });
     expect(() => parseConfig()).toThrow("Invalid TELEGRAM_MODE");
@@ -135,6 +169,7 @@ describe("telegram bridge config and cache", () => {
       openCodeUrl: "http://127.0.0.1:4096",
       sessionCacheMax: 2,
       sessionCacheTtlMs: 10_000,
+      notificationDebounceMs: 20_000,
       port: 4097,
       webhookPath: "/webhook",
       sessionStorePath: "/tmp/test-store.json",
@@ -171,6 +206,7 @@ describe("telegram bridge config and cache", () => {
           openCodeUrl: "http://127.0.0.1:4096",
           sessionCacheMax: 10,
           sessionCacheTtlMs: 10_000,
+          notificationDebounceMs: 20_000,
           port: 4097,
           webhookPath: "/webhook",
           sessionStorePath: "/tmp/test-store.json",
@@ -230,6 +266,7 @@ describe("telegram bridge config and cache", () => {
           openCodeUrl: "http://127.0.0.1:4096",
           sessionCacheMax: 10,
           sessionCacheTtlMs: 10_000,
+          notificationDebounceMs: 20_000,
           port: 4097,
           webhookPath: "/webhook",
           sessionStorePath: "/tmp/test-store.json",
@@ -270,6 +307,371 @@ describe("telegram bridge config and cache", () => {
     }
   });
 
+  test("handleTextUpdate supports notification opt-in commands", async () => {
+    const calls: Array<{ url: string; body: Record<string, unknown> }> = [];
+    const originalFetch = globalThis.fetch;
+    try {
+      globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        const body = init?.body ? (JSON.parse(String(init.body)) as Record<string, unknown>) : {};
+        calls.push({ url, body });
+        if (url.includes("/sendMessage")) {
+          return new Response(JSON.stringify({ ok: true, result: { message_id: 1 } }), { status: 200 });
+        }
+        throw new Error(`Unexpected fetch ${url}`);
+      };
+
+      const map = new Map<string, string>();
+      const notify = new Map<string, boolean>();
+      const runtime = {
+        config: {
+          mode: "polling" as const,
+          token: "token",
+          openCodeUrl: "http://127.0.0.1:4096",
+          sessionCacheMax: 10,
+          sessionCacheTtlMs: 10_000,
+          notificationDebounceMs: 20_000,
+          port: 4097,
+          webhookPath: "/webhook",
+          sessionStorePath: "/tmp/test-store.json",
+        },
+        store: {
+          get: async (key: string) => map.get(key),
+          set: async (key: string, value: string) => {
+            map.set(key, value);
+          },
+          delete: async (key: string) => {
+            map.delete(key);
+          },
+          notificationGet: async (key: string) => notify.get(key) === true,
+          notificationSet: async (key: string, enabled: boolean) => {
+            if (enabled) {
+              notify.set(key, true);
+              return;
+            }
+            notify.delete(key);
+          },
+        },
+      };
+
+      await handleTextUpdate(runtime, {
+        update_id: 1,
+        message: { message_id: 1, text: "/notify status", chat: { id: 77 }, from: { id: 5 } },
+      });
+      await handleTextUpdate(runtime, {
+        update_id: 2,
+        message: { message_id: 2, text: "/notify on", chat: { id: 77 }, from: { id: 5 } },
+      });
+      await handleTextUpdate(runtime, {
+        update_id: 3,
+        message: { message_id: 3, text: "/notify status", chat: { id: 77 }, from: { id: 5 } },
+      });
+      await handleTextUpdate(runtime, {
+        update_id: 4,
+        message: { message_id: 4, text: "/notify off", chat: { id: 77 }, from: { id: 5 } },
+      });
+
+      const sentTexts = calls
+        .filter((x) => x.url.includes("/sendMessage"))
+        .map((x) => String(x.body.text || ""));
+      expect(sentTexts[0]).toBe("Notifications are disabled.");
+      expect(sentTexts[1]).toBe("Notifications enabled for this chat.");
+      expect(sentTexts[2]).toBe("Notifications are enabled.");
+      expect(sentTexts[3]).toBe("Notifications disabled for this chat.");
+      expect(notify.get("chat:77")).toBeUndefined();
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test("/notify setting applies to whole chat across users", async () => {
+    const calls: Array<{ url: string; body: Record<string, unknown> }> = [];
+    const originalFetch = globalThis.fetch;
+    try {
+      globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        const body = init?.body ? (JSON.parse(String(init.body)) as Record<string, unknown>) : {};
+        calls.push({ url, body });
+        if (url.includes("/sendMessage")) {
+          return new Response(JSON.stringify({ ok: true, result: { message_id: 1 } }), { status: 200 });
+        }
+        throw new Error(`Unexpected fetch ${url}`);
+      };
+
+      const notify = new Map<string, boolean>();
+      const runtime = {
+        config: {
+          mode: "polling" as const,
+          token: "token",
+          openCodeUrl: "http://127.0.0.1:4096",
+          sessionCacheMax: 10,
+          sessionCacheTtlMs: 10_000,
+          notificationDebounceMs: 20_000,
+          port: 4097,
+          webhookPath: "/webhook",
+          sessionStorePath: "/tmp/test-store.json",
+        },
+        store: {
+          get: async () => undefined,
+          set: async () => undefined,
+          delete: async () => undefined,
+          notificationGet: async (key: string) => notify.get(key) === true,
+          notificationSet: async (key: string, enabled: boolean) => {
+            if (enabled) {
+              notify.set(key, true);
+              return;
+            }
+            notify.delete(key);
+          },
+        },
+      };
+
+      await handleTextUpdate(runtime, {
+        update_id: 1,
+        message: { message_id: 1, text: "/notify on", chat: { id: 90 }, from: { id: 5 } },
+      });
+      await handleTextUpdate(runtime, {
+        update_id: 2,
+        message: { message_id: 2, text: "/notify status", chat: { id: 90 }, from: { id: 6 } },
+      });
+
+      const sentTexts = calls
+        .filter((x) => x.url.includes("/sendMessage"))
+        .map((x) => String(x.body.text || ""));
+      expect(sentTexts[0]).toBe("Notifications enabled for this chat.");
+      expect(sentTexts[1]).toBe("Notifications are enabled.");
+      expect(notify.get("chat:90")).toBe(true);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test("handleBridgeEvent does not debounce failed key and still notifies another key in same chat", async () => {
+    const calls: Array<{ url: string; body: Record<string, unknown> }> = [];
+    const originalFetch = globalThis.fetch;
+    let failed = false;
+    try {
+      globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        const body = init?.body ? (JSON.parse(String(init.body)) as Record<string, unknown>) : {};
+        calls.push({ url, body });
+        if (url.includes("/sendMessage")) {
+          if (!failed) {
+            failed = true;
+            throw new Error("temporary telegram error");
+          }
+          return new Response(JSON.stringify({ ok: true, result: { message_id: 1 } }), { status: 200 });
+        }
+        throw new Error(`Unexpected fetch ${url}`);
+      };
+
+      const runtime = {
+        config: {
+          mode: "polling" as const,
+          token: "token",
+          openCodeUrl: "http://127.0.0.1:4096",
+          sessionCacheMax: 10,
+          sessionCacheTtlMs: 10_000,
+          notificationDebounceMs: 20_000,
+          port: 4097,
+          webhookPath: "/webhook",
+          sessionStorePath: "/tmp/test-store.json",
+        },
+        store: {
+          get: async () => undefined,
+          set: async () => undefined,
+          delete: async () => undefined,
+          sessionKeys: async () => ["chat:77:user:5", "chat:77:user:6"],
+          notificationGet: async () => true,
+        },
+      };
+
+      await handleBridgeEvent(runtime, {
+        type: "question.asked",
+        properties: {
+          sessionID: "session-1",
+          questions: [{ header: "Need input" }],
+        },
+      });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+
+    const messages = calls.filter((x) => x.url.includes("/sendMessage") && x.body.chat_id === 77);
+    expect(messages.length).toBe(2);
+  });
+
+  test("handleBridgeEvent continues notifying other chats after one failure", async () => {
+    const calls: Array<{ url: string; body: Record<string, unknown> }> = [];
+    const originalFetch = globalThis.fetch;
+    try {
+      globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        const body = init?.body ? (JSON.parse(String(init.body)) as Record<string, unknown>) : {};
+        calls.push({ url, body });
+        if (url.includes("/sendMessage")) {
+          if (body.chat_id === 77) {
+            throw new Error("telegram down for chat 77");
+          }
+          return new Response(JSON.stringify({ ok: true, result: { message_id: 1 } }), { status: 200 });
+        }
+        throw new Error(`Unexpected fetch ${url}`);
+      };
+
+      const runtime = {
+        config: {
+          mode: "polling" as const,
+          token: "token",
+          openCodeUrl: "http://127.0.0.1:4096",
+          sessionCacheMax: 10,
+          sessionCacheTtlMs: 10_000,
+          notificationDebounceMs: 20_000,
+          port: 4097,
+          webhookPath: "/webhook",
+          sessionStorePath: "/tmp/test-store.json",
+        },
+        store: {
+          get: async () => undefined,
+          set: async () => undefined,
+          delete: async () => undefined,
+          sessionKeys: async () => ["chat:77:user:5", "chat:88:user:6"],
+          notificationGet: async () => true,
+        },
+      };
+
+      await handleBridgeEvent(runtime, {
+        type: "question.asked",
+        properties: {
+          sessionID: "session-1",
+          questions: [{ header: "Need input" }],
+        },
+      });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+
+    const messages = calls.filter((x) => x.url.includes("/sendMessage"));
+    expect(messages.some((x) => x.body.chat_id === 88)).toBe(true);
+  });
+
+  test("handleBridgeEvent sends task-finished only on non-idle to idle transition", async () => {
+    const calls: Array<{ url: string; body: Record<string, unknown> }> = [];
+    const originalFetch = globalThis.fetch;
+    try {
+      globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        const body = init?.body ? (JSON.parse(String(init.body)) as Record<string, unknown>) : {};
+        calls.push({ url, body });
+        if (url.includes("/sendMessage")) {
+          return new Response(JSON.stringify({ ok: true, result: { message_id: 1 } }), { status: 200 });
+        }
+        throw new Error(`Unexpected fetch ${url}`);
+      };
+
+      const runtime = {
+        config: {
+          mode: "polling" as const,
+          token: "token",
+          openCodeUrl: "http://127.0.0.1:4096",
+          sessionCacheMax: 10,
+          sessionCacheTtlMs: 10_000,
+          notificationDebounceMs: 0,
+          port: 4097,
+          webhookPath: "/webhook",
+          sessionStorePath: "/tmp/test-store.json",
+        },
+        store: {
+          get: async () => undefined,
+          set: async () => undefined,
+          delete: async () => undefined,
+          sessionKeys: async () => ["chat:77:user:5"],
+          notificationGet: async () => true,
+        },
+      };
+
+      await handleBridgeEvent(runtime, {
+        type: "session.status",
+        properties: { sessionID: "session-1", status: { type: "idle" } },
+      });
+      await handleBridgeEvent(runtime, {
+        type: "session.status",
+        properties: { sessionID: "session-1", status: { type: "busy" } },
+      });
+      await handleBridgeEvent(runtime, {
+        type: "session.status",
+        properties: { sessionID: "session-1", status: { type: "idle" } },
+      });
+      await handleBridgeEvent(runtime, {
+        type: "session.status",
+        properties: { sessionID: "session-1", status: { type: "idle" } },
+      });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+
+    const sentTexts = calls
+      .filter((x) => x.url.includes("/sendMessage"))
+      .map((x) => String(x.body.text || ""));
+    expect(sentTexts).toEqual(["Task finished: the session is now idle.\n\nOpen session session-1"]);
+  });
+
+  test("handleBridgeEvent clears tracked status on session.deleted without sessionID", async () => {
+    const calls: Array<{ url: string; body: Record<string, unknown> }> = [];
+    const originalFetch = globalThis.fetch;
+    try {
+      globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        const body = init?.body ? (JSON.parse(String(init.body)) as Record<string, unknown>) : {};
+        calls.push({ url, body });
+        if (url.includes("/sendMessage")) {
+          return new Response(JSON.stringify({ ok: true, result: { message_id: 1 } }), { status: 200 });
+        }
+        throw new Error(`Unexpected fetch ${url}`);
+      };
+
+      const runtime = {
+        config: {
+          mode: "polling" as const,
+          token: "token",
+          openCodeUrl: "http://127.0.0.1:4096",
+          sessionCacheMax: 10,
+          sessionCacheTtlMs: 10_000,
+          notificationDebounceMs: 0,
+          port: 4097,
+          webhookPath: "/webhook",
+          sessionStorePath: "/tmp/test-store.json",
+        },
+        store: {
+          get: async () => undefined,
+          set: async () => undefined,
+          delete: async () => undefined,
+          sessionKeys: async () => ["chat:77:user:5"],
+          notificationGet: async () => true,
+        },
+      };
+
+      await handleBridgeEvent(runtime, {
+        type: "session.status",
+        properties: { sessionID: "session-1", status: { type: "busy" } },
+      });
+      await handleBridgeEvent(runtime, {
+        type: "session.deleted",
+        properties: { info: { id: "session-1" } },
+      });
+      await handleBridgeEvent(runtime, {
+        type: "session.status",
+        properties: { sessionID: "session-1", status: { type: "idle" } },
+      });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+
+    const sentTexts = calls
+      .filter((x) => x.url.includes("/sendMessage"))
+      .map((x) => String(x.body.text || ""));
+    expect(sentTexts).toEqual([]);
+  });
+
   test("sessionForChat does not cache new session when store set fails", async () => {
     const calls: Array<{ url: string; body: Record<string, unknown> }> = [];
     const originalFetch = globalThis.fetch;
@@ -299,6 +701,7 @@ describe("telegram bridge config and cache", () => {
           openCodeUrl: "http://127.0.0.1:4096",
           sessionCacheMax: 10,
           sessionCacheTtlMs: 10_000,
+          notificationDebounceMs: 20_000,
           port: 4097,
           webhookPath: "/webhook",
           sessionStorePath: "/tmp/test-store.json",
@@ -367,6 +770,7 @@ describe("telegram bridge config and cache", () => {
           openCodeUrl: "http://127.0.0.1:4096",
           sessionCacheMax: 10,
           sessionCacheTtlMs: 10_000,
+          notificationDebounceMs: 20_000,
           port: 4097,
           webhookPath: "/webhook",
           sessionStorePath: "/tmp/test-store.json",
@@ -404,5 +808,147 @@ describe("telegram bridge config and cache", () => {
     } finally {
       globalThis.fetch = originalFetch;
     }
+  });
+
+  test("outbound SSE parser handles CRLF split across chunk boundaries", () => {
+    const blocks = parseOutboundBlocks(["data: one\r", "\n\r", "\ndata: two\n\n"]);
+    expect(blocks).toEqual(["data: one", "data: two"]);
+  });
+
+  test("outbound SSE parser normalizes lone CR and detects boundaries", () => {
+    const blocks = parseOutboundBlocks(["data: one\r\rdata: two\r\r"]);
+    expect(blocks).toEqual(["data: one", "data: two"]);
+  });
+
+  test("consumeOutboundEventStream flushes decoder output before parser flush", async () => {
+    const OriginalDecoder = globalThis.TextDecoder;
+    const NativeDecoder = globalThis.TextDecoder;
+    class FlushOnlyDecoder {
+      private pending: string[] = [];
+
+      decode(input?: AllowSharedBufferSource, options?: TextDecodeOptions) {
+        if (input && options?.stream) {
+          const native = new NativeDecoder();
+          this.pending.push(native.decode(input));
+          return "";
+        }
+        if (input) {
+          const native = new NativeDecoder();
+          return native.decode(input);
+        }
+        return this.pending.join("");
+      }
+    }
+    Object.assign(globalThis, { TextDecoder: FlushOnlyDecoder });
+
+    try {
+      const chunks = [
+        new TextEncoder().encode(
+          'data: {"payload":{"type":"question.asked","properties":{"sessionID":"session-1","questions":[{"header":"Need input"}]}}}\n\n',
+        ),
+      ];
+      const calls: Array<{ url: string; body: Record<string, unknown> }> = [];
+      const originalFetch = globalThis.fetch;
+      try {
+        globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+          const url = String(input);
+          const body = init?.body ? (JSON.parse(String(init.body)) as Record<string, unknown>) : {};
+          calls.push({ url, body });
+          if (url.includes("/sendMessage")) {
+            return new Response(JSON.stringify({ ok: true, result: { message_id: 1 } }), { status: 200 });
+          }
+          throw new Error(`Unexpected fetch ${url}`);
+        };
+
+        const runtime = {
+          config: {
+            mode: "polling" as const,
+            token: "token",
+            openCodeUrl: "http://127.0.0.1:4096",
+            sessionCacheMax: 10,
+            sessionCacheTtlMs: 10_000,
+            notificationDebounceMs: 0,
+            port: 4097,
+            webhookPath: "/webhook",
+            sessionStorePath: "/tmp/test-store.json",
+          },
+          store: {
+            get: async () => undefined,
+            set: async () => undefined,
+            delete: async () => undefined,
+            sessionKeys: async () => ["chat:77:user:5"],
+            notificationGet: async () => true,
+          },
+        };
+
+        await consumeOutboundEventStream(runtime, streamFromChunks(chunks));
+      } finally {
+        globalThis.fetch = originalFetch;
+      }
+
+      const sentTexts = calls
+        .filter((x) => x.url.includes("/sendMessage"))
+        .map((x) => String(x.body.text || ""));
+      expect(sentTexts).toEqual(["Question pending: Need input\n\nOpen session session-1"]);
+    } finally {
+      Object.assign(globalThis, { TextDecoder: OriginalDecoder });
+    }
+  });
+
+  test("consumeOutboundEventStream flushes decoder and handles final event", async () => {
+    const calls: Array<{ url: string; body: Record<string, unknown> }> = [];
+    const originalFetch = globalThis.fetch;
+    const payload = '{"payload":{"type":"question.asked","properties":{"sessionID":"session-1","questions":[{"header":"Need caf\u00e9"}]}}}';
+    const bytes = new TextEncoder().encode(payload);
+    const head = bytes.slice(0, bytes.length - 1);
+    const tail = bytes.slice(bytes.length - 1);
+    const chunks = [
+      new TextEncoder().encode("data: "),
+      head,
+      tail,
+      new TextEncoder().encode("\n\n"),
+    ];
+
+    try {
+      globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        const body = init?.body ? (JSON.parse(String(init.body)) as Record<string, unknown>) : {};
+        calls.push({ url, body });
+        if (url.includes("/sendMessage")) {
+          return new Response(JSON.stringify({ ok: true, result: { message_id: 1 } }), { status: 200 });
+        }
+        throw new Error(`Unexpected fetch ${url}`);
+      };
+
+      const runtime = {
+        config: {
+          mode: "polling" as const,
+          token: "token",
+          openCodeUrl: "http://127.0.0.1:4096",
+          sessionCacheMax: 10,
+          sessionCacheTtlMs: 10_000,
+          notificationDebounceMs: 0,
+          port: 4097,
+          webhookPath: "/webhook",
+          sessionStorePath: "/tmp/test-store.json",
+        },
+        store: {
+          get: async () => undefined,
+          set: async () => undefined,
+          delete: async () => undefined,
+          sessionKeys: async () => ["chat:77:user:5"],
+          notificationGet: async () => true,
+        },
+      };
+
+      await consumeOutboundEventStream(runtime, streamFromChunks(chunks));
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+
+    const sentTexts = calls
+      .filter((x) => x.url.includes("/sendMessage"))
+      .map((x) => String(x.body.text || ""));
+    expect(sentTexts).toEqual(["Question pending: Need caf\u00e9\n\nOpen session session-1"]);
   });
 });
