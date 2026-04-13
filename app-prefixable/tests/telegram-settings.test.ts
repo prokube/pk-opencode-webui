@@ -304,6 +304,66 @@ describe("telegram settings extended API", () => {
     expect(stored.settings?.openCodeUrl).toBeUndefined()
   })
 
+  test("PUT allows empty string to clear persisted sessionStorePath", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "telegram-settings-"))
+    const path = join(dir, "telegram-settings.json")
+    cleanupPaths.push(dir)
+
+    const envStore = join(dir, "env-sessions.json")
+    const persistedStore = join(dir, "persisted-sessions.json")
+    process.env.TELEGRAM_SETTINGS_PATH = path
+    process.env.TELEGRAM_SESSION_STORE_PATH = envStore
+
+    const seed = await handleExtendedEndpoint(
+      "/api/ext/telegram/settings",
+      "PUT",
+      new URL("http://127.0.0.1/api/ext/telegram/settings"),
+      new Request("http://127.0.0.1/api/ext/telegram/settings", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          settings: {
+            sessionStorePath: persistedStore,
+          },
+        }),
+      }),
+    )
+    expect(seed?.status).toBe(200)
+
+    const clear = await handleExtendedEndpoint(
+      "/api/ext/telegram/settings",
+      "PUT",
+      new URL("http://127.0.0.1/api/ext/telegram/settings"),
+      new Request("http://127.0.0.1/api/ext/telegram/settings", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          settings: {
+            sessionStorePath: "",
+          },
+        }),
+      }),
+    )
+    expect(clear?.status).toBe(200)
+    const clearData = await clear?.json()
+    expect(clearData.changedFields).toEqual(expect.arrayContaining(["sessionStorePath"]))
+
+    const read = await handleExtendedEndpoint(
+      "/api/ext/telegram/settings",
+      "GET",
+      new URL("http://127.0.0.1/api/ext/telegram/settings"),
+      new Request("http://127.0.0.1/api/ext/telegram/settings"),
+    )
+    expect(read?.status).toBe(200)
+    const data = await read?.json()
+    expect(data.settings.sessionStorePath).toBe(envStore)
+
+    const stored = JSON.parse(await Bun.file(path).text()) as {
+      settings?: Record<string, string | number>
+    }
+    expect(stored.settings?.sessionStorePath).toBeUndefined()
+  })
+
   test("PUT returns 500 when persistence fails", async () => {
     const dir = await mkdtemp(join(tmpdir(), "telegram-settings-"))
     cleanupPaths.push(dir)
@@ -440,11 +500,12 @@ describe("telegram settings extended API", () => {
         {
           version: 1,
           updatedAt: new Date().toISOString(),
-          settings: {
-            openCodeUrl: "  https://persisted.example.com/base  ",
-            webhookUrl: "  https://hooks.example.com/persisted  ",
+            settings: {
+              openCodeUrl: "  https://persisted.example.com/base  ",
+              webhookUrl: "  https://hooks.example.com/persisted  ",
+              sessionLinkBase: "  https://persisted.example.com/notebook/  ",
+            },
           },
-        },
         null,
         2,
       ),
@@ -462,6 +523,7 @@ describe("telegram settings extended API", () => {
     const data = await read?.json()
     expect(data.settings.openCodeUrl).toBe("https://persisted.example.com/base")
     expect(data.settings.webhookUrl).toBe("https://hooks.example.com/persisted")
+    expect(data.settings.sessionLinkBase).toBe("https://persisted.example.com/notebook")
   })
 
   test("PUT cleans temporary file when backup rename fails", async () => {

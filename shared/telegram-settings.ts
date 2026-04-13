@@ -96,10 +96,12 @@ function parsePersistedUrl(value: unknown, field: "openCodeUrl" | "webhookUrl", 
 }
 
 function parsePersistedLinkBase(value: unknown, fallback: string | undefined): string | undefined {
-  if (typeof value !== "string" || !value.trim()) return fallback
-  const base = value.endsWith("/") ? value.slice(0, -1) : value
+  if (typeof value !== "string") return fallback
+  const trimmed = value.trim()
+  if (!trimmed) return fallback
+  const base = trimmed.endsWith("/") ? trimmed.slice(0, -1) : trimmed
   if (!URL.canParse(base)) return fallback
-  return normalizeLinkBase(value, "persisted sessionLinkBase")
+  return normalizeLinkBase(trimmed, "persisted sessionLinkBase")
 }
 
 function defaultSessionStorePath() {
@@ -633,10 +635,10 @@ function normalizePayload(input: unknown): {
   }
 
   if ("sessionStorePath" in raw) {
-    if (raw.sessionStorePath === null) {
+    if (raw.sessionStorePath === null || raw.sessionStorePath === "") {
       patch.sessionStorePath = undefined
     }
-    if (raw.sessionStorePath !== null && (typeof raw.sessionStorePath !== "string" || !raw.sessionStorePath.trim())) {
+    if (raw.sessionStorePath !== null && raw.sessionStorePath !== "" && (typeof raw.sessionStorePath !== "string" || !raw.sessionStorePath.trim())) {
       errors.push({ field: "sessionStorePath", message: "sessionStorePath must be a non-empty string or null" })
     }
     if (typeof raw.sessionStorePath === "string" && raw.sessionStorePath.trim()) {
