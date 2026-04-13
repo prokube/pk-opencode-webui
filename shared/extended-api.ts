@@ -111,7 +111,15 @@ async function readPromptFile(path: string): Promise<StoredPrompt[]> {
 async function writePromptFile(path: string, prompts: StoredPrompt[]) {
   const parentDir = nodePath.dirname(path)
   await fs.promises.mkdir(parentDir, { recursive: true })
-  await fs.promises.writeFile(path, JSON.stringify(prompts, null, 2), "utf-8")
+  const tmp = `${path}.tmp-${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}`
+  const content = JSON.stringify(prompts, null, 2)
+  try {
+    await fs.promises.writeFile(tmp, content, "utf-8")
+    await fs.promises.rename(tmp, path)
+  } catch (e) {
+    await fs.promises.unlink(tmp).catch(() => undefined)
+    throw e
+  }
 }
 
 /**
