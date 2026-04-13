@@ -214,6 +214,55 @@ function parseEvent(rawData: string): { type: string; properties: Record<string,
   }
 }
 
+export function createOutboundSSEParser() {
+  let buffer = ""
+  let pendingCR = false
+
+  const blocks = () => {
+    const parts: string[] = []
+    while (true) {
+      const boundary = buffer.indexOf("\n\n")
+      if (boundary === -1) return parts
+      parts.push(buffer.slice(0, boundary))
+      buffer = buffer.slice(boundary + 2)
+    }
+  }
+
+  return {
+    push(chunk: string) {
+      let normalized = ""
+      for (const ch of chunk) {
+        if (ch === "\r") {
+          if (pendingCR) {
+            normalized += "\n"
+          }
+          pendingCR = true
+          continue
+        }
+        if (ch === "\n") {
+          normalized += "\n"
+          pendingCR = false
+          continue
+        }
+        if (pendingCR) {
+          normalized += "\n"
+          pendingCR = false
+        }
+        normalized += ch
+      }
+      buffer += normalized
+      return blocks()
+    },
+    flush() {
+      if (pendingCR) {
+        buffer += "\n"
+        pendingCR = false
+      }
+      return blocks()
+    },
+  }
+}
+
 function parseOpenCodeUrl(value: string, source: string): string {
   try {
     const url = new URL(value)
@@ -607,16 +656,12 @@ async function runOutboundNotifications(runtime: Runtime) {
 
       const reader = response.body.getReader()
       const decoder = new TextDecoder()
-      let buffer = ""
+      const parser = createOutboundSSEParser()
       while (true) {
         const step = await reader.read()
         if (step.done) break
-        buffer += decoder.decode(step.value, { stream: true }).replace(/\r\n/g, "\n")
-        while (true) {
-          const boundary = buffer.indexOf("\n\n")
-          if (boundary === -1) break
-          const block = buffer.slice(0, boundary)
-          buffer = buffer.slice(boundary + 2)
+        const blocks = parser.push(decoder.decode(step.value, { stream: true }))
+        for (const block of blocks) {
           const lines = block.split("\n")
           const dataLines = lines
             .filter((line) => line.startsWith("data:"))
@@ -629,6 +674,20 @@ async function runOutboundNotifications(runtime: Runtime) {
           if (!event) continue
           await handleBridgeEvent(runtime, event)
         }
+      }
+      const tailBlocks = parser.flush()
+      for (const block of tailBlocks) {
+        const lines = block.split("\n")
+        const dataLines = lines
+          .filter((line) => line.startsWith("data:"))
+          .map((line) => line.slice(5).trimStart())
+        if (!dataLines.length) continue
+        const raw = dataLines.join("\n")
+        const event = await Promise.resolve()
+          .then(() => parseEvent(raw))
+          .catch(() => undefined)
+        if (!event) continue
+        await handleBridgeEvent(runtime, event)
       }
     } catch (error) {
       console.error("[TelegramBridge] outbound event stream error", error)

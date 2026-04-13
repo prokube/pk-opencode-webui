@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   cacheSession,
+  createOutboundSSEParser,
   extractReply,
   handleBridgeEvent,
   handleTextUpdate,
@@ -13,6 +14,16 @@ import {
   resetSessionCacheForTest,
   sessionFromCache,
 } from "../../shared/telegram-bridge";
+
+function parseOutboundBlocks(chunks: string[]): string[] {
+  const parser = createOutboundSSEParser();
+  const blocks: string[] = [];
+  for (const chunk of chunks) {
+    blocks.push(...parser.push(chunk));
+  }
+  blocks.push(...parser.flush());
+  return blocks;
+}
 
 const envKeys = [
   "TELEGRAM_BOT_TOKEN",
@@ -728,5 +739,15 @@ describe("telegram bridge config and cache", () => {
     } finally {
       globalThis.fetch = originalFetch;
     }
+  });
+
+  test("outbound SSE parser handles CRLF split across chunk boundaries", () => {
+    const blocks = parseOutboundBlocks(["data: one\r", "\n\r", "\ndata: two\n\n"]);
+    expect(blocks).toEqual(["data: one", "data: two"]);
+  });
+
+  test("outbound SSE parser normalizes lone CR and detects boundaries", () => {
+    const blocks = parseOutboundBlocks(["data: one\r\rdata: two\r\r"]);
+    expect(blocks).toEqual(["data: one", "data: two"]);
   });
 });
