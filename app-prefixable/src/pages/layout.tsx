@@ -78,6 +78,7 @@ import { readNotifyMap, cleanupNotifyState, NOTIFY_STORAGE_KEY } from "../utils/
 import { readSoundSettings, playSound, primeAudioContext, SOUND_STORAGE_KEY } from "../utils/sound";
 import { dispatchStorageEvent } from "../utils/storage";
 import { sessionHasQuestion, buildChildMap, rootAncestorId } from "../utils/session-tree-request";
+import { createRootSession } from "../utils/root-session";
 
 // Storage keys
 const PROJECTS_STORAGE_KEY = "opencode.projects";
@@ -1781,10 +1782,13 @@ export function Layout(props: ParentProps) {
   async function createNewSession() {
     if (!directory) return;
     try {
-      const res = await client.session.create({});
-      if (res.data) {
-        setSessions((prev) => [res.data as Session, ...prev]);
-        navigate(`/${dirSlug()}/session/${res.data.id}`);
+      const data = await createRootSession(client, {
+        source: "layout.createNewSession",
+        scope: directory,
+      });
+      if (data) {
+        setSessions((prev) => [data as Session, ...prev]);
+        navigate(`/${dirSlug()}/session/${data.id}`);
       }
     } catch (e) {
       console.error("Failed to create session:", e);
@@ -1795,14 +1799,17 @@ export function Layout(props: ParentProps) {
     if (!directory) return;
     setPromptDropdownOpen(false);
     try {
-      const res = await client.session.create({});
-      if (res.data) {
-        setSessions((prev) => [res.data as Session, ...prev]);
+      const data = await createRootSession(client, {
+        source: "layout.createSessionWithPrompt",
+        scope: directory,
+      });
+      if (data) {
+        setSessions((prev) => [data as Session, ...prev]);
         sessionStorage.setItem(
-          `opencode.pendingPrompt.${res.data.id}`,
+          `opencode.pendingPrompt.${data.id}`,
           JSON.stringify({ text, ts: Date.now() }),
         );
-        navigate(`/${dirSlug()}/session/${res.data.id}`);
+        navigate(`/${dirSlug()}/session/${data.id}`);
       }
     } catch (e) {
       console.error("Failed to create session for prompt:", e);

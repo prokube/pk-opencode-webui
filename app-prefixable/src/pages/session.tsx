@@ -48,6 +48,7 @@ import {
 } from "../components/image-attachments";
 import { readNotifyMap, writeNotifyMap } from "../utils/notify";
 import { sessionQuestionRequest } from "../utils/session-tree-request";
+import { createRootSession } from "../utils/root-session";
 
 const ACCEPTED_TYPES = [
   "image/png",
@@ -563,10 +564,13 @@ export function Session() {
         onSelect: async () => {
           console.log("[Command] New session - creating...");
           try {
-            const res = await client.session.create({});
-            if (res.data) {
-              console.log("[Command] Created session:", res.data.id);
-              navigate(`/${dirSlug()}/session/${res.data.id}`);
+            const data = await createRootSession(client, {
+              source: "session.command.new",
+              scope: directory,
+            });
+            if (data) {
+              console.log("[Command] Created session:", data.id);
+              navigate(`/${dirSlug()}/session/${data.id}`);
             }
           } catch (err) {
             showToast(`Failed to create session: ${err instanceof Error ? err.message : String(err)}`);
@@ -1357,11 +1361,14 @@ export function Session() {
 
       if (!id) {
         console.log("[Session] Creating new session...");
-        const createRes = await client.session.create({});
-        console.log("[Session] Create response:", createRes);
-        if (!createRes.data) throw new Error("Failed to create session");
+        const data = await createRootSession(client, {
+          source: "session.send.createIfMissing",
+          scope: directory,
+        });
+        console.log("[Session] Create response:", data);
+        if (!data) throw new Error("Failed to create session");
 
-        id = createRes.data.id;
+        id = data.id;
         setSessionId(id);
         navigate(`/${dirSlug()}/session/${id}`, { replace: true });
         // Store the model for the new session
@@ -1450,9 +1457,12 @@ export function Session() {
     }
     setError(null);
     try {
-      const res = await client.session.create({});
-      if (!res.data) return;
-      const sid = res.data.id;
+      const data = await createRootSession(client, {
+        source: "session.savedPrompt.createAndSend",
+        scope: directory,
+      });
+      if (!data) return;
+      const sid = data.id;
       setSessionId(sid);
       navigate(`/${dirSlug()}/session/${sid}`, { replace: true });
       // Store the model for the new session
@@ -1617,10 +1627,13 @@ export function Session() {
                 }
                 try {
                   console.log("[Welcome] Creating session...");
-                  const res = await client.session.create({});
-                  console.log("[Welcome] Create response:", res);
-                  if (res.data) {
-                    const url = `/${dirSlug()}/session/${res.data.id}`;
+                  const data = await createRootSession(client, {
+                    source: "session.welcome.createNewSession",
+                    scope: directory,
+                  });
+                  console.log("[Welcome] Create response:", data);
+                  if (data) {
+                    const url = `/${dirSlug()}/session/${data.id}`;
                     console.log("[Welcome] Navigating to:", url);
                     navigate(url);
                   }
