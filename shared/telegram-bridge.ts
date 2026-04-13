@@ -159,6 +159,10 @@ function sessionLabel(config: BridgeConfig, sessionId: string): string {
   return `${config.sessionLinkBase}/session/${encodeURIComponent(sessionId)}`
 }
 
+function notificationKey(chatId: number): string {
+  return telegramSessionKey(chatId)
+}
+
 function shouldNotify(config: BridgeConfig, chatId: number, kind: string, sessionId: string): boolean {
   const now = Date.now()
   const cutoff = now - Math.max(config.notificationDebounceMs * 3, 60_000)
@@ -169,8 +173,11 @@ function shouldNotify(config: BridgeConfig, chatId: number, kind: string, sessio
   const key = `${chatId}:${kind}:${sessionId}`
   const previous = eventNotifications.get(key)
   if (previous && now - previous < config.notificationDebounceMs) return false
-  eventNotifications.set(key, now)
   return true
+}
+
+function stampNotification(chatId: number, kind: string, sessionId: string) {
+  eventNotifications.set(`${chatId}:${kind}:${sessionId}`, Date.now())
 }
 
 function questionText(properties: Record<string, unknown>): string {
@@ -487,18 +494,19 @@ export async function handleTextUpdate(runtime: Runtime, update: TelegramUpdate)
     }
     if (command.name === "/notify") {
       const mode = command.args[0]?.toLowerCase() || ""
+      const notifyKey = notificationKey(chatId)
       if (mode === "on") {
-        await setNotificationEnabled(runtime, key, true)
+        await setNotificationEnabled(runtime, notifyKey, true)
         await sendTelegramMessage(config, chatId, "Notifications enabled for this chat.")
         return true
       }
       if (mode === "off") {
-        await setNotificationEnabled(runtime, key, false)
+        await setNotificationEnabled(runtime, notifyKey, false)
         await sendTelegramMessage(config, chatId, "Notifications disabled for this chat.")
         return true
       }
       if (mode === "status" || !mode) {
-        const enabled = await notificationEnabled(runtime, key)
+        const enabled = await notificationEnabled(runtime, notifyKey)
         await sendTelegramMessage(config, chatId, enabled ? "Notifications are enabled." : "Notifications are disabled.")
         return true
       }
@@ -539,14 +547,15 @@ async function notifySessionKeys(runtime: Runtime, sessionId: string, kind: stri
   const keys = await runtime.store.sessionKeys(sessionId)
   for (const key of keys) {
     try {
-      if (!(await notificationEnabled(runtime, key))) continue
       const parsed = parseTelegramKey(key)
       if (!parsed) continue
+      if (!(await notificationEnabled(runtime, notificationKey(parsed.chatId)))) continue
       if (!shouldNotify(runtime.config, parsed.chatId, kind, sessionId)) continue
       const message = `${text}\n\nOpen ${sessionLabel(runtime.config, sessionId)}`
       await queueChatUpdate(String(parsed.chatId), async () => {
         await sendTelegramMessage(runtime.config, parsed.chatId, message)
       })
+      stampNotification(parsed.chatId, kind, sessionId)
     } catch (error) {
       console.error("[TelegramBridge] outbound notify failed", { sessionId, key, kind, error })
     }

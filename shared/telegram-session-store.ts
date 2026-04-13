@@ -178,11 +178,39 @@ export function createTelegramSessionStore(path: string): TelegramSessionStore {
   // In-memory serialization only coordinates writes within this process.
   // Cross-process writers need an external coordinated store.
   const sessions = new Map<string, string>()
+  const sessionIndex = new Map<string, Set<string>>()
   const notifications = new Map<string, boolean>()
+
+  function indexAdd(sessionId: string, key: string) {
+    const set = sessionIndex.get(sessionId)
+    if (set) {
+      set.add(key)
+      return
+    }
+    sessionIndex.set(sessionId, new Set([key]))
+  }
+
+  function indexDelete(sessionId: string, key: string) {
+    const set = sessionIndex.get(sessionId)
+    if (!set) return
+    set.delete(key)
+    if (set.size > 0) return
+    sessionIndex.delete(sessionId)
+  }
+
+  function indexReplace(key: string, prev: string | undefined, next: string | undefined) {
+    if (prev !== undefined && prev !== next) {
+      indexDelete(prev, key)
+    }
+    if (next !== undefined && next !== prev) {
+      indexAdd(next, key)
+    }
+  }
   const ready = readStore(path)
     .then((data) => {
       for (const [key, value] of Object.entries(data.sessions)) {
         sessions.set(key, value)
+        indexAdd(value, key)
       }
       for (const [key, value] of Object.entries(data.notifications)) {
         notifications.set(key, value)
@@ -225,12 +253,15 @@ export function createTelegramSessionStore(path: string): TelegramSessionStore {
         const prev = sessions.get(key)
         if (prev === sessionId) return
         sessions.set(key, sessionId)
+        indexReplace(key, prev, sessionId)
         await flush().catch((error) => {
           if (prev !== undefined) {
             sessions.set(key, prev)
+            indexReplace(key, sessionId, prev)
             throw error
           }
           sessions.delete(key)
+          indexReplace(key, sessionId, undefined)
           throw error
         })
       })
@@ -241,21 +272,19 @@ export function createTelegramSessionStore(path: string): TelegramSessionStore {
         const prev = sessions.get(key)
         if (prev === undefined) return
         sessions.delete(key)
+        indexReplace(key, prev, undefined)
         await flush().catch((error) => {
           sessions.set(key, prev)
+          indexReplace(key, undefined, prev)
           throw error
         })
       })
     },
     async sessionKeys(sessionId: string) {
       await ready
-      const keys: string[] = []
-      for (const [key, value] of sessions) {
-        if (value === sessionId) {
-          keys.push(key)
-        }
-      }
-      return keys
+      const keys = sessionIndex.get(sessionId)
+      if (!keys) return []
+      return Array.from(keys)
     },
     async notificationGet(key: string) {
       await ready

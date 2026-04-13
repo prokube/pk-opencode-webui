@@ -355,10 +355,127 @@ describe("telegram bridge config and cache", () => {
       expect(sentTexts[1]).toBe("Notifications enabled for this chat.");
       expect(sentTexts[2]).toBe("Notifications are enabled.");
       expect(sentTexts[3]).toBe("Notifications disabled for this chat.");
-      expect(notify.get("chat:77:user:5")).toBeUndefined();
+      expect(notify.get("chat:77")).toBeUndefined();
     } finally {
       globalThis.fetch = originalFetch;
     }
+  });
+
+  test("/notify setting applies to whole chat across users", async () => {
+    const calls: Array<{ url: string; body: Record<string, unknown> }> = [];
+    const originalFetch = globalThis.fetch;
+    try {
+      globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        const body = init?.body ? (JSON.parse(String(init.body)) as Record<string, unknown>) : {};
+        calls.push({ url, body });
+        if (url.includes("/sendMessage")) {
+          return new Response(JSON.stringify({ ok: true, result: { message_id: 1 } }), { status: 200 });
+        }
+        throw new Error(`Unexpected fetch ${url}`);
+      };
+
+      const notify = new Map<string, boolean>();
+      const runtime = {
+        config: {
+          mode: "polling" as const,
+          token: "token",
+          openCodeUrl: "http://127.0.0.1:4096",
+          sessionCacheMax: 10,
+          sessionCacheTtlMs: 10_000,
+          notificationDebounceMs: 20_000,
+          port: 4097,
+          webhookPath: "/webhook",
+          sessionStorePath: "/tmp/test-store.json",
+        },
+        store: {
+          get: async () => undefined,
+          set: async () => undefined,
+          delete: async () => undefined,
+          notificationGet: async (key: string) => notify.get(key) === true,
+          notificationSet: async (key: string, enabled: boolean) => {
+            if (enabled) {
+              notify.set(key, true);
+              return;
+            }
+            notify.delete(key);
+          },
+        },
+      };
+
+      await handleTextUpdate(runtime, {
+        update_id: 1,
+        message: { message_id: 1, text: "/notify on", chat: { id: 90 }, from: { id: 5 } },
+      });
+      await handleTextUpdate(runtime, {
+        update_id: 2,
+        message: { message_id: 2, text: "/notify status", chat: { id: 90 }, from: { id: 6 } },
+      });
+
+      const sentTexts = calls
+        .filter((x) => x.url.includes("/sendMessage"))
+        .map((x) => String(x.body.text || ""));
+      expect(sentTexts[0]).toBe("Notifications enabled for this chat.");
+      expect(sentTexts[1]).toBe("Notifications are enabled.");
+      expect(notify.get("chat:90")).toBe(true);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test("handleBridgeEvent retries same chat key when first send fails", async () => {
+    const calls: Array<{ url: string; body: Record<string, unknown> }> = [];
+    const originalFetch = globalThis.fetch;
+    let failed = false;
+    try {
+      globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        const body = init?.body ? (JSON.parse(String(init.body)) as Record<string, unknown>) : {};
+        calls.push({ url, body });
+        if (url.includes("/sendMessage")) {
+          if (!failed) {
+            failed = true;
+            throw new Error("temporary telegram error");
+          }
+          return new Response(JSON.stringify({ ok: true, result: { message_id: 1 } }), { status: 200 });
+        }
+        throw new Error(`Unexpected fetch ${url}`);
+      };
+
+      const runtime = {
+        config: {
+          mode: "polling" as const,
+          token: "token",
+          openCodeUrl: "http://127.0.0.1:4096",
+          sessionCacheMax: 10,
+          sessionCacheTtlMs: 10_000,
+          notificationDebounceMs: 20_000,
+          port: 4097,
+          webhookPath: "/webhook",
+          sessionStorePath: "/tmp/test-store.json",
+        },
+        store: {
+          get: async () => undefined,
+          set: async () => undefined,
+          delete: async () => undefined,
+          sessionKeys: async () => ["chat:77:user:5", "chat:77:user:6"],
+          notificationGet: async () => true,
+        },
+      };
+
+      await handleBridgeEvent(runtime, {
+        type: "question.asked",
+        properties: {
+          sessionID: "session-1",
+          questions: [{ header: "Need input" }],
+        },
+      });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+
+    const messages = calls.filter((x) => x.url.includes("/sendMessage") && x.body.chat_id === 77);
+    expect(messages.length).toBe(2);
   });
 
   test("handleBridgeEvent continues notifying other chats after one failure", async () => {
@@ -455,7 +572,7 @@ describe("telegram bridge config and cache", () => {
       });
       await handleBridgeEvent(runtime, {
         type: "session.status",
-        properties: { sessionID: "session-1", status: { type: "running" } },
+        properties: { sessionID: "session-1", status: { type: "busy" } },
       });
       await handleBridgeEvent(runtime, {
         type: "session.status",
