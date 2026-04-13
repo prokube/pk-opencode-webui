@@ -1,5 +1,5 @@
-import { mkdir, rename, rm } from "node:fs/promises"
-import { dirname } from "node:path"
+import { mkdir, readdir, rename, rm } from "node:fs/promises"
+import { basename, dirname, join } from "node:path"
 
 type StoreShape = {
   version: 1
@@ -32,9 +32,46 @@ function parseStore(input: string): StoreShape {
 async function readStore(path: string): Promise<StoreShape> {
   const file = Bun.file(path)
   const exists = await file.exists()
-  if (!exists) return emptyStore()
-  const text = await file.text()
-  return parseStore(text)
+  if (exists) {
+    const text = await file.text()
+    return parseStore(text)
+  }
+
+  const dir = dirname(path)
+  const name = basename(path)
+  const entries = await readdir(dir).catch((error) => {
+    const code = error && typeof error === "object" && "code" in error ? String(error.code) : ""
+    if (code === "ENOENT" || code === "ENOTDIR") return []
+    throw error
+  })
+  const backups = entries
+    .filter((entry) => entry.startsWith(`${name}.bak.`))
+    .sort((a, b) => {
+      const aStamp = Number(a.slice(`${name}.bak.`.length).split(".")[0] || "0")
+      const bStamp = Number(b.slice(`${name}.bak.`.length).split(".")[0] || "0")
+      return bStamp - aStamp
+    })
+
+  for (const entry of backups) {
+    const backupPath = join(dir, entry)
+    const text = await Bun.file(backupPath)
+      .text()
+      .catch(() => "")
+    if (!text) continue
+    const data = await Promise.resolve()
+      .then(() => parseStore(text))
+      .catch(() => undefined)
+    if (!data) continue
+
+    await rename(backupPath, path).catch((error) => {
+      const code = error && typeof error === "object" && "code" in error ? String(error.code) : ""
+      if (code === "EEXIST" || code === "EPERM" || code === "ENOTEMPTY") return
+      throw error
+    })
+    return data
+  }
+
+  return emptyStore()
 }
 
 async function writeStore(path: string, data: StoreShape) {

@@ -66,4 +66,39 @@ describe("telegram session store", () => {
 
     await chmod(dir, 0o700)
   })
+
+  test("recovers from backup when primary file is missing", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "telegram-session-store-"))
+    const path = join(dir, "sessions.json")
+    const backup = `${path}.bak.${Date.now()}.recover`
+    files.push(dir)
+
+    await Bun.write(
+      backup,
+      `${JSON.stringify({ version: 1, sessions: { [telegramSessionKey(777, 42)]: "session-recovered" } }, null, 2)}\n`,
+    )
+
+    const store = createTelegramSessionStore(path)
+    expect(await store.get(telegramSessionKey(777, 42))).toBe("session-recovered")
+    expect(await Bun.file(path).exists()).toBe(true)
+    expect(await Bun.file(backup).exists()).toBe(false)
+  })
+
+  test("skips invalid backup and recovers from next valid backup", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "telegram-session-store-"))
+    const path = join(dir, "sessions.json")
+    const badBackup = `${path}.bak.${Date.now() + 1}.bad`
+    const goodBackup = `${path}.bak.${Date.now()}.good`
+    files.push(dir)
+
+    await Bun.write(badBackup, "{invalid json")
+    await Bun.write(
+      goodBackup,
+      `${JSON.stringify({ version: 1, sessions: { [telegramSessionKey(778, 43)]: "session-good" } }, null, 2)}\n`,
+    )
+
+    const store = createTelegramSessionStore(path)
+    expect(await store.get(telegramSessionKey(778, 43))).toBe("session-good")
+    expect(await Bun.file(path).exists()).toBe(true)
+  })
 })
