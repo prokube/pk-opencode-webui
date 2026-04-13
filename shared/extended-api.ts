@@ -144,10 +144,13 @@ function parsePromptList(raw: string, scope: "global" | "project"): StoredPrompt
         ? nestedPrompts
         : nestedPrompts && typeof nestedPrompts === "object" && Array.isArray((nestedPrompts as Record<string, unknown>)[scope])
           ? ((nestedPrompts as Record<string, unknown>)[scope] as unknown[])
-        : Array.isArray((parsed as Record<string, unknown>)[scope])
-          ? ((parsed as Record<string, unknown>)[scope] as unknown[])
-          : []
+          : Array.isArray((parsed as Record<string, unknown>)[scope])
+            ? ((parsed as Record<string, unknown>)[scope] as unknown[])
+            : null
       : []
+  if (list === null) {
+    throw new Error(`invalid saved prompts format for ${scope}: expected array, prompts array, prompts.${scope}, or ${scope} array`)
+  }
   const prompts: StoredPrompt[] = []
   for (let i = 0; i < list.length; i++) {
     const prompt = parsePromptValue(list[i], scope)
@@ -158,10 +161,6 @@ function parsePromptList(raw: string, scope: "global" | "project"): StoredPrompt
     prompts.push(prompt)
   }
   return prompts
-}
-
-function invalidPromptIndex(list: unknown[], scope: "global" | "project"): number {
-  return list.findIndex((item) => !parsePromptValue(item, scope))
 }
 
 async function readPromptFile(path: string, scope: "global" | "project"): Promise<StoredPrompt[]> {
@@ -346,20 +345,18 @@ export async function handleExtendedEndpoint(
     const configDir = getConfigDir()
     const globalPath = nodePath.join(configDir, "saved-prompts.json")
     const projectPath = validatedDir ? nodePath.join(validatedDir, ".opencode", "saved-prompts.json") : null
-    const badGlobal = invalidPromptIndex(global, "global")
+    const parsedGlobal = global.map((item) => parsePromptValue(item, "global"))
+    const badGlobal = parsedGlobal.findIndex((item) => item === null)
     if (badGlobal !== -1) {
       return Response.json({ error: `global[${badGlobal}] is invalid` }, { status: 400 })
     }
-    const badProject = invalidPromptIndex(project, "project")
+    const parsedProject = project.map((item) => parsePromptValue(item, "project"))
+    const badProject = parsedProject.findIndex((item) => item === null)
     if (badProject !== -1) {
       return Response.json({ error: `project[${badProject}] is invalid` }, { status: 400 })
     }
-    const nextGlobal = global
-      .map((item) => parsePromptValue(item, "global"))
-      .filter((item): item is StoredPrompt => item !== null)
-    const nextProject = project
-      .map((item) => parsePromptValue(item, "project"))
-      .filter((item): item is StoredPrompt => item !== null)
+    const nextGlobal = parsedGlobal as StoredPrompt[]
+    const nextProject = parsedProject as StoredPrompt[]
     if (project.length > 0 && !validatedDir) {
       return Response.json({ error: "directory is required for project prompts" }, { status: 400 })
     }
