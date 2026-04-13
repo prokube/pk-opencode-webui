@@ -602,7 +602,7 @@ Add your project-specific instructions here.
     setEditingPromptId(null)
     setPromptTitle("")
     setPromptText("")
-    setPromptScope(savedPrompts.hasProject() ? "project" : "global")
+    setPromptScope(savedPrompts.canUseProjectScope() ? "project" : "global")
     setPromptDialogOpen(true)
   }
 
@@ -2318,7 +2318,8 @@ Add your project-specific instructions here.
           setText={setPromptText}
           scope={promptScope}
           setScope={setPromptScope}
-          hasProject={savedPrompts.hasProject()}
+          canUseProjectScope={savedPrompts.canUseProjectScope()}
+          hasActiveProject={savedPrompts.hasActiveProject()}
           onSave={savePromptDialog}
           onClose={() => setPromptDialogOpen(false)}
         />
@@ -3145,7 +3146,8 @@ function PromptDialog(props: {
   setText: (v: string) => void
   scope: () => PromptScope
   setScope: (v: PromptScope) => void
-  hasProject: boolean
+  canUseProjectScope: boolean
+  hasActiveProject: boolean
   onSave: () => void
   onClose: () => void
 }) {
@@ -3269,8 +3271,8 @@ function PromptDialog(props: {
                 <button
                   type="button"
                   onClick={() => props.setScope("project")}
-                  disabled={!props.hasProject}
-                  title={!props.hasProject ? "Open a project first to use project-scoped prompts" : undefined}
+                  disabled={!props.canUseProjectScope}
+                  title={!props.canUseProjectScope ? "Open a project first to use project-scoped prompts" : undefined}
                   aria-pressed={props.scope() === "project"}
                   class="flex-1 px-3 py-1.5 rounded-md text-sm font-medium transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
                   style={{
@@ -3284,10 +3286,12 @@ function PromptDialog(props: {
               </div>
               <p class="text-xs mt-1.5" style={{ color: "var(--text-weak)" }}>
                 {props.scope() === "project"
-                  ? "This prompt will only appear in the current project."
+                  ? props.hasActiveProject
+                    ? "This prompt will only appear in this project."
+                    : "This prompt will only appear in your most recent project."
                   : "This prompt will be available in all projects."}
               </p>
-              <Show when={!props.hasProject}>
+              <Show when={!props.canUseProjectScope}>
                 <p class="text-xs mt-1" style={{ color: "var(--text-weak)" }}>
                   Open a project first to use project-scoped prompts.
                 </p>

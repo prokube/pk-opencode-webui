@@ -242,7 +242,9 @@ export function Session() {
   const [showSavePrompt, setShowSavePrompt] = createSignal(false);
   const [savePromptTitle, setSavePromptTitle] = createSignal("");
   const [savePromptBody, setSavePromptBody] = createSignal("");
-  const [savePromptScope, setSavePromptScope] = createSignal<PromptScope>(savedPrompts.hasProject() ? "project" : "global");
+  const [savePromptScope, setSavePromptScope] = createSignal<PromptScope>(
+    savedPrompts.canUseProjectScope() ? "project" : "global",
+  );
 
   const [fileContext, setFileContext] = createSignal<FileContext[]>([]);
   const [imageAttachments, setImageAttachments] = createSignal<
@@ -2084,7 +2086,7 @@ export function Session() {
                           if (!text) return;
                           setSavePromptTitle(text.slice(0, 30));
                           setSavePromptBody(text);
-                          setSavePromptScope(savedPrompts.hasProject() ? "project" : "global");
+                          setSavePromptScope(savedPrompts.canUseProjectScope() ? "project" : "global");
                           setShowSavePrompt(true);
                         }}
                         class="p-1.5 rounded transition-colors"
@@ -2311,7 +2313,8 @@ export function Session() {
             setTitle={setSavePromptTitle}
             scope={savePromptScope}
             setScope={setSavePromptScope}
-            hasProject={savedPrompts.hasProject()}
+            canUseProjectScope={savedPrompts.canUseProjectScope()}
+            hasActiveProject={savedPrompts.hasActiveProject()}
             onSave={() => {
               const title = savePromptTitle().trim();
               const body = savePromptBody();
@@ -2411,7 +2414,8 @@ function SavePromptDialog(props: {
   setTitle: (v: string) => void
   scope: () => PromptScope
   setScope: (v: PromptScope) => void
-  hasProject: boolean
+  canUseProjectScope: boolean
+  hasActiveProject: boolean
   onSave: () => void
   onClose: () => void
 }) {
@@ -2543,8 +2547,8 @@ function SavePromptDialog(props: {
                 <button
                   type="button"
                   onClick={() => props.setScope("project")}
-                  disabled={!props.hasProject}
-                  title={!props.hasProject ? "Open a project first to use project-scoped prompts" : undefined}
+                  disabled={!props.canUseProjectScope}
+                  title={!props.canUseProjectScope ? "Open a project first to use project-scoped prompts" : undefined}
                   aria-pressed={props.scope() === "project"}
                   class="flex-1 px-2.5 py-1 rounded-md text-xs font-medium transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
                   style={{
@@ -2556,7 +2560,14 @@ function SavePromptDialog(props: {
                   Project
                 </button>
               </div>
-              <Show when={!props.hasProject}>
+              <Show when={props.scope() === "project"}>
+                <p class="text-xs mt-1" style={{ color: "var(--text-weak)" }}>
+                  {props.hasActiveProject
+                    ? "Project scope saves to this project only."
+                    : "Project scope saves to your most recent project."}
+                </p>
+              </Show>
+              <Show when={!props.canUseProjectScope}>
                 <p class="text-xs mt-1" style={{ color: "var(--text-weak)" }}>
                   Open a project first to use project-scoped prompts.
                 </p>

@@ -27,8 +27,10 @@ interface SavedPromptsContextValue {
   globalPrompts: () => SavedPrompt[]
   /** Only project-scoped prompts. */
   projectPrompts: () => SavedPrompt[]
-  /** Whether there is an active project directory. */
-  hasProject: () => boolean
+  /** Whether project scope can be used (active project or recent fallback). */
+  canUseProjectScope: () => boolean
+  /** Whether there is an active project in the current route context. */
+  hasActiveProject: () => boolean
   add: (title: string, text: string, scope?: PromptScope) => void
   move: (id: string, scope: PromptScope) => void
   update: (id: string, fields: Partial<Pick<SavedPrompt, "title" | "text">>) => void
@@ -261,6 +263,7 @@ export function SavedPromptsProvider(props: ParentProps & { directory?: Accessor
       const prev = loadFromStorage(k, "project")
       const updated = [prompt, ...prev]
       saveToStorage(k, updated)
+      if (!pKey()) setProjectPrompts(updated.sort(sortNewest))
       return
     }
     addGlobal(prompt)
@@ -317,6 +320,7 @@ export function SavedPromptsProvider(props: ParentProps & { directory?: Accessor
     const prev = loadFromStorage(k, "project")
     const updated = [{ ...global, scope: "project" as const }, ...prev.filter((p) => p.id !== id)]
     saveToStorage(k, updated)
+    if (!pKey()) setProjectPrompts(updated.sort(sortNewest))
   }
 
   function update(id: string, fields: Partial<Pick<SavedPrompt, "title" | "text">>) {
@@ -401,7 +405,8 @@ export function SavedPromptsProvider(props: ParentProps & { directory?: Accessor
         prompts: allPrompts,
         globalPrompts,
         projectPrompts,
-        hasProject: () => !!targetDirectory(),
+        canUseProjectScope: () => !!targetDirectory(),
+        hasActiveProject: () => !!dir(),
         add,
         move,
         update,
