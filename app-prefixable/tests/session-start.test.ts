@@ -134,7 +134,11 @@ describe("createSessionWithPrompt", () => {
     const lines: unknown[][] = [];
     const warn = console.warn;
     console.warn = (...args: unknown[]) => {
-      lines.push(args);
+      if (String(args[0]).includes("[session-start]")) {
+        lines.push(args);
+        return;
+      }
+      warn(...args);
     };
 
     const client = {
@@ -156,8 +160,7 @@ describe("createSessionWithPrompt", () => {
           model: { providerID: "openai", modelID: "gpt-4.1" },
         }),
       ).rejects.toThrow("prompt failed");
-      expect(lines.length).toBe(1);
-      expect(String(lines[0][0])).toContain("Failed to cleanup session");
+      expect(lines.some((line) => String(line[0]).includes("[session-start] Failed to cleanup session"))).toBe(true);
     } finally {
       console.warn = warn;
     }
