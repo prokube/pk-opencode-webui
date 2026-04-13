@@ -1,4 +1,4 @@
-import { For, Show, createMemo, createSignal } from "solid-js";
+import { For, Show, createMemo, createSignal, createUniqueId } from "solid-js";
 import { ChevronDown } from "lucide-solid";
 import { Button } from "./ui/button";
 
@@ -9,6 +9,7 @@ export function FollowupDock(props: {
   onEdit: (id: string) => void;
 }) {
   const [collapsed, setCollapsed] = createSignal(true);
+  const contentId = `followup-dock-${createUniqueId()}`;
   const count = createMemo(() => props.items.length);
   const preview = createMemo(() => props.items[0]?.text ?? "");
   const label = createMemo(() =>
@@ -31,6 +32,8 @@ export function FollowupDock(props: {
         type="button"
         class="w-full flex items-center gap-2 px-3 py-2 text-left"
         onClick={toggle}
+        aria-expanded={!collapsed()}
+        aria-controls={contentId}
       >
         <span class="text-sm font-medium" style={{ color: "var(--text-strong)" }}>
           {label()}
@@ -50,7 +53,12 @@ export function FollowupDock(props: {
       </button>
 
       <Show when={!collapsed()}>
-        <div class="px-3 pb-3 pt-1 flex flex-col gap-2 max-h-44 overflow-y-auto">
+        <div
+          id={contentId}
+          class="px-3 pb-3 pt-1 flex flex-col gap-2 max-h-44 overflow-y-auto"
+          role="region"
+          aria-label="Queued followup messages"
+        >
           <For each={props.items}>
             {(item) => (
               <div class="flex items-center gap-2 min-w-0">
