@@ -71,4 +71,32 @@ describe("telegram settings form helpers", () => {
       webhookUrl: null,
     })
   })
+
+  test("allows blank values to clear persisted URL and numeric overrides", () => {
+    const initial = createTelegramForm(seed)
+    const next = {
+      ...initial,
+      openCodeUrl: "",
+      sessionCacheMax: "",
+      sessionCacheTtlMs: "",
+      notificationDebounceMs: "",
+      port: "",
+    }
+
+    const errors = validateTelegramForm(next)
+    expect(errors.openCodeUrl).toBeUndefined()
+    expect(errors.sessionCacheMax).toBeUndefined()
+    expect(errors.sessionCacheTtlMs).toBeUndefined()
+    expect(errors.notificationDebounceMs).toBeUndefined()
+    expect(errors.port).toBeUndefined()
+
+    const patch = createTelegramPatch(next, initial)
+    expect(patch).toEqual({
+      openCodeUrl: null,
+      sessionCacheMax: null,
+      sessionCacheTtlMs: null,
+      notificationDebounceMs: null,
+      port: null,
+    })
+  })
 })

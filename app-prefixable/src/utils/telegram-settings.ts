@@ -134,21 +134,34 @@ export function createTelegramForm(settings: TelegramPublicSettings): TelegramFo
 export function validateTelegramForm(form: TelegramForm): Record<string, string> {
   const errors: Record<string, string> = {}
 
-  if (!isUrl(form.openCodeUrl.trim())) errors.openCodeUrl = "Enter a valid URL"
+  const openCodeUrl = form.openCodeUrl.trim()
+  if (openCodeUrl && !isUrl(openCodeUrl)) errors.openCodeUrl = "Enter a valid URL"
   if (form.webhookUrl.trim() && !isUrl(form.webhookUrl.trim())) errors.webhookUrl = "Enter a valid URL"
   if (form.sessionLinkBase.trim() && !isUrl(form.sessionLinkBase.trim())) errors.sessionLinkBase = "Enter a valid URL"
 
+  const sessionCacheMaxRaw = form.sessionCacheMax.trim()
   const sessionCacheMax = toNumber(form.sessionCacheMax)
-  if (sessionCacheMax === undefined || sessionCacheMax <= 0) errors.sessionCacheMax = "Must be a positive integer"
+  if (sessionCacheMaxRaw && (sessionCacheMax === undefined || sessionCacheMax <= 0)) {
+    errors.sessionCacheMax = "Must be a positive integer"
+  }
 
+  const sessionCacheTtlMsRaw = form.sessionCacheTtlMs.trim()
   const sessionCacheTtlMs = toNumber(form.sessionCacheTtlMs)
-  if (sessionCacheTtlMs === undefined || sessionCacheTtlMs <= 0) errors.sessionCacheTtlMs = "Must be a positive integer"
+  if (sessionCacheTtlMsRaw && (sessionCacheTtlMs === undefined || sessionCacheTtlMs <= 0)) {
+    errors.sessionCacheTtlMs = "Must be a positive integer"
+  }
 
+  const notificationDebounceMsRaw = form.notificationDebounceMs.trim()
   const notificationDebounceMs = toNumber(form.notificationDebounceMs)
-  if (notificationDebounceMs === undefined || notificationDebounceMs <= 0) errors.notificationDebounceMs = "Must be a positive integer"
+  if (notificationDebounceMsRaw && (notificationDebounceMs === undefined || notificationDebounceMs <= 0)) {
+    errors.notificationDebounceMs = "Must be a positive integer"
+  }
 
+  const portRaw = form.port.trim()
   const port = toNumber(form.port)
-  if (port === undefined || port < 1 || port > 65535) errors.port = "Must be an integer between 1 and 65535"
+  if (portRaw && (port === undefined || port < 1 || port > 65535)) {
+    errors.port = "Must be an integer between 1 and 65535"
+  }
 
   if (!form.webhookPath.trim()) errors.webhookPath = "Webhook path is required"
   if (form.webhookPath.trim() && !form.webhookPath.trim().startsWith("/")) {

@@ -79,6 +79,7 @@ export function TelegramSettings(props: Props) {
     const current = form()
     const seed = initial()
     if (!current || !seed) return
+    setRestartFields([])
 
     const localErrors = validateTelegramForm(current)
     if (Object.keys(localErrors).length > 0) {
