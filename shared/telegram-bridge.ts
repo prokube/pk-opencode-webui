@@ -1111,8 +1111,9 @@ async function notifyQuestion(runtime: Runtime, sessionId: string, question: Tel
       if (!(await notificationEnabled(runtime, notificationKey(parsed.chatId)))) continue
       if (!shouldNotify(runtime.config, parsed.chatId, kind, sessionId)) continue
       await upsertPendingQuestion(runtime, key, question)
+      const message = `${questionPromptText(question)}\n\nOpen ${sessionLabel(runtime.config, sessionId)}`
       await queueChatUpdate(String(parsed.chatId), async () => {
-        await sendTelegramMessage(runtime.config, parsed.chatId, questionPromptText(question))
+        await sendTelegramMessage(runtime.config, parsed.chatId, message)
       })
       stampNotification(parsed.chatId, kind, sessionId)
     } catch (error) {

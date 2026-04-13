@@ -1778,6 +1778,7 @@ describe("telegram bridge config and cache", () => {
       .filter((x) => x.url.includes("/sendMessage"))
       .map((x) => String(x.body.text || ""));
     expect(sentTexts.some((text) => text.includes("1) Alpha"))).toBe(true);
+    expect(sentTexts.some((text) => text.includes("Open session session-1"))).toBe(true);
     expect(sentTexts.some((text) => text.includes("Thanks, your answer was sent."))).toBe(true);
   });
 
