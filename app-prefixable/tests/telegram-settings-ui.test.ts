@@ -53,8 +53,30 @@ describe("telegram settings form helpers", () => {
     expect(errors.openCodeUrl).toBe("Enter a valid URL")
     expect(errors.port).toBe("Must be an integer between 1 and 65535")
     expect(errors.sessionCacheMax).toBe("Must be a positive integer")
-    expect(errors.webhookPath).toBe("Webhook path must start with '/'")
+    expect(errors.webhookPath).toBeUndefined()
     expect(errors.token).toBe("Token is required when setting a new value")
+  })
+
+  test("normalizes webhook path patch values to include leading slash", () => {
+    const initial = createTelegramForm(seed)
+    const next = {
+      ...initial,
+      webhookPath: "hooks/new",
+    }
+
+    const patch = createTelegramPatch(next, initial)
+    expect(patch.webhookPath).toBe("/hooks/new")
+  })
+
+  test("does not emit webhook patch when only slash differs", () => {
+    const initial = createTelegramForm(seed)
+    const next = {
+      ...initial,
+      webhookPath: "webhook",
+    }
+
+    const patch = createTelegramPatch(next, initial)
+    expect(patch.webhookPath).toBeUndefined()
   })
 
   test("creates clear patch for secret and optional fields", () => {

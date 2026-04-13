@@ -97,6 +97,13 @@ function asNullable(value: string): string | null {
   return value.trim() ? value.trim() : null
 }
 
+function normalizeWebhookPath(value: string): string | null {
+  const path = asNullable(value)
+  if (!path) return null
+  if (path.startsWith("/")) return path
+  return `/${path}`
+}
+
 function addStringPatch(patch: Record<string, string | number | null>, key: string, next: string, prev: string) {
   const nextValue = asNullable(next)
   const prevValue = asNullable(prev)
@@ -109,6 +116,13 @@ function addNumberPatch(patch: Record<string, string | number | null>, key: stri
   const prevValue = toNumber(prev)
   if (nextValue === prevValue) return
   patch[key] = nextValue ?? null
+}
+
+function addWebhookPathPatch(patch: Record<string, string | number | null>, next: string, prev: string) {
+  const nextValue = normalizeWebhookPath(next)
+  const prevValue = normalizeWebhookPath(prev)
+  if (nextValue === prevValue) return
+  patch.webhookPath = nextValue
 }
 
 export function createTelegramForm(settings: TelegramPublicSettings): TelegramForm {
@@ -164,9 +178,6 @@ export function validateTelegramForm(form: TelegramForm): Record<string, string>
   }
 
   if (!form.webhookPath.trim()) errors.webhookPath = "Webhook path is required"
-  if (form.webhookPath.trim() && !form.webhookPath.trim().startsWith("/")) {
-    errors.webhookPath = "Webhook path must start with '/'"
-  }
   if (form.tokenMode === "set" && !form.token.trim()) errors.token = "Token is required when setting a new value"
   if (form.webhookSecretMode === "set" && !form.webhookSecret.trim()) {
     errors.webhookSecret = "Webhook secret is required when setting a new value"
@@ -186,7 +197,7 @@ export function createTelegramPatch(current: TelegramForm, initial: TelegramForm
   addNumberPatch(patch, "sessionCacheTtlMs", current.sessionCacheTtlMs, initial.sessionCacheTtlMs)
   addNumberPatch(patch, "notificationDebounceMs", current.notificationDebounceMs, initial.notificationDebounceMs)
   addNumberPatch(patch, "port", current.port, initial.port)
-  addStringPatch(patch, "webhookPath", current.webhookPath, initial.webhookPath)
+  addWebhookPathPatch(patch, current.webhookPath, initial.webhookPath)
   addStringPatch(patch, "webhookUrl", current.webhookUrl, initial.webhookUrl)
   addStringPatch(patch, "sessionStorePath", current.sessionStorePath, initial.sessionStorePath)
   addStringPatch(patch, "sessionLinkBase", current.sessionLinkBase, initial.sessionLinkBase)

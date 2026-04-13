@@ -44,6 +44,7 @@ export function TelegramSettings(props: Props) {
     setError(null)
     setSuccess(null)
     setRestartFields([])
+    setFieldErrors({})
     const res = await fetch(`${props.serverUrl}/api/ext/telegram/settings`).catch(() => null)
     if (!res?.ok) {
       setLoading(false)
@@ -244,7 +245,7 @@ export function TelegramSettings(props: Props) {
                   </Field>
                 </div>
 
-                <Field label="Webhook path" hint="Path should start with '/'.">
+                <Field label="Webhook path" hint="Leading '/' is optional and added automatically.">
                   <input class="w-full px-3 py-2 rounded-md text-sm" value={state().webhookPath} onInput={(e) => setField("webhookPath", e.currentTarget.value)} style={{ background: "var(--surface-inset)", border: `1px solid ${fieldError("webhookPath") ? "var(--interactive-critical)" : "var(--border-base)"}`, color: "var(--text-base)" }} />
                   <FieldError text={fieldError("webhookPath")} />
                 </Field>
