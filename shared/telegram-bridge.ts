@@ -161,6 +161,11 @@ function sessionLabel(config: BridgeConfig, sessionId: string): string {
 
 function shouldNotify(config: BridgeConfig, chatId: number, kind: string, sessionId: string): boolean {
   const now = Date.now()
+  const cutoff = now - Math.max(config.notificationDebounceMs * 3, 60_000)
+  for (const [entryKey, stampedAt] of eventNotifications) {
+    if (stampedAt >= cutoff) continue
+    eventNotifications.delete(entryKey)
+  }
   const key = `${chatId}:${kind}:${sessionId}`
   const previous = eventNotifications.get(key)
   if (previous && now - previous < config.notificationDebounceMs) return false
@@ -533,18 +538,22 @@ async function notifySessionKeys(runtime: Runtime, sessionId: string, kind: stri
   if (!runtime.store.sessionKeys) return
   const keys = await runtime.store.sessionKeys(sessionId)
   for (const key of keys) {
-    if (!(await notificationEnabled(runtime, key))) continue
-    const parsed = parseTelegramKey(key)
-    if (!parsed) continue
-    if (!shouldNotify(runtime.config, parsed.chatId, kind, sessionId)) continue
-    const message = `${text}\n\nOpen ${sessionLabel(runtime.config, sessionId)}`
-    await queueChatUpdate(String(parsed.chatId), async () => {
-      await sendTelegramMessage(runtime.config, parsed.chatId, message)
-    })
+    try {
+      if (!(await notificationEnabled(runtime, key))) continue
+      const parsed = parseTelegramKey(key)
+      if (!parsed) continue
+      if (!shouldNotify(runtime.config, parsed.chatId, kind, sessionId)) continue
+      const message = `${text}\n\nOpen ${sessionLabel(runtime.config, sessionId)}`
+      await queueChatUpdate(String(parsed.chatId), async () => {
+        await sendTelegramMessage(runtime.config, parsed.chatId, message)
+      })
+    } catch (error) {
+      console.error("[TelegramBridge] outbound notify failed", { sessionId, key, kind, error })
+    }
   }
 }
 
-async function handleBridgeEvent(runtime: Runtime, event: { type: string; properties: Record<string, unknown> }) {
+export async function handleBridgeEvent(runtime: Runtime, event: { type: string; properties: Record<string, unknown> }) {
   const sessionId = typeof event.properties.sessionID === "string" ? event.properties.sessionID : ""
   if (!sessionId) return
   if (event.type === "question.asked") {
@@ -561,8 +570,11 @@ async function handleBridgeEvent(runtime: Runtime, event: { type: string; proper
     : undefined
   const next = typeof status?.type === "string" ? status.type : ""
   const prev = statusBySession.get(sessionId)
-  statusBySession.set(sessionId, next)
-  if (next !== "idle") return
+  if (next !== "idle") {
+    statusBySession.set(sessionId, next)
+    return
+  }
+  statusBySession.delete(sessionId)
   if (!prev || prev === "idle") return
   await notifySessionKeys(runtime, sessionId, "task-finished", "Task finished: the session is now idle.")
 }
