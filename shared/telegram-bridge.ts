@@ -37,8 +37,17 @@ function parseMode(value: string): "polling" | "webhook" {
 
 function parsePort(value: string): number {
   const n = Number.parseInt(value, 10)
-  if (Number.isNaN(n) || n <= 0) return 4097
+  if (Number.isNaN(n) || n <= 0 || n > 65535) return 4097
   return n
+}
+
+function parseOpenCodeUrl(value: string): string {
+  try {
+    const url = new URL(value)
+    return url.toString()
+  } catch {
+    throw new Error(`Invalid OPENCODE_API_URL: ${value}`)
+  }
 }
 
 function parseConfig(): BridgeConfig {
@@ -48,7 +57,7 @@ function parseConfig(): BridgeConfig {
   }
 
   const mode = parseMode(env("TELEGRAM_MODE") || "polling")
-  const openCodeUrl = env("OPENCODE_API_URL") || env("API_URL") || "http://127.0.0.1:4096"
+  const openCodeUrl = parseOpenCodeUrl(env("OPENCODE_API_URL") || env("API_URL") || "http://127.0.0.1:4096")
   const webhookPath = env("TELEGRAM_WEBHOOK_PATH") || "/webhook"
 
   return {
@@ -61,6 +70,13 @@ function parseConfig(): BridgeConfig {
     webhookSecret: env("TELEGRAM_WEBHOOK_SECRET") || undefined,
     webhookUrl: env("TELEGRAM_WEBHOOK_URL") || undefined,
   }
+}
+
+function isMissingSession(error: unknown): boolean {
+  if (!(error instanceof Error)) return false
+  if (error.message.startsWith("OpenCode prompt failed (404):")) return true
+  if (error.message.startsWith("OpenCode prompt failed (410):")) return true
+  return false
 }
 
 async function retry<T>(name: string, fn: () => Promise<T>, retries = 2, delayMs = 400): Promise<T> {
@@ -206,12 +222,24 @@ async function handleTextUpdate(config: BridgeConfig, update: TelegramUpdate) {
   if (!chatId || !text) return
 
   try {
-    const sessionID = await sessionForChat(config, String(chatId))
-    const reply = await sendPrompt(config, sessionID, text)
+    const key = String(chatId)
+    const sessionID = await sessionForChat(config, key)
+    const reply = await sendPrompt(config, sessionID, text).catch(async (error) => {
+      if (!isMissingSession(error)) {
+        throw error
+      }
+      sessions.delete(key)
+      const next = await sessionForChat(config, key)
+      return sendPrompt(config, next, text)
+    })
     await sendTelegramMessage(config, chatId, reply)
   } catch (error) {
     console.error("[TelegramBridge] request handling failed", { chatId, error })
-    await sendTelegramMessage(config, chatId, "Sorry, I ran into an internal error. Please try again in a moment.")
+    try {
+      await sendTelegramMessage(config, chatId, "Sorry, I ran into an internal error. Please try again in a moment.")
+    } catch (sendError) {
+      console.error("[TelegramBridge] failed to send error response", { chatId, error: sendError })
+    }
   }
 }
 
@@ -274,7 +302,9 @@ async function runWebhook(config: BridgeConfig) {
         return new Response("Bad Request", { status: 400 })
       }
 
-      await handleTextUpdate(config, update)
+      void handleTextUpdate(config, update).catch((error) => {
+        console.error("[TelegramBridge] webhook handling failed", error)
+      })
       return Response.json({ ok: true })
     },
   })
