@@ -49,6 +49,10 @@ import {
 import { readNotifyMap, writeNotifyMap } from "../utils/notify";
 import { sessionQuestionRequest } from "../utils/session-tree-request";
 import { createRootSession } from "../utils/root-session";
+import {
+  createSessionWithPrompt as createAndSendPrompt,
+  startSessionError,
+} from "../utils/session-start";
 
 const ACCEPTED_TYPES = [
   "image/png",
@@ -161,6 +165,7 @@ export function Session() {
   const [loading, setLoading] = createSignal(false);
   const [processing, setProcessing] = createSignal(false);
   const [loadingHistory, setLoadingHistory] = createSignal(false);
+  const [creatingSession, setCreatingSession] = createSignal(false);
 
   // Find the Nth-from-last user message (1-indexed: 1 = last, 2 = second-to-last)
   function getNthLastUserMsg(msgs: DisplayMessage[], n: number) {
@@ -562,7 +567,9 @@ export function Session() {
         description: "Create a new chat session",
         slash: "new",
         onSelect: async () => {
+          if (creatingSession()) return;
           console.log("[Command] New session - creating...");
+          setCreatingSession(true);
           try {
             const res = await createRootSession(client, {
               source: "session.command.new",
@@ -575,6 +582,8 @@ export function Session() {
             }
           } catch (err) {
             showToast(`Failed to create session: ${err instanceof Error ? err.message : String(err)}`);
+          } finally {
+            setCreatingSession(false);
           }
         },
       },
@@ -1448,33 +1457,37 @@ export function Session() {
   }
 
   async function createSessionAndSendPrompt(text: string) {
+    if (creatingSession()) return;
     const model = sessionModel();
-    if (!model) {
-      setError("Please select a model before sending messages. Click the model button in the header.");
+    const err = startSessionError({
+      loading: providers.loading,
+      providerCount: providers.providers.length,
+      model,
+      connected: providers.connected,
+    });
+    if (err) {
+      setError(err);
       return;
     }
-    if (!providers.connected.includes(model.providerID)) {
-      setError(`Provider "${model.providerID}" is not connected. Please configure it in Settings.`);
-      return;
-    }
+    if (!model) return;
     setError(null);
+    setCreatingSession(true);
     try {
-      const res = await createRootSession(client, {
-        source: "session.savedPrompt.createAndSend",
-        scope: directory,
+      const created = await createAndSendPrompt({
+        client,
+        text,
+        agent: providers.selectedAgent || "build",
+        model,
       });
-      const data = res.data;
-      if (!data) return;
-      const sid = data.id;
-      sessionStorage.setItem(
-        `opencode.pendingPrompt.${sid}`,
-        JSON.stringify({ text, ts: Date.now() }),
-      );
-      providers.setSessionModel(sid, model);
+      if (!created) return;
+      const sid = created.id;
       setSessionId(sid);
       navigate(`/${dirSlug()}/session/${sid}`, { replace: true });
+      providers.setSessionModel(sid, model);
     } catch (err) {
       setError(`Failed to send saved prompt: ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      setCreatingSession(false);
     }
   }
 
@@ -1615,6 +1628,7 @@ export function Session() {
           <div class="flex flex-col gap-3 w-full max-w-xs">
             <Button
               onClick={async () => {
+                if (creatingSession()) return;
                 console.log(
                   "[Welcome] New Session clicked, directory:",
                   directory,
@@ -1625,6 +1639,7 @@ export function Session() {
                   console.error("[Welcome] No directory available");
                   return;
                 }
+                setCreatingSession(true);
                 try {
                   console.log("[Welcome] Creating session...");
                   const res = await createRootSession(client, {
@@ -1640,9 +1655,12 @@ export function Session() {
                   }
                 } catch (e) {
                   console.error("[Welcome] Failed to create session:", e);
+                } finally {
+                  setCreatingSession(false);
                 }
               }}
               variant="ghost"
+              disabled={creatingSession()}
               class="w-full"
               size="sm"
             >
@@ -1720,10 +1738,13 @@ export function Session() {
                     <button
                       type="button"
                       onClick={() => createSessionAndSendPrompt(prompt.text)}
+                      disabled={creatingSession()}
                       class="p-3 rounded-lg text-left transition-colors"
                       style={{
                         background: "var(--background-base)",
                         border: "1px solid var(--border-base)",
+                        opacity: creatingSession() ? 0.6 : 1,
+                        cursor: creatingSession() ? "not-allowed" : "pointer",
                       }}
                       onMouseEnter={(e) => {
                         e.currentTarget.style.borderColor = "var(--interactive-base)";

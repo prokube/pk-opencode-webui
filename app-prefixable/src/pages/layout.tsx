@@ -79,6 +79,10 @@ import { readSoundSettings, playSound, primeAudioContext, SOUND_STORAGE_KEY } fr
 import { dispatchStorageEvent } from "../utils/storage";
 import { sessionHasQuestion, buildChildMap, rootAncestorId } from "../utils/session-tree-request";
 import { createRootSession } from "../utils/root-session";
+import {
+  createSessionWithPrompt as createAndSendPrompt,
+  startSessionError,
+} from "../utils/session-start";
 
 // Storage keys
 const PROJECTS_STORAGE_KEY = "opencode.projects";
@@ -279,6 +283,8 @@ export function Layout(props: ParentProps) {
   const [promptDropdownIndex, setPromptDropdownIndex] = createSignal(0);
   const [confirmArchiveSession, setConfirmArchiveSession] = createSignal<Session | null>(null);
   const [pinnedIds, setPinnedIds] = createSignal<string[]>([]);
+  const [creatingSession, setCreatingSession] = createSignal(false);
+  const [sessionStartError, setSessionStartError] = createSignal<string | null>(null);
 
   // Search state
   const [searchQuery, setSearchQuery] = createSignal("");
@@ -1781,6 +1787,9 @@ export function Layout(props: ParentProps) {
 
   async function createNewSession() {
     if (!directory) return;
+    if (creatingSession()) return;
+    setSessionStartError(null);
+    setCreatingSession(true);
     try {
       const res = await createRootSession(client, {
         source: "layout.createNewSession",
@@ -1798,33 +1807,46 @@ export function Layout(props: ParentProps) {
       }
     } catch (e) {
       console.error("Failed to create session:", e);
+      setSessionStartError(`Failed to create session: ${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      setCreatingSession(false);
     }
   }
 
   async function createSessionWithPrompt(text: string) {
     if (!directory) return;
+    if (creatingSession()) return;
     setPromptDropdownOpen(false);
+    const model = providers.selectedModel;
+    const err = startSessionError({
+      loading: providers.loading,
+      providerCount: providers.providers.length,
+      model,
+      connected: providers.connected,
+    });
+    if (err) {
+      setSessionStartError(err);
+      return;
+    }
+    if (!model) return;
+    setSessionStartError(null);
+    setCreatingSession(true);
     try {
-      const res = await createRootSession(client, {
-        source: "layout.createSessionWithPrompt",
-        scope: directory,
+      const res = await createAndSendPrompt({
+        client,
+        text,
+        agent: providers.selectedAgent || "build",
+        model,
       });
-      const data = res.data;
-      if (data) {
-        if (res.isLeader) {
-          setSessions((prev) => {
-            if (prev.some((s) => s.id === data.id)) return prev;
-            return [data as Session, ...prev];
-          });
-        }
-        sessionStorage.setItem(
-          `opencode.pendingPrompt.${data.id}`,
-          JSON.stringify({ text, ts: Date.now() }),
-        );
-        navigate(`/${dirSlug()}/session/${data.id}`);
-      }
+      if (!res) return;
+      setSessions((prev) => [res as Session, ...prev]);
+      providers.setSessionModel(res.id, model);
+      navigate(`/${dirSlug()}/session/${res.id}`);
     } catch (e) {
       console.error("Failed to create session for prompt:", e);
+      setSessionStartError(`Failed to send saved prompt: ${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      setCreatingSession(false);
     }
   }
 
@@ -2217,6 +2239,8 @@ export function Layout(props: ParentProps) {
                 onClick={createNewSession}
                 variant="ghost"
                 class={`flex-1 justify-start ${!savedPrompts.loading() && savedPrompts.prompts().length > 0 ? "rounded-r-none" : ""}`}
+                disabled={creatingSession()}
+                class={`flex-1 justify-start ${!savedPrompts.loading() && savedPrompts.prompts().length > 0 ? "rounded-r-none" : ""}`}
                 size="sm"
               >
                 <Plus class="w-4 h-4" />
@@ -2246,6 +2270,17 @@ export function Layout(props: ParentProps) {
                 onClose={() => setPromptDropdownOpen(false)}
                 onIndexChange={(i) => setPromptDropdownIndex(i)}
               />
+            </Show>
+            <Show when={sessionStartError()}>
+              <div
+                class="mt-2 px-3 py-2 rounded-md text-xs"
+                style={{
+                  background: "var(--status-danger-dim)",
+                  color: "var(--status-danger-text)",
+                }}
+              >
+                {sessionStartError()}
+              </div>
             </Show>
           </div>
 
