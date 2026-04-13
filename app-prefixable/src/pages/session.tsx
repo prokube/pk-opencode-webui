@@ -1466,17 +1466,13 @@ export function Session() {
       const data = res.data;
       if (!data) return;
       const sid = data.id;
+      sessionStorage.setItem(
+        `opencode.pendingPrompt.${sid}`,
+        JSON.stringify({ text, ts: Date.now() }),
+      );
+      providers.setSessionModel(sid, model);
       setSessionId(sid);
       navigate(`/${dirSlug()}/session/${sid}`, { replace: true });
-      if (!res.isLeader) return;
-      // Store the model for the new session
-      providers.setSessionModel(sid, model);
-      await client.session.promptAsync({
-        sessionID: sid,
-        parts: [{ type: "text", text }],
-        agent: providers.selectedAgent || "build",
-        model,
-      });
     } catch (err) {
       setError(`Failed to send saved prompt: ${err instanceof Error ? err.message : String(err)}`);
     }
