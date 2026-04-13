@@ -26,6 +26,8 @@ const envKeys = [
   "TELEGRAM_WEBHOOK_SECRET",
   "TELEGRAM_WEBHOOK_URL",
   "TELEGRAM_SESSION_STORE_PATH",
+  "TELEGRAM_SESSION_LINK_BASE",
+  "TELEGRAM_NOTIFY_DEBOUNCE_MS",
 ] as const;
 
 const envSnapshot = new Map<string, string | undefined>();
@@ -105,9 +107,17 @@ describe("telegram bridge config and cache", () => {
     setEnv({ TELEGRAM_BOT_TOKEN: "token", OPENCODE_API_URL: "http://127.0.0.1:4096" });
     expect(parseConfig().mode).toBe("polling");
     expect(parseConfig().sessionStorePath).toBe(join(tmpdir(), "opencode-telegram-sessions.json"));
+    expect(parseConfig().notificationDebounceMs).toBe(20_000);
 
-    setEnv({ TELEGRAM_BOT_TOKEN: "token", TELEGRAM_SESSION_STORE_PATH: join(tmpdir(), "custom-store.json") });
+    setEnv({
+      TELEGRAM_BOT_TOKEN: "token",
+      TELEGRAM_SESSION_STORE_PATH: join(tmpdir(), "custom-store.json"),
+      TELEGRAM_SESSION_LINK_BASE: "https://opencode.example.com/notebook",
+      TELEGRAM_NOTIFY_DEBOUNCE_MS: "5000",
+    });
     expect(parseConfig().sessionStorePath).toBe(join(tmpdir(), "custom-store.json"));
+    expect(parseConfig().sessionLinkBase).toBe("https://opencode.example.com/notebook");
+    expect(parseConfig().notificationDebounceMs).toBe(5000);
 
     setEnv({ TELEGRAM_BOT_TOKEN: "token", TELEGRAM_MODE: "bad-mode", OPENCODE_API_URL: "http://127.0.0.1:4096" });
     expect(() => parseConfig()).toThrow("Invalid TELEGRAM_MODE");
@@ -135,6 +145,7 @@ describe("telegram bridge config and cache", () => {
       openCodeUrl: "http://127.0.0.1:4096",
       sessionCacheMax: 2,
       sessionCacheTtlMs: 10_000,
+      notificationDebounceMs: 20_000,
       port: 4097,
       webhookPath: "/webhook",
       sessionStorePath: "/tmp/test-store.json",
@@ -171,6 +182,7 @@ describe("telegram bridge config and cache", () => {
           openCodeUrl: "http://127.0.0.1:4096",
           sessionCacheMax: 10,
           sessionCacheTtlMs: 10_000,
+          notificationDebounceMs: 20_000,
           port: 4097,
           webhookPath: "/webhook",
           sessionStorePath: "/tmp/test-store.json",
@@ -230,6 +242,7 @@ describe("telegram bridge config and cache", () => {
           openCodeUrl: "http://127.0.0.1:4096",
           sessionCacheMax: 10,
           sessionCacheTtlMs: 10_000,
+          notificationDebounceMs: 20_000,
           port: 4097,
           webhookPath: "/webhook",
           sessionStorePath: "/tmp/test-store.json",
@@ -270,6 +283,83 @@ describe("telegram bridge config and cache", () => {
     }
   });
 
+  test("handleTextUpdate supports notification opt-in commands", async () => {
+    const calls: Array<{ url: string; body: Record<string, unknown> }> = [];
+    const originalFetch = globalThis.fetch;
+    try {
+      globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        const body = init?.body ? (JSON.parse(String(init.body)) as Record<string, unknown>) : {};
+        calls.push({ url, body });
+        if (url.includes("/sendMessage")) {
+          return new Response(JSON.stringify({ ok: true, result: { message_id: 1 } }), { status: 200 });
+        }
+        throw new Error(`Unexpected fetch ${url}`);
+      };
+
+      const map = new Map<string, string>();
+      const notify = new Map<string, boolean>();
+      const runtime = {
+        config: {
+          mode: "polling" as const,
+          token: "token",
+          openCodeUrl: "http://127.0.0.1:4096",
+          sessionCacheMax: 10,
+          sessionCacheTtlMs: 10_000,
+          notificationDebounceMs: 20_000,
+          port: 4097,
+          webhookPath: "/webhook",
+          sessionStorePath: "/tmp/test-store.json",
+        },
+        store: {
+          get: async (key: string) => map.get(key),
+          set: async (key: string, value: string) => {
+            map.set(key, value);
+          },
+          delete: async (key: string) => {
+            map.delete(key);
+          },
+          notificationGet: async (key: string) => notify.get(key) === true,
+          notificationSet: async (key: string, enabled: boolean) => {
+            if (enabled) {
+              notify.set(key, true);
+              return;
+            }
+            notify.delete(key);
+          },
+        },
+      };
+
+      await handleTextUpdate(runtime, {
+        update_id: 1,
+        message: { message_id: 1, text: "/notify status", chat: { id: 77 }, from: { id: 5 } },
+      });
+      await handleTextUpdate(runtime, {
+        update_id: 2,
+        message: { message_id: 2, text: "/notify on", chat: { id: 77 }, from: { id: 5 } },
+      });
+      await handleTextUpdate(runtime, {
+        update_id: 3,
+        message: { message_id: 3, text: "/notify status", chat: { id: 77 }, from: { id: 5 } },
+      });
+      await handleTextUpdate(runtime, {
+        update_id: 4,
+        message: { message_id: 4, text: "/notify off", chat: { id: 77 }, from: { id: 5 } },
+      });
+
+      const sentTexts = calls
+        .filter((x) => x.url.includes("/sendMessage"))
+        .map((x) => String(x.body.text || ""));
+      expect(sentTexts[0]).toBe("Notifications are disabled.");
+      expect(sentTexts[1]).toBe("Notifications enabled for this chat.");
+      expect(sentTexts[2]).toBe("Notifications are enabled.");
+      expect(sentTexts[3]).toBe("Notifications disabled for this chat.");
+      expect(notify.get("chat:77:user:5")).toBeUndefined();
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   test("sessionForChat does not cache new session when store set fails", async () => {
     const calls: Array<{ url: string; body: Record<string, unknown> }> = [];
     const originalFetch = globalThis.fetch;
@@ -299,6 +389,7 @@ describe("telegram bridge config and cache", () => {
           openCodeUrl: "http://127.0.0.1:4096",
           sessionCacheMax: 10,
           sessionCacheTtlMs: 10_000,
+          notificationDebounceMs: 20_000,
           port: 4097,
           webhookPath: "/webhook",
           sessionStorePath: "/tmp/test-store.json",
@@ -367,6 +458,7 @@ describe("telegram bridge config and cache", () => {
           openCodeUrl: "http://127.0.0.1:4096",
           sessionCacheMax: 10,
           sessionCacheTtlMs: 10_000,
+          notificationDebounceMs: 20_000,
           port: 4097,
           webhookPath: "/webhook",
           sessionStorePath: "/tmp/test-store.json",

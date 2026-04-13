@@ -160,6 +160,8 @@ bun install && bun run dev
 | `OPENCODE_API_URL` | `API_URL` or `http://127.0.0.1:4096` | OpenCode API URL for bridge |
 | `OPENCODE_DIRECTORY` | _(empty)_ | Optional directory for bridge session API calls |
 | `TELEGRAM_SESSION_STORE_PATH` | OS temp dir + `/opencode-telegram-sessions.json` | Telegram chat/user to OpenCode session mapping file; set this to a mounted persistent volume path in Kubernetes for restart-safe persistence |
+| `TELEGRAM_SESSION_LINK_BASE` | _(empty)_ | Public UI base URL used in outbound notifications (for direct session links) |
+| `TELEGRAM_NOTIFY_DEBOUNCE_MS` | `20000` | Debounce window to suppress duplicate burst notifications per chat/session/event |
 
 ## Deployment
 
@@ -212,7 +214,8 @@ See [examples/](examples/) for nginx and Traefik configurations.
 This repository includes a Telegram bridge service (`docker/telegram-bridge.ts`) that:
 - receives Telegram bot text messages,
 - forwards prompts to OpenCode session APIs,
-- sends assistant responses back to Telegram.
+- sends assistant responses back to Telegram,
+- sends proactive outbound alerts for question prompts, permission requests, and completed tasks.
 
 The bridge keeps a default OpenCode session per Telegram chat (and sender in shared chats), persisted to `TELEGRAM_SESSION_STORE_PATH` so mappings survive restarts.
 
@@ -223,10 +226,26 @@ The file-backed session store is single-writer/single-replica only (no cross-pro
 Supported bot commands:
 - `/new` creates and switches to a fresh session for the current chat mapping.
 - `/status` shows the current mapped session id.
+- `/notify on|off|status` enables/disables outbound operational notifications per chat (default off).
 - `/help` shows command help.
 - Unknown commands return a short help hint.
 
 Messages from the same chat are handled through a per-chat queue to avoid cross-reply mixups when users send requests quickly.
+
+Outbound alert behavior:
+- Safe by default: outbound alerts are disabled until a chat opts in via `/notify on`.
+- Debounced: repeated burst events are suppressed for `TELEGRAM_NOTIFY_DEBOUNCE_MS`.
+- Context-rich: alerts include the session id and, when `TELEGRAM_SESSION_LINK_BASE` is set, a direct session URL.
+
+Token and webhook security guidance:
+- Never commit `TELEGRAM_BOT_TOKEN` to git; inject it from your runtime secret manager.
+- For webhook mode, set `TELEGRAM_WEBHOOK_SECRET` and ensure your ingress forwards `x-telegram-bot-api-secret-token` unchanged.
+- Limit webhook exposure to HTTPS only and scope ingress routes to `TELEGRAM_WEBHOOK_PATH`.
+
+Failure troubleshooting:
+- Check bridge logs for `[TelegramBridge] outbound event stream error` when OpenCode event streaming is unavailable.
+- Check bridge logs for `Telegram sendMessage failed` and verify bot token validity/permissions.
+- If links look wrong in alerts, set `TELEGRAM_SESSION_LINK_BASE` to the public UI URL prefix.
 
 The bridge is opt-in and only starts in the Kubeflow image when `TELEGRAM_BRIDGE_ENABLED=true`.
 

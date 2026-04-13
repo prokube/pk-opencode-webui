@@ -159,10 +159,24 @@ Optional:
 - `TELEGRAM_MODE` (`polling` or `webhook`, default `polling`)
 - `OPENCODE_API_URL` (defaults to `API_URL` or `http://127.0.0.1:4096`)
 - `OPENCODE_DIRECTORY`
+- `TELEGRAM_SESSION_LINK_BASE` (public base URL for session links in outbound alerts)
+- `TELEGRAM_NOTIFY_DEBOUNCE_MS` (default `20000`, suppresses burst duplicate alerts)
 - `TELEGRAM_BRIDGE_PORT` (webhook mode)
 - `TELEGRAM_WEBHOOK_PATH` (webhook mode)
 - `TELEGRAM_WEBHOOK_URL` (auto-register webhook if set)
 - `TELEGRAM_WEBHOOK_SECRET` (validated from `x-telegram-bot-api-secret-token` header)
+
+Outbound alerts are opt-in per chat and disabled by default. Users can enable with `/notify on` and disable with `/notify off`.
+
+Alert types:
+- Question pending (`question.asked`)
+- Permission request (`permission.asked`)
+- Task finished (session transitions from busy/retry to idle)
+
+Security and operations:
+- Store `TELEGRAM_BOT_TOKEN` as a Kubernetes secret and inject it as an env var.
+- Restrict webhook ingress to HTTPS, preserve `x-telegram-bot-api-secret-token`, and set `TELEGRAM_WEBHOOK_SECRET`.
+- If outbound alerts fail, inspect logs for `[TelegramBridge] outbound event stream error` (OpenCode event stream) and Telegram API errors.
 
 Webhook mode deployment notes:
 - Expose `TELEGRAM_BRIDGE_PORT` on the Notebook service or sidecar Service, then publish it through your cluster ingress.

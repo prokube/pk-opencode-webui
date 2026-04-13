@@ -20,9 +20,11 @@ type BridgeConfig = {
   mode: "polling" | "webhook"
   token: string
   openCodeUrl: string
+  sessionLinkBase?: string
   directory?: string
   sessionCacheMax: number
   sessionCacheTtlMs: number
+  notificationDebounceMs: number
   port: number
   webhookPath: string
   webhookSecret?: string
@@ -43,6 +45,9 @@ type CachedSession = {
 const sessions = new Map<string, CachedSession>()
 const creatingSessions = new Map<string, Promise<string>>()
 const chatQueues = new Map<string, Promise<void>>()
+const eventNotifications = new Map<string, number>()
+const statusBySession = new Map<string, string>()
+const fallbackNotifications = new Map<string, boolean>()
 
 function env(name: string): string {
   return process.env[name]?.trim() || ""
@@ -86,12 +91,17 @@ function parsePositiveInt(value: string, fallback: number): number {
   return n
 }
 
-function parseCommand(text: string): { name: string } | undefined {
+function parseCommand(text: string): { name: string; args: string[] } | undefined {
   if (!text.startsWith("/")) return
-  const raw = text.split(/\s+/, 1)[0]?.trim()
+  const parts = text
+    .trim()
+    .split(/\s+/)
+    .map((part) => part.trim())
+    .filter(Boolean)
+  const raw = parts[0]
   const name = raw?.split("@")[0]?.trim().toLowerCase()
   if (!name) return
-  return { name }
+  return { name, args: parts.slice(1) }
 }
 
 function helpText(): string {
@@ -99,8 +109,97 @@ function helpText(): string {
     "Available commands:",
     "/new - start and switch to a fresh OpenCode session",
     "/status - show current session mapping",
+    "/notify on|off|status - control proactive notifications for this chat",
     "/help - show this help message",
   ].join("\n")
+}
+
+function normalizeLinkBase(value: string): string | undefined {
+  if (!value) return
+  const trimmed = value.trim()
+  if (!trimmed) return
+  const base = trimmed.endsWith("/") ? trimmed.slice(0, -1) : trimmed
+  try {
+    return new URL(base).toString().replace(/\/$/, "")
+  } catch {
+    throw new Error(`Invalid TELEGRAM_SESSION_LINK_BASE URL: ${value}`)
+  }
+}
+
+function parseTelegramKey(key: string): { chatId: number } | undefined {
+  const parts = key.split(":")
+  if (parts.length < 2) return
+  if (parts[0] !== "chat") return
+  const chatId = Number.parseInt(parts[1] || "", 10)
+  if (!Number.isFinite(chatId)) return
+  return { chatId }
+}
+
+async function notificationEnabled(runtime: Runtime, key: string): Promise<boolean> {
+  if (runtime.store.notificationGet) {
+    return runtime.store.notificationGet(key)
+  }
+  return fallbackNotifications.get(key) === true
+}
+
+async function setNotificationEnabled(runtime: Runtime, key: string, enabled: boolean): Promise<void> {
+  if (runtime.store.notificationSet) {
+    await runtime.store.notificationSet(key, enabled)
+    return
+  }
+  if (enabled) {
+    fallbackNotifications.set(key, true)
+    return
+  }
+  fallbackNotifications.delete(key)
+}
+
+function sessionLabel(config: BridgeConfig, sessionId: string): string {
+  if (!config.sessionLinkBase) return `session ${sessionId}`
+  return `${config.sessionLinkBase}/session/${encodeURIComponent(sessionId)}`
+}
+
+function shouldNotify(config: BridgeConfig, chatId: number, kind: string, sessionId: string): boolean {
+  const now = Date.now()
+  const key = `${chatId}:${kind}:${sessionId}`
+  const previous = eventNotifications.get(key)
+  if (previous && now - previous < config.notificationDebounceMs) return false
+  eventNotifications.set(key, now)
+  return true
+}
+
+function questionText(properties: Record<string, unknown>): string {
+  const questions = Array.isArray(properties.questions) ? properties.questions : []
+  const first = questions[0] as { header?: unknown; question?: unknown } | undefined
+  const header = typeof first?.header === "string" ? first.header.trim() : ""
+  if (header) return header
+  const question = typeof first?.question === "string" ? first.question.trim() : ""
+  if (question) return question.slice(0, 120)
+  return "The assistant is waiting for your answer."
+}
+
+function permissionText(properties: Record<string, unknown>): string {
+  const permission = typeof properties.permission === "string" ? properties.permission : "permission"
+  const patterns = Array.isArray(properties.patterns)
+    ? properties.patterns.filter((part) => typeof part === "string" && part).slice(0, 3)
+    : []
+  if (!patterns.length) return `Permission request: ${permission}`
+  return `Permission request: ${permission} (${patterns.join(", ")})`
+}
+
+function parseEvent(rawData: string): { type: string; properties: Record<string, unknown> } | undefined {
+  const decoded = JSON.parse(rawData) as { payload?: unknown; type?: unknown; properties?: unknown }
+  const event = decoded.payload && typeof decoded.payload === "object"
+    ? decoded.payload as { type?: unknown; properties?: unknown }
+    : decoded
+  if (typeof event.type !== "string") return
+  const properties = event.properties && typeof event.properties === "object"
+    ? event.properties as Record<string, unknown>
+    : {}
+  return {
+    type: event.type,
+    properties,
+  }
 }
 
 function parseOpenCodeUrl(value: string, source: string): string {
@@ -131,15 +230,19 @@ export function parseConfig(): BridgeConfig {
   const webhookPath = env("TELEGRAM_WEBHOOK_PATH") || "/webhook"
   const sessionCacheMax = parsePositiveInt(env("TELEGRAM_SESSION_CACHE_MAX") || "", 500)
   const sessionCacheTtlMs = parsePositiveInt(env("TELEGRAM_SESSION_CACHE_TTL_MS") || "", 6 * 60 * 60 * 1000)
+  const notificationDebounceMs = parsePositiveInt(env("TELEGRAM_NOTIFY_DEBOUNCE_MS") || "", 20_000)
   const sessionStorePath = env("TELEGRAM_SESSION_STORE_PATH") || defaultSessionStorePath()
+  const sessionLinkBase = normalizeLinkBase(env("TELEGRAM_SESSION_LINK_BASE"))
 
   return {
     mode,
     token,
     openCodeUrl,
+    sessionLinkBase,
     directory: env("OPENCODE_DIRECTORY") || undefined,
     sessionCacheMax,
     sessionCacheTtlMs,
+    notificationDebounceMs,
     port: parsePort(env("TELEGRAM_BRIDGE_PORT") || "4097"),
     webhookPath: webhookPath.startsWith("/") ? webhookPath : `/${webhookPath}`,
     webhookSecret: env("TELEGRAM_WEBHOOK_SECRET") || undefined,
@@ -377,6 +480,26 @@ export async function handleTextUpdate(runtime: Runtime, update: TelegramUpdate)
       await sendTelegramMessage(config, chatId, `Started a new session: ${next}`)
       return true
     }
+    if (command.name === "/notify") {
+      const mode = command.args[0]?.toLowerCase() || ""
+      if (mode === "on") {
+        await setNotificationEnabled(runtime, key, true)
+        await sendTelegramMessage(config, chatId, "Notifications enabled for this chat.")
+        return true
+      }
+      if (mode === "off") {
+        await setNotificationEnabled(runtime, key, false)
+        await sendTelegramMessage(config, chatId, "Notifications disabled for this chat.")
+        return true
+      }
+      if (mode === "status" || !mode) {
+        const enabled = await notificationEnabled(runtime, key)
+        await sendTelegramMessage(config, chatId, enabled ? "Notifications are enabled." : "Notifications are disabled.")
+        return true
+      }
+      await sendTelegramMessage(config, chatId, "Usage: /notify on, /notify off, or /notify status")
+      return true
+    }
     await sendTelegramMessage(config, chatId, `Unknown command ${command.name}. Use /help.`)
     return true
   }
@@ -402,6 +525,93 @@ export async function handleTextUpdate(runtime: Runtime, update: TelegramUpdate)
       await sendTelegramMessage(config, chatId, "Sorry, I ran into an internal error. Please try again in a moment.")
     } catch (sendError) {
       console.error("[TelegramBridge] failed to send error response", { chatId, error: sendError })
+    }
+  }
+}
+
+async function notifySessionKeys(runtime: Runtime, sessionId: string, kind: string, text: string) {
+  if (!runtime.store.sessionKeys) return
+  const keys = await runtime.store.sessionKeys(sessionId)
+  for (const key of keys) {
+    if (!(await notificationEnabled(runtime, key))) continue
+    const parsed = parseTelegramKey(key)
+    if (!parsed) continue
+    if (!shouldNotify(runtime.config, parsed.chatId, kind, sessionId)) continue
+    const message = `${text}\n\nOpen ${sessionLabel(runtime.config, sessionId)}`
+    await queueChatUpdate(String(parsed.chatId), async () => {
+      await sendTelegramMessage(runtime.config, parsed.chatId, message)
+    })
+  }
+}
+
+async function handleBridgeEvent(runtime: Runtime, event: { type: string; properties: Record<string, unknown> }) {
+  const sessionId = typeof event.properties.sessionID === "string" ? event.properties.sessionID : ""
+  if (!sessionId) return
+  if (event.type === "question.asked") {
+    await notifySessionKeys(runtime, sessionId, "question", `Question pending: ${questionText(event.properties)}`)
+    return
+  }
+  if (event.type === "permission.asked") {
+    await notifySessionKeys(runtime, sessionId, "permission", permissionText(event.properties))
+    return
+  }
+  if (event.type !== "session.status") return
+  const status = event.properties.status && typeof event.properties.status === "object"
+    ? event.properties.status as { type?: unknown }
+    : undefined
+  const next = typeof status?.type === "string" ? status.type : ""
+  const prev = statusBySession.get(sessionId)
+  statusBySession.set(sessionId, next)
+  if (next !== "idle") return
+  if (!prev || prev === "idle") return
+  await notifySessionKeys(runtime, sessionId, "task-finished", "Task finished: the session is now idle.")
+}
+
+async function runOutboundNotifications(runtime: Runtime) {
+  const config = runtime.config
+  while (true) {
+    const url = opencodeUrl(config, "/event")
+    if (config.directory) {
+      url.searchParams.set("directory", config.directory)
+    }
+
+    try {
+      const response = await fetch(url, {
+        headers: { Accept: "text/event-stream" },
+        signal: AbortSignal.timeout(10 * 60 * 1000),
+      })
+      if (!response.ok || !response.body) {
+        throw new Error(`OpenCode event stream failed (${response.status})`)
+      }
+
+      const reader = response.body.getReader()
+      const decoder = new TextDecoder()
+      let buffer = ""
+      while (true) {
+        const step = await reader.read()
+        if (step.done) break
+        buffer += decoder.decode(step.value, { stream: true }).replace(/\r\n/g, "\n")
+        while (true) {
+          const boundary = buffer.indexOf("\n\n")
+          if (boundary === -1) break
+          const block = buffer.slice(0, boundary)
+          buffer = buffer.slice(boundary + 2)
+          const lines = block.split("\n")
+          const dataLines = lines
+            .filter((line) => line.startsWith("data:"))
+            .map((line) => line.slice(5).trimStart())
+          if (!dataLines.length) continue
+          const raw = dataLines.join("\n")
+          const event = await Promise.resolve()
+            .then(() => parseEvent(raw))
+            .catch(() => undefined)
+          if (!event) continue
+          await handleBridgeEvent(runtime, event)
+        }
+      }
+    } catch (error) {
+      console.error("[TelegramBridge] outbound event stream error", error)
+      await sleep(1500)
     }
   }
 }
@@ -502,15 +712,18 @@ export async function startTelegramBridge() {
     console.log(`[TelegramBridge] OpenCode directory: ${config.directory}`)
   }
   if (config.mode === "polling") {
-    await runPolling(runtime)
+    await Promise.all([runPolling(runtime), runOutboundNotifications(runtime)])
     return
   }
 
-  await runWebhook(runtime)
+  await Promise.all([runWebhook(runtime), runOutboundNotifications(runtime)])
 }
 
 export function resetSessionCacheForTest() {
   sessions.clear()
   creatingSessions.clear()
   chatQueues.clear()
+  eventNotifications.clear()
+  statusBySession.clear()
+  fallbackNotifications.clear()
 }

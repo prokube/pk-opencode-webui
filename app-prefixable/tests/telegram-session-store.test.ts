@@ -82,7 +82,7 @@ describe("telegram session store", () => {
 
     await Bun.write(
       backup,
-      `${JSON.stringify({ version: 1, sessions: { [telegramSessionKey(777, 42)]: "session-recovered" } }, null, 2)}\n`,
+      `${JSON.stringify({ version: 2, sessions: { [telegramSessionKey(777, 42)]: "session-recovered" }, notifications: {} }, null, 2)}\n`,
     )
 
     const store = createTelegramSessionStore(path)
@@ -101,7 +101,7 @@ describe("telegram session store", () => {
     await Bun.write(badBackup, "{invalid json")
     await Bun.write(
       goodBackup,
-      `${JSON.stringify({ version: 1, sessions: { [telegramSessionKey(778, 43)]: "session-good" } }, null, 2)}\n`,
+      `${JSON.stringify({ version: 2, sessions: { [telegramSessionKey(778, 43)]: "session-good" }, notifications: {} }, null, 2)}\n`,
     )
 
     const store = createTelegramSessionStore(path)
@@ -119,7 +119,7 @@ describe("telegram session store", () => {
     await Bun.write(path, "{invalid json")
     await Bun.write(
       backup,
-      `${JSON.stringify({ version: 1, sessions: { [key]: "session-recovered" } }, null, 2)}\n`,
+      `${JSON.stringify({ version: 2, sessions: { [key]: "session-recovered" }, notifications: {} }, null, 2)}\n`,
     )
 
     const store = createTelegramSessionStore(path)
@@ -130,5 +130,37 @@ describe("telegram session store", () => {
     expect(stored.sessions?.[key]).toBe("session-recovered")
     const leftovers = (await readdir(dir)).filter((entry) => entry.includes("sessions.json.corrupt."))
     expect(leftovers).toEqual([])
+  })
+
+  test("persists notification opt-in flags", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "telegram-session-store-"))
+    const path = join(dir, "sessions.json")
+    const key = telegramSessionKey(880, 55)
+    files.push(path)
+    files.push(dir)
+
+    const first = createTelegramSessionStore(path)
+    await first.notificationSet?.(key, true)
+    expect(await first.notificationGet?.(key)).toBe(true)
+
+    const second = createTelegramSessionStore(path)
+    expect(await second.notificationGet?.(key)).toBe(true)
+    await second.notificationSet?.(key, false)
+    expect(await second.notificationGet?.(key)).toBe(false)
+  })
+
+  test("sessionKeys returns all mappings for a session", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "telegram-session-store-"))
+    const path = join(dir, "sessions.json")
+    files.push(path)
+    files.push(dir)
+
+    const first = createTelegramSessionStore(path)
+    await first.set(telegramSessionKey(400, 1), "session-a")
+    await first.set(telegramSessionKey(401, 2), "session-a")
+    await first.set(telegramSessionKey(402, 3), "session-b")
+
+    const keys = await first.sessionKeys?.("session-a")
+    expect(keys?.sort()).toEqual([telegramSessionKey(400, 1), telegramSessionKey(401, 2)])
   })
 })
