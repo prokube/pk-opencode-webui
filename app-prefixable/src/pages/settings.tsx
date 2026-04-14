@@ -106,17 +106,23 @@ export function Settings() {
       return
     }
     const data = await healthRes.json().catch(() => null) as TelegramHealthResponse | null
-    const ready = !!data?.bridgeReachable
+    const dependencyOk = data?.dependencies?.telegramApi?.status === "ok"
+      && data?.dependencies?.openCodeApi?.status === "ok"
+    const ready = data?.status === "healthy"
+      && !!data?.bridgeReachable
+      && data?.process?.status === "up"
       && data?.config?.status === "ok"
       && !!data?.config?.tokenConfigured
-      && data?.status !== "down"
+      && dependencyOk
     setTelegramAlarmReady(ready)
     if (ready) {
       setTelegramAlarmHint("Telegram channel is ready. This toggle controls proactive Telegram pings for bell-enabled sessions.")
       return
     }
-    const msg = data?.messages?.[0]?.text
-    setTelegramAlarmHint(msg || "Telegram alarms need a healthy bridge and bot token before they can be enabled.")
+    const issues = (data?.messages || []).map((item) => item.text.trim()).filter(Boolean)
+    const summary = issues.length ? issues.join(" ") : "Telegram alarms need a healthy bridge, valid bot token, and passing dependency checks before they can be enabled."
+    const state = data?.status === "degraded" ? "degraded" : data?.status === "down" ? "down" : "not healthy"
+    setTelegramAlarmHint(`Telegram bridge is ${state}. ${summary}`)
   }
 
   async function toggleTelegramAlarmChannel() {

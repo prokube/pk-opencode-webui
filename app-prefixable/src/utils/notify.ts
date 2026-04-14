@@ -35,7 +35,7 @@ export function readNotifyMap(): Record<string, boolean> {
     if (!raw) return {};
     const parsed = JSON.parse(raw) as Record<string, boolean>;
     if (!parsed || typeof parsed !== "object") {
-      window.localStorage.removeItem(NOTIFY_STORAGE_KEY);
+      removeStorageKey(NOTIFY_STORAGE_KEY);
       return {};
     }
     return parsed;
