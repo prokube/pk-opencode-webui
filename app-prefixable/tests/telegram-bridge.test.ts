@@ -874,9 +874,9 @@ describe("telegram bridge config and cache", () => {
     const markup = sent?.body.reply_markup as { inline_keyboard?: Array<Array<{ text?: string; callback_data?: string }>> } | undefined;
     const first = markup?.inline_keyboard?.[0]?.[0];
     const second = markup?.inline_keyboard?.[1]?.[0];
-    expect(first?.text).toBe("1. First");
+    expect(first?.text).toBe("First");
     expect(first?.callback_data).toBe("p:p-1");
-    expect(second?.text).toBe("2. Third");
+    expect(second?.text).toBe("Third");
     expect(second?.callback_data).toBe("p:p-2");
   });
 

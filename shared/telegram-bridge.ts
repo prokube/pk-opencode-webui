@@ -1883,7 +1883,7 @@ function savedPromptsStatus(error: unknown): number | undefined {
 function savedPromptsFailureGuidance(error: unknown, directory?: string): string {
   const status = savedPromptsStatus(error)
   if (error instanceof Error && error.message.includes("(invalid response):")) {
-    return "Saved prompts endpoint returned an unexpected response. Check Telegram bridge openCodeUrl and point it to the prokube.ai server that serves /api/ext endpoints."
+    return "Saved prompts endpoint returned an unexpected response. Check Telegram bridge openCodeUrl and point it to the OpenCode API server that exposes /api/ext endpoints."
   }
   if (status === 403 && directory) {
     return `OpenCode rejected saved prompts access for directory ${directory} (HTTP 403). Run /status in a session mapped to the right project, or update Telegram directory in bridge settings.`
@@ -1939,7 +1939,6 @@ function promptChoice(prompt: SavedPrompt, index: number): string {
 
 function promptsMarkup(prompts: SavedPrompt[]): { inline_keyboard: Array<Array<{ text: string; callback_data: string }>> } | undefined {
   const rows = prompts
-    .slice(0, inlineButtonMaxOptions)
     .map((prompt) => {
       const callback = promptCallbackData(prompt.id)
       if (!callback) return
@@ -1948,8 +1947,9 @@ function promptsMarkup(prompts: SavedPrompt[]): { inline_keyboard: Array<Array<{
       return { title, callback_data: callback }
     })
     .filter((item) => item !== undefined)
-    .map((item, index) => [{
-      text: `${index + 1}. ${item.title}`.slice(0, inlineButtonTextMax),
+    .slice(0, inlineButtonMaxOptions)
+    .map((item) => [{
+      text: item.title.slice(0, inlineButtonTextMax),
       callback_data: item.callback_data,
     }])
   if (!rows.length) return
