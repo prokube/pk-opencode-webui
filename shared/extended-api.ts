@@ -27,6 +27,14 @@ function telegramSessionStore(sessionStorePath: string) {
   return next
 }
 
+export function resetTelegramSessionStoreCacheForTest() {
+  telegramSessionStores.clear()
+}
+
+export function telegramSessionStoreCacheSizeForTest() {
+  return telegramSessionStores.size
+}
+
 type TelegramBridgeHealthResponse = {
   status?: "healthy" | "degraded"
   checkedAt?: string
