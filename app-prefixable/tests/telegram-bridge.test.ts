@@ -755,6 +755,68 @@ describe("telegram bridge config and cache", () => {
     expect(text.indexOf("Project dated [project] (p-1)")).toBeLessThan(text.indexOf("Global fallback [global] (g-1)"));
   });
 
+  test("/prompts resolves project prompts from the mapped session directory", async () => {
+    const calls: Array<{ url: string; body: Record<string, unknown> }> = [];
+    const originalFetch = globalThis.fetch;
+    try {
+      globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        const body = init?.body ? (JSON.parse(String(init.body)) as Record<string, unknown>) : {};
+        calls.push({ url, body });
+        if (url.includes("/session/session-current")) {
+          return new Response(JSON.stringify({ id: "session-current", directory: "/workspace/project-a" }), { status: 200 });
+        }
+        if (url.includes("/api/ext/saved-prompts")) {
+          const value = new URL(url).searchParams.get("directory");
+          if (value !== "/workspace/project-a") {
+            return new Response(JSON.stringify({ global: [], project: [] }), { status: 200 });
+          }
+          return new Response(
+            JSON.stringify({
+              global: [{ id: "g-1", title: "Global prompt", text: "Global", createdAt: 10 }],
+              project: [{ id: "p-1", title: "Project deploy", text: "Deploy", createdAt: 20 }],
+            }),
+            { status: 200 },
+          );
+        }
+        if (url.includes("/sendMessage")) {
+          return new Response(JSON.stringify({ ok: true, result: { message_id: 1 } }), { status: 200 });
+        }
+        throw new Error(`Unexpected fetch ${url}`);
+      };
+
+      const runtime = {
+        config: {
+          mode: "polling" as const,
+          token: "token",
+          openCodeUrl: "http://127.0.0.1:4096",
+          sessionCacheMax: 10,
+          sessionCacheTtlMs: 10_000,
+          notificationDebounceMs: 20_000,
+          port: 4097,
+          webhookPath: "/webhook",
+          sessionStorePath: "/tmp/test-store.json",
+        },
+        store: {
+          get: async () => "session-current",
+          set: async () => undefined,
+          delete: async () => undefined,
+        },
+      };
+
+      await handleTextUpdate(runtime, {
+        update_id: 1,
+        message: { message_id: 1, text: "/prompts", chat: { id: 91 }, from: { id: 6 } },
+      });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+
+    const text = String(calls.find((x) => x.url.includes("/sendMessage"))?.body.text || "");
+    expect(text).toContain("Project deploy [project] (p-1)");
+    expect(calls.some((x) => x.url.includes("/api/ext/saved-prompts?directory=%2Fworkspace%2Fproject-a"))).toBe(true);
+  });
+
   test("/prompts empty-state message reflects merged prompt list", async () => {
     const calls: Array<{ url: string; body: Record<string, unknown> }> = [];
     const originalFetch = globalThis.fetch;
@@ -800,7 +862,9 @@ describe("telegram bridge config and cache", () => {
     }
 
     const text = String(calls.find((x) => x.url.includes("/sendMessage"))?.body.text || "");
-    expect(text).toBe("No saved prompts found. Create one in the web UI, then run /prompts again.");
+    expect(text).toBe(
+      "No saved prompts found. If your prompts are project-scoped, run /status in the target project first or configure Telegram directory in bridge settings.",
+    );
   });
 
   test("/prompt runs a saved prompt and returns assistant response", async () => {

@@ -1478,10 +1478,44 @@ function mergeSavedPrompts(globalPrompts: SavedPrompt[], projectPrompts: SavedPr
     })
 }
 
-async function savedPrompts(config: BridgeConfig): Promise<SavedPrompt[]> {
+function sessionDirectoryFromPayload(raw: unknown): string | undefined {
+  if (!raw || typeof raw !== "object") return
+  const row = raw as { directory?: unknown; info?: unknown }
+  const direct = typeof row.directory === "string" ? row.directory.trim() : ""
+  if (direct) return direct
+  if (!row.info || typeof row.info !== "object") return
+  const info = row.info as { directory?: unknown }
+  const nested = typeof info.directory === "string" ? info.directory.trim() : ""
+  if (nested) return nested
+}
+
+async function sessionDirectory(config: BridgeConfig, sessionId: string): Promise<string | undefined> {
+  const id = sessionId.trim()
+  if (!id) return
+  const lookup = async (withConfiguredDirectory: boolean) => {
+    const url = opencodeUrl(config, `/session/${encodeURIComponent(id)}`)
+    if (withConfiguredDirectory && config.directory) {
+      url.searchParams.set("directory", config.directory)
+    }
+    const res = await fetch(url, {
+      method: "GET",
+      signal: AbortSignal.timeout(12_000),
+    }).catch(() => undefined)
+    if (!res?.ok) return
+    const data = await res.json().catch(() => ({}))
+    return sessionDirectoryFromPayload(data)
+  }
+
+  const first = await lookup(true)
+  if (first) return first
+  if (!config.directory) return
+  return lookup(false)
+}
+
+async function savedPromptsForDirectory(config: BridgeConfig, directory?: string) {
   const url = opencodeUrl(config, "/api/ext/saved-prompts")
-  if (config.directory) {
-    url.searchParams.set("directory", config.directory)
+  if (directory) {
+    url.searchParams.set("directory", directory)
   }
   const res = await fetch(url, {
     method: "GET",
@@ -1492,9 +1526,32 @@ async function savedPrompts(config: BridgeConfig): Promise<SavedPrompt[]> {
     throw new Error(`OpenCode saved prompts failed (${res.status}): ${body.slice(0, 300)}`)
   }
   const data = await res.json().catch(() => ({})) as { global?: unknown; project?: unknown }
-  const global = parseSavedPromptList(data.global, "global")
-  const project = parseSavedPromptList(data.project, "project")
-  return mergeSavedPrompts(global, project)
+  return {
+    global: parseSavedPromptList(data.global, "global"),
+    project: parseSavedPromptList(data.project, "project"),
+  }
+}
+
+async function savedPrompts(runtime: Runtime, key: string): Promise<{ prompts: SavedPrompt[]; guidance?: string }> {
+  const config = runtime.config
+  const current = await runtime.store.get(key) || sessionFromCache(config, key)
+  const bySession = current ? await sessionDirectory(config, current) : undefined
+  const resolved = bySession || config.directory
+  const scoped = await savedPromptsForDirectory(config, resolved)
+  const merged = mergeSavedPrompts(scoped.global, scoped.project)
+  if (merged.length) {
+    return { prompts: merged }
+  }
+  if (resolved) {
+    return {
+      prompts: [],
+      guidance: "No saved prompts found for this context. If prompts exist in another project, run /status in that project first or configure Telegram directory in bridge settings.",
+    }
+  }
+  return {
+    prompts: [],
+    guidance: "No saved prompts found. If your prompts are project-scoped, run /status in the target project first or configure Telegram directory in bridge settings.",
+  }
 }
 
 function promptScope(scope: SavedPrompt["scope"]): string {
@@ -1506,9 +1563,9 @@ function promptChoice(prompt: SavedPrompt, index: number): string {
   return `${index + 1}. ${prompt.title} [${promptScope(prompt.scope)}] (${prompt.id})`
 }
 
-function promptsListText(prompts: SavedPrompt[]): string {
+function promptsListText(prompts: SavedPrompt[], guidance?: string): string {
   if (!prompts.length) {
-    return "No saved prompts found. Create one in the web UI, then run /prompts again."
+    return guidance || "No saved prompts found. Create one in the web UI, then run /prompts again."
   }
   const shown = prompts.slice(0, 25)
   const lines = shown.map(promptChoice)
@@ -1928,8 +1985,8 @@ export async function handleTextUpdate(runtime: Runtime, update: TelegramUpdate)
       return true
     }
     if (known?.name === "prompts") {
-      const prompts = await savedPrompts(config)
-      await sendTelegramMessage(config, chatId, promptsListText(prompts))
+      const list = await savedPrompts(runtime, key)
+      await sendTelegramMessage(config, chatId, promptsListText(list.prompts, list.guidance))
       return true
     }
     if (known?.name === "prompt") {
@@ -1938,8 +1995,12 @@ export async function handleTextUpdate(runtime: Runtime, update: TelegramUpdate)
         await sendTelegramMessage(config, chatId, "Usage: /prompt <name|id>")
         return true
       }
-      const prompts = await savedPrompts(config)
-      const resolved = lookupSavedPrompt(target, prompts)
+      const list = await savedPrompts(runtime, key)
+      if (!list.prompts.length && list.guidance) {
+        await sendTelegramMessage(config, chatId, list.guidance)
+        return true
+      }
+      const resolved = lookupSavedPrompt(target, list.prompts)
       if (resolved.error) {
         await sendTelegramMessage(config, chatId, resolved.error)
         return true
