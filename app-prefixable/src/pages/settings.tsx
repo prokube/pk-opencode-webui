@@ -23,6 +23,8 @@ import { ALARM_CHANNELS_STORAGE_KEY, readAlarmChannels, writeAlarmChannels, type
 import type { TelegramHealthResponse, TelegramSettingsResponse } from "../utils/telegram-settings"
 import type { Config, PermissionActionConfig } from "../sdk/client"
 
+const TELEGRAM_ALARM_FIELD = "telegramAlarmChannelEnabled"
+
 export function Settings() {
   const providers = useProviders()
   const mcp = useMCP()
@@ -66,6 +68,12 @@ export function Settings() {
   const [telegramAlarmReady, setTelegramAlarmReady] = createSignal(false)
   const [telegramAlarmSaving, setTelegramAlarmSaving] = createSignal(false)
   const [telegramAlarmHint, setTelegramAlarmHint] = createSignal("Telegram bridge health check has not run yet.")
+  const [telegramAlarmRestartRequired, setTelegramAlarmRestartRequired] = createSignal(false)
+  const telegramAlarmHintText = createMemo(() => {
+    const hint = telegramAlarmHint()
+    if (!telegramAlarmRestartRequired()) return hint
+    return `${hint} Restart Telegram bridge before this change takes effect.`
+  })
 
   // Keep soundSettings in sync with localStorage changes from other tabs
   onMount(() => {
@@ -147,11 +155,17 @@ export function Settings() {
       return
     }
 
-    const data = await res.json().catch(() => null) as TelegramSettingsResponse | null
+    const data = await res.json().catch(() => null) as (TelegramSettingsResponse & {
+      restartRequired?: boolean
+      restartRequiredFields?: string[]
+    }) | null
     const enabled = data?.settings?.telegramAlarmChannelEnabled
     if (typeof enabled === "boolean") {
       updateAlarmChannels({ telegram: enabled })
     }
+    const restartRequired = !!data?.restartRequired
+      || !!data?.restartRequiredFields?.includes(TELEGRAM_ALARM_FIELD)
+    setTelegramAlarmRestartRequired(restartRequired)
     void loadTelegramAlarmState()
   }
 
@@ -2432,8 +2446,8 @@ Add your project-specific instructions here.
                       <h3 class="text-sm font-medium" style={{ color: "var(--text-strong)" }}>
                         Telegram alarm channel
                       </h3>
-                      <p id="telegram-alarm-hint" class="text-xs mt-1" style={{ color: telegramAlarmReady() ? "var(--text-weak)" : "var(--icon-warning-base)" }}>
-                        {telegramAlarmHint()}
+                      <p id="telegram-alarm-hint" class="text-xs mt-1" style={{ color: telegramAlarmReady() && !telegramAlarmRestartRequired() ? "var(--text-weak)" : "var(--icon-warning-base)" }}>
+                        {telegramAlarmHintText()}
                       </p>
                       <p id="telegram-alarm-fallback" class="text-xs mt-1" style={{ color: "var(--text-weak)" }}>
                         If proactive alerts are missed or disabled, use <code class="px-1 py-0.5 rounded" style={{ background: "var(--surface-inset)" }}>/pending</code> in Telegram for fallback/history.
