@@ -945,6 +945,74 @@ describe("telegram bridge config and cache", () => {
     expect(text).toContain("Project fallback [project] (p-2)");
   });
 
+  test("/prompts falls back to global prompts when mapped and configured directories are empty", async () => {
+    const calls: Array<{ url: string; body: Record<string, unknown> }> = [];
+    const originalFetch = globalThis.fetch;
+    try {
+      globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        const body = init?.body ? (JSON.parse(String(init.body)) as Record<string, unknown>) : {};
+        calls.push({ url, body });
+        if (url.includes("/session/session-current") && !url.includes("/message")) {
+          return new Response(JSON.stringify({ id: "session-current", directory: "/workspace/project-a" }), { status: 200 });
+        }
+        if (url.includes("/api/ext/saved-prompts?directory=%2Fworkspace%2Fproject-a")) {
+          return new Response(JSON.stringify({ global: [], project: [] }), { status: 200 });
+        }
+        if (url.includes("/api/ext/saved-prompts?directory=%2Fworkspace%2Fproject-b")) {
+          return new Response(JSON.stringify({ global: [], project: [] }), { status: 200 });
+        }
+        if (url.endsWith("/api/ext/saved-prompts")) {
+          return new Response(
+            JSON.stringify({
+              global: [{ id: "g-9", title: "Global rescue", text: "Run global rescue", createdAt: 10 }],
+              project: [],
+            }),
+            { status: 200 },
+          );
+        }
+        if (url.includes("/sendMessage")) {
+          return new Response(JSON.stringify({ ok: true, result: { message_id: 1 } }), { status: 200 });
+        }
+        throw new Error(`Unexpected fetch ${url}`);
+      };
+
+      const runtime = {
+        config: {
+          mode: "polling" as const,
+          token: "token",
+          openCodeUrl: "http://127.0.0.1:4096",
+          sessionCacheMax: 10,
+          sessionCacheTtlMs: 10_000,
+          notificationDebounceMs: 20_000,
+          port: 4097,
+          webhookPath: "/webhook",
+          sessionStorePath: "/tmp/test-store.json",
+          directory: "/workspace/project-b",
+        },
+        store: {
+          get: async () => "session-current",
+          set: async () => undefined,
+          delete: async () => undefined,
+        },
+      };
+
+      await handleTextUpdate(runtime, {
+        update_id: 1,
+        message: { message_id: 1, text: "/prompts", chat: { id: 98 }, from: { id: 6 } },
+      });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+
+    const promptCalls = calls.filter((x) => x.url.includes("/api/ext/saved-prompts")).map((x) => x.url);
+    expect(promptCalls[0]).toContain("directory=%2Fworkspace%2Fproject-a");
+    expect(promptCalls[1]).toContain("directory=%2Fworkspace%2Fproject-b");
+    expect(promptCalls[2]).toBe("http://127.0.0.1:4096/api/ext/saved-prompts");
+    const text = String(calls.find((x) => x.url.includes("/sendMessage"))?.body.text || "");
+    expect(text).toContain("Global rescue [global] (g-9)");
+  });
+
   test("/prompt falls back to global prompts when mapped and configured directories are rejected", async () => {
     const calls: Array<{ url: string; body: Record<string, unknown> }> = [];
     const originalFetch = globalThis.fetch;
@@ -1316,6 +1384,77 @@ describe("telegram bridge config and cache", () => {
     expect(promptCalls[1]).toContain("directory=%2Fworkspace%2Fproject-b");
     const runCall = calls.find((x) => x.url.includes("/session/session-current/message"));
     expect(runCall?.body.parts).toEqual([{ type: "text", text: "Run fallback prompt" }]);
+  });
+
+  test("/prompt falls back to global prompts when mapped and configured directories are empty", async () => {
+    const calls: Array<{ url: string; body: Record<string, unknown> }> = [];
+    const originalFetch = globalThis.fetch;
+    try {
+      globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        const body = init?.body ? (JSON.parse(String(init.body)) as Record<string, unknown>) : {};
+        calls.push({ url, body });
+        if (url.includes("/session/session-current") && !url.includes("/message")) {
+          return new Response(JSON.stringify({ id: "session-current", directory: "/workspace/project-a" }), { status: 200 });
+        }
+        if (url.includes("/api/ext/saved-prompts?directory=%2Fworkspace%2Fproject-a")) {
+          return new Response(JSON.stringify({ global: [], project: [] }), { status: 200 });
+        }
+        if (url.includes("/api/ext/saved-prompts?directory=%2Fworkspace%2Fproject-b")) {
+          return new Response(JSON.stringify({ global: [], project: [] }), { status: 200 });
+        }
+        if (url.endsWith("/api/ext/saved-prompts")) {
+          return new Response(
+            JSON.stringify({
+              global: [{ id: "g-9", title: "Global rescue", text: "Run global rescue", createdAt: 10 }],
+              project: [],
+            }),
+            { status: 200 },
+          );
+        }
+        if (url.includes("/session/session-current/message")) {
+          return new Response(JSON.stringify({ parts: [{ type: "text", text: "Global rescue done." }] }), { status: 200 });
+        }
+        if (url.includes("/sendMessage")) {
+          return new Response(JSON.stringify({ ok: true, result: { message_id: 1 } }), { status: 200 });
+        }
+        throw new Error(`Unexpected fetch ${url}`);
+      };
+
+      const runtime = {
+        config: {
+          mode: "polling" as const,
+          token: "token",
+          openCodeUrl: "http://127.0.0.1:4096",
+          sessionCacheMax: 10,
+          sessionCacheTtlMs: 10_000,
+          notificationDebounceMs: 20_000,
+          port: 4097,
+          webhookPath: "/webhook",
+          sessionStorePath: "/tmp/test-store.json",
+          directory: "/workspace/project-b",
+        },
+        store: {
+          get: async () => "session-current",
+          set: async () => undefined,
+          delete: async () => undefined,
+        },
+      };
+
+      await handleTextUpdate(runtime, {
+        update_id: 1,
+        message: { message_id: 1, text: "/prompt Global rescue", chat: { id: 99 }, from: { id: 6 } },
+      });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+
+    const promptCalls = calls.filter((x) => x.url.includes("/api/ext/saved-prompts")).map((x) => x.url);
+    expect(promptCalls[0]).toContain("directory=%2Fworkspace%2Fproject-a");
+    expect(promptCalls[1]).toContain("directory=%2Fworkspace%2Fproject-b");
+    expect(promptCalls[2]).toBe("http://127.0.0.1:4096/api/ext/saved-prompts");
+    const runCall = calls.find((x) => x.url.includes("/session/session-current/message"));
+    expect(runCall?.body.parts).toEqual([{ type: "text", text: "Run global rescue" }]);
   });
 
   test("/prompt returns actionable guidance for unknown names", async () => {
