@@ -141,6 +141,9 @@ export function ReviewPanel(props: ReviewPanelProps) {
           loadDiffs();
         }
       }
+      if (event.type === "vcs.branch.updated") {
+        loadDiffs();
+      }
     });
 
     onCleanup(unsub);

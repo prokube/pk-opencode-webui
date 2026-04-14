@@ -299,10 +299,13 @@ describe("telegram bridge config and cache", () => {
       { command: "new", description: "Start a fresh OpenCode session" },
       { command: "status", description: "Show current session mapping" },
       { command: "sessions", description: "List known sessions for this chat/user mapping" },
+      { command: "recent", description: "Show latest user/assistant exchanges" },
       { command: "switch", description: "Switch this chat/user mapping to an existing session" },
       { command: "notify", description: "Control proactive notifications" },
       { command: "pending", description: "Show pending inbox items" },
       { command: "inbox", description: "Alias for /pending" },
+      { command: "prompts", description: "List saved prompts available in this session" },
+      { command: "prompt", description: "Run a saved prompt by name or id" },
       { command: "help", description: "Show available commands" },
     ]);
   });
@@ -641,6 +644,337 @@ describe("telegram bridge config and cache", () => {
     }
   });
 
+  test("/prompts lists available saved prompts with scope hints", async () => {
+    const calls: Array<{ url: string; body: Record<string, unknown> }> = [];
+    const originalFetch = globalThis.fetch;
+    try {
+      globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        const body = init?.body ? (JSON.parse(String(init.body)) as Record<string, unknown>) : {};
+        calls.push({ url, body });
+        if (url.includes("/api/ext/saved-prompts")) {
+          return new Response(
+            JSON.stringify({
+              global: [{ id: "g-1", title: "Quick summary", text: "Summarize", createdAt: 10 }],
+              project: [{ id: "p-1", title: "Deploy release", text: "Deploy", createdAt: 20 }],
+            }),
+            { status: 200 },
+          );
+        }
+        if (url.includes("/sendMessage")) {
+          return new Response(JSON.stringify({ ok: true, result: { message_id: 1 } }), { status: 200 });
+        }
+        throw new Error(`Unexpected fetch ${url}`);
+      };
+
+      const runtime = {
+        config: {
+          mode: "polling" as const,
+          token: "token",
+          openCodeUrl: "http://127.0.0.1:4096",
+          sessionCacheMax: 10,
+          sessionCacheTtlMs: 10_000,
+          notificationDebounceMs: 20_000,
+          port: 4097,
+          webhookPath: "/webhook",
+          sessionStorePath: "/tmp/test-store.json",
+        },
+        store: {
+          get: async () => undefined,
+          set: async () => undefined,
+          delete: async () => undefined,
+        },
+      };
+
+      await handleTextUpdate(runtime, {
+        update_id: 1,
+        message: { message_id: 1, text: "/prompts", chat: { id: 77 }, from: { id: 5 } },
+      });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+
+    const text = String(calls.find((x) => x.url.includes("/sendMessage"))?.body.text || "");
+    expect(text).toContain("Saved prompts:");
+    expect(text).toContain("Deploy release [project] (p-1)");
+    expect(text).toContain("Quick summary [global] (g-1)");
+    expect(text).toContain("Use /prompt <name|id> to run one.");
+  });
+
+  test("/prompts uses deterministic ordering when createdAt is invalid", async () => {
+    const calls: Array<{ url: string; body: Record<string, unknown> }> = [];
+    const originalFetch = globalThis.fetch;
+    try {
+      globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        const body = init?.body ? (JSON.parse(String(init.body)) as Record<string, unknown>) : {};
+        calls.push({ url, body });
+        if (url.includes("/api/ext/saved-prompts")) {
+          return new Response(
+            JSON.stringify({
+              global: [{ id: "g-1", title: "Global fallback", text: "Global", createdAt: "bad" }],
+              project: [{ id: "p-1", title: "Project dated", text: "Project", createdAt: 5 }],
+            }),
+            { status: 200 },
+          );
+        }
+        if (url.includes("/sendMessage")) {
+          return new Response(JSON.stringify({ ok: true, result: { message_id: 1 } }), { status: 200 });
+        }
+        throw new Error(`Unexpected fetch ${url}`);
+      };
+
+      const runtime = {
+        config: {
+          mode: "polling" as const,
+          token: "token",
+          openCodeUrl: "http://127.0.0.1:4096",
+          sessionCacheMax: 10,
+          sessionCacheTtlMs: 10_000,
+          notificationDebounceMs: 20_000,
+          port: 4097,
+          webhookPath: "/webhook",
+          sessionStorePath: "/tmp/test-store.json",
+        },
+        store: {
+          get: async () => undefined,
+          set: async () => undefined,
+          delete: async () => undefined,
+        },
+      };
+
+      await handleTextUpdate(runtime, {
+        update_id: 1,
+        message: { message_id: 1, text: "/prompts", chat: { id: 77 }, from: { id: 5 } },
+      });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+
+    const text = String(calls.find((x) => x.url.includes("/sendMessage"))?.body.text || "");
+    expect(text.indexOf("Project dated [project] (p-1)")).toBeLessThan(text.indexOf("Global fallback [global] (g-1)"));
+  });
+
+  test("/prompts empty-state message reflects merged prompt list", async () => {
+    const calls: Array<{ url: string; body: Record<string, unknown> }> = [];
+    const originalFetch = globalThis.fetch;
+    try {
+      globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        const body = init?.body ? (JSON.parse(String(init.body)) as Record<string, unknown>) : {};
+        calls.push({ url, body });
+        if (url.includes("/api/ext/saved-prompts")) {
+          return new Response(JSON.stringify({ global: [], project: [] }), { status: 200 });
+        }
+        if (url.includes("/sendMessage")) {
+          return new Response(JSON.stringify({ ok: true, result: { message_id: 1 } }), { status: 200 });
+        }
+        throw new Error(`Unexpected fetch ${url}`);
+      };
+
+      const runtime = {
+        config: {
+          mode: "polling" as const,
+          token: "token",
+          openCodeUrl: "http://127.0.0.1:4096",
+          sessionCacheMax: 10,
+          sessionCacheTtlMs: 10_000,
+          notificationDebounceMs: 20_000,
+          port: 4097,
+          webhookPath: "/webhook",
+          sessionStorePath: "/tmp/test-store.json",
+        },
+        store: {
+          get: async () => undefined,
+          set: async () => undefined,
+          delete: async () => undefined,
+        },
+      };
+
+      await handleTextUpdate(runtime, {
+        update_id: 1,
+        message: { message_id: 1, text: "/prompts", chat: { id: 90 }, from: { id: 6 } },
+      });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+
+    const text = String(calls.find((x) => x.url.includes("/sendMessage"))?.body.text || "");
+    expect(text).toBe("No saved prompts found. Create one in the web UI, then run /prompts again.");
+  });
+
+  test("/prompt runs a saved prompt and returns assistant response", async () => {
+    const calls: Array<{ url: string; body: Record<string, unknown> }> = [];
+    const originalFetch = globalThis.fetch;
+    try {
+      globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        const body = init?.body ? (JSON.parse(String(init.body)) as Record<string, unknown>) : {};
+        calls.push({ url, body });
+        if (url.includes("/api/ext/saved-prompts")) {
+          return new Response(
+            JSON.stringify({
+              global: [{ id: "g-1", title: "Deploy release", text: "Please deploy the release.", createdAt: 10 }],
+              project: [],
+            }),
+            { status: 200 },
+          );
+        }
+        if (url.includes("/session/session-current/message")) {
+          return new Response(JSON.stringify({ parts: [{ type: "text", text: "Deployment complete." }] }), { status: 200 });
+        }
+        if (url.includes("/sendMessage")) {
+          return new Response(JSON.stringify({ ok: true, result: { message_id: 1 } }), { status: 200 });
+        }
+        throw new Error(`Unexpected fetch ${url}`);
+      };
+
+      const runtime = {
+        config: {
+          mode: "polling" as const,
+          token: "token",
+          openCodeUrl: "http://127.0.0.1:4096",
+          sessionCacheMax: 10,
+          sessionCacheTtlMs: 10_000,
+          notificationDebounceMs: 20_000,
+          port: 4097,
+          webhookPath: "/webhook",
+          sessionStorePath: "/tmp/test-store.json",
+        },
+        store: {
+          get: async () => "session-current",
+          set: async () => undefined,
+          delete: async () => undefined,
+        },
+      };
+
+      await handleTextUpdate(runtime, {
+        update_id: 1,
+        message: { message_id: 1, text: "/prompt Deploy release", chat: { id: 77 }, from: { id: 5 } },
+      });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+
+    const runCall = calls.find((x) => x.url.includes("/session/session-current/message"));
+    expect(runCall?.body.parts).toEqual([{ type: "text", text: "Please deploy the release." }]);
+    const sent = String(calls.filter((x) => x.url.includes("/sendMessage")).at(-1)?.body.text || "");
+    expect(sent).toBe("Deployment complete.");
+  });
+
+  test("/prompt returns actionable guidance for unknown names", async () => {
+    const calls: Array<{ url: string; body: Record<string, unknown> }> = [];
+    const originalFetch = globalThis.fetch;
+    try {
+      globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        const body = init?.body ? (JSON.parse(String(init.body)) as Record<string, unknown>) : {};
+        calls.push({ url, body });
+        if (url.includes("/api/ext/saved-prompts")) {
+          return new Response(
+            JSON.stringify({
+              global: [{ id: "g-1", title: "Deploy release", text: "Deploy", createdAt: 10 }],
+              project: [],
+            }),
+            { status: 200 },
+          );
+        }
+        if (url.includes("/sendMessage")) {
+          return new Response(JSON.stringify({ ok: true, result: { message_id: 1 } }), { status: 200 });
+        }
+        throw new Error(`Unexpected fetch ${url}`);
+      };
+
+      const runtime = {
+        config: {
+          mode: "polling" as const,
+          token: "token",
+          openCodeUrl: "http://127.0.0.1:4096",
+          sessionCacheMax: 10,
+          sessionCacheTtlMs: 10_000,
+          notificationDebounceMs: 20_000,
+          port: 4097,
+          webhookPath: "/webhook",
+          sessionStorePath: "/tmp/test-store.json",
+        },
+        store: {
+          get: async () => "session-current",
+          set: async () => undefined,
+          delete: async () => undefined,
+        },
+      };
+
+      await handleTextUpdate(runtime, {
+        update_id: 1,
+        message: { message_id: 1, text: "/prompt missing", chat: { id: 77 }, from: { id: 5 } },
+      });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+
+    const sent = String(calls.filter((x) => x.url.includes("/sendMessage")).at(-1)?.body.text || "");
+    expect(sent).toBe("Saved prompt not found: missing. Use /prompts to list available options.");
+  });
+
+  test("/prompt returns disambiguation when multiple names match", async () => {
+    const calls: Array<{ url: string; body: Record<string, unknown> }> = [];
+    const originalFetch = globalThis.fetch;
+    try {
+      globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        const body = init?.body ? (JSON.parse(String(init.body)) as Record<string, unknown>) : {};
+        calls.push({ url, body });
+        if (url.includes("/api/ext/saved-prompts")) {
+          return new Response(
+            JSON.stringify({
+              global: [
+                { id: "g-1", title: "Deploy release", text: "Deploy prod", createdAt: 10 },
+                { id: "g-2", title: "Deploy release staging", text: "Deploy stage", createdAt: 9 },
+              ],
+              project: [],
+            }),
+            { status: 200 },
+          );
+        }
+        if (url.includes("/sendMessage")) {
+          return new Response(JSON.stringify({ ok: true, result: { message_id: 1 } }), { status: 200 });
+        }
+        throw new Error(`Unexpected fetch ${url}`);
+      };
+
+      const runtime = {
+        config: {
+          mode: "polling" as const,
+          token: "token",
+          openCodeUrl: "http://127.0.0.1:4096",
+          sessionCacheMax: 10,
+          sessionCacheTtlMs: 10_000,
+          notificationDebounceMs: 20_000,
+          port: 4097,
+          webhookPath: "/webhook",
+          sessionStorePath: "/tmp/test-store.json",
+        },
+        store: {
+          get: async () => "session-current",
+          set: async () => undefined,
+          delete: async () => undefined,
+        },
+      };
+
+      await handleTextUpdate(runtime, {
+        update_id: 1,
+        message: { message_id: 1, text: "/prompt deploy", chat: { id: 77 }, from: { id: 5 } },
+      });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+
+    const sent = String(calls.filter((x) => x.url.includes("/sendMessage")).at(-1)?.body.text || "");
+    expect(sent).toContain("Multiple prompts match \"deploy\":");
+    expect(sent).toContain("Deploy release [global] (g-1)");
+    expect(sent).toContain("Use /prompt <id> to pick one.");
+  });
+
   test("/sessions lists known sessions and /switch supports index and explicit id", async () => {
     const calls: Array<{ url: string; body: Record<string, unknown> }> = [];
     const originalFetch = globalThis.fetch;
@@ -836,6 +1170,476 @@ describe("telegram bridge config and cache", () => {
       .map((x) => String(x.body.text || ""));
     expect(sent[0]).toBe("Current session: session-current");
     expect(historyWrites).toBe(0);
+  });
+
+  test("/recent returns latest user and assistant exchanges", async () => {
+    const calls: Array<{ url: string; body: Record<string, unknown> }> = [];
+    const originalFetch = globalThis.fetch;
+    try {
+      globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        const body = init?.body ? (JSON.parse(String(init.body)) as Record<string, unknown>) : {};
+        calls.push({ url, body });
+        if (url.includes("/session/session-current/message")) {
+          return new Response(
+            JSON.stringify([
+              {
+                info: { id: "u-1", role: "user" },
+                parts: [{ type: "text", text: "First question" }],
+              },
+              {
+                info: { id: "a-1", role: "assistant", parentID: "u-1" },
+                parts: [{ type: "text", text: "First answer" }],
+              },
+              {
+                info: { id: "u-2", role: "user" },
+                parts: [{ type: "text", text: "Second question" }],
+              },
+              {
+                info: { id: "a-2", role: "assistant", parentID: "u-2" },
+                parts: [{ type: "text", text: "Second answer" }],
+              },
+            ]),
+            { status: 200 },
+          );
+        }
+        if (url.includes("/sendMessage")) {
+          return new Response(JSON.stringify({ ok: true, result: { message_id: 1 } }), { status: 200 });
+        }
+        throw new Error(`Unexpected fetch ${url}`);
+      };
+
+      const runtime = {
+        config: {
+          mode: "polling" as const,
+          token: "token",
+          openCodeUrl: "http://127.0.0.1:4096",
+          sessionCacheMax: 10,
+          sessionCacheTtlMs: 10_000,
+          notificationDebounceMs: 20_000,
+          port: 4097,
+          webhookPath: "/webhook",
+          sessionStorePath: "/tmp/test-store.json",
+        },
+        store: {
+          get: async () => "session-current",
+          set: async () => undefined,
+          delete: async () => undefined,
+        },
+      };
+
+      await handleTextUpdate(runtime, {
+        update_id: 1,
+        message: { message_id: 1, text: "/recent", chat: { id: 101 }, from: { id: 4 } },
+      });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+
+    const text = String(calls.filter((x) => x.url.includes("/sendMessage")).at(-1)?.body.text || "");
+    expect(text).toContain("Recent activity for session session-current");
+    expect(text).toContain("You: First question");
+    expect(text).toContain("Assistant: First answer");
+    expect(text).toContain("You: Second question");
+    expect(text).toContain("Assistant: Second answer");
+  });
+
+  test("/recent reports empty state when no message history exists", async () => {
+    const calls: Array<{ url: string; body: Record<string, unknown> }> = [];
+    const originalFetch = globalThis.fetch;
+    try {
+      globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        const body = init?.body ? (JSON.parse(String(init.body)) as Record<string, unknown>) : {};
+        calls.push({ url, body });
+        if (url.includes("/session/session-current/message")) {
+          return new Response(JSON.stringify([]), { status: 200 });
+        }
+        if (url.includes("/sendMessage")) {
+          return new Response(JSON.stringify({ ok: true, result: { message_id: 1 } }), { status: 200 });
+        }
+        throw new Error(`Unexpected fetch ${url}`);
+      };
+
+      const runtime = {
+        config: {
+          mode: "polling" as const,
+          token: "token",
+          openCodeUrl: "http://127.0.0.1:4096",
+          sessionCacheMax: 10,
+          sessionCacheTtlMs: 10_000,
+          notificationDebounceMs: 20_000,
+          port: 4097,
+          webhookPath: "/webhook",
+          sessionStorePath: "/tmp/test-store.json",
+        },
+        store: {
+          get: async () => "session-current",
+          set: async () => undefined,
+          delete: async () => undefined,
+        },
+      };
+
+      await handleTextUpdate(runtime, {
+        update_id: 2,
+        message: { message_id: 2, text: "/recent 3", chat: { id: 101 }, from: { id: 4 } },
+      });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+
+    const text = String(calls.filter((x) => x.url.includes("/sendMessage")).at(-1)?.body.text || "");
+    expect(text).toBe("No recent chat messages found for session session-current. Send a new message first.");
+  });
+
+  test("/recent validates invalid count arguments", async () => {
+    const calls: Array<{ url: string; body: Record<string, unknown> }> = [];
+    const originalFetch = globalThis.fetch;
+    try {
+      globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        const body = init?.body ? (JSON.parse(String(init.body)) as Record<string, unknown>) : {};
+        calls.push({ url, body });
+        if (url.includes("/sendMessage")) {
+          return new Response(JSON.stringify({ ok: true, result: { message_id: 1 } }), { status: 200 });
+        }
+        throw new Error(`Unexpected fetch ${url}`);
+      };
+
+      const runtime = {
+        config: {
+          mode: "polling" as const,
+          token: "token",
+          openCodeUrl: "http://127.0.0.1:4096",
+          sessionCacheMax: 10,
+          sessionCacheTtlMs: 10_000,
+          notificationDebounceMs: 20_000,
+          port: 4097,
+          webhookPath: "/webhook",
+          sessionStorePath: "/tmp/test-store.json",
+        },
+        store: {
+          get: async () => "session-current",
+          set: async () => undefined,
+          delete: async () => undefined,
+        },
+      };
+
+      await handleTextUpdate(runtime, {
+        update_id: 4,
+        message: { message_id: 4, text: "/recent foo", chat: { id: 101 }, from: { id: 4 } },
+      });
+      await handleTextUpdate(runtime, {
+        update_id: 5,
+        message: { message_id: 5, text: "/recent 0", chat: { id: 101 }, from: { id: 4 } },
+      });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+
+    const texts = calls
+      .filter((x) => x.url.includes("/sendMessage"))
+      .map((x) => String(x.body.text || ""));
+    expect(texts).toEqual([
+      "Usage: /recent [count] (count must be >= 1; values above 12 are clamped to 12)",
+      "Usage: /recent [count] (count must be >= 1; values above 12 are clamped to 12)",
+    ]);
+    expect(calls.some((x) => x.url.includes("/session/session-current/message"))).toBe(false);
+  });
+
+  test("/recent keeps truncated inline text on one line", async () => {
+    const calls: Array<{ url: string; body: Record<string, unknown> }> = [];
+    const originalFetch = globalThis.fetch;
+    const long = "z".repeat(600);
+    try {
+      globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        const body = init?.body ? (JSON.parse(String(init.body)) as Record<string, unknown>) : {};
+        calls.push({ url, body });
+        if (url.includes("/session/session-current/message")) {
+          return new Response(
+            JSON.stringify([
+              { info: { id: "u-1", role: "user" }, parts: [{ type: "text", text: long }] },
+              { info: { id: "a-1", role: "assistant", parentID: "u-1" }, parts: [{ type: "text", text: "ok" }] },
+            ]),
+            { status: 200 },
+          );
+        }
+        if (url.includes("/sendMessage")) {
+          return new Response(JSON.stringify({ ok: true, result: { message_id: 1 } }), { status: 200 });
+        }
+        throw new Error(`Unexpected fetch ${url}`);
+      };
+
+      const runtime = {
+        config: {
+          mode: "polling" as const,
+          token: "token",
+          openCodeUrl: "http://127.0.0.1:4096",
+          sessionCacheMax: 10,
+          sessionCacheTtlMs: 10_000,
+          notificationDebounceMs: 20_000,
+          port: 4097,
+          webhookPath: "/webhook",
+          sessionStorePath: "/tmp/test-store.json",
+        },
+        store: {
+          get: async () => "session-current",
+          set: async () => undefined,
+          delete: async () => undefined,
+        },
+      };
+
+      await handleTextUpdate(runtime, {
+        update_id: 6,
+        message: { message_id: 6, text: "/recent 1", chat: { id: 101 }, from: { id: 4 } },
+      });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+
+    const text = String(calls.filter((x) => x.url.includes("/sendMessage")).at(-1)?.body.text || "");
+    expect(text).toContain(`You: ${"z".repeat(497)}...`);
+    expect(text).not.toContain("\n\n...");
+  });
+
+  test("/recent reports missing active mapping", async () => {
+    const calls: Array<{ url: string; body: Record<string, unknown> }> = [];
+    const originalFetch = globalThis.fetch;
+    try {
+      globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        const body = init?.body ? (JSON.parse(String(init.body)) as Record<string, unknown>) : {};
+        calls.push({ url, body });
+        if (url.includes("/sendMessage")) {
+          return new Response(JSON.stringify({ ok: true, result: { message_id: 1 } }), { status: 200 });
+        }
+        throw new Error(`Unexpected fetch ${url}`);
+      };
+
+      const runtime = {
+        config: {
+          mode: "polling" as const,
+          token: "token",
+          openCodeUrl: "http://127.0.0.1:4096",
+          sessionCacheMax: 10,
+          sessionCacheTtlMs: 10_000,
+          notificationDebounceMs: 20_000,
+          port: 4097,
+          webhookPath: "/webhook",
+          sessionStorePath: "/tmp/test-store.json",
+        },
+        store: {
+          get: async () => undefined,
+          set: async () => undefined,
+          delete: async () => undefined,
+        },
+      };
+
+      await handleTextUpdate(runtime, {
+        update_id: 5,
+        message: { message_id: 5, text: "/recent", chat: { id: 101 }, from: { id: 4 } },
+      });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+
+    const text = String(calls.filter((x) => x.url.includes("/sendMessage")).at(-1)?.body.text || "");
+    expect(text).toBe("No active session mapping for this chat/user yet. Use /status or /new first.");
+    expect(calls.some((x) => x.url.includes("/session/"))).toBe(false);
+  });
+
+  test("/recent excludes non-chat and ignored message parts", async () => {
+    const calls: Array<{ url: string; body: Record<string, unknown> }> = [];
+    const originalFetch = globalThis.fetch;
+    try {
+      globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        const body = init?.body ? (JSON.parse(String(init.body)) as Record<string, unknown>) : {};
+        calls.push({ url, body });
+        if (url.includes("/session/session-current/message")) {
+          return new Response(
+            JSON.stringify([
+              {
+                info: { id: "sys-1", role: "system" },
+                parts: [{ type: "text", text: "system-secret" }],
+              },
+              {
+                info: { id: "u-1", role: "user" },
+                parts: [
+                  { type: "text", text: "Keep this" },
+                  { type: "text", text: "drop-ignored", ignored: true },
+                  { type: "text", text: "drop-synthetic", synthetic: true },
+                  { type: "tool", text: "tool-payload" },
+                ],
+              },
+              {
+                info: { id: "a-1", role: "assistant", parentID: "u-1" },
+                parts: [{ type: "text", text: "Assistant text" }],
+              },
+            ]),
+            { status: 200 },
+          );
+        }
+        if (url.includes("/sendMessage")) {
+          return new Response(JSON.stringify({ ok: true, result: { message_id: 1 } }), { status: 200 });
+        }
+        throw new Error(`Unexpected fetch ${url}`);
+      };
+
+      const runtime = {
+        config: {
+          mode: "polling" as const,
+          token: "token",
+          openCodeUrl: "http://127.0.0.1:4096",
+          sessionCacheMax: 10,
+          sessionCacheTtlMs: 10_000,
+          notificationDebounceMs: 20_000,
+          port: 4097,
+          webhookPath: "/webhook",
+          sessionStorePath: "/tmp/test-store.json",
+        },
+        store: {
+          get: async () => "session-current",
+          set: async () => undefined,
+          delete: async () => undefined,
+        },
+      };
+
+      await handleTextUpdate(runtime, {
+        update_id: 6,
+        message: { message_id: 6, text: "/recent 1", chat: { id: 101 }, from: { id: 4 } },
+      });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+
+    const text = String(calls.filter((x) => x.url.includes("/sendMessage")).at(-1)?.body.text || "");
+    expect(text).toContain("You: Keep this");
+    expect(text).toContain("Assistant: Assistant text");
+    expect(text).not.toContain("system-secret");
+    expect(text).not.toContain("drop-ignored");
+    expect(text).not.toContain("drop-synthetic");
+    expect(text).not.toContain("tool-payload");
+  });
+
+  test("/recent output is chunked for Telegram message size limits", async () => {
+    const calls: Array<{ url: string; body: Record<string, unknown> }> = [];
+    const originalFetch = globalThis.fetch;
+    const long = "x".repeat(2000);
+    const rows = Array.from({ length: 12 }, (_, i) => {
+      const n = i + 1;
+      return [
+        { info: { id: `u-${n}`, role: "user" }, parts: [{ type: "text", text: `${long}-${n}` }] },
+        { info: { id: `a-${n}`, role: "assistant", parentID: `u-${n}` }, parts: [{ type: "text", text: `${long}-a-${n}` }] },
+      ];
+    }).flat();
+
+    try {
+      globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        const body = init?.body ? (JSON.parse(String(init.body)) as Record<string, unknown>) : {};
+        calls.push({ url, body });
+        if (url.includes("/session/session-current/message")) {
+          return new Response(JSON.stringify(rows), { status: 200 });
+        }
+        if (url.includes("/sendMessage")) {
+          return new Response(JSON.stringify({ ok: true, result: { message_id: 1 } }), { status: 200 });
+        }
+        throw new Error(`Unexpected fetch ${url}`);
+      };
+
+      const runtime = {
+        config: {
+          mode: "polling" as const,
+          token: "token",
+          openCodeUrl: "http://127.0.0.1:4096",
+          sessionCacheMax: 10,
+          sessionCacheTtlMs: 10_000,
+          notificationDebounceMs: 20_000,
+          port: 4097,
+          webhookPath: "/webhook",
+          sessionStorePath: "/tmp/test-store.json",
+        },
+        store: {
+          get: async () => "session-current",
+          set: async () => undefined,
+          delete: async () => undefined,
+        },
+      };
+
+      await handleTextUpdate(runtime, {
+        update_id: 7,
+        message: { message_id: 7, text: "/recent 12", chat: { id: 101 }, from: { id: 4 } },
+      });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+
+    const sent = calls.filter((x) => x.url.includes("/sendMessage"));
+    expect(sent.length).toBeGreaterThan(1);
+    for (const row of sent) {
+      expect(String(row.body.text || "").length).toBeLessThanOrEqual(3900);
+    }
+  });
+
+  test("/recent enforces max limit when count is too high", async () => {
+    const calls: Array<{ url: string; body: Record<string, unknown> }> = [];
+    const originalFetch = globalThis.fetch;
+    const rows = Array.from({ length: 20 }, (_, i) => {
+      const n = i + 1;
+      return [
+        { info: { id: `u-${n}`, role: "user" }, parts: [{ type: "text", text: `user-${n}` }] },
+        { info: { id: `a-${n}`, role: "assistant", parentID: `u-${n}` }, parts: [{ type: "text", text: `assistant-${n}` }] },
+      ];
+    }).flat();
+
+    try {
+      globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        const body = init?.body ? (JSON.parse(String(init.body)) as Record<string, unknown>) : {};
+        calls.push({ url, body });
+        if (url.includes("/session/session-current/message")) {
+          return new Response(JSON.stringify(rows), { status: 200 });
+        }
+        if (url.includes("/sendMessage")) {
+          return new Response(JSON.stringify({ ok: true, result: { message_id: 1 } }), { status: 200 });
+        }
+        throw new Error(`Unexpected fetch ${url}`);
+      };
+
+      const runtime = {
+        config: {
+          mode: "polling" as const,
+          token: "token",
+          openCodeUrl: "http://127.0.0.1:4096",
+          sessionCacheMax: 10,
+          sessionCacheTtlMs: 10_000,
+          notificationDebounceMs: 20_000,
+          port: 4097,
+          webhookPath: "/webhook",
+          sessionStorePath: "/tmp/test-store.json",
+        },
+        store: {
+          get: async () => "session-current",
+          set: async () => undefined,
+          delete: async () => undefined,
+        },
+      };
+
+      await handleTextUpdate(runtime, {
+        update_id: 3,
+        message: { message_id: 3, text: "/recent 99", chat: { id: 101 }, from: { id: 4 } },
+      });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+
+    const text = String(calls.filter((x) => x.url.includes("/sendMessage")).at(-1)?.body.text || "");
+    expect(text).toContain("showing 12 of 20");
+    expect(text).toContain("You: user-9");
+    expect(text).not.toContain("You: user-8");
+    expect(text).toContain("Assistant: assistant-20");
   });
 
   test("/status keeps handling updates when history persistence fails", async () => {
@@ -1828,6 +2632,378 @@ describe("telegram bridge config and cache", () => {
     expect(items.map((item) => item.kind).sort()).toEqual(["permission", "question"]);
   });
 
+  test("permission.asked reuses stable request id for pending entries", async () => {
+    const pending = new Map<string, Array<{
+      id: string;
+      kind: "question" | "permission" | "task-finished";
+      sessionId: string;
+      text: string;
+      stampedAt: number;
+      resolved: boolean;
+    }>>();
+    const runtime = {
+      config: {
+        mode: "polling" as const,
+        token: "token",
+        openCodeUrl: "http://127.0.0.1:4096",
+        sessionCacheMax: 10,
+        sessionCacheTtlMs: 10_000,
+        notificationDebounceMs: 20_000,
+        port: 4097,
+        webhookPath: "/webhook",
+        sessionStorePath: "/tmp/test-store.json",
+      },
+      store: {
+        get: async () => undefined,
+        set: async () => undefined,
+        delete: async () => undefined,
+        sessionKeys: async () => ["chat:77:user:5"],
+        notificationGet: async () => false,
+        pendingGet: async (chatKey: string) => pending.get(chatKey) || [],
+        pendingSet: async (chatKey: string, items: Array<{
+          id: string;
+          kind: "question" | "permission" | "task-finished";
+          sessionId: string;
+          text: string;
+          stampedAt: number;
+          resolved: boolean;
+        }>) => {
+          pending.set(chatKey, [...items]);
+        },
+      },
+    };
+
+    await handleBridgeEvent(runtime, {
+      type: "permission.asked",
+      properties: {
+        id: "perm-request-1",
+        sessionID: "session-1",
+        permission: "shell",
+        patterns: ["docker *"],
+      },
+    });
+    await handleBridgeEvent(runtime, {
+      type: "permission.asked",
+      properties: {
+        id: "perm-request-1",
+        sessionID: "session-1",
+        permission: "shell",
+        patterns: ["kubectl *"],
+      },
+    });
+
+    const items = pending.get("chat:77") || [];
+    expect(items).toHaveLength(1);
+    expect(items[0]?.id).toContain("perm-request-1");
+    expect(items[0]?.text).toContain("kubectl *");
+  });
+
+  test("permission notifications debounce retries per request id only", async () => {
+    const calls: Array<{ url: string; body: Record<string, unknown> }> = [];
+    const originalFetch = globalThis.fetch;
+    try {
+      globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        const body = init?.body ? (JSON.parse(String(init.body)) as Record<string, unknown>) : {};
+        calls.push({ url, body });
+        if (url.includes("/sendMessage")) {
+          return new Response(JSON.stringify({ ok: true, result: { message_id: 1 } }), { status: 200 });
+        }
+        throw new Error(`Unexpected fetch ${url}`);
+      };
+
+      const runtime = {
+        config: {
+          mode: "polling" as const,
+          token: "token",
+          openCodeUrl: "http://127.0.0.1:4096",
+          sessionCacheMax: 10,
+          sessionCacheTtlMs: 10_000,
+          notificationDebounceMs: 60_000,
+          port: 4097,
+          webhookPath: "/webhook",
+          sessionStorePath: "/tmp/test-store.json",
+        },
+        store: {
+          get: async () => undefined,
+          set: async () => undefined,
+          delete: async () => undefined,
+          sessionKeys: async () => ["chat:77:user:5"],
+          notificationGet: async () => true,
+        },
+      };
+
+      await handleBridgeEvent(runtime, {
+        type: "permission.asked",
+        properties: {
+          id: "perm-a",
+          sessionID: "session-same",
+          permission: "shell",
+          patterns: ["docker *"],
+        },
+      });
+      await handleBridgeEvent(runtime, {
+        type: "permission.asked",
+        properties: {
+          id: "perm-a",
+          sessionID: "session-same",
+          permission: "shell",
+          patterns: ["docker *"],
+        },
+      });
+      await handleBridgeEvent(runtime, {
+        type: "permission.asked",
+        properties: {
+          id: "perm-b",
+          sessionID: "session-same",
+          permission: "shell",
+          patterns: ["kubectl *"],
+        },
+      });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+
+    const sentTexts = calls
+      .filter((x) => x.url.includes("/sendMessage"))
+      .map((x) => String(x.body.text || ""));
+    expect(sentTexts).toHaveLength(2);
+    expect(sentTexts[0]).toContain("docker *");
+    expect(sentTexts[1]).toContain("kubectl *");
+  });
+
+  test("question pending inbox text is truncated for oversized prompts", async () => {
+    const pending = new Map<string, Array<{
+      id: string;
+      kind: "question" | "permission" | "task-finished";
+      sessionId: string;
+      text: string;
+      stampedAt: number;
+      resolved: boolean;
+    }>>();
+    const runtime = {
+      config: {
+        mode: "polling" as const,
+        token: "token",
+        openCodeUrl: "http://127.0.0.1:4096",
+        sessionCacheMax: 10,
+        sessionCacheTtlMs: 10_000,
+        notificationDebounceMs: 20_000,
+        port: 4097,
+        webhookPath: "/webhook",
+        sessionStorePath: "/tmp/test-store.json",
+      },
+      store: {
+        get: async () => undefined,
+        set: async () => undefined,
+        delete: async () => undefined,
+        sessionKeys: async () => ["chat:77:user:5"],
+        notificationGet: async () => false,
+        pendingGet: async (chatKey: string) => pending.get(chatKey) || [],
+        pendingSet: async (chatKey: string, items: Array<{
+          id: string;
+          kind: "question" | "permission" | "task-finished";
+          sessionId: string;
+          text: string;
+          stampedAt: number;
+          resolved: boolean;
+        }>) => {
+          pending.set(chatKey, [...items]);
+        },
+      },
+    };
+
+    await handleBridgeEvent(runtime, {
+      type: "question.asked",
+      properties: {
+        id: "req-long-question",
+        sessionID: "session-1",
+        questions: [{ header: "Need confirmation ".repeat(30) }],
+      },
+    });
+
+    const text = pending.get("chat:77")?.[0]?.text || "";
+    expect(text.startsWith("Question pending:")).toBe(true);
+    expect(text.length).toBeLessThanOrEqual(240);
+    expect(text.endsWith("...")).toBe(true);
+  });
+
+  test("question and permission events only queue pending when notifications are disabled", async () => {
+    const calls: Array<{ url: string; body: Record<string, unknown> }> = [];
+    const originalFetch = globalThis.fetch;
+    const inbox = new Map<string, Array<{
+      id: string;
+      kind: "question" | "permission" | "task-finished";
+      sessionId: string;
+      text: string;
+      stampedAt: number;
+      resolved: boolean;
+    }>>();
+    const pending = new Map<string, unknown[]>();
+    try {
+      globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        const body = init?.body ? (JSON.parse(String(init.body)) as Record<string, unknown>) : {};
+        calls.push({ url, body });
+        if (url.includes("/sendMessage")) {
+          return new Response(JSON.stringify({ ok: true, result: { message_id: 1 } }), { status: 200 });
+        }
+        throw new Error(`Unexpected fetch ${url}`);
+      };
+
+      const runtime = {
+        config: {
+          mode: "polling" as const,
+          token: "token",
+          openCodeUrl: "http://127.0.0.1:4096",
+          sessionCacheMax: 10,
+          sessionCacheTtlMs: 10_000,
+          notificationDebounceMs: 0,
+          port: 4097,
+          webhookPath: "/webhook",
+          sessionStorePath: "/tmp/test-store.json",
+        },
+        store: {
+          get: async () => undefined,
+          set: async () => undefined,
+          delete: async () => undefined,
+          sessionKeys: async () => ["chat:77:user:5"],
+          notificationGet: async () => false,
+          pendingGet: async (chatKey: string) => inbox.get(chatKey) || [],
+          pendingSet: async (chatKey: string, items: Array<{
+            id: string;
+            kind: "question" | "permission" | "task-finished";
+            sessionId: string;
+            text: string;
+            stampedAt: number;
+            resolved: boolean;
+          }>) => {
+            inbox.set(chatKey, [...items]);
+          },
+          questionList: async (name: string) => (pending.get(name) || []) as unknown[],
+          questionUpsert: async (name: string, row: unknown) => {
+            pending.set(name, [row]);
+          },
+          questionDelete: async () => undefined,
+        },
+      };
+
+      await handleBridgeEvent(runtime, {
+        type: "question.asked",
+        properties: {
+          id: "req-disabled",
+          sessionID: "session-1",
+          questions: [{ header: "Need approval", options: [{ label: "Yes" }, { label: "No" }] }],
+        },
+      });
+      await handleBridgeEvent(runtime, {
+        type: "permission.asked",
+        properties: {
+          sessionID: "session-1",
+          permission: "shell",
+          patterns: ["docker *"],
+        },
+      });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+
+    expect(calls.some((x) => x.url.includes("/sendMessage"))).toBe(false);
+    const items = inbox.get("chat:77") || [];
+    expect(items).toHaveLength(2);
+    expect(items.map((item) => item.kind).sort()).toEqual(["permission", "question"]);
+    const stored = (pending.get("chat:77:user:5") || []) as Array<{ requestId?: string }>;
+    expect(stored[0]?.requestId).toBe("req-disabled");
+  });
+
+  test("question and permission events notify immediately when enabled", async () => {
+    const calls: Array<{ url: string; body: Record<string, unknown> }> = [];
+    const originalFetch = globalThis.fetch;
+    const inbox = new Map<string, Array<{
+      id: string;
+      kind: "question" | "permission" | "task-finished";
+      sessionId: string;
+      text: string;
+      stampedAt: number;
+      resolved: boolean;
+    }>>();
+    const pending = new Map<string, unknown[]>();
+    try {
+      globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        const body = init?.body ? (JSON.parse(String(init.body)) as Record<string, unknown>) : {};
+        calls.push({ url, body });
+        if (url.includes("/sendMessage")) {
+          return new Response(JSON.stringify({ ok: true, result: { message_id: 1 } }), { status: 200 });
+        }
+        throw new Error(`Unexpected fetch ${url}`);
+      };
+
+      const runtime = {
+        config: {
+          mode: "polling" as const,
+          token: "token",
+          openCodeUrl: "http://127.0.0.1:4096",
+          sessionCacheMax: 10,
+          sessionCacheTtlMs: 10_000,
+          notificationDebounceMs: 0,
+          port: 4097,
+          webhookPath: "/webhook",
+          sessionStorePath: "/tmp/test-store.json",
+        },
+        store: {
+          get: async () => undefined,
+          set: async () => undefined,
+          delete: async () => undefined,
+          sessionKeys: async () => ["chat:88:user:9"],
+          notificationGet: async () => true,
+          pendingGet: async (chatKey: string) => inbox.get(chatKey) || [],
+          pendingSet: async (chatKey: string, items: Array<{
+            id: string;
+            kind: "question" | "permission" | "task-finished";
+            sessionId: string;
+            text: string;
+            stampedAt: number;
+            resolved: boolean;
+          }>) => {
+            inbox.set(chatKey, [...items]);
+          },
+          questionList: async (name: string) => (pending.get(name) || []) as unknown[],
+          questionUpsert: async (name: string, row: unknown) => {
+            pending.set(name, [row]);
+          },
+          questionDelete: async () => undefined,
+        },
+      };
+
+      await handleBridgeEvent(runtime, {
+        type: "question.asked",
+        properties: {
+          id: "req-enabled",
+          sessionID: "session-1",
+          questions: [{ header: "Need approval", options: [{ label: "Yes" }, { label: "No" }] }],
+        },
+      });
+      await handleBridgeEvent(runtime, {
+        type: "permission.asked",
+        properties: {
+          sessionID: "session-1",
+          permission: "shell",
+          patterns: ["docker *"],
+        },
+      });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+
+    const sent = calls.filter((x) => x.url.includes("/sendMessage")).map((x) => String(x.body.text || ""));
+    expect(sent.some((text) => text.includes("Question pending:"))).toBe(true);
+    expect(sent.some((text) => text.includes("Permission request: shell"))).toBe(true);
+    const items = inbox.get("chat:88") || [];
+    expect(items).toHaveLength(2);
+    expect(items.map((item) => item.kind).sort()).toEqual(["permission", "question"]);
+  });
+
   test("/pending response is chunked under Telegram message limits", async () => {
     const calls: Array<{ url: string; body: Record<string, unknown> }> = [];
     const originalFetch = globalThis.fetch;
@@ -2046,6 +3222,15 @@ describe("telegram bridge config and cache", () => {
   test("handleBridgeEvent continues notifying other chats after one failure", async () => {
     const calls: Array<{ url: string; body: Record<string, unknown> }> = [];
     const originalFetch = globalThis.fetch;
+    const pending = new Map<string, Array<{
+      id: string;
+      kind: "question" | "permission" | "task-finished";
+      sessionId: string;
+      text: string;
+      stampedAt: number;
+      resolved: boolean;
+    }>>();
+    const queued = new Map<string, unknown[]>();
     try {
       globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
         const url = String(input);
@@ -2078,6 +3263,22 @@ describe("telegram bridge config and cache", () => {
           delete: async () => undefined,
           sessionKeys: async () => ["chat:77:user:5", "chat:88:user:6"],
           notificationGet: async () => true,
+          pendingGet: async (chatKey: string) => pending.get(chatKey) || [],
+          pendingSet: async (chatKey: string, items: Array<{
+            id: string;
+            kind: "question" | "permission" | "task-finished";
+            sessionId: string;
+            text: string;
+            stampedAt: number;
+            resolved: boolean;
+          }>) => {
+            pending.set(chatKey, [...items]);
+          },
+          questionList: async (name: string) => (queued.get(name) || []) as unknown[],
+          questionUpsert: async (name: string, row: unknown) => {
+            queued.set(name, [row]);
+          },
+          questionDelete: async () => undefined,
         },
       };
 
@@ -2094,6 +3295,8 @@ describe("telegram bridge config and cache", () => {
 
     const messages = calls.filter((x) => x.url.includes("/sendMessage"));
     expect(messages.some((x) => x.body.chat_id === 88)).toBe(true);
+    expect((pending.get("chat:77") || []).length).toBe(1);
+    expect((pending.get("chat:88") || []).length).toBe(1);
   });
 
   test("handleBridgeEvent sends task-finished only on non-idle to idle transition", async () => {
@@ -3712,6 +4915,99 @@ describe("telegram bridge config and cache", () => {
       .map((x) => String(x.body.text || ""));
     expect(sentTexts.filter((text) => text.includes("Question pending:")).length).toBe(2);
     expect((pending.get("chat:77:user:5") || []).map((row) => row.requestId)).toEqual(["req-a", "req-b"]);
+  });
+
+  test("question fallback notifications debounce per request id and refresh pending entries", async () => {
+    const calls: Array<{ url: string; body: Record<string, unknown> }> = [];
+    const originalFetch = globalThis.fetch;
+    const pending = new Map<string, Array<{
+      id: string;
+      kind: "question" | "permission" | "task-finished";
+      sessionId: string;
+      text: string;
+      stampedAt: number;
+      resolved: boolean;
+    }>>();
+    try {
+      globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        const body = init?.body ? (JSON.parse(String(init.body)) as Record<string, unknown>) : {};
+        calls.push({ url, body });
+        if (url.includes("/sendMessage")) {
+          return new Response(JSON.stringify({ ok: true, result: { message_id: 1 } }), { status: 200 });
+        }
+        throw new Error(`Unexpected fetch ${url}`);
+      };
+
+      const runtime = {
+        config: {
+          mode: "polling" as const,
+          token: "token",
+          openCodeUrl: "http://127.0.0.1:4096",
+          sessionCacheMax: 10,
+          sessionCacheTtlMs: 10_000,
+          notificationDebounceMs: 60_000,
+          port: 4097,
+          webhookPath: "/webhook",
+          sessionStorePath: "/tmp/test-store.json",
+        },
+        store: {
+          get: async () => undefined,
+          set: async () => undefined,
+          delete: async () => undefined,
+          sessionKeys: async () => ["chat:77:user:5"],
+          notificationGet: async () => true,
+          pendingGet: async (chatKey: string) => pending.get(chatKey) || [],
+          pendingSet: async (chatKey: string, items: Array<{
+            id: string;
+            kind: "question" | "permission" | "task-finished";
+            sessionId: string;
+            text: string;
+            stampedAt: number;
+            resolved: boolean;
+          }>) => {
+            pending.set(chatKey, [...items]);
+          },
+        },
+      };
+
+      await handleBridgeEvent(runtime, {
+        type: "question.asked",
+        properties: {
+          id: "req-fallback-a",
+          sessionID: "session-fallback",
+          questions: [],
+        },
+      });
+      await handleBridgeEvent(runtime, {
+        type: "question.asked",
+        properties: {
+          id: "req-fallback-a",
+          sessionID: "session-fallback",
+          questions: [],
+        },
+      });
+      await handleBridgeEvent(runtime, {
+        type: "question.asked",
+        properties: {
+          id: "req-fallback-b",
+          sessionID: "session-fallback",
+          questions: [],
+        },
+      });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+
+    const sentTexts = calls
+      .filter((x) => x.url.includes("/sendMessage"))
+      .map((x) => String(x.body.text || ""));
+    expect(sentTexts).toHaveLength(2);
+
+    const items = pending.get("chat:77") || [];
+    expect(items).toHaveLength(2);
+    expect(items.filter((item) => item.id.includes("req-fallback-a"))).toHaveLength(1);
+    expect(items.filter((item) => item.id.includes("req-fallback-b"))).toHaveLength(1);
   });
 
   test("pending question queues are scoped per chat and user", async () => {

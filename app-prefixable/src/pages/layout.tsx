@@ -286,6 +286,9 @@ export function Layout(props: ParentProps) {
   const [pinnedIds, setPinnedIds] = createSignal<string[]>([]);
   const [creatingSession, setCreatingSession] = createSignal(false);
   const [sessionStartError, setSessionStartError] = createSignal<string | null>(null);
+  const [worktreeToast, setWorktreeToast] = createSignal<string | null>(null);
+  const [worktreeToastVariant, setWorktreeToastVariant] = createSignal<"default" | "error">("default");
+  const worktreeToastTimer = { id: undefined as ReturnType<typeof setTimeout> | undefined };
 
   // Search state
   const [searchQuery, setSearchQuery] = createSignal("");
@@ -294,6 +297,23 @@ export function Layout(props: ParentProps) {
   const [searchFocusIdx, setSearchFocusIdx] = createSignal(-1);
   const searchTimer = { id: undefined as ReturnType<typeof setTimeout> | undefined };
   let searchInputRef: HTMLInputElement | undefined;
+
+  onCleanup(() => {
+    if (worktreeToastTimer.id !== undefined) clearTimeout(worktreeToastTimer.id);
+  });
+
+  function hideWorktreeToast() {
+    if (worktreeToastTimer.id !== undefined) clearTimeout(worktreeToastTimer.id);
+    worktreeToastTimer.id = undefined;
+    setWorktreeToast(null);
+  }
+
+  function showWorktreeToast(msg: string, duration = 2500, variant: "default" | "error" = "default") {
+    if (worktreeToastTimer.id !== undefined) clearTimeout(worktreeToastTimer.id);
+    setWorktreeToast(msg);
+    setWorktreeToastVariant(variant);
+    worktreeToastTimer.id = setTimeout(() => hideWorktreeToast(), duration);
+  }
 
   // Keyboard navigation state for session list
   const [focusedId, setFocusedId] = createSignal<string | null>(null);
@@ -1543,6 +1563,26 @@ export function Layout(props: ParentProps) {
         const info = (event.properties as { info: { parentID?: string } }).info;
         if (info?.parentID) return;
         loadSessions();
+      }
+    });
+
+    onCleanup(unsub);
+  });
+
+  onMount(() => {
+    const unsub = events.subscribe((event) => {
+      if (event.type === "worktree.ready") {
+        const props = event.properties as { name?: unknown; branch?: unknown };
+        const name = typeof props.name === "string" ? props.name.trim() || "unknown" : "unknown";
+        const branch = typeof props.branch === "string" ? props.branch.trim() || "unknown" : "unknown";
+        showWorktreeToast(`Worktree '${name}' ready on branch '${branch}'`);
+        return;
+      }
+
+      if (event.type === "worktree.failed") {
+        const props = event.properties as { message?: unknown };
+        const msg = typeof props.message === "string" ? props.message.trim() || "unknown error" : "unknown error";
+        showWorktreeToast(`Worktree creation failed: ${msg}`, 4000, "error");
       }
     });
 
@@ -3022,6 +3062,28 @@ export function Layout(props: ParentProps) {
 
       {/* Vimium-style hint mode overlay */}
       <HintMode />
+
+      {/* Directory-wide worktree event toast */}
+      <Show when={worktreeToast()}>
+        <div
+          class="fixed bottom-32 left-1/2 -translate-x-1/2 z-[100] px-4 py-2 rounded-lg shadow-lg text-sm font-medium"
+          role={worktreeToastVariant() === "error" ? "alert" : "status"}
+          aria-live={worktreeToastVariant() === "error" ? "assertive" : "polite"}
+          aria-atomic="true"
+          style={worktreeToastVariant() === "error"
+            ? {
+                background: "var(--status-danger-dim)",
+                color: "var(--status-danger-text)",
+                border: "1px solid var(--status-danger-text)",
+              }
+            : {
+                background: "var(--interactive-base)",
+                color: "white",
+              }}
+        >
+          {worktreeToast()}
+        </div>
+      </Show>
     </div>
   );
 }

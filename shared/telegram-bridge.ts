@@ -126,6 +126,14 @@ type TelegramCommand = {
   args?: string
 }
 
+type SavedPrompt = {
+  id: string
+  title: string
+  text: string
+  createdAt: number
+  scope: "global" | "project"
+}
+
 type TelegramPendingItem = {
   id: string
   kind: "question" | "permission" | "task-finished"
@@ -152,13 +160,18 @@ const startedAt = Date.now()
 const pendingRetentionMs = 3 * 24 * 60 * 60 * 1000
 const pendingMaxItems = 60
 const pendingDigestMax = 8
+const pendingTextMax = 240
 const sessionHistoryMax = 12
+const recentDefaultCount = 5
+const recentMaxCount = 12
+const recentPartTextMax = 500
 const callbackIdLength = 24
 const callbackAckText = "Sending answer..."
 const inlineButtonMaxOptions = 20
 const inlineButtonTextMax = 48
 const callbackDataMax = 64
 const telegramMessageSoftLimit = 3900
+const recentPayloadMax = telegramMessageSoftLimit * 3
 
 const telegramCommands = Object.freeze([
   Object.freeze({
@@ -172,6 +185,11 @@ const telegramCommands = Object.freeze([
   Object.freeze({
     name: "sessions",
     text: "List known sessions for this chat/user mapping",
+  }),
+  Object.freeze({
+    name: "recent",
+    text: "Show latest user/assistant exchanges",
+    args: "[count]",
   }),
   Object.freeze({
     name: "switch",
@@ -190,6 +208,15 @@ const telegramCommands = Object.freeze([
   Object.freeze({
     name: "inbox",
     text: "Alias for /pending",
+  }),
+  Object.freeze({
+    name: "prompts",
+    text: "List saved prompts available in this session",
+  }),
+  Object.freeze({
+    name: "prompt",
+    text: "Run a saved prompt by name or id",
+    args: "<name|id>",
   }),
   Object.freeze({
     name: "help",
@@ -428,6 +455,23 @@ async function appendPending(runtime: Runtime, chatId: number, entry: TelegramPe
     const next = [entry, ...items.filter((item) => item.id !== entry.id)]
     await pendingSet(runtime, key, next)
   })
+}
+
+function pendingEntryId(sessionId: string, kind: string, chatId: number, requestId?: string): string {
+  const base = requestId?.trim()
+  if (base) return `${sessionId}:${kind}:${base}:${chatId}`
+  const seq = String(pendingEntrySeq).padStart(8, "0")
+  pendingEntrySeq += 1
+  return `${sessionId}:${kind}:${Date.now()}:${seq}:${chatId}`
+}
+
+function pendingQuestionText(question: TelegramPendingQuestion): string {
+  const row = question.questions[0]
+  const title = row?.header || row?.question || "The assistant is waiting for your answer."
+  const text = `Question pending: ${title}`
+  if (text.length <= pendingTextMax) return text
+  if (pendingTextMax <= 3) return text.slice(0, pendingTextMax)
+  return `${text.slice(0, pendingTextMax - 3)}...`
 }
 
 async function resolvePendingForSession(runtime: Runtime, chatId: number, sessionId: string) {
@@ -762,6 +806,13 @@ function questionStepText(question: TelegramPendingQuestion, hasButtons = false)
 function truncateTelegramText(input: string, size: number): string {
   if (input.length <= size) return input
   const suffix = "\n\n..."
+  if (size <= suffix.length) return input.slice(0, size)
+  return `${input.slice(0, size - suffix.length)}${suffix}`
+}
+
+function truncateTelegramInlineText(input: string, size: number): string {
+  if (input.length <= size) return input
+  const suffix = "..."
   if (size <= suffix.length) return input.slice(0, size)
   return `${input.slice(0, size - suffix.length)}${suffix}`
 }
@@ -1153,6 +1204,93 @@ async function sessionsText(runtime: Runtime, chatKey: string, current?: string)
   return `Known sessions for this chat/user mapping:\n${lines.join("\n")}\n\nUse /switch <index|session-id> to switch.`
 }
 
+function normalizeRecentCount(args: string[]): { count?: number; error?: string } {
+  const usage = `Usage: /recent [count] (count must be >= 1; values above ${recentMaxCount} are clamped to ${recentMaxCount})`
+  const raw = args[0]?.trim()
+  if (!raw) return { count: recentDefaultCount }
+  if (!/^\d+$/.test(raw)) {
+    return { error: usage }
+  }
+  const parsed = Number.parseInt(raw, 10)
+  if (!Number.isFinite(parsed) || parsed < 1) {
+    return { error: usage }
+  }
+  return { count: Math.min(parsed, recentMaxCount) }
+}
+
+function parseRecentText(parts: unknown): string {
+  if (!Array.isArray(parts)) return ""
+  const text = parts
+    .map((part) => {
+      if (!part || typeof part !== "object") return ""
+      const row = part as { type?: unknown; text?: unknown; ignored?: unknown; synthetic?: unknown }
+      if (row.type !== "text") return ""
+      if (row.ignored === true) return ""
+      if (row.synthetic === true) return ""
+      if (typeof row.text !== "string") return ""
+      return row.text
+    })
+    .join("\n")
+    .replace(/\s+/g, " ")
+    .trim()
+  if (!text) return ""
+  return truncateTelegramInlineText(text, recentPartTextMax)
+}
+
+async function recentText(config: BridgeConfig, sessionId: string, count: number): Promise<string> {
+  const safeCount = Math.max(1, Math.min(count, recentMaxCount))
+  const url = opencodeUrl(config, `/session/${encodeURIComponent(sessionId)}/message`)
+  url.searchParams.set("limit", String(Math.max(20, safeCount * 6)))
+  if (config.directory) {
+    url.searchParams.set("directory", config.directory)
+  }
+  const res = await fetch(url, {
+    method: "GET",
+    signal: AbortSignal.timeout(20_000),
+  })
+  if (!res.ok) {
+    const body = await res.text().catch(() => "")
+    throw new Error(`OpenCode session messages failed (${res.status}): ${body.slice(0, 300)}`)
+  }
+  const data = await res.json().catch(() => [])
+  const rows = Array.isArray(data) ? data : []
+  const assistants = new Map<string, string>()
+  const users: Array<{ id: string; text: string }> = []
+  for (const entry of rows) {
+    if (!entry || typeof entry !== "object") continue
+    const row = entry as { info?: unknown; parts?: unknown }
+    const info = row.info && typeof row.info === "object"
+      ? row.info as { id?: unknown; role?: unknown; parentID?: unknown }
+      : undefined
+    if (!info) continue
+    const id = typeof info.id === "string" ? info.id : ""
+    const parentID = typeof info.parentID === "string" ? info.parentID : ""
+    const role = info.role === "assistant" || info.role === "user" ? info.role : ""
+    const text = parseRecentText(row.parts)
+    if (!id || !role || !text) continue
+    if (role === "assistant" && parentID && !assistants.has(parentID)) {
+      assistants.set(parentID, text)
+      continue
+    }
+    if (role !== "user") continue
+    users.push({ id, text })
+  }
+  if (!users.length) {
+    return `No recent chat messages found for session ${sessionId}. Send a new message first.`
+  }
+  const list = users.slice(-safeCount)
+  const lines = [`Recent activity for session ${sessionId} (showing ${list.length} of ${users.length}):`]
+  for (let i = 0; i < list.length; i++) {
+    const item = list[i]
+    if (!item) continue
+    const reply = assistants.get(item.id) || "(no assistant response yet)"
+    lines.push("")
+    lines.push(`${i + 1}. You: ${item.text}`)
+    lines.push(`   Assistant: ${reply}`)
+  }
+  return truncateTelegramText(lines.join("\n"), recentPayloadMax)
+}
+
 async function sessionExists(config: BridgeConfig, sessionId: string): Promise<boolean> {
   const id = sessionId.trim()
   if (!id) return false
@@ -1290,6 +1428,125 @@ async function sendPrompt(config: BridgeConfig, sessionId: string, text: string)
   return extractReply(data)
 }
 
+function parseSavedPrompt(value: unknown, fallbackScope: "global" | "project"): SavedPrompt | undefined {
+  if (!value || typeof value !== "object") return
+  const row = value as Record<string, unknown>
+  const id = typeof row.id === "string" ? row.id.trim() : ""
+  const title = typeof row.title === "string"
+    ? row.title.trim()
+    : typeof row.name === "string"
+      ? row.name.trim()
+      : ""
+  const text = typeof row.text === "string"
+    ? row.text
+    : typeof row.prompt === "string"
+      ? row.prompt
+      : typeof row.content === "string"
+        ? row.content
+        : ""
+  if (!id || !title || !text) return
+  const rawCreated = row.createdAt
+  const createdAt = typeof rawCreated === "number" && Number.isFinite(rawCreated)
+    ? rawCreated
+    : typeof rawCreated === "string" && Number.isFinite(Number(rawCreated))
+      ? Number(rawCreated)
+      : 0
+  const scope = row.scope === "project" || row.scope === "global" ? row.scope : fallbackScope
+  return { id, title, text, createdAt, scope }
+}
+
+function parseSavedPromptList(raw: unknown, scope: "global" | "project"): SavedPrompt[] {
+  if (!Array.isArray(raw)) return []
+  return raw
+    .map((item) => parseSavedPrompt(item, scope))
+    .filter((item) => item !== undefined) as SavedPrompt[]
+}
+
+function mergeSavedPrompts(globalPrompts: SavedPrompt[], projectPrompts: SavedPrompt[]): SavedPrompt[] {
+  const projectIds = new Set(projectPrompts.map((item) => item.id))
+  const dedupedGlobal = globalPrompts.filter((item) => !projectIds.has(item.id))
+  return [...dedupedGlobal, ...projectPrompts]
+    .sort((a, b) => {
+      const created = b.createdAt - a.createdAt
+      if (created !== 0) return created
+      return a.id.localeCompare(b.id)
+    })
+}
+
+async function savedPrompts(config: BridgeConfig): Promise<SavedPrompt[]> {
+  const url = opencodeUrl(config, "/api/ext/saved-prompts")
+  if (config.directory) {
+    url.searchParams.set("directory", config.directory)
+  }
+  const res = await fetch(url, {
+    method: "GET",
+    signal: AbortSignal.timeout(15_000),
+  })
+  if (!res.ok) {
+    const body = await res.text().catch(() => "")
+    throw new Error(`OpenCode saved prompts failed (${res.status}): ${body.slice(0, 300)}`)
+  }
+  const data = await res.json().catch(() => ({})) as { global?: unknown; project?: unknown }
+  const global = parseSavedPromptList(data.global, "global")
+  const project = parseSavedPromptList(data.project, "project")
+  return mergeSavedPrompts(global, project)
+}
+
+function promptScope(scope: SavedPrompt["scope"]): string {
+  if (scope === "project") return "project"
+  return "global"
+}
+
+function promptChoice(prompt: SavedPrompt, index: number): string {
+  return `${index + 1}. ${prompt.title} [${promptScope(prompt.scope)}] (${prompt.id})`
+}
+
+function promptsListText(prompts: SavedPrompt[]): string {
+  if (!prompts.length) {
+    return "No saved prompts found. Create one in the web UI, then run /prompts again."
+  }
+  const shown = prompts.slice(0, 25)
+  const lines = shown.map(promptChoice)
+  const extra = prompts.length - shown.length
+  const suffix = extra > 0 ? `\n+${extra} more prompt(s). Refine with /prompt <name|id>.` : ""
+  return `Saved prompts:\n${lines.join("\n")}\n\nUse /prompt <name|id> to run one.${suffix}`
+}
+
+function lookupSavedPrompt(input: string, prompts: SavedPrompt[]): { prompt?: SavedPrompt; error?: string } {
+  const value = input.trim()
+  if (!value) {
+    return { error: "Usage: /prompt <name|id>" }
+  }
+  const byId = prompts.find((item) => item.id === value)
+  if (byId) {
+    return { prompt: byId }
+  }
+  const lowered = value.toLowerCase()
+  const exact = prompts.filter((item) => item.title.trim().toLowerCase() === lowered)
+  if (exact.length === 1) {
+    return { prompt: exact[0] }
+  }
+  if (exact.length > 1) {
+    const options = exact.slice(0, 8).map((item, index) => promptChoice(item, index))
+    return {
+      error: `Multiple prompts match \"${value}\":\n${options.join("\n")}\nUse /prompt <id> to pick one.`,
+    }
+  }
+  const partial = prompts.filter((item) => item.title.toLowerCase().includes(lowered))
+  if (partial.length === 1) {
+    return { prompt: partial[0] }
+  }
+  if (partial.length > 1) {
+    const options = partial.slice(0, 8).map((item, index) => promptChoice(item, index))
+    return {
+      error: `Multiple prompts match \"${value}\":\n${options.join("\n")}\nUse /prompt <id> to pick one.`,
+    }
+  }
+  return {
+    error: `Saved prompt not found: ${value}. Use /prompts to list available options.`,
+  }
+}
+
 function isMissingQuestion(error: unknown): boolean {
   if (!(error instanceof Error)) return false
   if (error.message.startsWith("OpenCode question reply failed (404):")) return true
@@ -1343,7 +1600,7 @@ function chunks(input: string, size: number): string[] {
 
 async function sendTelegramMessage(config: BridgeConfig, chatId: number, text: string) {
   const safe = text || "I could not produce a response."
-  for (const part of chunks(safe, 3900)) {
+  for (const part of chunks(safe, telegramMessageSoftLimit)) {
     await telegramRequest(config, "sendMessage", {
       chat_id: chatId,
       text: part,
@@ -1596,6 +1853,21 @@ export async function handleTextUpdate(runtime: Runtime, update: TelegramUpdate)
       await sendTelegramMessage(config, chatId, await sessionsText(runtime, key, current))
       return true
     }
+    if (known?.name === "recent") {
+      const parsed = normalizeRecentCount(command.args)
+      if (parsed.error) {
+        await sendTelegramMessage(config, chatId, parsed.error)
+        return true
+      }
+      const current = await runtime.store.get(key) || sessionFromCache(config, key)
+      if (!current) {
+        await sendTelegramMessage(config, chatId, "No active session mapping for this chat/user yet. Use /status or /new first.")
+        return true
+      }
+      const text = await recentText(config, current, parsed.count || recentDefaultCount)
+      await sendTelegramMessage(config, chatId, text)
+      return true
+    }
     if (known?.name === "switch") {
       const target = command.args.join(" ").trim()
       if (!target) {
@@ -1648,6 +1920,42 @@ export async function handleTextUpdate(runtime: Runtime, update: TelegramUpdate)
     if (known?.name === "pending" || known?.name === "inbox") {
       const items = await pendingGet(runtime, pendingChatKey(chatId))
       await sendTelegramMessage(config, chatId, pendingMessage(items))
+      return true
+    }
+    if (known?.name === "prompts") {
+      const prompts = await savedPrompts(config)
+      await sendTelegramMessage(config, chatId, promptsListText(prompts))
+      return true
+    }
+    if (known?.name === "prompt") {
+      const target = command.args.join(" ").trim()
+      if (!target) {
+        await sendTelegramMessage(config, chatId, "Usage: /prompt <name|id>")
+        return true
+      }
+      const prompts = await savedPrompts(config)
+      const resolved = lookupSavedPrompt(target, prompts)
+      if (resolved.error) {
+        await sendTelegramMessage(config, chatId, resolved.error)
+        return true
+      }
+      const selected = resolved.prompt
+      if (!selected) {
+        await sendTelegramMessage(config, chatId, "Usage: /prompt <name|id>")
+        return true
+      }
+      const sessionId = await sessionForChat(runtime, key)
+      await resolvePendingForSession(runtime, chatId, sessionId)
+      const reply = await sendPrompt(config, sessionId, selected.text).catch(async (error) => {
+        if (!isMissingSession(error)) {
+          throw error
+        }
+        sessions.delete(key)
+        await runtime.store.delete(key)
+        const next = await sessionForChat(runtime, key)
+        return sendPrompt(config, next, selected.text)
+      })
+      await sendTelegramMessage(config, chatId, reply)
       return true
     }
     const suggestions = commandSuggestions(command.name)
@@ -1731,40 +2039,46 @@ export async function handleTextUpdate(runtime: Runtime, update: TelegramUpdate)
   }
 }
 
-async function notifySessionKeys(runtime: Runtime, sessionId: string, kind: string, text: string) {
+async function notifySessionKeys(
+  runtime: Runtime,
+  sessionId: string,
+  kind: "question" | "permission" | "task-finished",
+  text: string,
+  requestId?: string,
+  notifyKind?: string,
+) {
   if (!runtime.store.sessionKeys) return
+  const dedupeKey = notifyKind || kind
   const keys = await runtime.store.sessionKeys(sessionId)
   const chats = new Set<number>()
-  for (const key of keys) {
+  for (const mapKey of keys) {
     try {
-      const parsed = parseTelegramKey(key)
+      const parsed = parseTelegramKey(mapKey)
       if (!parsed) continue
       if (!chats.has(parsed.chatId)) {
         chats.add(parsed.chatId)
-        const seq = String(pendingEntrySeq).padStart(8, "0")
         const entry: TelegramPendingItem = {
-          id: `${sessionId}:${kind}:${Date.now()}:${seq}:${parsed.chatId}`,
-          kind: kind === "task-finished" ? "task-finished" : kind === "permission" ? "permission" : "question",
+          id: pendingEntryId(sessionId, kind, parsed.chatId, requestId),
+          kind,
           sessionId,
           text,
           stampedAt: Date.now(),
           resolved: kind === "task-finished",
         }
-        pendingEntrySeq += 1
         await appendPending(runtime, parsed.chatId, entry)
         if (kind === "task-finished") {
           await resolvePendingForSession(runtime, parsed.chatId, sessionId)
         }
       }
       if (!(await notificationEnabled(runtime, notificationKey(parsed.chatId)))) continue
-      if (!shouldNotify(runtime.config, parsed.chatId, kind, sessionId)) continue
+      if (!shouldNotify(runtime.config, parsed.chatId, dedupeKey, sessionId)) continue
       const message = `${text}\n\nOpen ${sessionLabel(runtime.config, sessionId)}`
       await queueChatUpdate(String(parsed.chatId), async () => {
         await sendTelegramMessage(runtime.config, parsed.chatId, message)
       })
-      stampNotification(parsed.chatId, kind, sessionId)
+      stampNotification(parsed.chatId, dedupeKey, sessionId)
     } catch (error) {
-      console.error("[TelegramBridge] outbound notify failed", { sessionId, key, kind, error })
+      console.error("[TelegramBridge] outbound notify failed", { sessionId, key: mapKey, kind, error })
     }
   }
 }
@@ -1773,13 +2087,25 @@ async function notifyQuestion(runtime: Runtime, sessionId: string, question: Tel
   if (!runtime.store.sessionKeys) return
   const keys = await runtime.store.sessionKeys(sessionId)
   const kind = `question:${question.requestId}`
+  const chats = new Set<number>()
   for (const key of keys) {
     try {
       const parsed = parseTelegramKey(key)
       if (!parsed) continue
+      await upsertPendingQuestion(runtime, key, question)
+      if (!chats.has(parsed.chatId)) {
+        chats.add(parsed.chatId)
+        await appendPending(runtime, parsed.chatId, {
+          id: pendingEntryId(sessionId, "question", parsed.chatId, question.requestId),
+          kind: "question",
+          sessionId,
+          text: pendingQuestionText(question),
+          stampedAt: Date.now(),
+          resolved: false,
+        })
+      }
       if (!(await notificationEnabled(runtime, notificationKey(parsed.chatId)))) continue
       if (!shouldNotify(runtime.config, parsed.chatId, kind, sessionId)) continue
-      await upsertPendingQuestion(runtime, key, question)
       await queueChatUpdate(String(parsed.chatId), async () => {
         await sendTelegramQuestionPrompt(runtime.config, parsed.chatId, question)
         await sendTelegramMessage(runtime.config, parsed.chatId, `Open ${sessionLabel(runtime.config, sessionId)}`)
@@ -1853,14 +2179,25 @@ export async function handleBridgeEvent(runtime: Runtime, event: { type: string;
   if (event.type === "question.asked") {
     const pending = parsePendingQuestion(event.properties)
     if (!pending) {
-      await notifySessionKeys(runtime, sessionId, "question", `Question pending: ${questionText(event.properties)}`)
+      const requestId = typeof event.properties.id === "string" ? event.properties.id.trim() : ""
+      const notifyKind = requestId ? `question:${requestId}` : undefined
+      await notifySessionKeys(
+        runtime,
+        sessionId,
+        "question",
+        `Question pending: ${questionText(event.properties)}`,
+        requestId || undefined,
+        notifyKind,
+      )
       return
     }
     await notifyQuestion(runtime, sessionId, pending)
     return
   }
   if (event.type === "permission.asked") {
-    await notifySessionKeys(runtime, sessionId, "permission", permissionText(event.properties))
+    const requestId = typeof event.properties.id === "string" ? event.properties.id.trim() : ""
+    const notifyKind = requestId ? `permission:${requestId}` : undefined
+    await notifySessionKeys(runtime, sessionId, "permission", permissionText(event.properties), requestId || undefined, notifyKind)
     return
   }
   if (event.type !== "session.status") return
