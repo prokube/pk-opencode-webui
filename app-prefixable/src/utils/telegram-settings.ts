@@ -9,6 +9,7 @@ export type TelegramPublicSettings = {
   sessionCacheMax: number
   sessionCacheTtlMs: number
   notificationDebounceMs: number
+  telegramAlarmChannelEnabled: boolean
   port: number
   webhookPath: string
   webhookSecretConfigured: boolean

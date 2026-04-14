@@ -19,7 +19,11 @@ import { ServerDialog } from "../components/server-dialog"
 import { SETTINGS_BASE_TABS } from "./settings-tabs"
 import { TelegramSettings } from "../components/telegram-settings"
 import { writeFile } from "../utils/extended-api"
+import { ALARM_CHANNELS_STORAGE_KEY, readAlarmChannels, writeAlarmChannels, type AlarmChannels } from "../utils/notify"
+import type { TelegramHealthResponse, TelegramSettingsResponse } from "../utils/telegram-settings"
 import type { Config, PermissionActionConfig } from "../sdk/client"
+
+const TELEGRAM_ALARM_FIELD = "telegramAlarmChannelEnabled"
 
 export function Settings() {
   const providers = useProviders()
@@ -60,11 +64,22 @@ export function Settings() {
 
   // Sound settings
   const [soundSettings, setSoundSettings] = createSignal<SoundSettings>(readSoundSettings())
+  const [alarmChannels, setAlarmChannels] = createSignal<AlarmChannels>(readAlarmChannels())
+  const [telegramAlarmReady, setTelegramAlarmReady] = createSignal(false)
+  const [telegramAlarmSaving, setTelegramAlarmSaving] = createSignal(false)
+  const [telegramAlarmHint, setTelegramAlarmHint] = createSignal("Telegram bridge health check has not run yet.")
+  const [telegramAlarmRestartRequired, setTelegramAlarmRestartRequired] = createSignal(false)
+  const telegramAlarmHintText = createMemo(() => {
+    const hint = telegramAlarmHint()
+    if (!telegramAlarmRestartRequired()) return hint
+    return `${hint} Restart Telegram bridge before this change takes effect.`
+  })
 
   // Keep soundSettings in sync with localStorage changes from other tabs
   onMount(() => {
     function handleStorage(e: StorageEvent) {
       if (e.key === SOUND_STORAGE_KEY) setSoundSettings(readSoundSettings())
+      if (e.key === ALARM_CHANNELS_STORAGE_KEY) setAlarmChannels(readAlarmChannels())
     }
     window.addEventListener("storage", handleStorage)
     onCleanup(() => window.removeEventListener("storage", handleStorage))
@@ -74,6 +89,84 @@ export function Settings() {
     const next = { ...soundSettings(), ...patch }
     setSoundSettings(next)
     writeSoundSettings(next)
+  }
+
+  function updateAlarmChannels(patch: Partial<AlarmChannels>) {
+    const next = { ...alarmChannels(), ...patch }
+    setAlarmChannels(next)
+    writeAlarmChannels(next)
+  }
+
+  async function loadTelegramAlarmState() {
+    const [settingsRes, healthRes] = await Promise.all([
+      fetch(`${basePath.serverUrl}/api/ext/telegram/settings`).catch(() => null),
+      fetch(`${basePath.serverUrl}/api/ext/telegram/health`).catch(() => null),
+    ])
+
+    const settings = settingsRes?.ok
+      ? await settingsRes.json().catch(() => null) as TelegramSettingsResponse | null
+      : null
+    if (settings?.settings) {
+      updateAlarmChannels({ telegram: settings.settings.telegramAlarmChannelEnabled })
+    }
+
+    if (!healthRes?.ok) {
+      setTelegramAlarmReady(false)
+      setTelegramAlarmHint("Telegram bridge is not reachable. Configure the bridge on the Telegram tab, then refresh this page.")
+      return
+    }
+    const data = await healthRes.json().catch(() => null) as TelegramHealthResponse | null
+    const dependencyOk = data?.dependencies?.telegramApi?.status === "ok"
+      && data?.dependencies?.openCodeApi?.status === "ok"
+    const ready = data?.status === "healthy"
+      && !!data?.bridgeReachable
+      && data?.process?.status === "up"
+      && data?.config?.status === "ok"
+      && !!data?.config?.tokenConfigured
+      && dependencyOk
+    setTelegramAlarmReady(ready)
+    if (ready) {
+      setTelegramAlarmHint("Telegram channel is ready. This toggle controls proactive Telegram pings for bell-enabled sessions.")
+      return
+    }
+    const issues = (data?.messages || []).map((item) => item.text.trim()).filter(Boolean)
+    const summary = issues.length ? issues.join(" ") : "Telegram alarms need a healthy bridge, valid bot token, and passing dependency checks before they can be enabled."
+    const state = data?.status === "degraded" ? "degraded" : data?.status === "down" ? "down" : "not healthy"
+    setTelegramAlarmHint(`Telegram bridge is ${state}. ${summary}`)
+  }
+
+  async function toggleTelegramAlarmChannel() {
+    if (telegramAlarmSaving()) return
+    const current = alarmChannels().telegram
+    if (!telegramAlarmReady() && !current) return
+
+    setTelegramAlarmSaving(true)
+    const target = !current
+    const res = await fetch(`${basePath.serverUrl}/api/ext/telegram/settings`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ settings: { telegramAlarmChannelEnabled: target } }),
+    }).catch(() => null)
+    setTelegramAlarmSaving(false)
+
+    if (!res?.ok) {
+      setTelegramAlarmHint("Failed to update Telegram channel setting. Check Telegram tab configuration and retry.")
+      void loadTelegramAlarmState()
+      return
+    }
+
+    const data = await res.json().catch(() => null) as (TelegramSettingsResponse & {
+      restartRequired?: boolean
+      restartRequiredFields?: string[]
+    }) | null
+    const enabled = data?.settings?.telegramAlarmChannelEnabled
+    if (typeof enabled === "boolean") {
+      updateAlarmChannels({ telegram: enabled })
+    }
+    const restartRequired = !!data?.restartRequired
+      || !!data?.restartRequiredFields?.includes(TELEGRAM_ALARM_FIELD)
+    setTelegramAlarmRestartRequired(restartRequired)
+    void loadTelegramAlarmState()
   }
 
   // Provider search
@@ -159,6 +252,9 @@ export function Settings() {
       setInstructionLoaded(true)
       loadInstructions()
     }
+    if (tabId === "sounds") {
+      void loadTelegramAlarmState()
+    }
   }
 
   // Load SSH key on mount if starting on git tab
@@ -170,6 +266,9 @@ export function Settings() {
     if (activeTab() === "instructions" && directory && !instructionLoaded()) {
       setInstructionLoaded(true)
       loadInstructions()
+    }
+    if (activeTab() === "sounds") {
+      void loadTelegramAlarmState()
     }
   })
 
@@ -2294,9 +2393,90 @@ Add your project-specific instructions here.
                   Sound Notifications
                 </h1>
                 <p class="text-sm mt-1" style={{ color: "var(--text-weak)" }}>
-                  Play a sound when notification-worthy events occur (task complete, permission request, agent question)
+                  Configure browser and Telegram alarm channels for notification-worthy events (task complete, permission request, agent question)
                 </p>
               </header>
+
+              <section
+                class="rounded-lg overflow-hidden"
+                style={{
+                  background: "var(--background-base)",
+                  border: "1px solid var(--border-base)",
+                }}
+              >
+                <div class="px-4 py-3" style={{ "border-bottom": "1px solid var(--border-base)" }}>
+                  <h2 class="text-sm font-medium" style={{ color: "var(--text-strong)" }}>
+                    Alarm Channels
+                  </h2>
+                </div>
+
+                <div class="p-4 space-y-4">
+                  <div class="flex items-start justify-between gap-4">
+                    <div class="flex-1 min-w-0">
+                      <h3 class="text-sm font-medium" style={{ color: "var(--text-strong)" }}>
+                        Browser alarm channel
+                      </h3>
+                      <p class="text-xs mt-1" style={{ color: "var(--text-weak)" }}>
+                        Delivers tab flash and browser notifications for bell-enabled sessions. Sound playback still depends on Enable Sound below.
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => updateAlarmChannels({ browser: !alarmChannels().browser })}
+                      class="relative w-10 h-5 rounded-full transition-colors"
+                      style={{
+                        background: alarmChannels().browser ? "var(--interactive-base)" : "var(--surface-inset)",
+                      }}
+                      role="switch"
+                      aria-checked={alarmChannels().browser}
+                      aria-label="Toggle browser alarm channel"
+                    >
+                      <div
+                        class="absolute top-0.5 w-4 h-4 rounded-full transition-all"
+                        style={{
+                          background: "var(--background-base)",
+                          left: alarmChannels().browser ? "calc(100% - 18px)" : "2px",
+                        }}
+                      />
+                    </button>
+                  </div>
+
+                  <div class="flex items-start justify-between gap-4">
+                    <div class="flex-1 min-w-0">
+                      <h3 class="text-sm font-medium" style={{ color: "var(--text-strong)" }}>
+                        Telegram alarm channel
+                      </h3>
+                      <p id="telegram-alarm-hint" class="text-xs mt-1" style={{ color: telegramAlarmReady() && !telegramAlarmRestartRequired() ? "var(--text-weak)" : "var(--icon-warning-base)" }}>
+                        {telegramAlarmHintText()}
+                      </p>
+                      <p id="telegram-alarm-fallback" class="text-xs mt-1" style={{ color: "var(--text-weak)" }}>
+                        If proactive alerts are missed or disabled, use <code class="px-1 py-0.5 rounded" style={{ background: "var(--surface-inset)" }}>/pending</code> in Telegram for fallback/history.
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => void toggleTelegramAlarmChannel()}
+                      disabled={telegramAlarmSaving() || (!telegramAlarmReady() && !alarmChannels().telegram)}
+                      class="relative w-10 h-5 rounded-full transition-colors disabled:opacity-50"
+                      style={{
+                        background: alarmChannels().telegram ? "var(--interactive-base)" : "var(--surface-inset)",
+                      }}
+                      role="switch"
+                      aria-checked={alarmChannels().telegram}
+                      aria-label="Toggle Telegram alarm channel"
+                      aria-describedby="telegram-alarm-hint telegram-alarm-fallback"
+                    >
+                      <div
+                        class="absolute top-0.5 w-4 h-4 rounded-full transition-all"
+                        style={{
+                          background: "var(--background-base)",
+                          left: alarmChannels().telegram ? "calc(100% - 18px)" : "2px",
+                        }}
+                      />
+                    </button>
+                  </div>
+                </div>
+              </section>
 
               <section
                 class="rounded-lg overflow-hidden"

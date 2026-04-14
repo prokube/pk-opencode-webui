@@ -3,6 +3,29 @@
 import { dispatchStorageEvent } from "./storage"
 
 export const NOTIFY_STORAGE_KEY = "opencode.sessionNotify";
+export const ALARM_CHANNELS_STORAGE_KEY = "opencode.alarmChannels";
+
+export type AlarmChannels = {
+  browser: boolean
+  telegram: boolean
+}
+
+const DEFAULT_ALARM_CHANNELS: AlarmChannels = {
+  browser: true,
+  telegram: false,
+}
+
+function defaultAlarmChannels(): AlarmChannels {
+  return { ...DEFAULT_ALARM_CHANNELS }
+}
+
+function removeStorageKey(key: string) {
+  try {
+    window.localStorage.removeItem(key)
+  } catch {
+    return
+  }
+}
 
 /** Read the per-session notification toggle map from localStorage */
 export function readNotifyMap(): Record<string, boolean> {
@@ -12,12 +35,12 @@ export function readNotifyMap(): Record<string, boolean> {
     if (!raw) return {};
     const parsed = JSON.parse(raw) as Record<string, boolean>;
     if (!parsed || typeof parsed !== "object") {
-      window.localStorage.removeItem(NOTIFY_STORAGE_KEY);
+      removeStorageKey(NOTIFY_STORAGE_KEY);
       return {};
     }
     return parsed;
   } catch {
-    try { window.localStorage.removeItem(NOTIFY_STORAGE_KEY); } catch {}
+    removeStorageKey(NOTIFY_STORAGE_KEY)
     return {};
   }
 }
@@ -41,4 +64,44 @@ export function cleanupNotifyState(id: string) {
   if (!(id in map)) return;
   delete map[id];
   writeNotifyMap(map);
+}
+
+export function readAlarmChannels(): AlarmChannels {
+  if (typeof window === "undefined") return defaultAlarmChannels();
+  const raw = (() => {
+    try {
+      return window.localStorage.getItem(ALARM_CHANNELS_STORAGE_KEY)
+    } catch {
+      return null
+    }
+  })();
+  if (raw === null) {
+    return defaultAlarmChannels();
+  }
+  if (!raw) return defaultAlarmChannels();
+  try {
+    const parsed = JSON.parse(raw) as Partial<AlarmChannels> | null;
+    if (!parsed || typeof parsed !== "object") {
+      removeStorageKey(ALARM_CHANNELS_STORAGE_KEY)
+      return defaultAlarmChannels();
+    }
+    return {
+      browser: parsed.browser !== false,
+      telegram: parsed.telegram === true,
+    };
+  } catch {
+    removeStorageKey(ALARM_CHANNELS_STORAGE_KEY)
+    return defaultAlarmChannels();
+  }
+}
+
+export function writeAlarmChannels(channels: AlarmChannels) {
+  if (typeof window === "undefined") return;
+  const value = JSON.stringify(channels);
+  try {
+    window.localStorage.setItem(ALARM_CHANNELS_STORAGE_KEY, value);
+  } catch {
+    return;
+  }
+  dispatchStorageEvent(ALARM_CHANNELS_STORAGE_KEY, value);
 }

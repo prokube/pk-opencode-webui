@@ -12,6 +12,7 @@ export const telegramSettingFields = [
   "sessionCacheMax",
   "sessionCacheTtlMs",
   "notificationDebounceMs",
+  "telegramAlarmChannelEnabled",
   "port",
   "webhookPath",
   "webhookSecret",
@@ -22,10 +23,12 @@ export const telegramSettingFields = [
 
 export type TelegramSettingField = (typeof telegramSettingFields)[number]
 
+type TelegramSettingValue = string | number | boolean
+
 type TelegramSettingsStore = {
   version: 1
   updatedAt: string
-  settings: Partial<Record<TelegramSettingField, string | number>>
+  settings: Partial<Record<TelegramSettingField, TelegramSettingValue>>
 }
 
 type ValidationError = {
@@ -43,6 +46,7 @@ export type TelegramBridgeSettings = {
   sessionCacheMax: number
   sessionCacheTtlMs: number
   notificationDebounceMs: number
+  telegramAlarmChannelEnabled: boolean
   port: number
   webhookPath: string
   webhookSecret?: string
@@ -332,6 +336,7 @@ function envDefaults(): TelegramBridgeSettings {
     sessionCacheMax: parsePositiveInt(env("TELEGRAM_SESSION_CACHE_MAX") || "", 500),
     sessionCacheTtlMs: parsePositiveInt(env("TELEGRAM_SESSION_CACHE_TTL_MS") || "", 6 * 60 * 60 * 1000),
     notificationDebounceMs: parsePositiveInt(env("TELEGRAM_NOTIFY_DEBOUNCE_MS") || "", 20_000),
+    telegramAlarmChannelEnabled: true,
     port: parsePort(env("TELEGRAM_BRIDGE_PORT") || "4097"),
     webhookPath: webhookPath.startsWith("/") ? webhookPath : `/${webhookPath}`,
     webhookSecret: env("TELEGRAM_WEBHOOK_SECRET") || undefined,
@@ -347,10 +352,10 @@ function parseStore(text: string): TelegramSettingsStore | undefined {
   if (!text.trim()) return
   const data = JSON.parse(text) as Partial<TelegramSettingsStore>
   if (!data.settings || typeof data.settings !== "object") return
-  const settings: Partial<Record<TelegramSettingField, string | number>> = {}
+  const settings: Partial<Record<TelegramSettingField, TelegramSettingValue>> = {}
   for (const field of telegramSettingFields) {
     const value = data.settings[field]
-    if (typeof value === "string" || typeof value === "number") {
+    if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
       settings[field] = value
     }
   }
@@ -390,6 +395,10 @@ function applyPersisted(defaults: TelegramBridgeSettings, store: TelegramSetting
       typeof s.notificationDebounceMs === "number" && s.notificationDebounceMs > 0
         ? s.notificationDebounceMs
         : defaults.notificationDebounceMs,
+    telegramAlarmChannelEnabled:
+      typeof s.telegramAlarmChannelEnabled === "boolean"
+        ? s.telegramAlarmChannelEnabled
+        : defaults.telegramAlarmChannelEnabled,
     port: typeof s.port === "number" && s.port > 0 && s.port <= 65535 ? s.port : defaults.port,
     webhookPath:
       typeof s.webhookPath === "string" && s.webhookPath.trim()
@@ -421,6 +430,7 @@ function publicSettings(settings: TelegramBridgeSettings, store: TelegramSetting
     sessionCacheMax: settings.sessionCacheMax,
     sessionCacheTtlMs: settings.sessionCacheTtlMs,
     notificationDebounceMs: settings.notificationDebounceMs,
+    telegramAlarmChannelEnabled: settings.telegramAlarmChannelEnabled,
     port: settings.port,
     webhookPath: settings.webhookPath,
     webhookSecretConfigured: Boolean(settings.webhookSecret),
@@ -480,7 +490,7 @@ function pushUrl(errors: ValidationError[], field: string, value: unknown) {
 }
 
 function normalizePayload(input: unknown): {
-  patch: Partial<Record<TelegramSettingField, string | number | undefined>>
+  patch: Partial<Record<TelegramSettingField, TelegramSettingValue | undefined>>
   errors: ValidationError[]
 } {
   const raw = readObject(input)
@@ -488,7 +498,7 @@ function normalizePayload(input: unknown): {
     return { patch: {}, errors: [{ field: "settings", message: "settings object is required" }] }
   }
 
-  const patch: Partial<Record<TelegramSettingField, string | number | undefined>> = {}
+  const patch: Partial<Record<TelegramSettingField, TelegramSettingValue | undefined>> = {}
   const errors: ValidationError[] = []
 
   for (const key of Object.keys(raw)) {
@@ -584,6 +594,21 @@ function normalizePayload(input: unknown): {
     }
   }
 
+  if ("telegramAlarmChannelEnabled" in raw) {
+    if (raw.telegramAlarmChannelEnabled === null) {
+      patch.telegramAlarmChannelEnabled = undefined
+    }
+    if (typeof raw.telegramAlarmChannelEnabled === "boolean") {
+      patch.telegramAlarmChannelEnabled = raw.telegramAlarmChannelEnabled
+    }
+    if (raw.telegramAlarmChannelEnabled !== null && typeof raw.telegramAlarmChannelEnabled !== "boolean") {
+      errors.push({
+        field: "telegramAlarmChannelEnabled",
+        message: "telegramAlarmChannelEnabled must be a boolean or null",
+      })
+    }
+  }
+
   if ("port" in raw) {
     if (raw.port === null) {
       patch.port = undefined
@@ -670,7 +695,7 @@ function normalizePayload(input: unknown): {
   return { patch, errors }
 }
 
-async function writeSettings(path: string, settings: Partial<Record<TelegramSettingField, string | number>>) {
+async function writeSettings(path: string, settings: Partial<Record<TelegramSettingField, TelegramSettingValue>>) {
   await fsp.mkdir(nodePath.dirname(path), { recursive: true })
   const tmpPath = nodePath.join(nodePath.dirname(path), `.${nodePath.basename(path)}.${process.pid}.${randomUUID()}.tmp`)
   const backupPath = `${path}.bak.${Date.now()}.${randomUUID()}`
@@ -769,7 +794,7 @@ export async function updateTelegramSettings(input: unknown) {
       updatedAt: new Date().toISOString(),
       settings: {},
     }
-    const nextSettings: Partial<Record<TelegramSettingField, string | number>> = { ...current.settings }
+    const nextSettings: Partial<Record<TelegramSettingField, TelegramSettingValue>> = { ...current.settings }
     const changedFields: string[] = []
 
     for (const field of telegramSettingFields) {

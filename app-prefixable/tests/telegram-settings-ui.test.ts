@@ -19,6 +19,7 @@ const seed: TelegramPublicSettings = {
   sessionCacheMax: 500,
   sessionCacheTtlMs: 60000,
   notificationDebounceMs: 20000,
+  telegramAlarmChannelEnabled: true,
   port: 4097,
   webhookPath: "/webhook",
   webhookSecretConfigured: false,
