@@ -1329,7 +1329,7 @@ function parseSavedPrompt(value: unknown, fallbackScope: "global" | "project"): 
     ? rawCreated
     : typeof rawCreated === "string" && Number.isFinite(Number(rawCreated))
       ? Number(rawCreated)
-      : Date.now()
+      : 0
   const scope = row.scope === "project" || row.scope === "global" ? row.scope : fallbackScope
   return { id, title, text, createdAt, scope }
 }
@@ -1345,7 +1345,11 @@ function mergeSavedPrompts(globalPrompts: SavedPrompt[], projectPrompts: SavedPr
   const projectIds = new Set(projectPrompts.map((item) => item.id))
   const dedupedGlobal = globalPrompts.filter((item) => !projectIds.has(item.id))
   return [...dedupedGlobal, ...projectPrompts]
-    .sort((a, b) => b.createdAt - a.createdAt)
+    .sort((a, b) => {
+      const created = b.createdAt - a.createdAt
+      if (created !== 0) return created
+      return a.id.localeCompare(b.id)
+    })
 }
 
 async function savedPrompts(config: BridgeConfig): Promise<SavedPrompt[]> {
@@ -1378,7 +1382,7 @@ function promptChoice(prompt: SavedPrompt, index: number): string {
 
 function promptsListText(prompts: SavedPrompt[]): string {
   if (!prompts.length) {
-    return "No saved prompts found for this scope. Create one in the web UI, then run /prompts again."
+    return "No saved prompts found. Create one in the web UI, then run /prompts again."
   }
   const shown = prompts.slice(0, 25)
   const lines = shown.map(promptChoice)
