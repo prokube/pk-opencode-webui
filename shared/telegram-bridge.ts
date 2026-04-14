@@ -67,6 +67,15 @@ type BridgeHealthReport = {
   }
 }
 
+type TelegramPendingItem = {
+  id: string
+  kind: "question" | "permission" | "task-finished"
+  sessionId: string
+  text: string
+  stampedAt: number
+  resolved: boolean
+}
+
 type CachedSession = {
   id: string
   expiresAt: number
@@ -110,11 +119,17 @@ const chatQueues = new Map<string, Promise<void>>()
 const eventNotifications = new Map<string, number>()
 const statusBySession = new Map<string, string>()
 const fallbackNotifications = new Map<string, boolean>()
+const fallbackPending = new Map<string, TelegramPendingItem[]>()
 const pendingQuestions = new Map<string, TelegramPendingQuestion[]>()
 const sessionHistory = new Map<string, string[]>()
 
+let pendingEntrySeq = 0
+
 const pendingQuestionTtlMs = 30 * 60 * 1000
 const startedAt = Date.now()
+const pendingRetentionMs = 3 * 24 * 60 * 60 * 1000
+const pendingMaxItems = 60
+const pendingDigestMax = 8
 const sessionHistoryMax = 12
 
 const telegramCommands = Object.freeze([
@@ -299,12 +314,20 @@ function pendingAdapter(runtime: Runtime) {
   }
 }
 
+function pendingFallbackEnabled(runtime: Runtime): boolean {
+  if (runtime.store.pendingGet) return false
+  if (runtime.store.pendingSet) return false
+  return true
+}
+
 async function pendingGet(runtime: Runtime, key: string): Promise<TelegramPendingItem[]> {
   const now = Date.now()
   const adapter = pendingAdapter(runtime)
   const source = adapter
     ? await adapter.get(key)
-    : fallbackPending.get(key) || []
+    : pendingFallbackEnabled(runtime)
+      ? fallbackPending.get(key) || []
+      : []
   const next = prunePending(source, now)
   if (adapter) {
     const changed = next.length !== source.length || next.some((item, i) => item.id !== source[i]?.id)
@@ -328,6 +351,7 @@ async function pendingSet(runtime: Runtime, key: string, items: TelegramPendingI
     await adapter.set(key, next)
     return
   }
+  if (!pendingFallbackEnabled(runtime)) return
   if (!next.length) {
     fallbackPending.delete(key)
     return
@@ -1589,12 +1613,14 @@ export async function startTelegramBridge() {
 
 export function resetSessionCacheForTest() {
   setRetryDelayForTest()
+  pendingEntrySeq = 0
   sessions.clear()
   creatingSessions.clear()
   chatQueues.clear()
   eventNotifications.clear()
   statusBySession.clear()
   fallbackNotifications.clear()
+  fallbackPending.clear()
   pendingQuestions.clear()
   sessionHistory.clear()
 }
