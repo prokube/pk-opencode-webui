@@ -1749,19 +1749,27 @@ export async function handleTextUpdate(runtime: Runtime, update: TelegramUpdate)
   }
 }
 
-async function notifySessionKeys(runtime: Runtime, sessionId: string, kind: string, text: string, requestId?: string) {
+async function notifySessionKeys(
+  runtime: Runtime,
+  sessionId: string,
+  kind: "question" | "permission" | "task-finished",
+  text: string,
+  requestId?: string,
+  notifyKind?: string,
+) {
   if (!runtime.store.sessionKeys) return
+  const dedupeKey = notifyKind || kind
   const keys = await runtime.store.sessionKeys(sessionId)
   const chats = new Set<number>()
-  for (const key of keys) {
+  for (const mapKey of keys) {
     try {
-      const parsed = parseTelegramKey(key)
+      const parsed = parseTelegramKey(mapKey)
       if (!parsed) continue
       if (!chats.has(parsed.chatId)) {
         chats.add(parsed.chatId)
         const entry: TelegramPendingItem = {
           id: pendingEntryId(sessionId, kind, parsed.chatId, requestId),
-          kind: kind === "task-finished" ? "task-finished" : kind === "permission" ? "permission" : "question",
+          kind,
           sessionId,
           text,
           stampedAt: Date.now(),
@@ -1773,14 +1781,14 @@ async function notifySessionKeys(runtime: Runtime, sessionId: string, kind: stri
         }
       }
       if (!(await notificationEnabled(runtime, notificationKey(parsed.chatId)))) continue
-      if (!shouldNotify(runtime.config, parsed.chatId, kind, sessionId)) continue
+      if (!shouldNotify(runtime.config, parsed.chatId, dedupeKey, sessionId)) continue
       const message = `${text}\n\nOpen ${sessionLabel(runtime.config, sessionId)}`
       await queueChatUpdate(String(parsed.chatId), async () => {
         await sendTelegramMessage(runtime.config, parsed.chatId, message)
       })
-      stampNotification(parsed.chatId, kind, sessionId)
+      stampNotification(parsed.chatId, dedupeKey, sessionId)
     } catch (error) {
-      console.error("[TelegramBridge] outbound notify failed", { sessionId, key, kind, error })
+      console.error("[TelegramBridge] outbound notify failed", { sessionId, key: mapKey, kind, error })
     }
   }
 }
@@ -1881,7 +1889,16 @@ export async function handleBridgeEvent(runtime: Runtime, event: { type: string;
   if (event.type === "question.asked") {
     const pending = parsePendingQuestion(event.properties)
     if (!pending) {
-      await notifySessionKeys(runtime, sessionId, "question", `Question pending: ${questionText(event.properties)}`)
+      const requestId = typeof event.properties.id === "string" ? event.properties.id.trim() : ""
+      const notifyKind = requestId ? `question:${requestId}` : undefined
+      await notifySessionKeys(
+        runtime,
+        sessionId,
+        "question",
+        `Question pending: ${questionText(event.properties)}`,
+        requestId || undefined,
+        notifyKind,
+      )
       return
     }
     await notifyQuestion(runtime, sessionId, pending)
@@ -1889,7 +1906,8 @@ export async function handleBridgeEvent(runtime: Runtime, event: { type: string;
   }
   if (event.type === "permission.asked") {
     const requestId = typeof event.properties.id === "string" ? event.properties.id.trim() : ""
-    await notifySessionKeys(runtime, sessionId, "permission", permissionText(event.properties), requestId || undefined)
+    const notifyKind = requestId ? `permission:${requestId}` : undefined
+    await notifySessionKeys(runtime, sessionId, "permission", permissionText(event.properties), requestId || undefined, notifyKind)
     return
   }
   if (event.type !== "session.status") return
