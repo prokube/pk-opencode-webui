@@ -1396,6 +1396,7 @@ export function Session() {
   }
 
   function editFollowup(id: string) {
+    if (followupSending() === id) return;
     const item = followups().find((entry) => entry.id === id);
     if (!item || !inputRef) return;
     applyInputAndAutogrow(inputRef, item.text);

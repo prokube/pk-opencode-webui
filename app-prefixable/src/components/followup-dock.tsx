@@ -62,31 +62,34 @@ export function FollowupDock(props: {
           aria-label="Queued followup messages"
         >
           <For each={props.items}>
-            {(item) => (
-              <div class="flex items-center gap-2 min-w-0">
-                <span class="text-sm truncate flex-1" style={{ color: "var(--text-base)" }}>
-                  {item.text}
-                </span>
-                <Button
-                  type="button"
-                  size="sm"
-                  variant="secondary"
-                  disabled={!!props.sending || !!props.processing || !!props.loading}
-                  onClick={() => props.onSend(item.id)}
-                >
-                  Send now
-                </Button>
-                <Button
-                  type="button"
-                  size="sm"
-                  variant="ghost"
-                  disabled={!!props.sending || !!props.processing || !!props.loading}
-                  onClick={() => props.onEdit(item.id)}
-                >
-                  Edit
-                </Button>
-              </div>
-            )}
+            {(item) => {
+              const sending = () => props.sending === item.id;
+              return (
+                <div class="flex items-center gap-2 min-w-0">
+                  <span class="text-sm truncate flex-1" style={{ color: "var(--text-base)" }}>
+                    {item.text}
+                  </span>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="secondary"
+                    disabled={!!props.sending || !!props.processing || !!props.loading}
+                    onClick={() => props.onSend(item.id)}
+                  >
+                    Send now
+                  </Button>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="ghost"
+                    disabled={sending()}
+                    onClick={() => props.onEdit(item.id)}
+                  >
+                    Edit
+                  </Button>
+                </div>
+              );
+            }}
           </For>
         </div>
       </Show>
