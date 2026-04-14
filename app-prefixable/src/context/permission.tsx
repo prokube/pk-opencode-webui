@@ -245,3 +245,7 @@ export function usePermission() {
   if (!ctx) throw new Error("usePermission must be used within PermissionProvider")
   return ctx
 }
+
+export function useOptionalPermission() {
+  return useContext(PermissionContext)
+}
