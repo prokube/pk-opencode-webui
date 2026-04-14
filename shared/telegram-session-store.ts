@@ -175,8 +175,8 @@ function parseStore(input: string): StoreShape {
   }
   for (const key of Object.keys(notifications)) {
     const value = notifications[key]
-    if (typeof value !== "boolean") continue
-    notifyOut[key] = value
+    if (value !== true) continue
+    notifyOut[key] = true
   }
   for (const key of Object.keys(sessionAlarms)) {
     const value = sessionAlarms[key]
