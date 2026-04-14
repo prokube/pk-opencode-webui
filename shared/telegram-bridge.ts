@@ -427,7 +427,7 @@ function pendingChatKey(chatId: number): string {
 function pendingHint(item: TelegramPendingItem): string {
   if (item.kind === "question") return "reply with the needed answer, or use /status"
   if (item.kind === "permission") return "review in chat and reply to approve or deny"
-  return "use /status for details"
+  return "use /recent for details"
 }
 
 function pendingMessage(items: TelegramPendingItem[]): string {
