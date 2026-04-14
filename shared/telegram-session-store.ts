@@ -2,17 +2,52 @@ import { mkdir, readdir, rename, rm } from "node:fs/promises"
 import { basename, dirname, join } from "node:path"
 
 type StoreShape = {
-  version: 2
+  version: 3
   sessions: Record<string, string>
   notifications: Record<string, boolean>
+  inbox: Record<string, TelegramPendingItem[]>
+}
+
+export type TelegramPendingItem = {
+  id: string
+  kind: "question" | "permission" | "task-finished"
+  sessionId: string
+  text: string
+  stampedAt: number
+  resolved: boolean
 }
 
 function emptyStore(): StoreShape {
   return {
-    version: 2,
+    version: 3,
     sessions: {},
     notifications: {},
+    inbox: {},
   }
+}
+
+function parsePendingList(value: unknown): TelegramPendingItem[] {
+  if (!Array.isArray(value)) return []
+  const out: TelegramPendingItem[] = []
+  for (const item of value) {
+    if (!item || typeof item !== "object") continue
+    const data = item as Partial<TelegramPendingItem>
+    if (!data.id || typeof data.id !== "string") continue
+    if (!data.sessionId || typeof data.sessionId !== "string") continue
+    if (!data.text || typeof data.text !== "string") continue
+    if (data.kind !== "question" && data.kind !== "permission" && data.kind !== "task-finished") continue
+    if (typeof data.stampedAt !== "number" || !Number.isFinite(data.stampedAt) || data.stampedAt <= 0) continue
+    if (typeof data.resolved !== "boolean") continue
+    out.push({
+      id: data.id,
+      kind: data.kind,
+      sessionId: data.sessionId,
+      text: data.text,
+      stampedAt: data.stampedAt,
+      resolved: data.resolved,
+    })
+  }
+  return out
 }
 
 function parseStore(input: string): StoreShape {
@@ -20,8 +55,10 @@ function parseStore(input: string): StoreShape {
   const data = JSON.parse(input) as Partial<StoreShape>
   const sessions = data.sessions && typeof data.sessions === "object" ? data.sessions : {}
   const notifications = data.notifications && typeof data.notifications === "object" ? data.notifications : {}
+  const inbox = data.inbox && typeof data.inbox === "object" ? data.inbox : {}
   const out: Record<string, string> = {}
   const notifyOut: Record<string, boolean> = {}
+  const inboxOut: Record<string, TelegramPendingItem[]> = {}
   for (const key of Object.keys(sessions)) {
     const value = sessions[key]
     if (typeof value !== "string" || !value) continue
@@ -32,10 +69,16 @@ function parseStore(input: string): StoreShape {
     if (typeof value !== "boolean") continue
     notifyOut[key] = value
   }
+  for (const key of Object.keys(inbox)) {
+    const value = parsePendingList(inbox[key])
+    if (!value.length) continue
+    inboxOut[key] = value
+  }
   return {
-    version: 2,
+    version: 3,
     sessions: out,
     notifications: notifyOut,
+    inbox: inboxOut,
   }
 }
 
@@ -172,6 +215,8 @@ export type TelegramSessionStore = {
   sessionKeys?: (sessionId: string) => Promise<string[]>
   notificationGet?: (key: string) => Promise<boolean>
   notificationSet?: (key: string, enabled: boolean) => Promise<void>
+  pendingGet?: (chatKey: string) => Promise<TelegramPendingItem[]>
+  pendingSet?: (chatKey: string, items: TelegramPendingItem[]) => Promise<void>
 }
 
 export function createTelegramSessionStore(path: string): TelegramSessionStore {
@@ -180,6 +225,7 @@ export function createTelegramSessionStore(path: string): TelegramSessionStore {
   const sessions = new Map<string, string>()
   const sessionIndex = new Map<string, Set<string>>()
   const notifications = new Map<string, boolean>()
+  const inbox = new Map<string, TelegramPendingItem[]>()
 
   function indexAdd(sessionId: string, key: string) {
     const set = sessionIndex.get(sessionId)
@@ -215,6 +261,9 @@ export function createTelegramSessionStore(path: string): TelegramSessionStore {
       for (const [key, value] of Object.entries(data.notifications)) {
         notifications.set(key, value)
       }
+      for (const [key, value] of Object.entries(data.inbox)) {
+        inbox.set(key, value)
+      }
     })
     .catch((error) => {
       console.warn("[TelegramBridge] session store load failed, starting empty", { path, error })
@@ -225,9 +274,10 @@ export function createTelegramSessionStore(path: string): TelegramSessionStore {
 
   function flush() {
     const payload: StoreShape = {
-      version: 2,
+      version: 3,
       sessions: Object.fromEntries(sessions),
       notifications: Object.fromEntries(notifications),
+      inbox: Object.fromEntries(inbox),
     }
     writes = writes.then(
       () => writeStore(path, payload),
@@ -302,6 +352,26 @@ export function createTelegramSessionStore(path: string): TelegramSessionStore {
             throw error
           }
           notifications.set(key, prev)
+          throw error
+        })
+      })
+    },
+    async pendingGet(chatKey: string) {
+      await ready
+      return [...(inbox.get(chatKey) || [])]
+    },
+    async pendingSet(chatKey: string, items: TelegramPendingItem[]) {
+      await ready
+      await run(async () => {
+        const prev = inbox.get(chatKey)
+        if (!items.length) inbox.delete(chatKey)
+        if (items.length) inbox.set(chatKey, [...items])
+        await flush().catch((error) => {
+          if (!prev) {
+            inbox.delete(chatKey)
+            throw error
+          }
+          inbox.set(chatKey, prev)
           throw error
         })
       })

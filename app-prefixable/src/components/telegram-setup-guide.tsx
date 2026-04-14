@@ -14,7 +14,7 @@ const checklist = Object.freeze([
   Object.freeze({ id: "notify", label: "Notifications are enabled per chat with /notify on after a test message." }),
 ]) as readonly Readonly<ChecklistItem>[]
 
-const commands = ["/notify on", "/notify off", "/notify status", "/new", "/status", "/help"] as const
+const commands = ["/pending", "/inbox", "/notify on", "/notify off", "/notify status", "/new", "/status", "/help"] as const
 const sections = ["Readiness checklist", "Prerequisites", "Setup steps", "Command usage", "Security best practices", "Troubleshooting quick checks"] as const
 const title = "Telegram Setup Guide"
 
