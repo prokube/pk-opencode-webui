@@ -73,7 +73,6 @@ export function Settings() {
     }
     window.addEventListener("storage", handleStorage)
     onCleanup(() => window.removeEventListener("storage", handleStorage))
-    void loadTelegramAlarmState()
   })
 
   function updateSoundSettings(patch: Partial<SoundSettings>) {
