@@ -56,8 +56,8 @@ type BridgeHealthReport = {
     status: "ok"
     tokenConfigured: boolean
     webhookSecretConfigured: boolean
-    openCodeUrl: string
-    sessionStorePath: string
+    openCodeUrlConfigured: boolean
+    sessionStorePathConfigured: boolean
     directoryConfigured: boolean
     mode: "polling" | "webhook"
   }
@@ -70,6 +70,32 @@ type BridgeHealthReport = {
 type CachedSession = {
   id: string
   expiresAt: number
+}
+
+function healthAccessPublic() {
+  const value = (process.env.TELEGRAM_HEALTH_PUBLIC || "").trim().toLowerCase()
+  if (value === "1") return true
+  if (value === "true") return true
+  if (value === "yes") return true
+  return false
+}
+
+export function telegramHealthHost(mode: BridgeConfig["mode"]): string {
+  if (mode === "polling" && !healthAccessPublic()) return "127.0.0.1"
+  return "0.0.0.0"
+}
+
+function isLocalAddress(value: string | undefined): boolean {
+  if (!value) return false
+  if (value === "127.0.0.1") return true
+  if (value === "::1") return true
+  if (value === "::ffff:127.0.0.1") return true
+  return false
+}
+
+export function allowTelegramHealthRequest(address: string | undefined): boolean {
+  if (healthAccessPublic()) return true
+  return isLocalAddress(address)
 }
 
 type TelegramCommand = {
@@ -1014,8 +1040,7 @@ async function checkOpenCodeApi(config: BridgeConfig): Promise<BridgeHealthCheck
 }
 
 export async function readTelegramBridgeHealth(runtime: Runtime): Promise<BridgeHealthReport> {
-  const telegramApi = await checkTelegramApi(runtime.config)
-  const openCodeApi = await checkOpenCodeApi(runtime.config)
+  const [telegramApi, openCodeApi] = await Promise.all([checkTelegramApi(runtime.config), checkOpenCodeApi(runtime.config)])
   const healthy = telegramApi.status === "ok" && openCodeApi.status === "ok"
   return {
     status: healthy ? "healthy" : "degraded",
@@ -1030,8 +1055,8 @@ export async function readTelegramBridgeHealth(runtime: Runtime): Promise<Bridge
       status: "ok",
       tokenConfigured: Boolean(runtime.config.token),
       webhookSecretConfigured: Boolean(runtime.config.webhookSecret),
-      openCodeUrl: runtime.config.openCodeUrl,
-      sessionStorePath: runtime.config.sessionStorePath,
+      openCodeUrlConfigured: Boolean(runtime.config.openCodeUrl),
+      sessionStorePathConfigured: Boolean(runtime.config.sessionStorePath),
       directoryConfigured: Boolean(runtime.config.directory),
       mode: runtime.config.mode,
     },
@@ -1375,9 +1400,10 @@ async function runPolling(runtime: Runtime) {
 
 function runPollingHealthServer(runtime: Runtime) {
   const config = runtime.config
+  const host = telegramHealthHost(config.mode)
   Bun.serve({
     port: config.port,
-    hostname: "0.0.0.0",
+    hostname: host,
     async fetch(req) {
       const url = new URL(req.url)
       if (req.method !== "GET" || url.pathname !== "/health") {
@@ -1387,7 +1413,7 @@ function runPollingHealthServer(runtime: Runtime) {
       return Response.json(report)
     },
   })
-  console.log(`[TelegramBridge] health server listening on ${config.port}`)
+  console.log(`[TelegramBridge] health server listening on ${host}:${config.port}`)
 }
 
 async function runWebhook(runtime: Runtime) {
@@ -1404,9 +1430,12 @@ async function runWebhook(runtime: Runtime) {
   Bun.serve({
     port: config.port,
     hostname: "0.0.0.0",
-    async fetch(req) {
+    async fetch(req, server) {
       const url = new URL(req.url)
       if (req.method === "GET" && url.pathname === "/health") {
+        if (!allowTelegramHealthRequest(server.requestIP(req)?.address)) {
+          return new Response("Not Found", { status: 404 })
+        }
         const report = await readTelegramBridgeHealth(runtime)
         return Response.json(report)
       }

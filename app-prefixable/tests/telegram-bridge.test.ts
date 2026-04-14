@@ -3,6 +3,7 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+  allowTelegramHealthRequest,
   cacheSession,
   createOutboundSSEParser,
   consumeOutboundEventStream,
@@ -17,6 +18,7 @@ import {
   registerTelegramCommands,
   resetSessionCacheForTest,
   setRetryDelayForTest,
+  telegramHealthHost,
   sessionFromCache,
 } from "../../shared/telegram-bridge";
 
@@ -56,6 +58,7 @@ const envKeys = [
   "TELEGRAM_SESSION_STORE_PATH",
   "TELEGRAM_SESSION_LINK_BASE",
   "TELEGRAM_NOTIFY_DEBOUNCE_MS",
+  "TELEGRAM_HEALTH_PUBLIC",
 ] as const;
 
 const envSnapshot = new Map<string, string | undefined>();
@@ -400,6 +403,69 @@ describe("telegram bridge config and cache", () => {
     } finally {
       globalThis.fetch = originalFetch;
     }
+  });
+
+  test("readTelegramBridgeHealth checks dependencies concurrently", async () => {
+    const originalFetch = globalThis.fetch;
+    let releaseTelegram = () => {};
+    let openCodeStarted = false;
+    try {
+      globalThis.fetch = (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.includes("/getMe")) {
+          return new Promise<Response>((resolve) => {
+            releaseTelegram = () => resolve(new Response(JSON.stringify({ ok: true, result: { id: 1 } }), { status: 200 }));
+          });
+        }
+        if (url.includes("/session/status")) {
+          openCodeStarted = true;
+          return Promise.resolve(new Response(JSON.stringify({}), { status: 200 }));
+        }
+        return Promise.reject(new Error(`Unexpected fetch ${url}`));
+      };
+
+      const run = readTelegramBridgeHealth({
+        config: {
+          mode: "polling",
+          token: "token",
+          openCodeUrl: "http://127.0.0.1:4096",
+          sessionCacheMax: 10,
+          sessionCacheTtlMs: 10_000,
+          notificationDebounceMs: 20_000,
+          port: 4097,
+          webhookPath: "/webhook",
+          sessionStorePath: "/tmp/test-store.json",
+        },
+        store: {
+          get: async () => undefined,
+          set: async () => undefined,
+          delete: async () => undefined,
+        },
+      });
+
+      await Promise.resolve();
+      expect(openCodeStarted).toBe(true);
+      releaseTelegram();
+      const report = await run;
+      expect(report.status).toBe("healthy");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test("health helpers default to localhost-only policy", () => {
+    delete process.env.TELEGRAM_HEALTH_PUBLIC;
+    expect(telegramHealthHost("polling")).toBe("127.0.0.1");
+    expect(telegramHealthHost("webhook")).toBe("0.0.0.0");
+    expect(allowTelegramHealthRequest("127.0.0.1")).toBe(true);
+    expect(allowTelegramHealthRequest("::1")).toBe(true);
+    expect(allowTelegramHealthRequest("10.0.0.12")).toBe(false);
+  });
+
+  test("health helpers allow public access when explicitly enabled", () => {
+    process.env.TELEGRAM_HEALTH_PUBLIC = "true";
+    expect(telegramHealthHost("polling")).toBe("0.0.0.0");
+    expect(allowTelegramHealthRequest("10.0.0.12")).toBe(true);
   });
 
   test("handleTextUpdate parses whitespace and bot-qualified help command", async () => {

@@ -24,8 +24,8 @@ type TelegramBridgeHealthResponse = {
     status?: "ok"
     tokenConfigured?: boolean
     webhookSecretConfigured?: boolean
-    openCodeUrl?: string
-    sessionStorePath?: string
+    openCodeUrlConfigured?: boolean
+    sessionStorePathConfigured?: boolean
     directoryConfigured?: boolean
     mode?: "polling" | "webhook"
   }
@@ -60,8 +60,8 @@ function bridgeConfig(raw: TelegramBridgeHealthResponse["config"] | undefined, s
     mode: raw?.mode === "webhook" ? "webhook" : raw?.mode === "polling" ? "polling" : settings.mode,
     tokenConfigured: typeof raw?.tokenConfigured === "boolean" ? raw.tokenConfigured : settings.tokenConfigured,
     webhookSecretConfigured: typeof raw?.webhookSecretConfigured === "boolean" ? raw.webhookSecretConfigured : settings.webhookSecretConfigured,
-    openCodeUrl: typeof raw?.openCodeUrl === "string" ? raw.openCodeUrl : settings.openCodeUrl,
-    sessionStorePath: typeof raw?.sessionStorePath === "string" ? raw.sessionStorePath : settings.sessionStorePath,
+    openCodeUrlConfigured: typeof raw?.openCodeUrlConfigured === "boolean" ? raw.openCodeUrlConfigured : Boolean(settings.openCodeUrl),
+    sessionStorePathConfigured: typeof raw?.sessionStorePathConfigured === "boolean" ? raw.sessionStorePathConfigured : Boolean(settings.sessionStorePath),
     directoryConfigured: typeof raw?.directoryConfigured === "boolean" ? raw.directoryConfigured : Boolean(settings.directory),
   }
 }
@@ -418,8 +418,8 @@ export async function handleExtendedEndpoint(
         mode: settings.settings.mode,
         tokenConfigured: settings.settings.tokenConfigured,
         webhookSecretConfigured: settings.settings.webhookSecretConfigured,
-        openCodeUrl: settings.settings.openCodeUrl,
-        sessionStorePath: settings.settings.sessionStorePath,
+        openCodeUrlConfigured: Boolean(settings.settings.openCodeUrl),
+        sessionStorePathConfigured: Boolean(settings.settings.sessionStorePath),
         directoryConfigured: Boolean(settings.settings.directory),
       },
       dependencies: {

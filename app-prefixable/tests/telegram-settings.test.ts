@@ -686,8 +686,8 @@ describe("telegram settings extended API", () => {
             status: "ok",
             tokenConfigured: true,
             webhookSecretConfigured: false,
-            openCodeUrl: "http://127.0.0.1:4096",
-            sessionStorePath: "/tmp/store.json",
+            openCodeUrlConfigured: true,
+            sessionStorePathConfigured: true,
             directoryConfigured: false,
             mode: "polling",
           },
@@ -713,6 +713,8 @@ describe("telegram settings extended API", () => {
       expect(data.status).toBe("healthy")
       expect(data.bridgeReachable).toBe(true)
       expect(data.dependencies.telegramApi.status).toBe("ok")
+      expect(data.config.openCodeUrlConfigured).toBe(true)
+      expect(data.config.sessionStorePathConfigured).toBe(true)
       expect(JSON.stringify(data)).not.toContain("test-secret-token")
     } finally {
       fetchSpy.mockRestore()
@@ -734,8 +736,8 @@ describe("telegram settings extended API", () => {
             status: "ok",
             tokenConfigured: true,
             webhookSecretConfigured: true,
-            openCodeUrl: "http://127.0.0.1:4096",
-            sessionStorePath: "/tmp/store.json",
+            openCodeUrlConfigured: true,
+            sessionStorePathConfigured: true,
             directoryConfigured: false,
             mode: "polling",
             token: "super-secret",
@@ -764,6 +766,8 @@ describe("telegram settings extended API", () => {
       expect(data.status).toBe("healthy")
       expect(data.config.token).toBeUndefined()
       expect(data.config.webhookSecret).toBeUndefined()
+      expect(data.config.openCodeUrl).toBeUndefined()
+      expect(data.config.sessionStorePath).toBeUndefined()
       expect(data.debugToken).toBeUndefined()
       expect(data.process.token).toBeUndefined()
       expect(data.dependencies.telegramApi.detail).toBeUndefined()
@@ -793,6 +797,10 @@ describe("telegram settings extended API", () => {
       const data = await response?.json()
       expect(data.status).toBe("down")
       expect(data.bridgeReachable).toBe(false)
+      expect(data.config.openCodeUrl).toBeUndefined()
+      expect(data.config.sessionStorePath).toBeUndefined()
+      expect(data.config.openCodeUrlConfigured).toBe(true)
+      expect(data.config.sessionStorePathConfigured).toBe(true)
       expect(data.messages).toEqual(
         expect.arrayContaining([
           expect.objectContaining({ type: "config" }),
