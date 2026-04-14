@@ -294,6 +294,7 @@ export function Session() {
     })(),
   );
   const [followupAutoPaused, setFollowupAutoPaused] = createSignal<string | undefined>();
+  const [followupAutoPending, setFollowupAutoPending] = createSignal(false);
   const followupAutoStatus = { previous: undefined as string | undefined };
   const [error, setError] = createSignal<string | null>(null);
   // Use session tree walk to find pending questions from this session or any descendant.
@@ -405,6 +406,13 @@ export function Session() {
     writeFollowupAutoSendMap(map);
     setFollowupAutoSend(enabled);
     if (enabled) setFollowupAutoPaused(undefined);
+    if (!enabled) setFollowupAutoPending(false);
+  }
+
+  function queueAutoFollowupSend() {
+    if (!followupAutoSend()) return;
+    if (followups().length === 0) return;
+    setFollowupAutoPending(true);
   }
 
   function toggleFollowupAutoSend() {
@@ -415,9 +423,7 @@ export function Session() {
     if (!enabled) return;
     const status = events.status[id]?.type;
     if (status !== "idle") return;
-    const next = followups()[0];
-    if (!next) return;
-    void sendFollowupNow(next.id, "auto");
+    queueAutoFollowupSend();
   }
 
   function queueFollowup(text: string) {
@@ -541,6 +547,7 @@ export function Session() {
     setFollowups(id ? readFollowupMap()[id] ?? [] : []);
     setFollowupAutoSend(id ? readFollowupAutoSendMap()[id] ?? true : true);
     setFollowupAutoPaused(undefined);
+    setFollowupAutoPending(false);
     followupAutoStatus.previous = undefined;
 
     // Restore draft for the new session (or clear if none saved)
@@ -609,10 +616,30 @@ export function Session() {
     followupAutoStatus.previous = status;
     if (status !== "idle") return;
     if (!prev || prev === "idle") return;
-    if (!followupAutoSend() || loading() || followupSending() || inputBlocked()) return;
+    queueAutoFollowupSend();
+  });
+
+  createEffect(() => {
+    const sid = sessionId();
+    if (!sid) return;
+    if (!followupAutoPending()) return;
+    if (!followupAutoSend()) {
+      setFollowupAutoPending(false);
+      return;
+    }
+    if (loading() || followupSending() || processing() || inputBlocked()) return;
+    const status = events.status[sid]?.type;
+    if (status !== "idle") return;
     const next = followups()[0];
-    if (!next) return;
+    if (!next) {
+      setFollowupAutoPending(false);
+      return;
+    }
     if (followupAutoPaused() === next.id) return;
+    const model = sessionModel();
+    if (!model) return;
+    if (!providers.connected.includes(model.providerID)) return;
+    setFollowupAutoPending(false);
     void sendFollowupNow(next.id, "auto");
   });
 
@@ -1458,20 +1485,20 @@ export function Session() {
     const fail = (message: string) => {
       setError(message);
     };
-    if (!sid || followupSending() || loading() || processing()) return;
-    if (busy === "busy" || busy === "retry") return;
-    if (inputBlocked()) return;
+    if (!sid || followupSending() || loading() || processing()) return false;
+    if (busy === "busy" || busy === "retry") return false;
+    if (inputBlocked()) return false;
     const model = sessionModel();
     if (!model) {
       fail("Please select a model before sending messages. Click the model button in the header.");
-      return;
+      return false;
     }
     if (!providers.connected.includes(model.providerID)) {
       fail(`Provider "${model.providerID}" is not connected. Please configure it in Settings.`);
-      return;
+      return false;
     }
     const item = followups().find((entry) => entry.id === id);
-    if (!item) return;
+    if (!item) return false;
     setFollowupSending(id);
     if (followupAutoPaused() === id) setFollowupAutoPaused(undefined);
     setError(null);
@@ -1495,11 +1522,13 @@ export function Session() {
       writeFollowupMap(map, dir);
       if (sessionId() === sid) setFollowups(next);
       startProcessing();
+      return true;
     } catch (err) {
       setPendingUserMessageText(null);
       setOptimisticMessage(null);
       if (pauseAuto) setFollowupAutoPaused(id);
       fail(`Failed to send queued followup: ${err instanceof Error ? err.message : String(err)}`);
+      return false;
     } finally {
       setFollowupSending(undefined);
     }
@@ -2496,18 +2525,16 @@ export function Session() {
               </div>
             </form>
 
-            <Show when={followups().length > 0}>
-              <FollowupDock
-                items={followups()}
-                sending={followupSending()}
-                autoSend={followupAutoSend()}
-                processing={processing()}
-                loading={loading()}
-                onToggleAutoSend={toggleFollowupAutoSend}
-                onSend={sendFollowupNow}
-                onEdit={editFollowup}
-              />
-            </Show>
+            <FollowupDock
+              items={followups()}
+              sending={followupSending()}
+              autoSend={followupAutoSend()}
+              processing={processing()}
+              loading={loading()}
+              onToggleAutoSend={toggleFollowupAutoSend}
+              onSend={sendFollowupNow}
+              onEdit={editFollowup}
+            />
           </div>
         </div>
 
