@@ -261,8 +261,8 @@ export function SessionHeader(props: SessionHeaderProps) {
               onMouseLeave={(e) => {
                 if (!props.notifyEnabled) (e.currentTarget as HTMLElement).style.background = "transparent"
               }}
-              title={props.notifyEnabled ? "Disable completion notifications" : "Enable completion notifications"}
-              aria-label="Toggle completion notifications"
+              title={props.notifyEnabled ? "Disable alarms for this session" : "Enable alarms for this session"}
+              aria-label="Toggle alarms for this session"
             >
               <Show when={props.notifyEnabled} fallback={<Bell class="w-4 h-4" />}>
                 <BellRing class="w-4 h-4" />

@@ -74,7 +74,13 @@ import {
 import type { DragEvent as SolidDragEvent } from "@thisbeyond/solid-dnd";
 import { ConstrainDragXAxis } from "../utils/solid-dnd";
 
-import { readNotifyMap, cleanupNotifyState, NOTIFY_STORAGE_KEY } from "../utils/notify";
+import {
+  readNotifyMap,
+  cleanupNotifyState,
+  NOTIFY_STORAGE_KEY,
+  readAlarmChannels,
+  ALARM_CHANNELS_STORAGE_KEY,
+} from "../utils/notify";
 import { readSoundSettings, playSound, primeAudioContext, SOUND_STORAGE_KEY } from "../utils/sound";
 import { dispatchStorageEvent } from "../utils/storage";
 import { sessionHasQuestion, buildChildMap, rootAncestorId } from "../utils/session-tree-request";
@@ -1622,10 +1628,12 @@ export function Layout(props: ParentProps) {
   // Updated via storage events (including synthetic same-tab events dispatched by writeNotifyMap).
   const [notifyCache, setNotifyCache] = createSignal(readNotifyMap());
   const [soundCache, setSoundCache] = createSignal(readSoundSettings());
+  const [alarmChannels, setAlarmChannels] = createSignal(readAlarmChannels());
   onMount(() => {
     function handleStorage(e: StorageEvent) {
       if (e.key === NOTIFY_STORAGE_KEY) setNotifyCache(readNotifyMap());
       if (e.key === SOUND_STORAGE_KEY) setSoundCache(readSoundSettings());
+      if (e.key === ALARM_CHANNELS_STORAGE_KEY) setAlarmChannels(readAlarmChannels());
     }
     window.addEventListener("storage", handleStorage);
     onCleanup(() => window.removeEventListener("storage", handleStorage));
@@ -1678,6 +1686,8 @@ export function Layout(props: ParentProps) {
   });
 
   function fireNotification(sessionID: string, title: string, body: string, tag: string) {
+    if (!alarmChannels().browser) return;
+
     // Flash the tab title when the page is in the background, regardless of Notification permission
     if (typeof document !== "undefined" && document.hidden) flashTitle();
 

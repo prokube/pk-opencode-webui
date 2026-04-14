@@ -3,6 +3,17 @@
 import { dispatchStorageEvent } from "./storage"
 
 export const NOTIFY_STORAGE_KEY = "opencode.sessionNotify";
+export const ALARM_CHANNELS_STORAGE_KEY = "opencode.alarmChannels";
+
+export type AlarmChannels = {
+  browser: boolean
+  telegram: boolean
+}
+
+const DEFAULT_ALARM_CHANNELS: AlarmChannels = {
+  browser: true,
+  telegram: false,
+}
 
 /** Read the per-session notification toggle map from localStorage */
 export function readNotifyMap(): Record<string, boolean> {
@@ -41,4 +52,32 @@ export function cleanupNotifyState(id: string) {
   if (!(id in map)) return;
   delete map[id];
   writeNotifyMap(map);
+}
+
+export function readAlarmChannels(): AlarmChannels {
+  if (typeof window === "undefined") return DEFAULT_ALARM_CHANNELS;
+  const raw = window.localStorage.getItem(ALARM_CHANNELS_STORAGE_KEY);
+  if (!raw) return DEFAULT_ALARM_CHANNELS;
+  let parsed: Partial<AlarmChannels> | null = null;
+  try {
+    parsed = JSON.parse(raw) as Partial<AlarmChannels> | null;
+  } catch {
+    window.localStorage.removeItem(ALARM_CHANNELS_STORAGE_KEY);
+    return DEFAULT_ALARM_CHANNELS;
+  }
+  if (!parsed || typeof parsed !== "object") {
+    window.localStorage.removeItem(ALARM_CHANNELS_STORAGE_KEY);
+    return DEFAULT_ALARM_CHANNELS;
+  }
+  return {
+    browser: parsed.browser !== false,
+    telegram: parsed.telegram === true,
+  };
+}
+
+export function writeAlarmChannels(channels: AlarmChannels) {
+  if (typeof window === "undefined") return;
+  const value = JSON.stringify(channels);
+  window.localStorage.setItem(ALARM_CHANNELS_STORAGE_KEY, value);
+  dispatchStorageEvent(ALARM_CHANNELS_STORAGE_KEY, value);
 }
