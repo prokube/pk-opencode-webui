@@ -1495,7 +1495,7 @@ export async function handleCallbackUpdate(runtime: Runtime, update: TelegramUpd
     if (!row || !option) {
       await answerCallback(runtime.config, callbackId, "That option is no longer available.")
       state.acknowledged = true
-      await sendTelegramMessage(runtime.config, chatId, `${questionAnswerGuidance(pending)}\n\n${questionStepText(pending)}`)
+      await sendTelegramQuestionPrompt(runtime.config, chatId, pending)
       return
     }
 
