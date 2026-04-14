@@ -781,10 +781,13 @@ function isMissingSession(error: unknown): boolean {
   return false
 }
 
-function isTimeoutError(error: unknown): boolean {
+export function isTimeoutError(error: unknown): boolean {
   if (!(error instanceof Error)) return false
   if (error.name === "TimeoutError") return true
-  if (error.message.toLowerCase().includes("timed out")) return true
+  if ("code" in error && error.code === "ETIMEDOUT") return true
+  const message = error.message.toLowerCase()
+  if (message.includes("timed out")) return true
+  if (message.includes("timeout")) return true
   return false
 }
 
@@ -1566,7 +1569,7 @@ async function runOutboundNotifications(runtime: Runtime) {
       await consumeOutboundEventStream(runtime, response.body)
     } catch (error) {
       if (isTimeoutError(error)) {
-        console.info("[TelegramBridge] outbound event stream timed out, reconnecting")
+        console.log("[TelegramBridge] outbound event stream timed out, reconnecting")
         await sleep(1500)
         continue
       }

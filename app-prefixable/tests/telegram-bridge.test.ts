@@ -10,6 +10,7 @@ import {
   extractReply,
   handleBridgeEvent,
   handleTextUpdate,
+  isTimeoutError,
   joinOpenCodeUrl,
   parseConfig,
   parseMode,
@@ -2313,6 +2314,20 @@ describe("telegram bridge config and cache", () => {
   test("outbound SSE parser handles CRLF split across chunk boundaries", () => {
     const blocks = parseOutboundBlocks(["data: one\r", "\n\r", "\ndata: two\n\n"]);
     expect(blocks).toEqual(["data: one", "data: two"]);
+  });
+
+  test("isTimeoutError classifies timeout names, codes, and messages", () => {
+    const named = new Error("stream died");
+    named.name = "TimeoutError";
+    expect(isTimeoutError(named)).toBe(true);
+
+    const coded = Object.assign(new Error("network failed"), { code: "ETIMEDOUT" });
+    expect(isTimeoutError(coded)).toBe(true);
+
+    expect(isTimeoutError(new Error("request timed out after 30s"))).toBe(true);
+    expect(isTimeoutError(new Error("socket timeout waiting for headers"))).toBe(true);
+    expect(isTimeoutError(new Error("connection reset by peer"))).toBe(false);
+    expect(isTimeoutError("timeout")).toBe(false);
   });
 
   test("outbound SSE parser normalizes lone CR and detects boundaries", () => {
