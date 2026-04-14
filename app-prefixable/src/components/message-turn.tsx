@@ -315,7 +315,7 @@ function TurnDetails(props: { turn: Turn }) {
 function SubtaskCard(props: {
   part: Extract<Part, { type: "subtask" }>
   child?: Session
-  running: boolean
+  state: "waiting" | "running" | "open"
   onOpen: (childID: string) => void
 }) {
   const clickable = () => !!props.child?.id
@@ -338,8 +338,8 @@ function SubtaskCard(props: {
         if (!clickable()) return
         e.currentTarget.style.background = "var(--background-base)"
       }}
-      title={props.child?.id ? "Open delegated session" : "Waiting for delegated session"}
-      aria-label={`Delegated subtask for ${props.part.agent}`}
+      title={props.state === "open" ? "Open delegated session" : "Waiting for delegated session link"}
+      aria-label={`Delegated subtask for ${props.part.agent} (${props.state})`}
       disabled={!clickable()}
     >
       <div class="flex items-start gap-2">
@@ -357,13 +357,16 @@ function SubtaskCard(props: {
           {props.part.description || props.part.prompt}
         </div>
         <div class="shrink-0 flex items-center gap-1 text-xs" style={{ color: "var(--text-weak)" }}>
-          <Show when={props.running}>
+          <Show when={props.state === "running"}>
             <span class="w-3 h-3 rounded-full border-2 border-current border-r-transparent animate-spin" />
             <span>running</span>
           </Show>
-          <Show when={!props.running && props.child?.id}>
+          <Show when={props.state === "open"}>
             <ExternalLink class="w-3 h-3" />
             <span>open</span>
+          </Show>
+          <Show when={props.state === "waiting"}>
+            <span>waiting</span>
           </Show>
         </div>
       </div>
@@ -577,10 +580,10 @@ export function MessageTurn(props: {
     const list = children()[part.sessionID]
     if (!list || list.length === 0) return undefined
     const all = subtasksForParent(part.sessionID)
-    if (all.length !== 1) return undefined
-    if (list.length !== 1) return undefined
-    if (all[0].id !== part.id) return undefined
-    return list[0]
+    if (all.length !== list.length) return undefined
+    const index = all.findIndex((candidate) => candidate.id === part.id)
+    if (index < 0) return undefined
+    return list[index]
   }
 
   createEffect(() => {
@@ -601,17 +604,16 @@ export function MessageTurn(props: {
     }
   })
 
-  const isChildRunning = (childID: string | undefined) => {
-    if (!childID) return true
-    const child = sync.session.get(childID)
-    if (!child) return true
+  const childState = (childID: string | undefined) => {
+    if (!childID) return "waiting"
     const messages = sync.messages(childID)
     for (let i = messages.length - 1; i >= 0; i--) {
       const info = messages[i].info
       if (info.role !== "assistant") continue
-      return info.time.completed == null
+      if (info.time.completed == null) return "running"
+      return "open"
     }
-    return true
+    return "running"
   }
 
   const hasError = createMemo(() => props.turn.assistantMessages.some((m) => m.error))
@@ -908,12 +910,12 @@ export function MessageTurn(props: {
                         <For each={subtasks()}>
                           {(part) => {
                             const child = createMemo(() => childForSubtask(part))
-                            const running = createMemo(() => isChildRunning(child()?.id))
+                            const state = createMemo(() => childState(child()?.id))
                             return (
                               <SubtaskCard
                                 part={part}
                                 child={child()}
-                                running={running()}
+                                state={state()}
                                 onOpen={openChild}
                               />
                             )
