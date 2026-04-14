@@ -527,20 +527,21 @@ export function Session() {
     // Seed from localStorage first for instant UI
     const local = readNotifyMap()[id] === true;
     setNotifyEnabled(local);
+    // Cancellation flag for stale responses
+    let cancelled = false;
+    onCleanup(() => { cancelled = true });
     // Then fetch server-side alarm state asynchronously
     getSessionAlarm(url, id).then((state) => {
-      // If server returned a value and we're still on the same session, adopt it
-      if (state && params.id === id) {
-        setNotifyEnabled(state.enabled);
-        // Sync localStorage to match server truth
-        const map = readNotifyMap();
-        if (state.enabled) {
-          map[id] = true;
-        } else {
-          delete map[id];
-        }
-        writeNotifyMap(map);
+      if (cancelled || !state || params.id !== id) return;
+      setNotifyEnabled(state.enabled);
+      // Sync localStorage to match server truth
+      const map = readNotifyMap();
+      if (state.enabled) {
+        map[id] = true;
+      } else {
+        delete map[id];
       }
+      writeNotifyMap(map);
     });
   });
 
