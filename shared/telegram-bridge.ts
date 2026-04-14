@@ -96,6 +96,7 @@ type CachedSession = {
 }
 
 type CachedSessionInfo = {
+  exists: boolean
   title: string | null
   expiresAt: number
 }
@@ -1226,24 +1227,36 @@ function trimSessionTitle(value: unknown): string | undefined {
   return text
 }
 
-function cacheSessionInfo(config: BridgeConfig, sessionId: string, title?: string) {
-  const expiresAt = Date.now() + config.sessionCacheTtlMs
+function pruneExpiredSessionInfo(now: number) {
+  for (const [key, value] of sessionInfo) {
+    if (value.expiresAt > now) continue
+    sessionInfo.delete(key)
+  }
+}
+
+function cacheSessionInfo(config: BridgeConfig, sessionId: string, info: SessionLookup) {
+  const now = Date.now()
+  const expiresAt = now + config.sessionCacheTtlMs
   sessionInfo.delete(sessionId)
-  sessionInfo.set(sessionId, { title: title || null, expiresAt })
+  sessionInfo.set(sessionId, { exists: info.exists, title: info.title || null, expiresAt })
+  pruneExpiredSessionInfo(now)
   for (const key of sessionInfo.keys()) {
     if (sessionInfo.size <= config.sessionCacheMax * 2) return
     sessionInfo.delete(key)
   }
 }
 
-function cachedSessionTitle(sessionId: string): string | undefined {
+function cachedSessionLookup(sessionId: string): SessionLookup | undefined {
   const cached = sessionInfo.get(sessionId)
   if (!cached) return
   if (cached.expiresAt <= Date.now()) {
     sessionInfo.delete(sessionId)
     return
   }
-  return cached.title || undefined
+  return {
+    exists: cached.exists,
+    title: cached.title || undefined,
+  }
 }
 
 function formatSessionDisplay(sessionId: string, title?: string): string {
@@ -1280,12 +1293,14 @@ async function readSessionInfo(config: BridgeConfig, sessionId: string): Promise
 }
 
 async function sessionTitle(config: BridgeConfig, sessionId: string): Promise<string | undefined> {
-  const cached = cachedSessionTitle(sessionId)
-  if (cached !== undefined) return cached
-  if (sessionInfo.has(sessionId)) return
+  const cached = cachedSessionLookup(sessionId)
+  if (cached) {
+    if (!cached.exists) return
+    return cached.title
+  }
   const loaded = await readSessionInfo(config, sessionId)
+  cacheSessionInfo(config, sessionId, loaded)
   if (!loaded.exists) return
-  cacheSessionInfo(config, sessionId, loaded.title)
   return loaded.title
 }
 
@@ -1381,10 +1396,18 @@ async function recentText(config: BridgeConfig, sessionId: string, count: number
 }
 
 async function sessionExists(config: BridgeConfig, sessionId: string): Promise<boolean> {
+  const cached = cachedSessionLookup(sessionId)
+  if (cached) return cached.exists
   const loaded = await readSessionInfo(config, sessionId)
-  if (!loaded.exists) return false
-  cacheSessionInfo(config, sessionId, loaded.title)
-  return true
+  cacheSessionInfo(config, sessionId, loaded)
+  return loaded.exists
+}
+
+function pruneExpiredSessions(now: number) {
+  for (const [key, value] of sessions) {
+    if (value.expiresAt > now) continue
+    sessions.delete(key)
+  }
 }
 
 async function switchPickerText(runtime: Runtime, chatKey: string, current?: string): Promise<string> {
@@ -1424,9 +1447,11 @@ function resolveSwitchTarget(target: string, list: string[]): { sessionId?: stri
 }
 
 export function cacheSession(config: BridgeConfig, chatId: string, sessionId: string) {
-  const expiresAt = Date.now() + config.sessionCacheTtlMs
+  const now = Date.now()
+  const expiresAt = now + config.sessionCacheTtlMs
   sessions.delete(chatId)
   sessions.set(chatId, { id: sessionId, expiresAt })
+  pruneExpiredSessions(now)
   for (const key of sessions.keys()) {
     if (sessions.size <= config.sessionCacheMax) return
     sessions.delete(key)
@@ -1435,10 +1460,7 @@ export function cacheSession(config: BridgeConfig, chatId: string, sessionId: st
 
 export function sessionFromCache(config: BridgeConfig, chatId: string): string | undefined {
   const now = Date.now()
-  for (const [key, value] of sessions) {
-    if (value.expiresAt > now) continue
-    sessions.delete(key)
-  }
+  pruneExpiredSessions(now)
 
   const cached = sessions.get(chatId)
   if (!cached) return

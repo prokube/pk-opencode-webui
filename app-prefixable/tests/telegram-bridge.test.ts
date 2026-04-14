@@ -1174,6 +1174,66 @@ describe("telegram bridge config and cache", () => {
     expect(historyWrites).toBe(0);
   });
 
+  test("/sessions and /status reuse cached session metadata within ttl", async () => {
+    const calls: Array<{ url: string; body: Record<string, unknown> }> = [];
+    const originalFetch = globalThis.fetch;
+    try {
+      globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        const body = init?.body ? (JSON.parse(String(init.body)) as Record<string, unknown>) : {};
+        calls.push({ url, body });
+        if (url.includes("/session/session-current")) {
+          return new Response(JSON.stringify({ id: "session-current", title: "Current thread" }), { status: 200 });
+        }
+        if (url.includes("/session/session-old")) {
+          return new Response(JSON.stringify({ id: "session-old", title: "Older thread" }), { status: 200 });
+        }
+        if (url.includes("/sendMessage")) {
+          return new Response(JSON.stringify({ ok: true, result: { message_id: 1 } }), { status: 200 });
+        }
+        throw new Error(`Unexpected fetch ${url}`);
+      };
+
+      const runtime = {
+        config: {
+          mode: "polling" as const,
+          token: "token",
+          openCodeUrl: "http://127.0.0.1:4096",
+          sessionCacheMax: 10,
+          sessionCacheTtlMs: 10_000,
+          notificationDebounceMs: 20_000,
+          port: 4097,
+          webhookPath: "/webhook",
+          sessionStorePath: "/tmp/test-store.json",
+        },
+        store: {
+          get: async () => "session-current",
+          set: async () => undefined,
+          delete: async () => undefined,
+          historyGet: async () => ["session-old"],
+        },
+      };
+
+      await handleTextUpdate(runtime, {
+        update_id: 1,
+        message: { message_id: 1, text: "/sessions", chat: { id: 67 }, from: { id: 8 } },
+      });
+      await handleTextUpdate(runtime, {
+        update_id: 2,
+        message: { message_id: 2, text: "/status", chat: { id: 67 }, from: { id: 8 } },
+      });
+      await handleTextUpdate(runtime, {
+        update_id: 3,
+        message: { message_id: 3, text: "/sessions", chat: { id: 67 }, from: { id: 8 } },
+      });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+
+    expect(calls.filter((x) => x.url.includes("/session/session-current")).length).toBe(1);
+    expect(calls.filter((x) => x.url.includes("/session/session-old")).length).toBe(1);
+  });
+
   test("/recent returns latest user and assistant exchanges", async () => {
     const calls: Array<{ url: string; body: Record<string, unknown> }> = [];
     const originalFetch = globalThis.fetch;
@@ -1987,12 +2047,18 @@ describe("telegram bridge config and cache", () => {
         update_id: 1,
         message: { message_id: 1, text: "/switch missing-session", chat: { id: 35 }, from: { id: 3 } },
       });
+      await handleTextUpdate(runtime, {
+        update_id: 2,
+        message: { message_id: 2, text: "/switch missing-session", chat: { id: 35 }, from: { id: 3 } },
+      });
 
       const sent = calls
         .filter((x) => x.url.includes("/sendMessage"))
         .map((x) => String(x.body.text || ""));
       expect(sent[0]).toBe("Session not found: missing-session. Use /sessions to select a known session or /new to create one.");
+      expect(sent[1]).toBe("Session not found: missing-session. Use /sessions to select a known session or /new to create one.");
       expect(map.get("chat:35:user:3")).toBe("session-a");
+      expect(calls.filter((x) => x.url.includes("/session/missing-session")).length).toBe(1);
     } finally {
       globalThis.fetch = originalFetch;
     }
