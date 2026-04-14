@@ -179,6 +179,7 @@ const sessionTitleInlineMax = 120
 const callbackIdLength = 24
 const callbackAckText = "Sending answer..."
 const promptCallbackAckText = "Running prompt..."
+const notifyCallbackAckText = "Updating notifications..."
 const inlineButtonMaxOptions = 20
 const inlineButtonTextMax = 48
 const callbackDataMax = 64
@@ -650,6 +651,10 @@ function promptCallbackData(promptId: string): string | undefined {
   return payload
 }
 
+function notifyCallbackData(mode: "on" | "off" | "status"): string {
+  return `n:${mode}`
+}
+
 function answeredQuestions(question: TelegramPendingQuestion): number {
   if (!question.answers.length) return 0
   return Math.min(question.questions.length, question.answers.length)
@@ -669,6 +674,7 @@ function activeQuestion(question: TelegramPendingQuestion): TelegramPendingQuest
 function parseCallbackData(input: string):
   | { kind: "question"; callbackId: string; questionIndex: number; optionIndex: number }
   | { kind: "prompt"; promptId: string }
+  | { kind: "notify"; mode: "on" | "off" | "status" }
   | undefined {
   const question = input.match(/^q:([a-z0-9]{6,24}):(\d+):(\d+)$/)
   if (question) {
@@ -685,10 +691,38 @@ function parseCallbackData(input: string):
   }
 
   const prompt = input.match(/^p:([A-Za-z0-9._:-]{1,62})$/)
-  if (!prompt) return
+  if (prompt) {
+    return {
+      kind: "prompt",
+      promptId: prompt[1] || "",
+    }
+  }
+
+  const notify = input.match(/^n:(on|off|status)$/)
+  if (!notify) return
   return {
-    kind: "prompt",
-    promptId: prompt[1] || "",
+    kind: "notify",
+    mode: (notify[1] as "on" | "off" | "status") || "status",
+  }
+}
+
+function notifyText(enabled: boolean, mode: "on" | "off" | "status"): string {
+  if (mode === "on") return "Notifications enabled for this chat."
+  if (mode === "off") return "Notifications disabled for this chat."
+  return enabled ? "Notifications are enabled." : "Notifications are disabled."
+}
+
+function notifyMarkup(enabled: boolean): { inline_keyboard: Array<Array<{ text: string; callback_data: string }>> } {
+  const on = enabled ? "On ✅" : "On"
+  const off = enabled ? "Off" : "Off ✅"
+  return {
+    inline_keyboard: [
+      [
+        { text: on, callback_data: notifyCallbackData("on") },
+        { text: off, callback_data: notifyCallbackData("off") },
+      ],
+      [{ text: "Status", callback_data: notifyCallbackData("status") }],
+    ],
   }
 }
 
@@ -2166,6 +2200,21 @@ export async function handleCallbackUpdate(runtime: Runtime, update: TelegramUpd
       return
     }
 
+    if (parsed.kind === "notify") {
+      const key = notificationKey(chatId)
+      await answerCallback(runtime.config, callbackId, notifyCallbackAckText)
+      state.acknowledged = true
+      if (parsed.mode === "on") {
+        await setNotificationEnabled(runtime, key, true)
+      }
+      if (parsed.mode === "off") {
+        await setNotificationEnabled(runtime, key, false)
+      }
+      const enabled = await notificationEnabled(runtime, key)
+      await sendTelegramMessageWithMarkup(runtime.config, chatId, notifyText(enabled, parsed.mode), notifyMarkup(enabled))
+      return
+    }
+
     if (parsed.kind === "prompt") {
       const key = telegramSessionKey(chatId, userId)
       await answerCallback(runtime.config, callbackId, promptCallbackAckText)
@@ -2376,17 +2425,19 @@ export async function handleTextUpdate(runtime: Runtime, update: TelegramUpdate)
       const notifyKey = notificationKey(chatId)
       if (mode === "on") {
         await setNotificationEnabled(runtime, notifyKey, true)
-        await sendTelegramMessage(config, chatId, "Notifications enabled for this chat.")
+        const enabled = await notificationEnabled(runtime, notifyKey)
+        await sendTelegramMessageWithMarkup(config, chatId, notifyText(enabled, "on"), notifyMarkup(enabled))
         return true
       }
       if (mode === "off") {
         await setNotificationEnabled(runtime, notifyKey, false)
-        await sendTelegramMessage(config, chatId, "Notifications disabled for this chat.")
+        const enabled = await notificationEnabled(runtime, notifyKey)
+        await sendTelegramMessageWithMarkup(config, chatId, notifyText(enabled, "off"), notifyMarkup(enabled))
         return true
       }
       if (mode === "status" || !mode) {
         const enabled = await notificationEnabled(runtime, notifyKey)
-        await sendTelegramMessage(config, chatId, enabled ? "Notifications are enabled." : "Notifications are disabled.")
+        await sendTelegramMessageWithMarkup(config, chatId, notifyText(enabled, "status"), notifyMarkup(enabled))
         return true
       }
       await sendTelegramMessage(config, chatId, "Usage: /notify on, /notify off, or /notify status")

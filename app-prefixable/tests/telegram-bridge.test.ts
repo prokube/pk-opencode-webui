@@ -3553,6 +3553,131 @@ describe("telegram bridge config and cache", () => {
     }
   });
 
+  test("/notify status includes inline toggle buttons", async () => {
+    const calls: Array<{ url: string; body: Record<string, unknown> }> = [];
+    const originalFetch = globalThis.fetch;
+    try {
+      globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        const body = init?.body ? (JSON.parse(String(init.body)) as Record<string, unknown>) : {};
+        calls.push({ url, body });
+        if (url.includes("/sendMessage")) {
+          return new Response(JSON.stringify({ ok: true, result: { message_id: 1 } }), { status: 200 });
+        }
+        throw new Error(`Unexpected fetch ${url}`);
+      };
+
+      const notify = new Map<string, boolean>();
+      const runtime = {
+        config: {
+          mode: "polling" as const,
+          token: "token",
+          openCodeUrl: "http://127.0.0.1:4096",
+          sessionCacheMax: 10,
+          sessionCacheTtlMs: 10_000,
+          notificationDebounceMs: 20_000,
+          port: 4097,
+          webhookPath: "/webhook",
+          sessionStorePath: "/tmp/test-store.json",
+        },
+        store: {
+          get: async () => undefined,
+          set: async () => undefined,
+          delete: async () => undefined,
+          notificationGet: async (key: string) => notify.get(key) === true,
+          notificationSet: async (key: string, enabled: boolean) => {
+            if (enabled) {
+              notify.set(key, true);
+              return;
+            }
+            notify.delete(key);
+          },
+        },
+      };
+
+      await handleTextUpdate(runtime, {
+        update_id: 8,
+        message: { message_id: 8, text: "/notify status", chat: { id: 81 }, from: { id: 5 } },
+      });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+
+    const sent = calls.find((x) => x.url.includes("/sendMessage"));
+    expect(String(sent?.body.text || "")).toBe("Notifications are disabled.");
+    const markup = sent?.body.reply_markup as { inline_keyboard?: Array<Array<{ callback_data?: string }>> } | undefined;
+    const top = markup?.inline_keyboard?.[0] || [];
+    expect(top.map((item) => item.callback_data)).toEqual(["n:on", "n:off"]);
+    expect(markup?.inline_keyboard?.[1]?.[0]?.callback_data).toBe("n:status");
+  });
+
+  test("notify callback toggles state and returns updated button state", async () => {
+    const calls: Array<{ url: string; body: Record<string, unknown> }> = [];
+    const originalFetch = globalThis.fetch;
+    try {
+      globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        const body = init?.body ? (JSON.parse(String(init.body)) as Record<string, unknown>) : {};
+        calls.push({ url, body });
+        if (url.includes("/answerCallbackQuery")) {
+          return new Response(JSON.stringify({ ok: true, result: true }), { status: 200 });
+        }
+        if (url.includes("/sendMessage")) {
+          return new Response(JSON.stringify({ ok: true, result: { message_id: 1 } }), { status: 200 });
+        }
+        throw new Error(`Unexpected fetch ${url}`);
+      };
+
+      const notify = new Map<string, boolean>();
+      const runtime = {
+        config: {
+          mode: "polling" as const,
+          token: "token",
+          openCodeUrl: "http://127.0.0.1:4096",
+          sessionCacheMax: 10,
+          sessionCacheTtlMs: 10_000,
+          notificationDebounceMs: 20_000,
+          port: 4097,
+          webhookPath: "/webhook",
+          sessionStorePath: "/tmp/test-store.json",
+        },
+        store: {
+          get: async () => undefined,
+          set: async () => undefined,
+          delete: async () => undefined,
+          notificationGet: async (key: string) => notify.get(key) === true,
+          notificationSet: async (key: string, enabled: boolean) => {
+            if (enabled) {
+              notify.set(key, true);
+              return;
+            }
+            notify.delete(key);
+          },
+        },
+      };
+
+      await handleCallbackUpdate(runtime, {
+        update_id: 82,
+        callback_query: {
+          id: "cb-notify-on",
+          data: "n:on",
+          from: { id: 5 },
+          message: { message_id: 7, chat: { id: 81 } },
+        },
+      });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+
+    expect(calls.some((x) => x.url.includes("/answerCallbackQuery") && String(x.body.text || "").includes("Updating notifications"))).toBe(true);
+    const sent = calls.find((x) => x.url.includes("/sendMessage"));
+    expect(String(sent?.body.text || "")).toBe("Notifications enabled for this chat.");
+    const markup = sent?.body.reply_markup as { inline_keyboard?: Array<Array<{ text?: string; callback_data?: string }>> } | undefined;
+    const top = markup?.inline_keyboard?.[0] || [];
+    expect(top.map((item) => item.callback_data)).toEqual(["n:on", "n:off"]);
+    expect((top[0]?.text || "").includes("✅")).toBe(true);
+  });
+
   test("/pending returns aggregated actionable items for the chat", async () => {
     const calls: Array<{ url: string; body: Record<string, unknown> }> = [];
     const originalFetch = globalThis.fetch;
