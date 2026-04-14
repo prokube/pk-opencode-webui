@@ -1253,17 +1253,19 @@ function cachedSessionLookup(sessionId: string): SessionLookup | undefined {
 }
 
 function formatSessionDisplay(sessionId: string, title?: string): string {
-  if (!title) return sessionId
-  return `${title} (${sessionId})`
+  const id = sessionId.trim()
+  if (!title) return id
+  return `${title} (${id})`
 }
 
 async function formatSessionList(config: BridgeConfig, list: string[], current?: string): Promise<string[]> {
+  const active = current?.trim()
   const details = await Promise.all(list.map(async (sessionId) => {
     const title = await safeSessionTitle(config, sessionId)
     return formatSessionDisplay(sessionId, title)
   }))
   return list.map((sessionId, index) => {
-    const suffix = current === sessionId ? " (current)" : ""
+    const suffix = active === sessionId.trim() ? " (current)" : ""
     return `${index + 1}. ${details[index]}${suffix}`
   })
 }

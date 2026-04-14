@@ -1122,6 +1122,62 @@ describe("telegram bridge config and cache", () => {
     expect(historyWrites).toBe(0);
   });
 
+  test("/sessions trims session ids in display and current marker matching", async () => {
+    const calls: Array<{ url: string; body: Record<string, unknown> }> = [];
+    const originalFetch = globalThis.fetch;
+    try {
+      globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        const body = init?.body ? (JSON.parse(String(init.body)) as Record<string, unknown>) : {};
+        calls.push({ url, body });
+        if (url.includes("/session/session-current")) {
+          return new Response(JSON.stringify({ id: "session-current", title: "Current thread" }), { status: 200 });
+        }
+        if (url.includes("/session/session-old")) {
+          return new Response(JSON.stringify({ id: "session-old", title: "Older thread" }), { status: 200 });
+        }
+        if (url.includes("/sendMessage")) {
+          return new Response(JSON.stringify({ ok: true, result: { message_id: 1 } }), { status: 200 });
+        }
+        throw new Error(`Unexpected fetch ${url}`);
+      };
+
+      const runtime = {
+        config: {
+          mode: "polling" as const,
+          token: "token",
+          openCodeUrl: "http://127.0.0.1:4096",
+          sessionCacheMax: 10,
+          sessionCacheTtlMs: 10_000,
+          notificationDebounceMs: 20_000,
+          port: 4097,
+          webhookPath: "/webhook",
+          sessionStorePath: "/tmp/test-store.json",
+        },
+        store: {
+          get: async () => "  session-current  ",
+          set: async () => undefined,
+          delete: async () => undefined,
+          historyGet: async () => ["  session-old  "],
+        },
+      };
+
+      await handleTextUpdate(runtime, {
+        update_id: 1,
+        message: { message_id: 1, text: "/sessions", chat: { id: 94 }, from: { id: 8 } },
+      });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+
+    const sent = calls
+      .filter((x) => x.url.includes("/sendMessage"))
+      .map((x) => String(x.body.text || ""));
+    expect(sent[0]).toContain("1. Current thread (session-current) (current)");
+    expect(sent[0]).toContain("2. Older thread (session-old)");
+    expect(sent[0]).not.toContain("session-current  ");
+  });
+
   test("/status avoids redundant history persistence when current session already first", async () => {
     const calls: Array<{ url: string; body: Record<string, unknown> }> = [];
     const originalFetch = globalThis.fetch;
