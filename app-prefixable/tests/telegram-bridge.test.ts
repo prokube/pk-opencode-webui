@@ -2530,7 +2530,7 @@ describe("telegram bridge config and cache", () => {
     const sentTexts = calls
       .filter((x) => x.url.includes("/sendMessage"))
       .map((x) => String(x.body.text || ""));
-    expect(sentTexts.some((text) => text.includes("1) Alpha"))).toBe(true);
+    expect(sentTexts.some((text) => text.includes("Choose an option using the buttons below."))).toBe(true);
     expect(sentTexts.some((text) => text.includes("Open session session-1"))).toBe(true);
     expect(sentTexts.some((text) => text.includes("Thanks, your answer was sent."))).toBe(true);
   });
@@ -2595,6 +2595,73 @@ describe("telegram bridge config and cache", () => {
     expect(first).toMatch(/^q:[a-z0-9]{6,24}:1:1$/);
     expect(second).toMatch(/^q:[a-z0-9]{6,24}:1:2$/);
     expect(first).not.toContain("Alpha");
+  });
+
+  test("inline-button prompts stay under Telegram message limits with long labels", async () => {
+    const calls: Array<{ url: string; body: Record<string, unknown> }> = [];
+    const originalFetch = globalThis.fetch;
+    const pending = new Map<string, unknown[]>();
+    const longLabel = "long-option-label-".repeat(320);
+    try {
+      globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        const body = init?.body ? (JSON.parse(String(init.body)) as Record<string, unknown>) : {};
+        calls.push({ url, body });
+        if (url.includes("/sendMessage")) {
+          const text = String(body.text || "");
+          if (text.length > 4096) {
+            return new Response(JSON.stringify({ ok: false, description: "Bad Request: message is too long" }), { status: 400 });
+          }
+          return new Response(JSON.stringify({ ok: true, result: { message_id: 1 } }), { status: 200 });
+        }
+        throw new Error(`Unexpected fetch ${url}`);
+      };
+
+      const runtime = {
+        config: {
+          mode: "polling" as const,
+          token: "token",
+          openCodeUrl: "http://127.0.0.1:4096",
+          sessionCacheMax: 10,
+          sessionCacheTtlMs: 10_000,
+          notificationDebounceMs: 0,
+          port: 4097,
+          webhookPath: "/webhook",
+          sessionStorePath: "/tmp/test-store.json",
+        },
+        store: {
+          get: async () => undefined,
+          set: async () => undefined,
+          delete: async () => undefined,
+          questionList: async (name: string) => (pending.get(name) || []) as unknown[],
+          questionUpsert: async (name: string, row: unknown) => {
+            pending.set(name, [row]);
+          },
+          questionDelete: async () => undefined,
+          sessionKeys: async () => ["chat:89:user:3"],
+          notificationGet: async () => true,
+        },
+      };
+
+      await handleBridgeEvent(runtime, {
+        type: "question.asked",
+        properties: {
+          id: "req-inline-long",
+          sessionID: "session-inline-long",
+          questions: [{ header: "Pick one", options: [{ label: `${longLabel}A` }, { label: `${longLabel}B` }], custom: false }],
+        },
+      });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+
+    const prompt = calls.find((x) => x.url.includes("/sendMessage") && x.body.reply_markup);
+    const promptText = String(prompt?.body.text || "");
+    expect(prompt).toBeDefined();
+    expect(promptText.length).toBeLessThanOrEqual(3900);
+    expect(promptText).toContain("Choose an option using the buttons below.");
+    expect(promptText).not.toContain(longLabel.slice(0, 40));
+    expect(calls.some((x) => String(x.body.text || "").includes("Open session session-inline-long"))).toBe(true);
   });
 
   test("question notifications fall back to text-only prompt when option list is too large", async () => {

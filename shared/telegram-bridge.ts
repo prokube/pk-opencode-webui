@@ -158,6 +158,7 @@ const callbackAckText = "Sending answer..."
 const inlineButtonMaxOptions = 20
 const inlineButtonTextMax = 48
 const callbackDataMax = 64
+const telegramMessageSoftLimit = 3900
 
 const telegramCommands = Object.freeze([
   Object.freeze({
@@ -665,7 +666,7 @@ function permissionText(properties: Record<string, unknown>): string {
   return `Permission request: ${permission} (${patterns.join(", ")})`
 }
 
-function questionPromptText(question: TelegramPendingQuestion): string {
+function questionPromptText(question: TelegramPendingQuestion, compactOptions = false): string {
   const lines = ["Question pending:"]
   for (let i = 0; i < question.questions.length; i++) {
     const row = question.questions[i]
@@ -680,8 +681,13 @@ function questionPromptText(question: TelegramPendingQuestion): string {
     }
     const detail = row.question && row.question !== row.header ? row.question : ""
     if (detail) lines.push(detail)
-    for (let index = 0; index < row.options.length; index++) {
-      lines.push(`${index + 1}) ${row.options[index]}`)
+    if (row.options.length && compactOptions) {
+      lines.push("Choose an option using the buttons below.")
+    }
+    if (!compactOptions) {
+      for (let index = 0; index < row.options.length; index++) {
+        lines.push(`${index + 1}) ${row.options[index]}`)
+      }
     }
     if (!row.options.length && row.custom) {
       lines.push("Reply with your answer as text.")
@@ -703,6 +709,13 @@ function questionPromptText(question: TelegramPendingQuestion): string {
   lines.push("")
   lines.push("Use /status to see your current session.")
   return lines.join("\n")
+}
+
+function truncateTelegramText(input: string, size: number): string {
+  if (input.length <= size) return input
+  const suffix = "\n\n..."
+  if (size <= suffix.length) return input.slice(0, size)
+  return `${input.slice(0, size - suffix.length)}${suffix}`
 }
 
 function questionAnswerGuidance(question: TelegramPendingQuestion): string {
@@ -1332,12 +1345,13 @@ export async function readTelegramBridgeHealth(runtime: Runtime): Promise<Bridge
 }
 
 async function sendTelegramQuestionPrompt(config: BridgeConfig, chatId: number, question: TelegramPendingQuestion) {
-  const text = questionPromptText(question)
   const markup = questionMarkup(question)
   if (!markup) {
-    await sendTelegramMessage(config, chatId, text)
+    await sendTelegramMessage(config, chatId, questionPromptText(question))
     return
   }
+  const compact = questionPromptText(question, true)
+  const text = truncateTelegramText(compact, telegramMessageSoftLimit)
   await telegramRequest(config, "sendMessage", {
     chat_id: chatId,
     text,
