@@ -35,6 +35,58 @@ type TelegramBridgeHealthResponse = {
   }
 }
 
+type TelegramHealthMessage = {
+  type: "config" | "runtime" | "dependency"
+  text: string
+}
+
+function bridgeHealthStatus(value: unknown): "healthy" | "degraded" {
+  if (value === "healthy") return "healthy"
+  return "degraded"
+}
+
+function bridgeProcess(raw: TelegramBridgeHealthResponse["process"] | undefined) {
+  return {
+    status: raw?.status === "down" ? "down" : "up",
+    pid: typeof raw?.pid === "number" ? raw.pid : undefined,
+    uptimeSec: typeof raw?.uptimeSec === "number" ? raw.uptimeSec : undefined,
+    mode: raw?.mode === "webhook" ? "webhook" : raw?.mode === "polling" ? "polling" : undefined,
+  }
+}
+
+function bridgeConfig(raw: TelegramBridgeHealthResponse["config"] | undefined, settings: Awaited<ReturnType<typeof readTelegramSettings>>["settings"]) {
+  return {
+    status: raw?.status === "ok" ? "ok" : "error",
+    mode: raw?.mode === "webhook" ? "webhook" : raw?.mode === "polling" ? "polling" : settings.mode,
+    tokenConfigured: typeof raw?.tokenConfigured === "boolean" ? raw.tokenConfigured : settings.tokenConfigured,
+    webhookSecretConfigured: typeof raw?.webhookSecretConfigured === "boolean" ? raw.webhookSecretConfigured : settings.webhookSecretConfigured,
+    openCodeUrl: typeof raw?.openCodeUrl === "string" ? raw.openCodeUrl : settings.openCodeUrl,
+    sessionStorePath: typeof raw?.sessionStorePath === "string" ? raw.sessionStorePath : settings.sessionStorePath,
+    directoryConfigured: typeof raw?.directoryConfigured === "boolean" ? raw.directoryConfigured : Boolean(settings.directory),
+  }
+}
+
+function bridgeDependency(raw: { status?: "ok" | "error" | "unknown"; message?: string } | undefined, missing: string) {
+  return {
+    status: raw?.status === "ok" || raw?.status === "error" || raw?.status === "unknown" ? raw.status : "unknown",
+    message: typeof raw?.message === "string" && raw.message.trim().length > 0 ? raw.message : missing,
+  }
+}
+
+function bridgeMessages(dependencies: {
+  telegramApi: { status: "ok" | "error" | "unknown"; message: string }
+  openCodeApi: { status: "ok" | "error" | "unknown"; message: string }
+}): TelegramHealthMessage[] {
+  const messages: TelegramHealthMessage[] = []
+  if (dependencies.telegramApi.status === "error") {
+    messages.push({ type: "dependency", text: dependencies.telegramApi.message || "Telegram API check failed" })
+  }
+  if (dependencies.openCodeApi.status === "error") {
+    messages.push({ type: "dependency", text: dependencies.openCodeApi.message || "OpenCode API check failed" })
+  }
+  return messages
+}
+
 /** Resolve the working directory from a query param, falling back to cwd */
 function resolveDir(url: URL): string {
   return url.searchParams.get("directory") || process.cwd()
@@ -337,33 +389,18 @@ export async function handleExtendedEndpoint(
     const bridge = await queryTelegramBridgeHealth(port)
 
     if (bridge) {
-      const status = bridge.status || "degraded"
-      const messages = [] as Array<{ type: "config" | "runtime" | "dependency"; text: string }>
-      if (bridge.dependencies?.telegramApi?.status === "error") {
-        messages.push({ type: "dependency", text: bridge.dependencies.telegramApi.message || "Telegram API check failed" })
-      }
-      if (bridge.dependencies?.openCodeApi?.status === "error") {
-        messages.push({ type: "dependency", text: bridge.dependencies.openCodeApi.message || "OpenCode API check failed" })
+      const dependencies = {
+        telegramApi: bridgeDependency(bridge.dependencies?.telegramApi, "Telegram API check unavailable"),
+        openCodeApi: bridgeDependency(bridge.dependencies?.openCodeApi, "OpenCode API check unavailable"),
       }
       return Response.json({
-        status,
-        checkedAt: bridge.checkedAt || new Date().toISOString(),
+        status: bridgeHealthStatus(bridge.status),
+        checkedAt: typeof bridge.checkedAt === "string" ? bridge.checkedAt : new Date().toISOString(),
         bridgeReachable: true,
-        process: bridge.process || { status: "up" },
-        config: bridge.config || {
-          status: "ok",
-          mode: settings.settings.mode,
-          tokenConfigured: settings.settings.tokenConfigured,
-          webhookSecretConfigured: settings.settings.webhookSecretConfigured,
-          openCodeUrl: settings.settings.openCodeUrl,
-          sessionStorePath: settings.settings.sessionStorePath,
-          directoryConfigured: Boolean(settings.settings.directory),
-        },
-        dependencies: bridge.dependencies || {
-          telegramApi: { status: "error", message: "Telegram API check unavailable" },
-          openCodeApi: { status: "error", message: "OpenCode API check unavailable" },
-        },
-        messages,
+        process: bridgeProcess(bridge.process),
+        config: bridgeConfig(bridge.config, settings.settings),
+        dependencies,
+        messages: bridgeMessages(dependencies),
       })
     }
 

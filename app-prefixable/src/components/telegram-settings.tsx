@@ -79,6 +79,7 @@ export function TelegramSettings(props: Props) {
   async function loadHealth() {
     setHealthLoading(true)
     setHealthError(null)
+    setHealth(null)
     const res = await fetch(`${props.serverUrl}/api/ext/telegram/health`).catch(() => null)
     if (!res?.ok) {
       setHealthLoading(false)
@@ -231,7 +232,7 @@ export function TelegramSettings(props: Props) {
         </div>
         <div class="p-4 space-y-3">
           <Show when={healthLoading()}>
-            <div class="flex items-center gap-2 text-sm" style={{ color: "var(--text-weak)" }}>
+            <div class="flex items-center gap-2 text-sm" role="status" aria-live="polite" style={{ color: "var(--text-weak)" }}>
               <Spinner class="w-4 h-4" /> Checking bridge health...
             </div>
           </Show>

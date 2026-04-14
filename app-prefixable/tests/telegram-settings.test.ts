@@ -719,6 +719,59 @@ describe("telegram settings extended API", () => {
     }
   })
 
+  test("GET telegram health strips unexpected bridge secret fields", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "telegram-settings-"))
+    cleanupPaths.push(dir)
+    process.env.TELEGRAM_SETTINGS_PATH = join(dir, "telegram-settings.json")
+
+    const fetchSpy = spyOn(globalThis, "fetch").mockImplementation(async () => {
+      return new Response(
+        JSON.stringify({
+          status: "healthy",
+          checkedAt: new Date().toISOString(),
+          process: { status: "up", pid: 123, uptimeSec: 10, mode: "polling", token: "secret" },
+          config: {
+            status: "ok",
+            tokenConfigured: true,
+            webhookSecretConfigured: true,
+            openCodeUrl: "http://127.0.0.1:4096",
+            sessionStorePath: "/tmp/store.json",
+            directoryConfigured: false,
+            mode: "polling",
+            token: "super-secret",
+            webhookSecret: "also-secret",
+          },
+          dependencies: {
+            telegramApi: { status: "ok", message: "Telegram API is reachable", detail: "sensitive" },
+            openCodeApi: { status: "ok", message: "OpenCode API is reachable" },
+          },
+          debugToken: "do-not-leak",
+        }),
+        { status: 200 },
+      )
+    })
+
+    try {
+      const response = await handleExtendedEndpoint(
+        "/api/ext/telegram/health",
+        "GET",
+        new URL("http://127.0.0.1/api/ext/telegram/health"),
+        new Request("http://127.0.0.1/api/ext/telegram/health"),
+      )
+
+      expect(response?.status).toBe(200)
+      const data = await response?.json()
+      expect(data.status).toBe("healthy")
+      expect(data.config.token).toBeUndefined()
+      expect(data.config.webhookSecret).toBeUndefined()
+      expect(data.debugToken).toBeUndefined()
+      expect(data.process.token).toBeUndefined()
+      expect(data.dependencies.telegramApi.detail).toBeUndefined()
+    } finally {
+      fetchSpy.mockRestore()
+    }
+  })
+
   test("GET telegram health reports config error when bridge is down", async () => {
     const dir = await mkdtemp(join(tmpdir(), "telegram-settings-"))
     cleanupPaths.push(dir)
