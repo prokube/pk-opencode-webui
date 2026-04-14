@@ -1891,6 +1891,7 @@ export function Layout(props: ParentProps) {
         text,
         agent: providers.selectedAgent || "build",
         model,
+        variant: providers.variant.current(undefined, model, providers.selectedAgent),
       });
       providers.setSessionModel(res.id, model);
       setSessions((prev) => {

@@ -130,6 +130,65 @@ describe("createSessionWithPrompt", () => {
     expect(deleted).toBe(0);
   });
 
+  test("forwards variant when provided", async () => {
+    let promptArgs: unknown;
+    const client = {
+      session: {
+        create: async () => ({ data: { id: "s-variant" } }),
+        promptAsync: async (args: unknown) => {
+          promptArgs = args;
+          return { data: {} };
+        },
+        delete: async () => ({ data: {} }),
+      },
+    } as unknown as OpencodeClient;
+
+    await createSessionWithPrompt({
+      client,
+      text: "hello",
+      agent: "build",
+      model: { providerID: "openai", modelID: "gpt-4.1" },
+      variant: "fast",
+    });
+
+    expect(promptArgs).toEqual({
+      sessionID: "s-variant",
+      parts: [{ type: "text", text: "hello" }],
+      agent: "build",
+      model: { providerID: "openai", modelID: "gpt-4.1" },
+      variant: "fast",
+    });
+  });
+
+  test("passes undefined variant when not provided", async () => {
+    let promptArgs: unknown;
+    const client = {
+      session: {
+        create: async () => ({ data: { id: "s-no-variant" } }),
+        promptAsync: async (args: unknown) => {
+          promptArgs = args;
+          return { data: {} };
+        },
+        delete: async () => ({ data: {} }),
+      },
+    } as unknown as OpencodeClient;
+
+    await createSessionWithPrompt({
+      client,
+      text: "hello",
+      agent: "build",
+      model: { providerID: "openai", modelID: "gpt-4.1" },
+    });
+
+    expect(promptArgs).toEqual({
+      sessionID: "s-no-variant",
+      parts: [{ type: "text", text: "hello" }],
+      agent: "build",
+      model: { providerID: "openai", modelID: "gpt-4.1" },
+      variant: undefined,
+    });
+  });
+
   test("logs cleanup failure when delete fails", async () => {
     const lines: unknown[][] = [];
     const warn = console.warn;
