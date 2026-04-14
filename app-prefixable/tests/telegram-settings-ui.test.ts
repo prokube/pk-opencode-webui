@@ -157,8 +157,8 @@ describe("telegram settings form helpers", () => {
         mode: "polling",
         tokenConfigured: false,
         webhookSecretConfigured: false,
-        openCodeUrl: "http://127.0.0.1:4096",
-        sessionStorePath: "/tmp/store.json",
+        openCodeUrlConfigured: true,
+        sessionStorePathConfigured: true,
         directoryConfigured: false,
       },
       dependencies: {

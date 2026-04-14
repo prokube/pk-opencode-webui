@@ -55,8 +55,8 @@ export type TelegramHealthResponse = {
     mode: TelegramMode
     tokenConfigured: boolean
     webhookSecretConfigured: boolean
-    openCodeUrl: string
-    sessionStorePath: string
+    openCodeUrlConfigured: boolean
+    sessionStorePathConfigured: boolean
     directoryConfigured: boolean
   }
   dependencies: {
