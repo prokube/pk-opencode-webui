@@ -295,6 +295,8 @@ describe("telegram bridge config and cache", () => {
     expect(calls[0]?.body.commands).toEqual([
       { command: "new", description: "Start a fresh OpenCode session" },
       { command: "status", description: "Show current session mapping" },
+      { command: "sessions", description: "List known sessions for this chat" },
+      { command: "switch", description: "Switch chat to an existing session" },
       { command: "notify", description: "Control proactive notifications" },
       { command: "pending", description: "Show pending inbox items" },
       { command: "inbox", description: "Alias for /pending" },
@@ -623,8 +625,211 @@ describe("telegram bridge config and cache", () => {
         .map((x) => String(x.body.text || ""));
       expect(sentTexts[0]).toBe("Current session: session-1");
       expect(sentTexts[1]).toBe("Started a new session: session-2");
-      expect(sentTexts[2]).toBe("Unknown command /statuz. Try /status or use /help.");
+      expect(sentTexts[2]).toBe("Unknown command /statuz. Try /status, /sessions or use /help.");
       expect(map.get("chat:7:user:9")).toBe("session-2");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test("/sessions lists known sessions and /switch supports index and explicit id", async () => {
+    const calls: Array<{ url: string; body: Record<string, unknown> }> = [];
+    const originalFetch = globalThis.fetch;
+    const createdSessions = ["session-1", "session-2"];
+    try {
+      globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        const body = init?.body ? (JSON.parse(String(init.body)) as Record<string, unknown>) : {};
+        calls.push({ url, body });
+        if (url === "http://127.0.0.1:4096/session") {
+          const id = createdSessions.shift();
+          return new Response(JSON.stringify({ id }), { status: 200 });
+        }
+        if (url.includes("/sendMessage")) {
+          return new Response(JSON.stringify({ ok: true, result: { message_id: 1 } }), { status: 200 });
+        }
+        throw new Error(`Unexpected fetch ${url}`);
+      };
+
+      const map = new Map<string, string>();
+      const runtime = {
+        config: {
+          mode: "polling" as const,
+          token: "token",
+          openCodeUrl: "http://127.0.0.1:4096",
+          sessionCacheMax: 10,
+          sessionCacheTtlMs: 10_000,
+          notificationDebounceMs: 20_000,
+          port: 4097,
+          webhookPath: "/webhook",
+          sessionStorePath: "/tmp/test-store.json",
+        },
+        store: {
+          get: async (key: string) => map.get(key),
+          set: async (key: string, value: string) => {
+            map.set(key, value);
+          },
+          delete: async (key: string) => {
+            map.delete(key);
+          },
+        },
+      };
+
+      await handleTextUpdate(runtime, {
+        update_id: 1,
+        message: { message_id: 1, text: "/status", chat: { id: 19 }, from: { id: 4 } },
+      });
+      await handleTextUpdate(runtime, {
+        update_id: 2,
+        message: { message_id: 2, text: "/new", chat: { id: 19 }, from: { id: 4 } },
+      });
+      await handleTextUpdate(runtime, {
+        update_id: 3,
+        message: { message_id: 3, text: "/sessions", chat: { id: 19 }, from: { id: 4 } },
+      });
+      await handleTextUpdate(runtime, {
+        update_id: 4,
+        message: { message_id: 4, text: "/switch 2", chat: { id: 19 }, from: { id: 4 } },
+      });
+      await handleTextUpdate(runtime, {
+        update_id: 5,
+        message: { message_id: 5, text: "/switch custom-session", chat: { id: 19 }, from: { id: 4 } },
+      });
+      await handleTextUpdate(runtime, {
+        update_id: 6,
+        message: { message_id: 6, text: "/status", chat: { id: 19 }, from: { id: 4 } },
+      });
+
+      const sent = calls
+        .filter((x) => x.url.includes("/sendMessage"))
+        .map((x) => String(x.body.text || ""));
+      expect(sent[2]).toContain("Known sessions for this chat:");
+      expect(sent[2]).toContain("1. session-2 (current)");
+      expect(sent[2]).toContain("2. session-1");
+      expect(sent[3]).toBe("Switched to session: session-1");
+      expect(sent[4]).toBe("Switched to session: custom-session");
+      expect(sent[5]).toBe("Current session: custom-session");
+      expect(map.get("chat:19:user:4")).toBe("custom-session");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test("/switch returns clear validation errors for missing and invalid index", async () => {
+    const calls: Array<{ url: string; body: Record<string, unknown> }> = [];
+    const originalFetch = globalThis.fetch;
+    try {
+      globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        const body = init?.body ? (JSON.parse(String(init.body)) as Record<string, unknown>) : {};
+        calls.push({ url, body });
+        if (url.includes("/sendMessage")) {
+          return new Response(JSON.stringify({ ok: true, result: { message_id: 1 } }), { status: 200 });
+        }
+        throw new Error(`Unexpected fetch ${url}`);
+      };
+
+      const runtime = {
+        config: {
+          mode: "polling" as const,
+          token: "token",
+          openCodeUrl: "http://127.0.0.1:4096",
+          sessionCacheMax: 10,
+          sessionCacheTtlMs: 10_000,
+          notificationDebounceMs: 20_000,
+          port: 4097,
+          webhookPath: "/webhook",
+          sessionStorePath: "/tmp/test-store.json",
+        },
+        store: {
+          get: async () => undefined,
+          set: async () => undefined,
+          delete: async () => undefined,
+        },
+      };
+
+      await handleTextUpdate(runtime, {
+        update_id: 1,
+        message: { message_id: 1, text: "/switch", chat: { id: 33 }, from: { id: 2 } },
+      });
+      await handleTextUpdate(runtime, {
+        update_id: 2,
+        message: { message_id: 2, text: "/switch 9", chat: { id: 33 }, from: { id: 2 } },
+      });
+
+      const sent = calls
+        .filter((x) => x.url.includes("/sendMessage"))
+        .map((x) => String(x.body.text || ""));
+      expect(sent[0]).toBe("Usage: /switch <session-id|index>");
+      expect(sent[1]).toBe("Invalid session index: 9. Available indices: none.");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test("queued switch commands are serialized and /status reflects latest mapping", async () => {
+    const calls: Array<{ url: string; body: Record<string, unknown> }> = [];
+    const originalFetch = globalThis.fetch;
+    try {
+      globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        const body = init?.body ? (JSON.parse(String(init.body)) as Record<string, unknown>) : {};
+        calls.push({ url, body });
+        if (url.includes("/sendMessage")) {
+          return new Response(JSON.stringify({ ok: true, result: { message_id: 1 } }), { status: 200 });
+        }
+        throw new Error(`Unexpected fetch ${url}`);
+      };
+
+      const map = new Map<string, string>([["chat:44:user:10", "session-a"]]);
+      const runtime = {
+        config: {
+          mode: "polling" as const,
+          token: "token",
+          openCodeUrl: "http://127.0.0.1:4096",
+          sessionCacheMax: 10,
+          sessionCacheTtlMs: 10_000,
+          notificationDebounceMs: 20_000,
+          port: 4097,
+          webhookPath: "/webhook",
+          sessionStorePath: "/tmp/test-store.json",
+        },
+        store: {
+          get: async (key: string) => map.get(key),
+          set: async (key: string, value: string) => {
+            map.set(key, value);
+          },
+          delete: async (key: string) => {
+            map.delete(key);
+          },
+        },
+      };
+
+      const updates = [
+        {
+          update_id: 1,
+          message: { message_id: 1, text: "/switch session-b", chat: { id: 44 }, from: { id: 10 } },
+        },
+        {
+          update_id: 2,
+          message: { message_id: 2, text: "/switch session-c", chat: { id: 44 }, from: { id: 10 } },
+        },
+        {
+          update_id: 3,
+          message: { message_id: 3, text: "/status", chat: { id: 44 }, from: { id: 10 } },
+        },
+      ];
+
+      await Promise.all(updates.map((update) => queueChatUpdate("44", () => handleTextUpdate(runtime, update))));
+
+      const sent = calls
+        .filter((x) => x.url.includes("/sendMessage"))
+        .map((x) => String(x.body.text || ""));
+      expect(sent).toEqual([
+        "Switched to session: session-b",
+        "Switched to session: session-c",
+        "Current session: session-c",
+      ]);
     } finally {
       globalThis.fetch = originalFetch;
     }
