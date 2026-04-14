@@ -622,6 +622,20 @@ export function Session() {
   createEffect(() => {
     const sid = sessionId();
     if (!sid) return;
+    if (!followupAutoSend()) return;
+    if (followupAutoPending()) return;
+    if (loading() || followupSending() || processing() || inputBlocked()) return;
+    const status = events.status[sid]?.type;
+    if (status !== "idle") return;
+    const next = followups()[0];
+    if (!next) return;
+    if (followupAutoPaused() === next.id) return;
+    queueAutoFollowupSend();
+  });
+
+  createEffect(() => {
+    const sid = sessionId();
+    if (!sid) return;
     if (!followupAutoPending()) return;
     if (!followupAutoSend()) {
       setFollowupAutoPending(false);
@@ -1572,8 +1586,16 @@ export function Session() {
 
     const files = fileContext();
     const images = imageAttachments();
-    if ((!text && files.length === 0 && images.length === 0) || loading() || inputBlocked() || !!followupSending())
+    if (!text && files.length === 0 && images.length === 0) return;
+    if (loading() || !!followupSending()) return;
+    if (inputBlocked()) {
+      setError(
+        pendingQuestion()
+          ? "Reply to the pending question above before sending another message."
+          : "Resolve the pending permission request above before sending another message.",
+      );
       return;
+    }
 
     if (processing() && text && files.length === 0 && images.length === 0) {
       if (!queueFollowup(text)) return;
