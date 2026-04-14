@@ -303,6 +303,8 @@ describe("telegram bridge config and cache", () => {
       { command: "notify", description: "Control proactive notifications" },
       { command: "pending", description: "Show pending inbox items" },
       { command: "inbox", description: "Alias for /pending" },
+      { command: "prompts", description: "List saved prompts available in this session" },
+      { command: "prompt", description: "Run a saved prompt by name or id" },
       { command: "help", description: "Show available commands" },
     ]);
   });
@@ -639,6 +641,235 @@ describe("telegram bridge config and cache", () => {
     } finally {
       globalThis.fetch = originalFetch;
     }
+  });
+
+  test("/prompts lists available saved prompts with scope hints", async () => {
+    const calls: Array<{ url: string; body: Record<string, unknown> }> = [];
+    const originalFetch = globalThis.fetch;
+    try {
+      globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        const body = init?.body ? (JSON.parse(String(init.body)) as Record<string, unknown>) : {};
+        calls.push({ url, body });
+        if (url.includes("/api/ext/saved-prompts")) {
+          return new Response(
+            JSON.stringify({
+              global: [{ id: "g-1", title: "Quick summary", text: "Summarize", createdAt: 10 }],
+              project: [{ id: "p-1", title: "Deploy release", text: "Deploy", createdAt: 20 }],
+            }),
+            { status: 200 },
+          );
+        }
+        if (url.includes("/sendMessage")) {
+          return new Response(JSON.stringify({ ok: true, result: { message_id: 1 } }), { status: 200 });
+        }
+        throw new Error(`Unexpected fetch ${url}`);
+      };
+
+      const runtime = {
+        config: {
+          mode: "polling" as const,
+          token: "token",
+          openCodeUrl: "http://127.0.0.1:4096",
+          sessionCacheMax: 10,
+          sessionCacheTtlMs: 10_000,
+          notificationDebounceMs: 20_000,
+          port: 4097,
+          webhookPath: "/webhook",
+          sessionStorePath: "/tmp/test-store.json",
+        },
+        store: {
+          get: async () => undefined,
+          set: async () => undefined,
+          delete: async () => undefined,
+        },
+      };
+
+      await handleTextUpdate(runtime, {
+        update_id: 1,
+        message: { message_id: 1, text: "/prompts", chat: { id: 77 }, from: { id: 5 } },
+      });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+
+    const text = String(calls.find((x) => x.url.includes("/sendMessage"))?.body.text || "");
+    expect(text).toContain("Saved prompts:");
+    expect(text).toContain("Deploy release [project] (p-1)");
+    expect(text).toContain("Quick summary [global] (g-1)");
+    expect(text).toContain("Use /prompt <name|id> to run one.");
+  });
+
+  test("/prompt runs a saved prompt and returns assistant response", async () => {
+    const calls: Array<{ url: string; body: Record<string, unknown> }> = [];
+    const originalFetch = globalThis.fetch;
+    try {
+      globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        const body = init?.body ? (JSON.parse(String(init.body)) as Record<string, unknown>) : {};
+        calls.push({ url, body });
+        if (url.includes("/api/ext/saved-prompts")) {
+          return new Response(
+            JSON.stringify({
+              global: [{ id: "g-1", title: "Deploy release", text: "Please deploy the release.", createdAt: 10 }],
+              project: [],
+            }),
+            { status: 200 },
+          );
+        }
+        if (url.includes("/session/session-current/message")) {
+          return new Response(JSON.stringify({ parts: [{ type: "text", text: "Deployment complete." }] }), { status: 200 });
+        }
+        if (url.includes("/sendMessage")) {
+          return new Response(JSON.stringify({ ok: true, result: { message_id: 1 } }), { status: 200 });
+        }
+        throw new Error(`Unexpected fetch ${url}`);
+      };
+
+      const runtime = {
+        config: {
+          mode: "polling" as const,
+          token: "token",
+          openCodeUrl: "http://127.0.0.1:4096",
+          sessionCacheMax: 10,
+          sessionCacheTtlMs: 10_000,
+          notificationDebounceMs: 20_000,
+          port: 4097,
+          webhookPath: "/webhook",
+          sessionStorePath: "/tmp/test-store.json",
+        },
+        store: {
+          get: async () => "session-current",
+          set: async () => undefined,
+          delete: async () => undefined,
+        },
+      };
+
+      await handleTextUpdate(runtime, {
+        update_id: 1,
+        message: { message_id: 1, text: "/prompt Deploy release", chat: { id: 77 }, from: { id: 5 } },
+      });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+
+    const runCall = calls.find((x) => x.url.includes("/session/session-current/message"));
+    expect(runCall?.body.parts).toEqual([{ type: "text", text: "Please deploy the release." }]);
+    const sent = String(calls.filter((x) => x.url.includes("/sendMessage")).at(-1)?.body.text || "");
+    expect(sent).toBe("Deployment complete.");
+  });
+
+  test("/prompt returns actionable guidance for unknown names", async () => {
+    const calls: Array<{ url: string; body: Record<string, unknown> }> = [];
+    const originalFetch = globalThis.fetch;
+    try {
+      globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        const body = init?.body ? (JSON.parse(String(init.body)) as Record<string, unknown>) : {};
+        calls.push({ url, body });
+        if (url.includes("/api/ext/saved-prompts")) {
+          return new Response(
+            JSON.stringify({
+              global: [{ id: "g-1", title: "Deploy release", text: "Deploy", createdAt: 10 }],
+              project: [],
+            }),
+            { status: 200 },
+          );
+        }
+        if (url.includes("/sendMessage")) {
+          return new Response(JSON.stringify({ ok: true, result: { message_id: 1 } }), { status: 200 });
+        }
+        throw new Error(`Unexpected fetch ${url}`);
+      };
+
+      const runtime = {
+        config: {
+          mode: "polling" as const,
+          token: "token",
+          openCodeUrl: "http://127.0.0.1:4096",
+          sessionCacheMax: 10,
+          sessionCacheTtlMs: 10_000,
+          notificationDebounceMs: 20_000,
+          port: 4097,
+          webhookPath: "/webhook",
+          sessionStorePath: "/tmp/test-store.json",
+        },
+        store: {
+          get: async () => "session-current",
+          set: async () => undefined,
+          delete: async () => undefined,
+        },
+      };
+
+      await handleTextUpdate(runtime, {
+        update_id: 1,
+        message: { message_id: 1, text: "/prompt missing", chat: { id: 77 }, from: { id: 5 } },
+      });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+
+    const sent = String(calls.filter((x) => x.url.includes("/sendMessage")).at(-1)?.body.text || "");
+    expect(sent).toBe("Saved prompt not found: missing. Use /prompts to list available options.");
+  });
+
+  test("/prompt returns disambiguation when multiple names match", async () => {
+    const calls: Array<{ url: string; body: Record<string, unknown> }> = [];
+    const originalFetch = globalThis.fetch;
+    try {
+      globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        const body = init?.body ? (JSON.parse(String(init.body)) as Record<string, unknown>) : {};
+        calls.push({ url, body });
+        if (url.includes("/api/ext/saved-prompts")) {
+          return new Response(
+            JSON.stringify({
+              global: [
+                { id: "g-1", title: "Deploy release", text: "Deploy prod", createdAt: 10 },
+                { id: "g-2", title: "Deploy release staging", text: "Deploy stage", createdAt: 9 },
+              ],
+              project: [],
+            }),
+            { status: 200 },
+          );
+        }
+        if (url.includes("/sendMessage")) {
+          return new Response(JSON.stringify({ ok: true, result: { message_id: 1 } }), { status: 200 });
+        }
+        throw new Error(`Unexpected fetch ${url}`);
+      };
+
+      const runtime = {
+        config: {
+          mode: "polling" as const,
+          token: "token",
+          openCodeUrl: "http://127.0.0.1:4096",
+          sessionCacheMax: 10,
+          sessionCacheTtlMs: 10_000,
+          notificationDebounceMs: 20_000,
+          port: 4097,
+          webhookPath: "/webhook",
+          sessionStorePath: "/tmp/test-store.json",
+        },
+        store: {
+          get: async () => "session-current",
+          set: async () => undefined,
+          delete: async () => undefined,
+        },
+      };
+
+      await handleTextUpdate(runtime, {
+        update_id: 1,
+        message: { message_id: 1, text: "/prompt deploy", chat: { id: 77 }, from: { id: 5 } },
+      });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+
+    const sent = String(calls.filter((x) => x.url.includes("/sendMessage")).at(-1)?.body.text || "");
+    expect(sent).toContain("Multiple prompts match \"deploy\":");
+    expect(sent).toContain("Deploy release [global] (g-1)");
+    expect(sent).toContain("Use /prompt <id> to pick one.");
   });
 
   test("/sessions lists known sessions and /switch supports index and explicit id", async () => {

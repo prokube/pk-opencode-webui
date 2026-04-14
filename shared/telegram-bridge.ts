@@ -126,6 +126,14 @@ type TelegramCommand = {
   args?: string
 }
 
+type SavedPrompt = {
+  id: string
+  title: string
+  text: string
+  createdAt: number
+  scope: "global" | "project"
+}
+
 type TelegramPendingItem = {
   id: string
   kind: "question" | "permission" | "task-finished"
@@ -190,6 +198,15 @@ const telegramCommands = Object.freeze([
   Object.freeze({
     name: "inbox",
     text: "Alias for /pending",
+  }),
+  Object.freeze({
+    name: "prompts",
+    text: "List saved prompts available in this session",
+  }),
+  Object.freeze({
+    name: "prompt",
+    text: "Run a saved prompt by name or id",
+    args: "<name|id>",
   }),
   Object.freeze({
     name: "help",
@@ -1290,6 +1307,121 @@ async function sendPrompt(config: BridgeConfig, sessionId: string, text: string)
   return extractReply(data)
 }
 
+function parseSavedPrompt(value: unknown, fallbackScope: "global" | "project"): SavedPrompt | undefined {
+  if (!value || typeof value !== "object") return
+  const row = value as Record<string, unknown>
+  const id = typeof row.id === "string" ? row.id.trim() : ""
+  const title = typeof row.title === "string"
+    ? row.title.trim()
+    : typeof row.name === "string"
+      ? row.name.trim()
+      : ""
+  const text = typeof row.text === "string"
+    ? row.text
+    : typeof row.prompt === "string"
+      ? row.prompt
+      : typeof row.content === "string"
+        ? row.content
+        : ""
+  if (!id || !title || !text) return
+  const rawCreated = row.createdAt
+  const createdAt = typeof rawCreated === "number" && Number.isFinite(rawCreated)
+    ? rawCreated
+    : typeof rawCreated === "string" && Number.isFinite(Number(rawCreated))
+      ? Number(rawCreated)
+      : Date.now()
+  const scope = row.scope === "project" || row.scope === "global" ? row.scope : fallbackScope
+  return { id, title, text, createdAt, scope }
+}
+
+function parseSavedPromptList(raw: unknown, scope: "global" | "project"): SavedPrompt[] {
+  if (!Array.isArray(raw)) return []
+  return raw
+    .map((item) => parseSavedPrompt(item, scope))
+    .filter((item) => item !== undefined) as SavedPrompt[]
+}
+
+function mergeSavedPrompts(globalPrompts: SavedPrompt[], projectPrompts: SavedPrompt[]): SavedPrompt[] {
+  const projectIds = new Set(projectPrompts.map((item) => item.id))
+  const dedupedGlobal = globalPrompts.filter((item) => !projectIds.has(item.id))
+  return [...dedupedGlobal, ...projectPrompts]
+    .sort((a, b) => b.createdAt - a.createdAt)
+}
+
+async function savedPrompts(config: BridgeConfig): Promise<SavedPrompt[]> {
+  const url = opencodeUrl(config, "/api/ext/saved-prompts")
+  if (config.directory) {
+    url.searchParams.set("directory", config.directory)
+  }
+  const res = await fetch(url, {
+    method: "GET",
+    signal: AbortSignal.timeout(15_000),
+  })
+  if (!res.ok) {
+    const body = await res.text().catch(() => "")
+    throw new Error(`OpenCode saved prompts failed (${res.status}): ${body.slice(0, 300)}`)
+  }
+  const data = await res.json().catch(() => ({})) as { global?: unknown; project?: unknown }
+  const global = parseSavedPromptList(data.global, "global")
+  const project = parseSavedPromptList(data.project, "project")
+  return mergeSavedPrompts(global, project)
+}
+
+function promptScope(scope: SavedPrompt["scope"]): string {
+  if (scope === "project") return "project"
+  return "global"
+}
+
+function promptChoice(prompt: SavedPrompt, index: number): string {
+  return `${index + 1}. ${prompt.title} [${promptScope(prompt.scope)}] (${prompt.id})`
+}
+
+function promptsListText(prompts: SavedPrompt[]): string {
+  if (!prompts.length) {
+    return "No saved prompts found for this scope. Create one in the web UI, then run /prompts again."
+  }
+  const shown = prompts.slice(0, 25)
+  const lines = shown.map(promptChoice)
+  const extra = prompts.length - shown.length
+  const suffix = extra > 0 ? `\n+${extra} more prompt(s). Refine with /prompt <name|id>.` : ""
+  return `Saved prompts:\n${lines.join("\n")}\n\nUse /prompt <name|id> to run one.${suffix}`
+}
+
+function lookupSavedPrompt(input: string, prompts: SavedPrompt[]): { prompt?: SavedPrompt; error?: string } {
+  const value = input.trim()
+  if (!value) {
+    return { error: "Usage: /prompt <name|id>" }
+  }
+  const byId = prompts.find((item) => item.id === value)
+  if (byId) {
+    return { prompt: byId }
+  }
+  const lowered = value.toLowerCase()
+  const exact = prompts.filter((item) => item.title.trim().toLowerCase() === lowered)
+  if (exact.length === 1) {
+    return { prompt: exact[0] }
+  }
+  if (exact.length > 1) {
+    const options = exact.slice(0, 8).map((item, index) => promptChoice(item, index))
+    return {
+      error: `Multiple prompts match \"${value}\":\n${options.join("\n")}\nUse /prompt <id> to pick one.`,
+    }
+  }
+  const partial = prompts.filter((item) => item.title.toLowerCase().includes(lowered))
+  if (partial.length === 1) {
+    return { prompt: partial[0] }
+  }
+  if (partial.length > 1) {
+    const options = partial.slice(0, 8).map((item, index) => promptChoice(item, index))
+    return {
+      error: `Multiple prompts match \"${value}\":\n${options.join("\n")}\nUse /prompt <id> to pick one.`,
+    }
+  }
+  return {
+    error: `Saved prompt not found: ${value}. Use /prompts to list available options.`,
+  }
+}
+
 function isMissingQuestion(error: unknown): boolean {
   if (!(error instanceof Error)) return false
   if (error.message.startsWith("OpenCode question reply failed (404):")) return true
@@ -1648,6 +1780,42 @@ export async function handleTextUpdate(runtime: Runtime, update: TelegramUpdate)
     if (known?.name === "pending" || known?.name === "inbox") {
       const items = await pendingGet(runtime, pendingChatKey(chatId))
       await sendTelegramMessage(config, chatId, pendingMessage(items))
+      return true
+    }
+    if (known?.name === "prompts") {
+      const prompts = await savedPrompts(config)
+      await sendTelegramMessage(config, chatId, promptsListText(prompts))
+      return true
+    }
+    if (known?.name === "prompt") {
+      const target = command.args.join(" ").trim()
+      if (!target) {
+        await sendTelegramMessage(config, chatId, "Usage: /prompt <name|id>")
+        return true
+      }
+      const prompts = await savedPrompts(config)
+      const resolved = lookupSavedPrompt(target, prompts)
+      if (resolved.error) {
+        await sendTelegramMessage(config, chatId, resolved.error)
+        return true
+      }
+      const selected = resolved.prompt
+      if (!selected) {
+        await sendTelegramMessage(config, chatId, "Usage: /prompt <name|id>")
+        return true
+      }
+      const sessionId = await sessionForChat(runtime, key)
+      await resolvePendingForSession(runtime, chatId, sessionId)
+      const reply = await sendPrompt(config, sessionId, selected.text).catch(async (error) => {
+        if (!isMissingSession(error)) {
+          throw error
+        }
+        sessions.delete(key)
+        await runtime.store.delete(key)
+        const next = await sessionForChat(runtime, key)
+        return sendPrompt(config, next, selected.text)
+      })
+      await sendTelegramMessage(config, chatId, reply)
       return true
     }
     const suggestions = commandSuggestions(command.name)
