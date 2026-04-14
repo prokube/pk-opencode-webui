@@ -226,26 +226,94 @@ describe("telegram session store", () => {
     expect(keys?.sort()).toEqual([telegramSessionKey(400, 1), telegramSessionKey(401, 2)])
   })
 
-  test("persists pending inbox entries across store instances", async () => {
+  test("persists pending question queue across store instances", async () => {
     const dir = await mkdtemp(join(tmpdir(), "telegram-session-store-"))
     const path = join(dir, "sessions.json")
-    const key = telegramSessionKey(505)
     files.push(path)
     files.push(dir)
 
-    const entry = {
-      id: "pending-1",
-      kind: "question" as const,
-      sessionId: "session-505",
-      text: "Question pending: Confirm deployment window",
-      stampedAt: Date.now(),
-      resolved: false,
-    }
-
     const first = createTelegramSessionStore(path)
-    await first.pendingSet?.(key, [entry])
+    await first.questionUpsert?.("chat:77", {
+      requestId: "req-1",
+      sessionId: "session-a",
+      createdAt: 1,
+      expiresAt: Date.now() + 30_000,
+      questions: [
+        {
+          header: "Pick",
+          question: "Pick",
+          options: ["Alpha", "Beta"],
+          multiple: false,
+          custom: true,
+        },
+      ],
+    })
 
     const second = createTelegramSessionStore(path)
-    expect(await second.pendingGet?.(key)).toEqual([entry])
+    const pending = await second.questionList?.("chat:77")
+    expect(pending?.[0]?.requestId).toBe("req-1")
+    expect(pending?.[0]?.questions[0]?.options).toEqual(["Alpha", "Beta"])
+
+    await second.questionDelete?.("chat:77", "req-1")
+    const third = createTelegramSessionStore(path)
+    expect(await third.questionList?.("chat:77")).toEqual([])
+  })
+
+  test("ignores blank pending question entries while loading store", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "telegram-session-store-"))
+    const path = join(dir, "sessions.json")
+    files.push(path)
+    files.push(dir)
+
+    await Bun.write(
+      path,
+      `${JSON.stringify({
+        version: 2,
+        sessions: {},
+        notifications: {},
+        pending: {
+          "chat:77:user:5": [{
+            requestId: "req-blank",
+            sessionId: "session-a",
+            createdAt: 1,
+            expiresAt: Date.now() + 30_000,
+            questions: [{ header: "   ", question: "", options: ["", "   "], multiple: false, custom: true }],
+          }],
+        },
+      }, null, 2)}\n`,
+    )
+
+    const store = createTelegramSessionStore(path)
+    expect(await store.questionList?.("chat:77:user:5")).toEqual([])
+  })
+
+  test("questionList returns defensive copy of pending queue", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "telegram-session-store-"))
+    const path = join(dir, "sessions.json")
+    files.push(path)
+    files.push(dir)
+
+    const store = createTelegramSessionStore(path)
+    await store.questionUpsert?.("chat:90:user:1", {
+      requestId: "req-copy",
+      sessionId: "session-copy",
+      createdAt: 1,
+      expiresAt: Date.now() + 30_000,
+      questions: [
+        {
+          header: "Pick",
+          question: "Pick",
+          options: ["A"],
+          multiple: false,
+          custom: true,
+        },
+      ],
+    })
+
+    const first = await store.questionList?.("chat:90:user:1")
+    first?.pop()
+
+    const second = await store.questionList?.("chat:90:user:1")
+    expect(second?.map((row) => row.requestId)).toEqual(["req-copy"])
   })
 })

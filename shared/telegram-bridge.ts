@@ -1,4 +1,4 @@
-import { createTelegramSessionStore, telegramSessionKey, type TelegramPendingItem } from "./telegram-session-store"
+import { createTelegramSessionStore, telegramSessionKey, type TelegramPendingQuestion } from "./telegram-session-store"
 import { loadTelegramBridgeSettings } from "./telegram-settings"
 
 type TelegramUpdate = {
@@ -53,11 +53,9 @@ const chatQueues = new Map<string, Promise<void>>()
 const eventNotifications = new Map<string, number>()
 const statusBySession = new Map<string, string>()
 const fallbackNotifications = new Map<string, boolean>()
-const fallbackPending = new Map<string, TelegramPendingItem[]>()
-const pendingRetentionMs = 3 * 24 * 60 * 60 * 1000
-const pendingMaxItems = 60
-const pendingDigestMax = 8
-let pendingEntrySeq = 0
+const pendingQuestions = new Map<string, TelegramPendingQuestion[]>()
+
+const pendingQuestionTtlMs = 30 * 60 * 1000
 
 const telegramCommands = Object.freeze([
   Object.freeze({
@@ -129,6 +127,8 @@ function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms))
 }
 
+let retryDelay = sleep
+
 export function parseMode(value: string): "polling" | "webhook" {
   const mode = value.trim().toLowerCase()
   if (mode === "polling") return "polling"
@@ -175,13 +175,18 @@ function helpText(): string {
   ].join("\n")
 }
 
-function parseTelegramKey(key: string): { chatId: number } | undefined {
+function parseTelegramKey(key: string): { chatId: number; userId?: number } | undefined {
   const parts = key.split(":")
   if (parts.length < 2) return
   if (parts[0] !== "chat") return
   const chatId = Number.parseInt(parts[1] || "", 10)
   if (!Number.isFinite(chatId)) return
-  return { chatId }
+  if (parts.length === 2) return { chatId }
+  if (parts.length !== 4) return
+  if (parts[2] !== "user") return
+  const userId = Number.parseInt(parts[3] || "", 10)
+  if (!Number.isFinite(userId)) return
+  return { chatId, userId }
 }
 
 async function notificationEnabled(runtime: Runtime, key: string): Promise<boolean> {
@@ -349,6 +354,113 @@ function questionText(properties: Record<string, unknown>): string {
   return "The assistant is waiting for your answer."
 }
 
+function pendingKey(chatId: number, userId?: number): string {
+  return telegramSessionKey(chatId, userId)
+}
+
+function trimQuestionList(list: TelegramPendingQuestion[]): TelegramPendingQuestion[] {
+  const now = Date.now()
+  return list
+    .filter((item) => item.expiresAt > now)
+    .sort((a, b) => a.createdAt - b.createdAt)
+    .slice(-10)
+}
+
+async function readPendingQuestions(runtime: Runtime, chatId: number, userId?: number): Promise<TelegramPendingQuestion[]> {
+  const key = pendingKey(chatId, userId)
+  const stored = runtime.store.questionList
+    ? await runtime.store.questionList(key)
+    : pendingQuestions.get(key) || []
+  const next = trimQuestionList(stored)
+  if (next.length === stored.length) return next
+  if (runtime.store.questionUpsert && runtime.store.questionDelete) {
+    for (const item of stored) {
+      if (next.find((nextItem) => nextItem.requestId === item.requestId)) continue
+      await runtime.store.questionDelete(key, item.requestId)
+    }
+    return next
+  }
+  if (next.length) {
+    pendingQuestions.set(key, next)
+    return next
+  }
+  pendingQuestions.delete(key)
+  return []
+}
+
+async function upsertPendingQuestion(runtime: Runtime, key: string, question: TelegramPendingQuestion) {
+  if (runtime.store.questionUpsert) {
+    await runtime.store.questionUpsert(key, question)
+    return
+  }
+  const current = pendingQuestions.get(key) || []
+  const next = [...current.filter((item) => item.requestId !== question.requestId), question]
+  const clean = trimQuestionList(next)
+  if (clean.length) {
+    pendingQuestions.set(key, clean)
+    return
+  }
+  pendingQuestions.delete(key)
+}
+
+async function deletePendingQuestion(runtime: Runtime, chatId: number, requestId: string, userId?: number) {
+  const key = pendingKey(chatId, userId)
+  if (runtime.store.questionDelete) {
+    await runtime.store.questionDelete(key, requestId)
+    return
+  }
+  const current = pendingQuestions.get(key) || []
+  const next = current.filter((item) => item.requestId !== requestId)
+  if (next.length) {
+    pendingQuestions.set(key, next)
+    return
+  }
+  pendingQuestions.delete(key)
+}
+
+function parsePendingQuestion(properties: Record<string, unknown>): TelegramPendingQuestion | undefined {
+  const requestId = typeof properties.id === "string" ? properties.id.trim() : ""
+  const sessionId = typeof properties.sessionID === "string" ? properties.sessionID.trim() : ""
+  const rows = Array.isArray(properties.questions) ? properties.questions : []
+  const questions = rows
+    .map((row) => {
+      if (!row || typeof row !== "object") return
+      const value = row as Record<string, unknown>
+      const header = typeof value.header === "string" ? value.header.trim() : ""
+      const question = typeof value.question === "string" ? value.question.trim() : ""
+      const options = Array.isArray(value.options)
+        ? value.options
+          .map((item) => {
+            if (!item || typeof item !== "object") return ""
+            const option = item as { label?: unknown }
+            return typeof option.label === "string" ? option.label.trim() : ""
+          })
+          .filter(Boolean)
+        : []
+      const multiple = value.multiple === true
+      const custom = value.custom !== false
+      if (!header && !question && !options.length) return
+      return {
+        header,
+        question,
+        options,
+        multiple,
+        custom,
+      }
+    })
+    .filter((item) => item !== undefined)
+  const parsed = questions as TelegramPendingQuestion["questions"]
+  if (!requestId || !sessionId || !parsed.length) return
+  const now = Date.now()
+  return {
+    requestId,
+    sessionId,
+    createdAt: now,
+    expiresAt: now + pendingQuestionTtlMs,
+    questions: parsed,
+  }
+}
+
 function permissionText(properties: Record<string, unknown>): string {
   const permission = typeof properties.permission === "string" ? properties.permission : "permission"
   const patterns = Array.isArray(properties.patterns)
@@ -356,6 +468,136 @@ function permissionText(properties: Record<string, unknown>): string {
     : []
   if (!patterns.length) return `Permission request: ${permission}`
   return `Permission request: ${permission} (${patterns.join(", ")})`
+}
+
+function questionPromptText(question: TelegramPendingQuestion): string {
+  const lines = ["Question pending:"]
+  for (let i = 0; i < question.questions.length; i++) {
+    const row = question.questions[i]
+    if (!row) continue
+    const title = row.header || row.question || `Question ${i + 1}`
+    if (question.questions.length > 1) {
+      lines.push("")
+      lines.push(`${i + 1}. ${title}`)
+    }
+    if (question.questions.length === 1) {
+      lines.push(title)
+    }
+    const detail = row.question && row.question !== row.header ? row.question : ""
+    if (detail) lines.push(detail)
+    for (let index = 0; index < row.options.length; index++) {
+      lines.push(`${index + 1}) ${row.options[index]}`)
+    }
+    if (!row.options.length && row.custom) {
+      lines.push("Reply with your answer as text.")
+    }
+    if (row.options.length && row.multiple) {
+      lines.push("You can pick multiple options: reply like 1,3")
+    }
+    if (row.options.length && !row.multiple) {
+      lines.push("Reply with an option number or label.")
+    }
+    if (row.options.length && row.custom) {
+      lines.push("You can also reply with custom text.")
+    }
+  }
+  if (question.questions.length > 1) {
+    lines.push("")
+    lines.push("Reply format: 1:<answer>; 2:<answer>")
+  }
+  lines.push("")
+  lines.push("Use /status to see your current session.")
+  return lines.join("\n")
+}
+
+function questionAnswerGuidance(question: TelegramPendingQuestion): string {
+  if (question.questions.length === 1) {
+    const first = question.questions[0]
+    if (!first) return "No pending question was found."
+    if (first.options.length) {
+      return `Please reply with an option number between 1 and ${first.options.length}, or send /help for commands.`
+    }
+    return "Please reply with text for the pending question, or send /help for commands."
+  }
+  return "Please reply using question-number format: 1:<answer>; 2:<answer>."
+}
+
+function parseNumericChoices(input: string): number[] | undefined {
+  const parts = input
+    .split(/[,\s]+/)
+    .map((part) => part.trim())
+    .filter(Boolean)
+  if (!parts.length) return
+  const values = parts.map((part) => {
+    if (!/^\d+$/.test(part)) return Number.NaN
+    const value = Number.parseInt(part, 10)
+    if (value < 1) return Number.NaN
+    return value
+  })
+  if (values.some((value) => !Number.isFinite(value))) return
+  return [...new Set(values)]
+}
+
+function matchLabel(options: string[], input: string): string | undefined {
+  const exact = options.find((option) => option === input)
+  if (exact) return exact
+  const lowered = input.toLowerCase()
+  return options.find((option) => option.toLowerCase() === lowered)
+}
+
+function answerFromInput(row: TelegramPendingQuestion["questions"][number], input: string): string[] | undefined {
+  const text = input.trim()
+  if (!text) return
+  const numbers = parseNumericChoices(text)
+  if (numbers && row.options.length) {
+    if (!row.multiple && numbers.length > 1) return
+    const labels = numbers
+      .map((value) => row.options[value - 1])
+      .filter((value) => typeof value === "string" && value)
+    if (!labels.length || labels.length !== numbers.length) return
+    return labels
+  }
+  const matched = row.options.length ? matchLabel(row.options, text) : undefined
+  if (matched) return [matched]
+  if (row.custom) return [text]
+  return
+}
+
+function parseQuestionAnswers(question: TelegramPendingQuestion, text: string): string[][] | undefined {
+  if (question.questions.length === 1) {
+    const row = question.questions[0]
+    if (!row) return
+    const answer = answerFromInput(row, text)
+    if (!answer) return
+    return [answer]
+  }
+
+  const map = new Map<number, string>()
+  const chunks = text
+    .split(/[\n;]+/)
+    .map((part) => part.trim())
+    .filter(Boolean)
+  for (const chunk of chunks) {
+    const match = chunk.match(/^(\d+)\s*:\s*(.+)$/)
+    if (!match) continue
+    const index = Number.parseInt(match[1] || "", 10)
+    const value = match[2]?.trim() || ""
+    if (!Number.isFinite(index) || !value) continue
+    map.set(index, value)
+  }
+
+  if (map.size < question.questions.length) return
+  const answers: string[][] = []
+  for (let i = 0; i < question.questions.length; i++) {
+    const row = question.questions[i]
+    if (!row) return
+    const value = map.get(i + 1)
+    if (!value) return
+    const parsed = answerFromInput(row, value)
+    if (!parsed) return
+    answers.push(parsed)
+  }
+  return answers
 }
 
 function parseEvent(rawData: string): { type: string; properties: Record<string, unknown> } | undefined {
@@ -437,15 +679,26 @@ function isMissingSession(error: unknown): boolean {
   return false
 }
 
-async function retry<T>(name: string, fn: () => Promise<T>, retries = 2, delayMs = 400): Promise<T> {
+async function retry<T>(
+  name: string,
+  fn: () => Promise<T>,
+  retries = 2,
+  delayMs = 400,
+  shouldRetry: (error: unknown) => boolean = () => true,
+): Promise<T> {
   try {
     return await fn()
   } catch (error) {
+    if (!shouldRetry(error)) throw error
     if (retries <= 0) throw error
     console.warn(`[TelegramBridge] ${name} failed, retrying in ${delayMs}ms`, error)
-    await sleep(delayMs)
-    return retry(name, fn, retries - 1, Math.min(delayMs * 2, 4000))
+    await retryDelay(delayMs)
+    return retry(name, fn, retries - 1, Math.min(delayMs * 2, 4000), shouldRetry)
   }
+}
+
+export function setRetryDelayForTest(next?: (ms: number) => Promise<void>) {
+  retryDelay = next || sleep
 }
 
 async function telegramRequest(config: BridgeConfig, method: string, body: Record<string, unknown>, timeoutMs = 10_000) {
@@ -629,6 +882,48 @@ async function sendPrompt(config: BridgeConfig, sessionId: string, text: string)
   return extractReply(data)
 }
 
+function isMissingQuestion(error: unknown): boolean {
+  if (!(error instanceof Error)) return false
+  if (error.message.startsWith("OpenCode question reply failed (404):")) return true
+  if (error.message.startsWith("OpenCode question reply failed (410):")) return true
+  return false
+}
+
+async function sendQuestionReply(
+  config: BridgeConfig,
+  requestId: string,
+  answers: string[][],
+): Promise<void> {
+  const run = async () => {
+    const url = opencodeUrl(config, `/question/${encodeURIComponent(requestId)}/reply`)
+    if (config.directory) {
+      url.searchParams.set("directory", config.directory)
+    }
+    const res = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ answers }),
+      signal: AbortSignal.timeout(20_000),
+    })
+    if (!res.ok) {
+      const body = await res.text().catch(() => "")
+      throw new Error(`OpenCode question reply failed (${res.status}): ${body.slice(0, 300)}`)
+    }
+  }
+
+  return retry("opencode:question.reply", run, 2, 400, (error) => {
+    if (isMissingQuestion(error)) return false
+    if (!(error instanceof Error)) return true
+    const match = error.message.match(/^OpenCode question reply failed \((\d+)\):/)
+    if (!match) return true
+    const status = Number.parseInt(match[1] || "", 10)
+    if (!Number.isFinite(status)) return true
+    if (status === 408 || status === 429) return true
+    if (status >= 400 && status < 500) return false
+    return true
+  })
+}
+
 function chunks(input: string, size: number): string[] {
   if (input.length <= size) return [input]
   const output: string[] = []
@@ -717,6 +1012,35 @@ export async function handleTextUpdate(runtime: Runtime, update: TelegramUpdate)
     const handled = await runCommand()
     if (handled) return
 
+    const queuedQuestions = await readPendingQuestions(runtime, chatId, userId)
+    const pending = queuedQuestions[0]
+    if (pending) {
+      const answers = parseQuestionAnswers(pending, text)
+      if (!answers) {
+        await sendTelegramMessage(config, chatId, `${questionAnswerGuidance(pending)}\n\n${questionPromptText(pending)}`)
+        return
+      }
+      await sendQuestionReply(config, pending.requestId, answers)
+        .then(async () => {
+          await deletePendingQuestion(runtime, chatId, pending.requestId, userId)
+          const remaining = await readPendingQuestions(runtime, chatId, userId)
+          if (remaining.length) {
+            const next = remaining[0]
+            if (next) {
+              await sendTelegramMessage(config, chatId, `Thanks, answer recorded.\n\n${questionPromptText(next)}`)
+            }
+            return
+          }
+          await sendTelegramMessage(config, chatId, "Thanks, your answer was sent.")
+        })
+        .catch(async (error) => {
+          if (!isMissingQuestion(error)) throw error
+          await deletePendingQuestion(runtime, chatId, pending.requestId, userId)
+          await sendTelegramMessage(config, chatId, "That question is no longer pending. Wait for the next prompt or use /status.")
+        })
+      return
+    }
+
     const sessionId = await sessionForChat(runtime, key)
     await resolvePendingForSession(runtime, chatId, sessionId)
     const reply = await sendPrompt(config, sessionId, text).catch(async (error) => {
@@ -772,6 +1096,28 @@ async function notifySessionKeys(runtime: Runtime, sessionId: string, kind: stri
       stampNotification(parsed.chatId, kind, sessionId)
     } catch (error) {
       console.error("[TelegramBridge] outbound notify failed", { sessionId, key, kind, error })
+    }
+  }
+}
+
+async function notifyQuestion(runtime: Runtime, sessionId: string, question: TelegramPendingQuestion) {
+  if (!runtime.store.sessionKeys) return
+  const keys = await runtime.store.sessionKeys(sessionId)
+  const kind = `question:${question.requestId}`
+  for (const key of keys) {
+    try {
+      const parsed = parseTelegramKey(key)
+      if (!parsed) continue
+      if (!(await notificationEnabled(runtime, notificationKey(parsed.chatId)))) continue
+      if (!shouldNotify(runtime.config, parsed.chatId, kind, sessionId)) continue
+      await upsertPendingQuestion(runtime, key, question)
+      const message = `${questionPromptText(question)}\n\nOpen ${sessionLabel(runtime.config, sessionId)}`
+      await queueChatUpdate(String(parsed.chatId), async () => {
+        await sendTelegramMessage(runtime.config, parsed.chatId, message)
+      })
+      stampNotification(parsed.chatId, kind, sessionId)
+    } catch (error) {
+      console.error("[TelegramBridge] outbound question notify failed", { sessionId, key, error })
     }
   }
 }
@@ -836,7 +1182,12 @@ export async function handleBridgeEvent(runtime: Runtime, event: { type: string;
   }
   if (!sessionId) return
   if (event.type === "question.asked") {
-    await notifySessionKeys(runtime, sessionId, "question", `Question pending: ${questionText(event.properties)}`)
+    const pending = parsePendingQuestion(event.properties)
+    if (!pending) {
+      await notifySessionKeys(runtime, sessionId, "question", `Question pending: ${questionText(event.properties)}`)
+      return
+    }
+    await notifyQuestion(runtime, sessionId, pending)
     return
   }
   if (event.type === "permission.asked") {
@@ -988,12 +1339,12 @@ export async function startTelegramBridge() {
 }
 
 export function resetSessionCacheForTest() {
+  setRetryDelayForTest()
   sessions.clear()
   creatingSessions.clear()
   chatQueues.clear()
   eventNotifications.clear()
   statusBySession.clear()
   fallbackNotifications.clear()
-  fallbackPending.clear()
-  pendingEntrySeq = 0
+  pendingQuestions.clear()
 }

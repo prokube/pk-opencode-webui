@@ -5,16 +5,23 @@ type StoreShape = {
   version: 3
   sessions: Record<string, string>
   notifications: Record<string, boolean>
-  inbox: Record<string, TelegramPendingItem[]>
+  pending: Record<string, TelegramPendingQuestion[]>
 }
 
-export type TelegramPendingItem = {
-  id: string
-  kind: "question" | "permission" | "task-finished"
+type TelegramPendingQuestionEntry = {
+  header: string
+  question: string
+  options: string[]
+  multiple: boolean
+  custom: boolean
+}
+
+export type TelegramPendingQuestion = {
+  requestId: string
   sessionId: string
-  text: string
-  stampedAt: number
-  resolved: boolean
+  createdAt: number
+  expiresAt: number
+  questions: TelegramPendingQuestionEntry[]
 }
 
 function emptyStore(): StoreShape {
@@ -22,7 +29,50 @@ function emptyStore(): StoreShape {
     version: 3,
     sessions: {},
     notifications: {},
-    inbox: {},
+    pending: {},
+  }
+}
+
+function parsePendingQuestionEntry(value: unknown): TelegramPendingQuestionEntry | undefined {
+  if (!value || typeof value !== "object") return
+  const row = value as Record<string, unknown>
+  const header = typeof row.header === "string" ? row.header : ""
+  const question = typeof row.question === "string" ? row.question : ""
+  const options = Array.isArray(row.options)
+    ? row.options.filter((item) => typeof item === "string" && item).map((item) => item.trim()).filter(Boolean)
+    : []
+  const multiple = row.multiple === true
+  const custom = row.custom !== false
+  if (!header.trim() && !question.trim() && !options.length) return
+  return {
+    header: header.trim(),
+    question: question.trim(),
+    options,
+    multiple,
+    custom,
+  }
+}
+
+function parsePendingQuestion(value: unknown): TelegramPendingQuestion | undefined {
+  if (!value || typeof value !== "object") return
+  const row = value as Record<string, unknown>
+  const requestId = typeof row.requestId === "string" ? row.requestId.trim() : ""
+  const sessionId = typeof row.sessionId === "string" ? row.sessionId.trim() : ""
+  const createdAt = typeof row.createdAt === "number" && Number.isFinite(row.createdAt) ? row.createdAt : Date.now()
+  const expiresAt = typeof row.expiresAt === "number" && Number.isFinite(row.expiresAt) ? row.expiresAt : Date.now()
+  const list = Array.isArray(row.questions)
+    ? row.questions
+      .map(parsePendingQuestionEntry)
+      .filter((item) => item !== undefined)
+    : []
+  const questions = list as TelegramPendingQuestionEntry[]
+  if (!requestId || !sessionId || !questions.length) return
+  return {
+    requestId,
+    sessionId,
+    createdAt,
+    expiresAt,
+    questions,
   }
 }
 
@@ -55,10 +105,10 @@ function parseStore(input: string): StoreShape {
   const data = JSON.parse(input) as Partial<StoreShape>
   const sessions = data.sessions && typeof data.sessions === "object" ? data.sessions : {}
   const notifications = data.notifications && typeof data.notifications === "object" ? data.notifications : {}
-  const inbox = data.inbox && typeof data.inbox === "object" ? data.inbox : {}
+  const pending = data.pending && typeof data.pending === "object" ? data.pending : {}
   const out: Record<string, string> = {}
   const notifyOut: Record<string, boolean> = {}
-  const inboxOut: Record<string, TelegramPendingItem[]> = {}
+  const pendingOut: Record<string, TelegramPendingQuestion[]> = {}
   for (const key of Object.keys(sessions)) {
     const value = sessions[key]
     if (typeof value !== "string" || !value) continue
@@ -69,16 +119,19 @@ function parseStore(input: string): StoreShape {
     if (typeof value !== "boolean") continue
     notifyOut[key] = value
   }
-  for (const key of Object.keys(inbox)) {
-    const value = parsePendingList(inbox[key])
-    if (!value.length) continue
-    inboxOut[key] = value
+  for (const key of Object.keys(pending)) {
+    const rows = Array.isArray(pending[key]) ? pending[key] : []
+    const next = rows
+      .map(parsePendingQuestion)
+      .filter((item) => item !== undefined)
+    if (!next.length) continue
+    pendingOut[key] = next as TelegramPendingQuestion[]
   }
   return {
     version: 3,
     sessions: out,
     notifications: notifyOut,
-    inbox: inboxOut,
+    pending: pendingOut,
   }
 }
 
@@ -215,8 +268,9 @@ export type TelegramSessionStore = {
   sessionKeys?: (sessionId: string) => Promise<string[]>
   notificationGet?: (key: string) => Promise<boolean>
   notificationSet?: (key: string, enabled: boolean) => Promise<void>
-  pendingGet?: (chatKey: string) => Promise<TelegramPendingItem[]>
-  pendingSet?: (chatKey: string, items: TelegramPendingItem[]) => Promise<void>
+  questionList?: (key: string) => Promise<TelegramPendingQuestion[]>
+  questionUpsert?: (key: string, question: TelegramPendingQuestion) => Promise<void>
+  questionDelete?: (key: string, requestId: string) => Promise<void>
 }
 
 export function createTelegramSessionStore(path: string): TelegramSessionStore {
@@ -225,7 +279,7 @@ export function createTelegramSessionStore(path: string): TelegramSessionStore {
   const sessions = new Map<string, string>()
   const sessionIndex = new Map<string, Set<string>>()
   const notifications = new Map<string, boolean>()
-  const inbox = new Map<string, TelegramPendingItem[]>()
+  const pending = new Map<string, TelegramPendingQuestion[]>()
 
   function indexAdd(sessionId: string, key: string) {
     const set = sessionIndex.get(sessionId)
@@ -261,8 +315,8 @@ export function createTelegramSessionStore(path: string): TelegramSessionStore {
       for (const [key, value] of Object.entries(data.notifications)) {
         notifications.set(key, value)
       }
-      for (const [key, value] of Object.entries(data.inbox)) {
-        inbox.set(key, value)
+      for (const [key, value] of Object.entries(data.pending)) {
+        pending.set(key, value)
       }
     })
     .catch((error) => {
@@ -277,7 +331,7 @@ export function createTelegramSessionStore(path: string): TelegramSessionStore {
       version: 3,
       sessions: Object.fromEntries(sessions),
       notifications: Object.fromEntries(notifications),
-      inbox: Object.fromEntries(inbox),
+      pending: Object.fromEntries(pending),
     }
     writes = writes.then(
       () => writeStore(path, payload),
@@ -356,22 +410,42 @@ export function createTelegramSessionStore(path: string): TelegramSessionStore {
         })
       })
     },
-    async pendingGet(chatKey: string) {
+    async questionList(key: string) {
       await ready
-      return [...(inbox.get(chatKey) || [])]
+      const rows = pending.get(key)
+      if (!rows) return []
+      return [...rows]
     },
-    async pendingSet(chatKey: string, items: TelegramPendingItem[]) {
+    async questionUpsert(key: string, question: TelegramPendingQuestion) {
       await ready
       await run(async () => {
-        const prev = inbox.get(chatKey)
-        if (!items.length) inbox.delete(chatKey)
-        if (items.length) inbox.set(chatKey, [...items])
+        const prev = pending.get(key) || []
+        const filtered = prev.filter((item) => item.requestId !== question.requestId)
+        const next = [...filtered, question]
+          .sort((a, b) => a.createdAt - b.createdAt)
+          .slice(-10)
+        pending.set(key, next)
         await flush().catch((error) => {
-          if (!prev) {
-            inbox.delete(chatKey)
+          if (!prev.length) {
+            pending.delete(key)
             throw error
           }
-          inbox.set(chatKey, prev)
+          pending.set(key, prev)
+          throw error
+        })
+      })
+    },
+    async questionDelete(key: string, requestId: string) {
+      await ready
+      await run(async () => {
+        const prev = pending.get(key) || []
+        if (!prev.length) return
+        const next = prev.filter((item) => item.requestId !== requestId)
+        if (next.length === prev.length) return
+        if (next.length) pending.set(key, next)
+        if (!next.length) pending.delete(key)
+        await flush().catch((error) => {
+          pending.set(key, prev)
           throw error
         })
       })
