@@ -578,11 +578,24 @@ export function MessageTurn(props: {
   })
 
   function subtasksForParent(sessionID: string) {
-    const all = sync.messages(sessionID).flatMap((message) => message.parts.filter(isSubtaskPart))
+    const all = sync.messages(sessionID).flatMap((message) => {
+      const orderedParts = sync.parts(message.info.id)
+      if (orderedParts.length > 0) {
+        return orderedParts.filter((part) => isSubtaskPart(part) && part.sessionID === sessionID)
+      }
+      return message.parts
+        .filter(isSubtaskPart)
+        .filter((part) => part.sessionID === sessionID)
+        .slice()
+        .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
+    })
+    all.sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
     if (all.length > 0) return all
     return props.turn.assistantMessages
       .flatMap((message) => message.parts.filter(isSubtaskPart))
       .filter((part) => part.sessionID === sessionID)
+      .slice()
+      .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
   }
 
   const childForSubtask = (part: Extract<Part, { type: "subtask" }>) => {
