@@ -1179,6 +1179,70 @@ describe("telegram bridge config and cache", () => {
     expect(sent[0]).not.toContain("session-current  ");
   });
 
+  test("/sessions and /status normalize multiline titles and truncate inline length", async () => {
+    const calls: Array<{ url: string; body: Record<string, unknown> }> = [];
+    const originalFetch = globalThis.fetch;
+    const raw = `Current\nsession ${"x".repeat(140)}`;
+    const normalized = raw.replace(/\s+/g, " ").trim();
+    const expectedTitle = `${normalized.slice(0, 117)}...`;
+    try {
+      globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        const body = init?.body ? (JSON.parse(String(init.body)) as Record<string, unknown>) : {};
+        calls.push({ url, body });
+        if (url.includes("/session/session-current")) {
+          return new Response(JSON.stringify({ id: "session-current", title: raw }), { status: 200 });
+        }
+        if (url.includes("/session/session-old")) {
+          return new Response(JSON.stringify({ id: "session-old", title: "Older\nthread" }), { status: 200 });
+        }
+        if (url.includes("/sendMessage")) {
+          return new Response(JSON.stringify({ ok: true, result: { message_id: 1 } }), { status: 200 });
+        }
+        throw new Error(`Unexpected fetch ${url}`);
+      };
+
+      const runtime = {
+        config: {
+          mode: "polling" as const,
+          token: "token",
+          openCodeUrl: "http://127.0.0.1:4096",
+          sessionCacheMax: 10,
+          sessionCacheTtlMs: 10_000,
+          notificationDebounceMs: 20_000,
+          port: 4097,
+          webhookPath: "/webhook",
+          sessionStorePath: "/tmp/test-store.json",
+        },
+        store: {
+          get: async () => "session-current",
+          set: async () => undefined,
+          delete: async () => undefined,
+          historyGet: async () => ["session-old"],
+        },
+      };
+
+      await handleTextUpdate(runtime, {
+        update_id: 1,
+        message: { message_id: 1, text: "/sessions", chat: { id: 95 }, from: { id: 8 } },
+      });
+      await handleTextUpdate(runtime, {
+        update_id: 2,
+        message: { message_id: 2, text: "/status", chat: { id: 95 }, from: { id: 8 } },
+      });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+
+    const sent = calls
+      .filter((x) => x.url.includes("/sendMessage"))
+      .map((x) => String(x.body.text || ""));
+    expect(sent[0]).toContain(`1. ${expectedTitle} (session-current) (current)`);
+    expect(sent[0]).toContain("2. Older thread (session-old)");
+    expect(sent[0]).not.toContain("Current\nsession");
+    expect(sent[1]).toBe(`Current session: ${expectedTitle} (session-current)`);
+  });
+
   test("/status avoids redundant history persistence when current session already first", async () => {
     const calls: Array<{ url: string; body: Record<string, unknown> }> = [];
     const originalFetch = globalThis.fetch;

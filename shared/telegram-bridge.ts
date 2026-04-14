@@ -173,6 +173,7 @@ const sessionHistoryMax = 12
 const recentDefaultCount = 5
 const recentMaxCount = 12
 const recentPartTextMax = 500
+const sessionTitleInlineMax = 120
 const callbackIdLength = 24
 const callbackAckText = "Sending answer..."
 const inlineButtonMaxOptions = 20
@@ -1255,7 +1256,10 @@ function cachedSessionLookup(sessionId: string): SessionLookup | undefined {
 function formatSessionDisplay(sessionId: string, title?: string): string {
   const id = sessionId.trim()
   if (!title) return id
-  return `${title} (${id})`
+  const single = title.replace(/\s+/g, " ").trim()
+  if (!single) return id
+  const safe = truncateTelegramInlineText(single, sessionTitleInlineMax)
+  return `${safe} (${id})`
 }
 
 async function formatSessionList(config: BridgeConfig, list: string[], current?: string): Promise<string[]> {
