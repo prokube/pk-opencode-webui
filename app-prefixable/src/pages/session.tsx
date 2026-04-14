@@ -1371,12 +1371,15 @@ export function Session() {
     setOptimisticMessage(optimisticUserMessage(item.text, sid));
 
     try {
-      await client.session.promptAsync({
+      const promptRes = await client.session.promptAsync({
         sessionID: sid,
         parts: [{ type: "text", text: item.text }],
         agent: providers.selectedAgent || "build",
         model,
       });
+      if ("error" in promptRes && promptRes.error) {
+        throw new Error(formatStartError(promptRes.error));
+      }
       const map = readFollowupMap(dir);
       const next = (map[sid] ?? []).filter((entry) => entry.id !== id);
       if (next.length === 0) delete map[sid];
