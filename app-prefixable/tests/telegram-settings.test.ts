@@ -5,6 +5,7 @@ import { tmpdir } from "node:os"
 import * as fsp from "node:fs/promises"
 import { handleExtendedEndpoint } from "../../shared/extended-api"
 import { readDesiredTelegramSettingsFingerprint, writeTelegramRuntimeState } from "../../shared/telegram-settings"
+import * as telegramSessionStore from "../../shared/telegram-session-store"
 
 const envKeys = [
   "TELEGRAM_SETTINGS_PATH",
@@ -196,6 +197,115 @@ describe("telegram settings extended API", () => {
       }),
     )
     expect(invalid?.status).toBe(400)
+  })
+
+  test("session alarm endpoint reuses cached store by session store path", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "telegram-settings-"))
+    const path = join(dir, "telegram-settings.json")
+    const storePath = join(dir, "telegram-sessions-cache.json")
+    cleanupPaths.push(dir)
+
+    process.env.TELEGRAM_SETTINGS_PATH = path
+    process.env.TELEGRAM_SESSION_STORE_PATH = storePath
+
+    const createSpy = spyOn(telegramSessionStore, "createTelegramSessionStore")
+
+    try {
+      const set = await handleExtendedEndpoint(
+        "/api/ext/telegram/session-alarm",
+        "PUT",
+        new URL("http://127.0.0.1/api/ext/telegram/session-alarm"),
+        new Request("http://127.0.0.1/api/ext/telegram/session-alarm", {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ sessionId: "session-alarm-cache", enabled: true }),
+        }),
+      )
+
+      const get = await handleExtendedEndpoint(
+        "/api/ext/telegram/session-alarm",
+        "GET",
+        new URL("http://127.0.0.1/api/ext/telegram/session-alarm?sessionId=session-alarm-cache"),
+        new Request("http://127.0.0.1/api/ext/telegram/session-alarm?sessionId=session-alarm-cache"),
+      )
+
+      expect(set?.status).toBe(200)
+      expect(get?.status).toBe(200)
+      expect(createSpy).toHaveBeenCalledTimes(1)
+      expect(createSpy.mock.calls[0]?.[0]).toBe(storePath)
+    } finally {
+      createSpy.mockRestore()
+    }
+  })
+
+  test("session alarm endpoint returns 500 when store read fails", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "telegram-settings-"))
+    cleanupPaths.push(dir)
+    process.env.TELEGRAM_SETTINGS_PATH = join(dir, "telegram-settings.json")
+    process.env.TELEGRAM_SESSION_STORE_PATH = join(dir, "telegram-sessions-read-fail.json")
+
+    const createSpy = spyOn(telegramSessionStore, "createTelegramSessionStore").mockImplementation(() => {
+      return {
+        get: async () => undefined,
+        set: async () => undefined,
+        delete: async () => undefined,
+        sessionAlarmGet: async () => {
+          throw new Error("mock session alarm read failure")
+        },
+      }
+    })
+
+    try {
+      const response = await handleExtendedEndpoint(
+        "/api/ext/telegram/session-alarm",
+        "GET",
+        new URL("http://127.0.0.1/api/ext/telegram/session-alarm?sessionId=session-alarm-read-error"),
+        new Request("http://127.0.0.1/api/ext/telegram/session-alarm?sessionId=session-alarm-read-error"),
+      )
+
+      expect(response?.status).toBe(500)
+      const data = await response?.json()
+      expect(data).toEqual({ error: "failed to read telegram session alarm" })
+    } finally {
+      createSpy.mockRestore()
+    }
+  })
+
+  test("session alarm endpoint returns 500 when store write fails", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "telegram-settings-"))
+    cleanupPaths.push(dir)
+    process.env.TELEGRAM_SETTINGS_PATH = join(dir, "telegram-settings.json")
+    process.env.TELEGRAM_SESSION_STORE_PATH = join(dir, "telegram-sessions-write-fail.json")
+
+    const createSpy = spyOn(telegramSessionStore, "createTelegramSessionStore").mockImplementation(() => {
+      return {
+        get: async () => undefined,
+        set: async () => undefined,
+        delete: async () => undefined,
+        sessionAlarmSet: async () => {
+          throw new Error("mock session alarm write failure")
+        },
+      }
+    })
+
+    try {
+      const response = await handleExtendedEndpoint(
+        "/api/ext/telegram/session-alarm",
+        "PUT",
+        new URL("http://127.0.0.1/api/ext/telegram/session-alarm"),
+        new Request("http://127.0.0.1/api/ext/telegram/session-alarm", {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ sessionId: "session-alarm-write-error", enabled: true }),
+        }),
+      )
+
+      expect(response?.status).toBe(500)
+      const data = await response?.json()
+      expect(data).toEqual({ error: "failed to update telegram session alarm" })
+    } finally {
+      createSpy.mockRestore()
+    }
   })
 
   test("PUT persists settings and marks restart-required fields", async () => {

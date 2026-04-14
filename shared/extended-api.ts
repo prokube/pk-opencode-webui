@@ -15,7 +15,17 @@ import {
   readTelegramSettings,
   updateTelegramSettings,
 } from "./telegram-settings"
-import { createTelegramSessionStore } from "./telegram-session-store"
+import { createTelegramSessionStore, type TelegramSessionStore } from "./telegram-session-store"
+
+const telegramSessionStores = new Map<string, TelegramSessionStore>()
+
+function telegramSessionStore(sessionStorePath: string) {
+  const cached = telegramSessionStores.get(sessionStorePath)
+  if (cached) return cached
+  const next = createTelegramSessionStore(sessionStorePath)
+  telegramSessionStores.set(sessionStorePath, next)
+  return next
+}
 
 type TelegramBridgeHealthResponse = {
   status?: "healthy" | "degraded"
@@ -569,8 +579,14 @@ export async function handleExtendedEndpoint(
     if (!settings) {
       return Response.json({ error: "failed to read telegram settings" }, { status: 500 })
     }
-    const store = createTelegramSessionStore(settings.settings.sessionStorePath)
-    const enabled = await store.sessionAlarmGet?.(sessionId)
+    const store = telegramSessionStore(settings.settings.sessionStorePath)
+    const enabled = await store.sessionAlarmGet?.(sessionId).catch((error) => {
+      console.error("[ExtAPI] telegram session alarm read error", error)
+      return undefined
+    })
+    if (enabled === undefined && store.sessionAlarmGet) {
+      return Response.json({ error: "failed to read telegram session alarm" }, { status: 500 })
+    }
     return Response.json({ sessionId, enabled: enabled === true })
   }
 
@@ -592,8 +608,17 @@ export async function handleExtendedEndpoint(
     if (!settings) {
       return Response.json({ error: "failed to read telegram settings" }, { status: 500 })
     }
-    const store = createTelegramSessionStore(settings.settings.sessionStorePath)
-    await store.sessionAlarmSet?.(sessionId, enabled)
+    const store = telegramSessionStore(settings.settings.sessionStorePath)
+    const ok = await store.sessionAlarmSet?.(sessionId, enabled).then(
+      () => true,
+      (error) => {
+        console.error("[ExtAPI] telegram session alarm write error", error)
+        return false
+      },
+    )
+    if (ok === false) {
+      return Response.json({ error: "failed to update telegram session alarm" }, { status: 500 })
+    }
     return Response.json({ sessionId, enabled })
   }
 
