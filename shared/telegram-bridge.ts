@@ -1358,65 +1358,83 @@ export async function handleCallbackUpdate(runtime: Runtime, update: TelegramUpd
   const callbackId = callback?.id
   const data = callback?.data?.trim() || ""
   if (!callbackId) return
-  if (!chatId || !userId || !data) {
-    await answerCallback(runtime.config, callbackId, "This button could not be processed.")
-    return
-  }
-  const parsed = parseCallbackData(data)
-  if (!parsed) {
-    await answerCallback(runtime.config, callbackId, "Unsupported button payload.")
-    return
-  }
+  const state = { acknowledged: false }
+  try {
+    if (!chatId || !userId || !data) {
+      await answerCallback(runtime.config, callbackId, "This button could not be processed.")
+      state.acknowledged = true
+      return
+    }
+    const parsed = parseCallbackData(data)
+    if (!parsed) {
+      await answerCallback(runtime.config, callbackId, "Unsupported button payload.")
+      state.acknowledged = true
+      return
+    }
 
-  const key = await pendingLookupKeys(chatId, userId)
-    .reduce(async (found, itemKey) => {
-      const previous = await found
-      if (previous) return previous
-      const queue = await readPendingQuestionsByKey(runtime, itemKey)
-      const pending = queue.find((item) => item.callbackId === parsed.callbackId)
-      if (!pending) return
-      return { itemKey, pending }
-    }, Promise.resolve(undefined as { itemKey: string; pending: TelegramPendingQuestion } | undefined))
-  if (!key) {
-    await answerCallback(runtime.config, callbackId, "This question has expired.")
-    await sendTelegramMessage(runtime.config, chatId, "That question is no longer pending. Wait for the next prompt or use /status.")
-    return
-  }
-
-  const pending = key.pending
-  const row = pending.questions[parsed.questionIndex]
-  const option = row?.options[parsed.optionIndex]
-  if (pending.questions.length !== 1 || row?.multiple) {
-    await answerCallback(runtime.config, callbackId, "Use text reply for this question.")
-    await sendTelegramMessage(runtime.config, chatId, `${questionAnswerGuidance(pending)}\n\n${questionPromptText(pending)}`)
-    return
-  }
-  if (!row || !option) {
-    await answerCallback(runtime.config, callbackId, "That option is no longer available.")
-    await sendTelegramMessage(runtime.config, chatId, `${questionAnswerGuidance(pending)}\n\n${questionPromptText(pending)}`)
-    return
-  }
-
-  const answers = [[option]]
-  await answerCallback(runtime.config, callbackId, callbackAckText)
-  await sendQuestionReply(runtime.config, pending.requestId, answers)
-    .then(async () => {
-      await deletePendingQuestionByKey(runtime, key.itemKey, pending.requestId)
-      const remaining = await readPendingQuestionsByKey(runtime, key.itemKey)
-      if (remaining.length) {
-        const next = remaining[0]
-        if (next) {
-          await sendTelegramQuestionPrompt(runtime.config, chatId, next)
-        }
-        return
-      }
-      await sendTelegramMessage(runtime.config, chatId, "Thanks, your answer was sent.")
-    })
-    .catch(async (error) => {
-      if (!isMissingQuestion(error)) throw error
-      await deletePendingQuestionByKey(runtime, key.itemKey, pending.requestId)
+    const key = await pendingLookupKeys(chatId, userId)
+      .reduce(async (found, itemKey) => {
+        const previous = await found
+        if (previous) return previous
+        const queue = await readPendingQuestionsByKey(runtime, itemKey)
+        const pending = queue.find((item) => item.callbackId === parsed.callbackId)
+        if (!pending) return
+        return { itemKey, pending }
+      }, Promise.resolve(undefined as { itemKey: string; pending: TelegramPendingQuestion } | undefined))
+    if (!key) {
+      await answerCallback(runtime.config, callbackId, "This question has expired.")
+      state.acknowledged = true
       await sendTelegramMessage(runtime.config, chatId, "That question is no longer pending. Wait for the next prompt or use /status.")
-    })
+      return
+    }
+
+    const pending = key.pending
+    const row = pending.questions[parsed.questionIndex]
+    const option = row?.options[parsed.optionIndex]
+    if (pending.questions.length !== 1 || row?.multiple) {
+      await answerCallback(runtime.config, callbackId, "Use text reply for this question.")
+      state.acknowledged = true
+      await sendTelegramMessage(runtime.config, chatId, `${questionAnswerGuidance(pending)}\n\n${questionPromptText(pending)}`)
+      return
+    }
+    if (!row || !option) {
+      await answerCallback(runtime.config, callbackId, "That option is no longer available.")
+      state.acknowledged = true
+      await sendTelegramMessage(runtime.config, chatId, `${questionAnswerGuidance(pending)}\n\n${questionPromptText(pending)}`)
+      return
+    }
+
+    const answers = [[option]]
+    await answerCallback(runtime.config, callbackId, callbackAckText)
+    state.acknowledged = true
+    await sendQuestionReply(runtime.config, pending.requestId, answers)
+      .then(async () => {
+        await deletePendingQuestionByKey(runtime, key.itemKey, pending.requestId)
+        const remaining = await readPendingQuestionsByKey(runtime, key.itemKey)
+        if (remaining.length) {
+          const next = remaining[0]
+          if (next) {
+            await sendTelegramQuestionPrompt(runtime.config, chatId, next)
+          }
+          return
+        }
+        await sendTelegramMessage(runtime.config, chatId, "Thanks, your answer was sent.")
+      })
+      .catch(async (error) => {
+        if (!isMissingQuestion(error)) throw error
+        await deletePendingQuestionByKey(runtime, key.itemKey, pending.requestId)
+        await sendTelegramMessage(runtime.config, chatId, "That question is no longer pending. Wait for the next prompt or use /status.")
+      })
+  } catch (error) {
+    console.error("[TelegramBridge] callback handling failed", { chatId, userId, callbackId, error })
+    const recovery = [
+      ...(state.acknowledged ? [] : [answerCallback(runtime.config, callbackId, "Sorry, this button could not be processed right now.")]),
+      ...(!chatId
+        ? []
+        : [sendTelegramMessage(runtime.config, chatId, "Sorry, something went wrong while processing that button. Please try again or reply with text.")]),
+    ]
+    await Promise.allSettled(recovery)
+  }
 }
 
 export async function handleTelegramUpdate(runtime: Runtime, update: TelegramUpdate) {

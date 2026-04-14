@@ -2801,6 +2801,97 @@ describe("telegram bridge config and cache", () => {
     expect(sentTexts.some((text) => text.includes("Thanks, your answer was sent."))).toBe(true);
   });
 
+  test("callback query returns explicit guidance on non-missing reply errors", async () => {
+    const calls: Array<{ url: string; body: Record<string, unknown> }> = [];
+    const originalFetch = globalThis.fetch;
+    const pending = new Map<string, unknown[]>();
+    try {
+      globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        const body = init?.body ? (JSON.parse(String(init.body)) as Record<string, unknown>) : {};
+        calls.push({ url, body });
+        if (url.includes("/sendMessage")) {
+          return new Response(JSON.stringify({ ok: true, result: { message_id: 1 } }), { status: 200 });
+        }
+        if (url.includes("/answerCallbackQuery")) {
+          return new Response(JSON.stringify({ ok: true, result: true }), { status: 200 });
+        }
+        if (url.includes("/question/req-callback-error/reply")) {
+          return new Response("bad request", { status: 400 });
+        }
+        throw new Error(`Unexpected fetch ${url}`);
+      };
+
+      const runtime = {
+        config: {
+          mode: "polling" as const,
+          token: "token",
+          openCodeUrl: "http://127.0.0.1:4096",
+          sessionCacheMax: 10,
+          sessionCacheTtlMs: 10_000,
+          notificationDebounceMs: 0,
+          port: 4097,
+          webhookPath: "/webhook",
+          sessionStorePath: "/tmp/test-store.json",
+        },
+        store: {
+          get: async () => undefined,
+          set: async () => undefined,
+          delete: async () => undefined,
+          questionList: async (name: string) => (pending.get(name) || []) as unknown[],
+          questionUpsert: async (name: string, row: unknown) => {
+            pending.set(name, [row]);
+          },
+          questionDelete: async (name: string, requestId: string) => {
+            const rows = (pending.get(name) || []) as Array<{ requestId?: string }>;
+            pending.set(name, rows.filter((row) => row.requestId !== requestId));
+          },
+          sessionKeys: async () => ["chat:92:user:7"],
+          notificationGet: async () => true,
+        },
+      };
+
+      await handleBridgeEvent(runtime, {
+        type: "question.asked",
+        properties: {
+          id: "req-callback-error",
+          sessionID: "session-callback-error",
+          questions: [{ header: "Pick one", options: [{ label: "Alpha" }, { label: "Beta" }] }],
+        },
+      });
+
+      const prompt = calls.find((x) => x.url.includes("/sendMessage") && String(x.body.text || "").includes("Question pending:"));
+      const data = String(
+        ((prompt?.body.reply_markup as { inline_keyboard?: Array<Array<{ callback_data?: string }>> } | undefined)
+          ?.inline_keyboard?.[0]?.[0]?.callback_data) || "",
+      );
+
+      await handleCallbackUpdate(runtime, {
+        update_id: 24,
+        callback_query: {
+          id: "cb-error",
+          data,
+          from: { id: 7 },
+          message: { message_id: 9, chat: { id: 92 } },
+        },
+      });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+
+    const replyCalls = calls.filter((x) => x.url.includes("/question/req-callback-error/reply"));
+    expect(replyCalls).toHaveLength(1);
+    const callbackAcks = calls
+      .filter((x) => x.url.includes("/answerCallbackQuery"))
+      .map((x) => String(x.body.text || ""));
+    expect(callbackAcks.some((text) => text.includes("Sending answer"))).toBe(true);
+    const sentTexts = calls
+      .filter((x) => x.url.includes("/sendMessage"))
+      .map((x) => String(x.body.text || ""));
+    expect(sentTexts.some((text) => text.includes("something went wrong while processing that button"))).toBe(true);
+    expect((pending.get("chat:92:user:7") || []).length).toBe(1);
+  });
+
   test("stale callback query returns guidance without crashing", async () => {
     const calls: Array<{ url: string; body: Record<string, unknown> }> = [];
     const originalFetch = globalThis.fetch;
