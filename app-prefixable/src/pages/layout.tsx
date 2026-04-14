@@ -3066,7 +3066,7 @@ export function Layout(props: ParentProps) {
       {/* Directory-wide worktree event toast */}
       <Show when={worktreeToast()}>
         <div
-          class="fixed bottom-20 left-1/2 -translate-x-1/2 z-[100] px-4 py-2 rounded-lg shadow-lg text-sm font-medium"
+          class="fixed bottom-32 left-1/2 -translate-x-1/2 z-[100] px-4 py-2 rounded-lg shadow-lg text-sm font-medium"
           role={worktreeToastVariant() === "error" ? "alert" : "status"}
           aria-live={worktreeToastVariant() === "error" ? "assertive" : "polite"}
           aria-atomic="true"
