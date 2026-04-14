@@ -90,9 +90,9 @@ function parsePendingQuestion(value: unknown): TelegramPendingQuestion | undefin
     : []
   const questions = list as TelegramPendingQuestionEntry[]
   if (!requestId || !sessionId || !questions.length) return
-  const compact = callbackId.toLowerCase().replace(/[^a-z0-9]/g, "").slice(0, 8)
-  const derived = requestId.toLowerCase().replace(/[^a-z0-9]/g, "").slice(0, 8)
-  const pendingId = (compact || derived || "000000").padStart(6, "0").slice(0, 8)
+  const compact = callbackId.toLowerCase().replace(/[^a-z0-9]/g, "").slice(0, 24)
+  const derived = requestId.toLowerCase().replace(/[^a-z0-9]/g, "").slice(0, 24)
+  const pendingId = (compact || derived || "000000").padStart(6, "0").slice(0, 24)
   return {
     requestId,
     callbackId: pendingId,
@@ -313,6 +313,8 @@ export type TelegramSessionStore = {
   historySet?: (key: string, ids: string[]) => Promise<void>
   notificationGet?: (key: string) => Promise<boolean>
   notificationSet?: (key: string, enabled: boolean) => Promise<void>
+  inboxGet?: (key: string) => Promise<TelegramPendingItem[]>
+  inboxSet?: (key: string, items: TelegramPendingItem[]) => Promise<void>
   pendingGet?: (key: string) => Promise<TelegramPendingItem[]>
   pendingSet?: (key: string, items: TelegramPendingItem[]) => Promise<void>
   questionList?: (key: string) => Promise<TelegramPendingQuestion[]>
@@ -494,6 +496,28 @@ export function createTelegramSessionStore(path: string): TelegramSessionStore {
             throw error
           }
           notifications.set(key, prev)
+          throw error
+        })
+      })
+    },
+    async inboxGet(key: string) {
+      await ready
+      const rows = inbox.get(key)
+      if (!rows) return []
+      return [...rows]
+    },
+    async inboxSet(key: string, items: TelegramPendingItem[]) {
+      await ready
+      await run(async () => {
+        const prev = inbox.get(key) || []
+        if (items.length) inbox.set(key, [...items])
+        if (!items.length) inbox.delete(key)
+        await flush().catch((error) => {
+          if (!prev.length) {
+            inbox.delete(key)
+            throw error
+          }
+          inbox.set(key, prev)
           throw error
         })
       })
