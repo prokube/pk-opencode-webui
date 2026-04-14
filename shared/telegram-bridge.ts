@@ -1785,6 +1785,19 @@ function parseSavedPromptList(raw: unknown, scope: "global" | "project"): SavedP
     .filter((item) => item !== undefined) as SavedPrompt[]
 }
 
+function readSavedPromptArray(payload: Record<string, unknown>, field: "global" | "project"): unknown[] | undefined {
+  const direct = payload[field]
+  if (Array.isArray(direct)) return direct
+  if (direct && typeof direct === "object") {
+    const nested = (direct as { prompts?: unknown }).prompts
+    if (Array.isArray(nested)) return nested
+  }
+  const grouped = payload.prompts
+  if (!grouped || typeof grouped !== "object") return
+  const nested = (grouped as { global?: unknown; project?: unknown })[field]
+  if (Array.isArray(nested)) return nested
+}
+
 function mergeSavedPrompts(globalPrompts: SavedPrompt[], projectPrompts: SavedPrompt[]): SavedPrompt[] {
   const projectIds = new Set(projectPrompts.map((item) => item.id))
   const dedupedGlobal = globalPrompts.filter((item) => !projectIds.has(item.id))
@@ -1843,16 +1856,18 @@ async function savedPromptsForDirectory(config: BridgeConfig, directory?: string
     const body = await res.text().catch(() => "")
     throw new Error(`OpenCode saved prompts failed (${res.status}): ${body.slice(0, 300)}`)
   }
-  const data = await res.json().catch(() => undefined) as { global?: unknown; project?: unknown } | undefined
+  const data = await res.json().catch(() => undefined) as Record<string, unknown> | undefined
   if (!data || typeof data !== "object") {
     throw new Error("OpenCode saved prompts failed (invalid response): endpoint did not return JSON")
   }
-  if (!("global" in data) && !("project" in data)) {
+  const global = readSavedPromptArray(data, "global")
+  const project = readSavedPromptArray(data, "project")
+  if (!global || !project) {
     throw new Error("OpenCode saved prompts failed (invalid response): missing global/project arrays")
   }
   return {
-    global: parseSavedPromptList(data.global, "global"),
-    project: parseSavedPromptList(data.project, "project"),
+    global: parseSavedPromptList(global, "global"),
+    project: parseSavedPromptList(project, "project"),
   }
 }
 
@@ -1925,14 +1940,18 @@ function promptChoice(prompt: SavedPrompt, index: number): string {
 function promptsMarkup(prompts: SavedPrompt[]): { inline_keyboard: Array<Array<{ text: string; callback_data: string }>> } | undefined {
   const rows = prompts
     .slice(0, inlineButtonMaxOptions)
-    .map((prompt, index) => {
+    .map((prompt) => {
       const callback = promptCallbackData(prompt.id)
       if (!callback) return
-      const label = `${index + 1}. ${prompt.title.trim()}`.slice(0, inlineButtonTextMax)
-      if (!label) return
-      return [{ text: label, callback_data: callback }]
+      const title = prompt.title.trim()
+      if (!title) return
+      return { title, callback_data: callback }
     })
     .filter((item) => item !== undefined)
+    .map((item, index) => [{
+      text: `${index + 1}. ${item.title}`.slice(0, inlineButtonTextMax),
+      callback_data: item.callback_data,
+    }])
   if (!rows.length) return
   return {
     inline_keyboard: rows as Array<Array<{ text: string; callback_data: string }>>,
@@ -2077,12 +2096,15 @@ async function sendTelegramMessageWithMarkup(
   text: string,
   markup: { inline_keyboard: Array<Array<{ text: string; callback_data: string }>> },
 ) {
-  const safe = truncateTelegramText(text || "I could not produce a response.", telegramMessageSoftLimit)
-  await telegramRequest(config, "sendMessage", {
-    chat_id: chatId,
-    text: safe,
-    reply_markup: markup,
-  })
+  const safe = text || "I could not produce a response."
+  const parts = chunks(safe, telegramMessageSoftLimit)
+  for (const [i, part] of parts.entries()) {
+    await telegramRequest(config, "sendMessage", {
+      chat_id: chatId,
+      text: part,
+      ...(i === 0 ? { reply_markup: markup } : {}),
+    })
+  }
 }
 
 async function checkTelegramApi(config: BridgeConfig): Promise<BridgeHealthCheck> {

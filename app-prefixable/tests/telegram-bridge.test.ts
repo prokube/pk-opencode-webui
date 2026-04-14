@@ -760,6 +760,189 @@ describe("telegram bridge config and cache", () => {
     expect(second).toBe("p:g-1");
   });
 
+  test("/prompts accepts nested saved-prompts payload shapes", async () => {
+    const calls: Array<{ url: string; body: Record<string, unknown> }> = [];
+    const originalFetch = globalThis.fetch;
+    try {
+      globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        const body = init?.body ? (JSON.parse(String(init.body)) as Record<string, unknown>) : {};
+        calls.push({ url, body });
+        if (url.includes("/api/ext/saved-prompts")) {
+          return new Response(
+            JSON.stringify({
+              global: { prompts: [{ id: "g-1", title: "Quick summary", text: "Summarize", createdAt: 10 }] },
+              project: { prompts: [{ id: "p-1", title: "Deploy release", text: "Deploy", createdAt: 20 }] },
+            }),
+            { status: 200 },
+          );
+        }
+        if (url.includes("/sendMessage")) {
+          return new Response(JSON.stringify({ ok: true, result: { message_id: 1 } }), { status: 200 });
+        }
+        throw new Error(`Unexpected fetch ${url}`);
+      };
+
+      const runtime = {
+        config: {
+          mode: "polling" as const,
+          token: "token",
+          openCodeUrl: "http://127.0.0.1:4096",
+          sessionCacheMax: 10,
+          sessionCacheTtlMs: 10_000,
+          notificationDebounceMs: 20_000,
+          port: 4097,
+          webhookPath: "/webhook",
+          sessionStorePath: "/tmp/test-store.json",
+        },
+        store: {
+          get: async () => undefined,
+          set: async () => undefined,
+          delete: async () => undefined,
+        },
+      };
+
+      await handleTextUpdate(runtime, {
+        update_id: 13,
+        message: { message_id: 13, text: "/prompts", chat: { id: 178 }, from: { id: 5 } },
+      });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+
+    const text = String(calls.find((x) => x.url.includes("/sendMessage"))?.body.text || "");
+    expect(text).toContain("Saved prompts:");
+    expect(text).toContain("Deploy release [project] (p-1)");
+    expect(text).toContain("Quick summary [global] (g-1)");
+  });
+
+  test("/prompts inline button numbering stays contiguous after invalid callback IDs are skipped", async () => {
+    const calls: Array<{ url: string; body: Record<string, unknown> }> = [];
+    const originalFetch = globalThis.fetch;
+    try {
+      globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        const body = init?.body ? (JSON.parse(String(init.body)) as Record<string, unknown>) : {};
+        calls.push({ url, body });
+        if (url.includes("/api/ext/saved-prompts")) {
+          return new Response(
+            JSON.stringify({
+              global: [],
+              project: [
+                { id: "p-1", title: "First", text: "Run first", createdAt: 30 },
+                { id: "bad id", title: "Skipped", text: "Run skipped", createdAt: 20 },
+                { id: "p-2", title: "Third", text: "Run third", createdAt: 10 },
+              ],
+            }),
+            { status: 200 },
+          );
+        }
+        if (url.includes("/sendMessage")) {
+          return new Response(JSON.stringify({ ok: true, result: { message_id: 1 } }), { status: 200 });
+        }
+        throw new Error(`Unexpected fetch ${url}`);
+      };
+
+      const runtime = {
+        config: {
+          mode: "polling" as const,
+          token: "token",
+          openCodeUrl: "http://127.0.0.1:4096",
+          sessionCacheMax: 10,
+          sessionCacheTtlMs: 10_000,
+          notificationDebounceMs: 20_000,
+          port: 4097,
+          webhookPath: "/webhook",
+          sessionStorePath: "/tmp/test-store.json",
+        },
+        store: {
+          get: async () => undefined,
+          set: async () => undefined,
+          delete: async () => undefined,
+        },
+      };
+
+      await handleTextUpdate(runtime, {
+        update_id: 14,
+        message: { message_id: 14, text: "/prompts", chat: { id: 179 }, from: { id: 5 } },
+      });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+
+    const sent = calls.find((x) => x.url.includes("/sendMessage"));
+    const markup = sent?.body.reply_markup as { inline_keyboard?: Array<Array<{ text?: string; callback_data?: string }>> } | undefined;
+    const first = markup?.inline_keyboard?.[0]?.[0];
+    const second = markup?.inline_keyboard?.[1]?.[0];
+    expect(first?.text).toBe("1. First");
+    expect(first?.callback_data).toBe("p:p-1");
+    expect(second?.text).toBe("2. Third");
+    expect(second?.callback_data).toBe("p:p-2");
+  });
+
+  test("/prompts sends follow-up chunks when markup response exceeds Telegram limits", async () => {
+    const calls: Array<{ url: string; body: Record<string, unknown> }> = [];
+    const originalFetch = globalThis.fetch;
+    const veryLong = "x".repeat(350);
+    try {
+      globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        const body = init?.body ? (JSON.parse(String(init.body)) as Record<string, unknown>) : {};
+        calls.push({ url, body });
+        if (url.includes("/api/ext/saved-prompts")) {
+          return new Response(
+            JSON.stringify({
+              global: [],
+              project: Array.from({ length: 25 }, (_, index) => ({
+                id: `p-${index + 1}`,
+                title: `Prompt ${index + 1} ${veryLong}`,
+                text: `Run ${index + 1}`,
+                createdAt: 1000 - index,
+              })),
+            }),
+            { status: 200 },
+          );
+        }
+        if (url.includes("/sendMessage")) {
+          return new Response(JSON.stringify({ ok: true, result: { message_id: 1 } }), { status: 200 });
+        }
+        throw new Error(`Unexpected fetch ${url}`);
+      };
+
+      const runtime = {
+        config: {
+          mode: "polling" as const,
+          token: "token",
+          openCodeUrl: "http://127.0.0.1:4096",
+          sessionCacheMax: 10,
+          sessionCacheTtlMs: 10_000,
+          notificationDebounceMs: 20_000,
+          port: 4097,
+          webhookPath: "/webhook",
+          sessionStorePath: "/tmp/test-store.json",
+        },
+        store: {
+          get: async () => undefined,
+          set: async () => undefined,
+          delete: async () => undefined,
+        },
+      };
+
+      await handleTextUpdate(runtime, {
+        update_id: 15,
+        message: { message_id: 15, text: "/prompts", chat: { id: 180 }, from: { id: 5 } },
+      });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+
+    const messages = calls.filter((x) => x.url.includes("/sendMessage"));
+    expect(messages.length).toBeGreaterThan(1);
+    expect(messages[0]?.body.reply_markup).toBeDefined();
+    expect(messages.slice(1).every((item) => item.body.reply_markup === undefined)).toBe(true);
+    expect(String(messages[0]?.body.text || "").length).toBeLessThanOrEqual(3900);
+  });
+
   test("prompt callback runs the selected saved prompt", async () => {
     const calls: Array<{ url: string; body: Record<string, unknown> }> = [];
     const originalFetch = globalThis.fetch;
