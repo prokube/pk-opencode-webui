@@ -28,8 +28,8 @@ export function resolveModelVariant(
   configured: string | undefined,
   variants: string[],
 ) {
-  if (selected === null) return undefined
-  if (selected && variants.includes(selected)) return selected
+  const session = selected ?? undefined
+  if (session && variants.includes(session)) return session
   if (configured && variants.includes(configured)) return configured
   return undefined
 }
@@ -40,9 +40,9 @@ export function cycleModelVariant(
   variants: string[],
 ) {
   if (variants.length === 0) return undefined
-  if (selected === null) return variants[0]
-  if (selected && variants.includes(selected)) {
-    const index = variants.indexOf(selected)
+  const session = selected ?? undefined
+  if (session && variants.includes(session)) {
+    const index = variants.indexOf(session)
     if (index === variants.length - 1) return undefined
     return variants[index + 1]
   }

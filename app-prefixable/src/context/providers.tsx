@@ -1,5 +1,5 @@
 import { createContext, useContext, createResource, createEffect, type ParentProps, onMount } from "solid-js"
-import { createStore } from "solid-js/store"
+import { createStore, produce } from "solid-js/store"
 import { useSDK } from "./sdk"
 import { useConfig } from "./config"
 import { cycleModelVariant, getConfiguredAgentVariant, resolveModelVariant } from "./model-variant"
@@ -32,12 +32,18 @@ function isValidModelsByAgent(value: unknown): value is Record<string, ModelKey>
   return true
 }
 
-function isValidVariantsBySession(value: unknown): value is Record<string, string | null> {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return false
+function normalizeVariantsBySession(value: unknown): Record<string, string> | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined
+  const next: Record<string, string> = {}
   for (const v of Object.values(value)) {
-    if (v !== null && typeof v !== "string") return false
+    if (v === null) continue
+    if (typeof v !== "string") return undefined
   }
-  return true
+  for (const [k, v] of Object.entries(value)) {
+    if (typeof v !== "string") continue
+    next[k] = v
+  }
+  return next
 }
 
 // Fallback defaults when no config is available
@@ -133,7 +139,7 @@ export function ProviderProvider(props: ParentProps) {
     modelsByAgent: {} as Record<string, ModelKey>,
     selectedAgent: FALLBACK_AGENT,
     sessionModels: {} as Record<string, ModelKey>,
-    sessionVariants: {} as Record<string, string | null>,
+    sessionVariants: {} as Record<string, string>,
   })
 
   // Track whether the user has manually changed the agent via setSelectedAgent
@@ -182,8 +188,9 @@ export function ProviderProvider(props: ParentProps) {
       if (stored) {
         try {
           const parsed = JSON.parse(stored)
-          if (isValidVariantsBySession(parsed)) {
-            setStore("sessionVariants", parsed)
+          const normalized = normalizeVariantsBySession(parsed)
+          if (normalized) {
+            setStore("sessionVariants", normalized)
             variantsHydrated = true
           }
         } catch (_) { /* invalid JSON, fall through to remove */ }
@@ -392,7 +399,13 @@ export function ProviderProvider(props: ParentProps) {
 
   function setSessionVariant(sessionID: string | undefined, value: string | undefined) {
     if (!sessionID) return
-    setStore("sessionVariants", sessionID, value ?? null)
+    if (value === undefined) {
+      setStore("sessionVariants", produce((state) => {
+        delete state[sessionID]
+      }))
+      return
+    }
+    setStore("sessionVariants", sessionID, value)
   }
 
   function currentVariant(sessionID: string | undefined, model: ModelKey | null, agent = store.selectedAgent) {

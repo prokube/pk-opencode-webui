@@ -2768,8 +2768,8 @@ export function Session() {
                 id: "__default__",
                 title: "Default",
                 description: configuredVariant()
-                  ? `Use agent default (${configuredVariant()})`
-                  : "No variant override",
+                  ? `Inherit agent default (${configuredVariant()})`
+                  : "Inherit agent default",
               },
               ...variantItems().map((name) => ({
                 id: name,

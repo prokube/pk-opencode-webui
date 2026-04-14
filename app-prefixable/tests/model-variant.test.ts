@@ -62,9 +62,9 @@ describe("resolveModelVariant", () => {
       .toBe("fast")
   })
 
-  test("respects explicit default override stored as null", () => {
+  test("treats legacy null override as inherit-configured default", () => {
     expect(resolveModelVariant(null, "fast", ["fast", "smart"]))
-      .toBeUndefined()
+      .toBe("fast")
   })
 
   test("returns undefined when no variants are available", () => {
@@ -84,9 +84,9 @@ describe("cycleModelVariant", () => {
       .toBeUndefined()
   })
 
-  test("starts from first variant when explicit default is selected", () => {
-    expect(cycleModelVariant(null, "smart", ["fast", "smart"]))
-      .toBe("fast")
+  test("treats legacy null override as no override when cycling", () => {
+    expect(cycleModelVariant(null, "fast", ["fast", "smart"]))
+      .toBe("smart")
   })
 
   test("returns undefined when no variants exist", () => {
