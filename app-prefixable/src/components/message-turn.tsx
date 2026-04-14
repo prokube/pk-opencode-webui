@@ -1,13 +1,17 @@
 import { type Accessor, createSignal, createEffect, Show, For, createMemo, onCleanup } from "solid-js"
-import { ChevronDown, ChevronRight, User, Bot, FileText, Copy, Check, Clock } from "lucide-solid"
+import { ChevronDown, ChevronRight, User, Bot, FileText, Copy, Check, Clock, ExternalLink } from "lucide-solid"
 import { Markdown } from "./markdown"
 import { MessageParts } from "./tool-part"
 import { ImagePreview } from "./image-preview"
 import { errorText } from "../types/message"
 import type { DisplayMessage, Turn } from "../types/message"
-import type { Part } from "../sdk/client"
+import type { Message, Part, Session } from "../sdk/client"
 import { extractTextContent } from "../utils/message"
 import { formatRelativeTime, formatAbsoluteTime, formatDuration } from "../utils/time"
+import { useNavigate, useParams } from "@solidjs/router"
+import { useSync } from "../context/sync"
+import { useSDK } from "../context/sdk"
+import { base64Encode } from "../utils/path"
 
 // Type for file parts with image/PDF data
 interface FilePart {
@@ -39,6 +43,14 @@ function isRetryPart(p: Part): p is Extract<Part, { type: "retry" }> {
 
 function isPatchPart(p: Part): p is Extract<Part, { type: "patch" }> {
   return p.type === "patch"
+}
+
+function isSubtaskPart(p: Part): p is Extract<Part, { type: "subtask" }> {
+  return p.type === "subtask"
+}
+
+function isAssistantMessage(message: Message): message is Extract<Message, { role: "assistant" }> {
+  return message.role === "assistant"
 }
 
 function renderMetaPart(part: Part) {
@@ -253,6 +265,65 @@ function TurnDetails(props: { turn: Turn }) {
   )
 }
 
+function SubtaskCard(props: {
+  part: Extract<Part, { type: "subtask" }>
+  child?: Session
+  running: boolean
+  onOpen: (childID: string) => void
+}) {
+  const clickable = () => !!props.child?.id
+
+  return (
+    <button
+      type="button"
+      onClick={() => props.child?.id && props.onOpen(props.child.id)}
+      class="w-full text-left rounded-md px-3 py-2 transition-colors"
+      style={{
+        border: "1px solid var(--border-base)",
+        background: "var(--background-base)",
+        cursor: clickable() ? "pointer" : "default",
+      }}
+      onMouseEnter={(e) => {
+        if (!clickable()) return
+        e.currentTarget.style.background = "var(--surface-inset)"
+      }}
+      onMouseLeave={(e) => {
+        if (!clickable()) return
+        e.currentTarget.style.background = "var(--background-base)"
+      }}
+      title={props.child?.id ? "Open delegated session" : "Waiting for delegated session"}
+      aria-label={`Delegated subtask for ${props.part.agent}`}
+      disabled={!clickable()}
+    >
+      <div class="flex items-start gap-2">
+        <span
+          class="inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-medium whitespace-nowrap"
+          style={{
+            background: "var(--surface-brand-muted)",
+            color: "var(--text-interactive-base)",
+            border: "1px solid var(--border-base)",
+          }}
+        >
+          {props.part.agent}
+        </span>
+        <div class="flex-1 min-w-0 text-sm" style={{ color: "var(--text-base)" }}>
+          {props.part.description || props.part.prompt}
+        </div>
+        <div class="shrink-0 flex items-center gap-1 text-xs" style={{ color: "var(--text-weak)" }}>
+          <Show when={props.running}>
+            <span class="w-3 h-3 rounded-full border-2 border-current border-r-transparent animate-spin" />
+            <span>running</span>
+          </Show>
+          <Show when={!props.running && props.child?.id}>
+            <ExternalLink class="w-3 h-3" />
+            <span>open</span>
+          </Show>
+        </div>
+      </div>
+    </button>
+  )
+}
+
 export function MessageTurn(props: {
   turn: Turn
   now: Accessor<number>
@@ -260,6 +331,10 @@ export function MessageTurn(props: {
   isLast?: boolean
   onToggle?: (turnId: string, expanded: boolean) => void
 }) {
+  const sync = useSync()
+  const { client, directory } = useSDK()
+  const params = useParams<{ dir: string }>()
+  const navigate = useNavigate()
   const [expanded, setExpanded] = createSignal(props.defaultExpanded ?? props.isLast ?? false)
   const [previewUrl, setPreviewUrl] = createSignal<string | null>(null)
   const [textExpanded, setTextExpanded] = createSignal(false)
@@ -268,6 +343,13 @@ export function MessageTurn(props: {
   const [focused, setFocused] = createSignal(false)
   const [detailsOpen, setDetailsOpen] = createSignal(false)
   const [hovered, setHovered] = createSignal(false)
+  const [children, setChildren] = createSignal<Record<string, Session[]>>({})
+
+  const dirSlug = createMemo(() => (directory ? base64Encode(directory) : params.dir))
+
+  const openChild = (childID: string) => {
+    navigate(`/${dirSlug()}/session/${childID}`)
+  }
 
   // Relative timestamp driven by shared `now` signal from parent
   const relativeTime = createMemo(() => {
@@ -329,16 +411,59 @@ export function MessageTurn(props: {
     copyTimeoutId = setTimeout(() => setCopied(false), 2000)
   }
 
-  const assistantText = createMemo(() => {
-    const msgs = props.turn.assistantMessages
-    if (msgs.length === 0) return ""
-    // Get text from last assistant message
-    for (let i = msgs.length - 1; i >= 0; i--) {
-      const text = extractTextContent(msgs[i].parts).trim()
-      if (text) return text
+  const parentIDs = createMemo(() => {
+    const ids = new Set<string>()
+    for (const message of props.turn.assistantMessages) {
+      if (!message.parts.some(isSubtaskPart)) continue
+      ids.add(message.sessionID)
     }
-    return ""
+    return [...ids]
   })
+
+  createEffect(() => {
+    for (const sessionID of parentIDs()) {
+      const known = children()[sessionID]
+      if (known) {
+        for (const child of known) sync.session.sync(child.id)
+        continue
+      }
+      client.session
+        .children({ sessionID, directory })
+        .then((res) => {
+          const list = (res.data ?? []).slice().sort((a, b) => a.time.created - b.time.created)
+          setChildren((prev) => ({ ...prev, [sessionID]: list }))
+          for (const child of list) sync.session.sync(child.id)
+        })
+        .catch((error) => {
+          console.error("Failed to load session children", error)
+        })
+    }
+  })
+
+  const childForSubtask = (part: Extract<Part, { type: "subtask" }>) => {
+    const list = children()[part.sessionID]
+    if (!list || list.length === 0) return undefined
+    const all = sync.messages(part.sessionID).flatMap((message) => message.parts.filter(isSubtaskPart))
+    const index = all.findIndex((candidate) => candidate.id === part.id)
+    if (index < 0) return undefined
+    return list[index]
+  }
+
+  const isChildRunning = (childID: string | undefined) => {
+    if (!childID) return true
+    const child = sync.session.get(childID)
+    if (!child) return true
+    const messages = sync.messages(childID)
+    const assistant = (() => {
+      for (let i = messages.length - 1; i >= 0; i--) {
+        const message = messages[i]
+        if (isAssistantMessage(message.info)) return message
+      }
+      return undefined
+    })()
+    if (!assistant) return true
+    return assistant.info.time.completed == null
+  }
 
   const hasError = createMemo(() => props.turn.assistantMessages.some((m) => m.error))
 
@@ -594,6 +719,7 @@ export function MessageTurn(props: {
               const text = extractTextContent(message.parts).trim()
               const tools = hasTools(message)
               const meta = () => message.parts.filter((part) => isAgentPart(part) || isSnapshotPart(part) || isRetryPart(part) || isPatchPart(part))
+              const subtasks = () => message.parts.filter(isSubtaskPart)
 
               return (
                 <div class="flex gap-3">
@@ -626,6 +752,23 @@ export function MessageTurn(props: {
                     <Show when={meta().length > 0}>
                       <div class="space-y-2 mt-2">
                         <For each={meta()}>{(part) => renderMetaPart(part)}</For>
+                      </div>
+                    </Show>
+                    <Show when={subtasks().length > 0}>
+                      <div class="space-y-2 mt-2">
+                        <For each={subtasks()}>
+                          {(part) => {
+                            const child = childForSubtask(part)
+                            return (
+                              <SubtaskCard
+                                part={part}
+                                child={child}
+                                running={isChildRunning(child?.id)}
+                                onOpen={openChild}
+                              />
+                            )
+                          }}
+                        </For>
                       </div>
                     </Show>
                     {/* Tool calls */}
