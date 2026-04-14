@@ -2363,6 +2363,7 @@ Add your project-specific instructions here.
                       </p>
                     </div>
                     <button
+                      type="button"
                       onClick={() => updateAlarmChannels({ browser: !alarmChannels().browser })}
                       class="relative w-10 h-5 rounded-full transition-colors"
                       style={{
@@ -2387,19 +2388,20 @@ Add your project-specific instructions here.
                       <h3 class="text-sm font-medium" style={{ color: "var(--text-strong)" }}>
                         Telegram alarm channel
                       </h3>
-                      <p class="text-xs mt-1" style={{ color: telegramAlarmReady() ? "var(--text-weak)" : "var(--icon-warning-base)" }}>
+                      <p id="telegram-alarm-hint" class="text-xs mt-1" style={{ color: telegramAlarmReady() ? "var(--text-weak)" : "var(--icon-warning-base)" }}>
                         {telegramAlarmHint()}
                       </p>
-                      <p class="text-xs mt-1" style={{ color: "var(--text-weak)" }}>
+                      <p id="telegram-alarm-fallback" class="text-xs mt-1" style={{ color: "var(--text-weak)" }}>
                         Telegram alarms are proactive. If alerts are missed, use <code class="px-1 py-0.5 rounded" style={{ background: "var(--surface-inset)" }}>/pending</code> in Telegram as fallback/history.
                       </p>
                     </div>
                     <button
+                      type="button"
                       onClick={() => {
-                        if (!telegramAlarmReady()) return
+                        if (!telegramAlarmReady() && !alarmChannels().telegram) return
                         updateAlarmChannels({ telegram: !alarmChannels().telegram })
                       }}
-                      disabled={!telegramAlarmReady()}
+                      disabled={!telegramAlarmReady() && !alarmChannels().telegram}
                       class="relative w-10 h-5 rounded-full transition-colors disabled:opacity-50"
                       style={{
                         background: alarmChannels().telegram ? "var(--interactive-base)" : "var(--surface-inset)",
@@ -2407,6 +2409,7 @@ Add your project-specific instructions here.
                       role="switch"
                       aria-checked={alarmChannels().telegram}
                       aria-label="Toggle Telegram alarm channel"
+                      aria-describedby="telegram-alarm-hint telegram-alarm-fallback"
                     >
                       <div
                         class="absolute top-0.5 w-4 h-4 rounded-full transition-all"

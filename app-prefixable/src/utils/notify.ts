@@ -56,17 +56,22 @@ export function cleanupNotifyState(id: string) {
 
 export function readAlarmChannels(): AlarmChannels {
   if (typeof window === "undefined") return DEFAULT_ALARM_CHANNELS;
-  const raw = window.localStorage.getItem(ALARM_CHANNELS_STORAGE_KEY);
+  let raw: string | null = null;
+  try {
+    raw = window.localStorage.getItem(ALARM_CHANNELS_STORAGE_KEY);
+  } catch {
+    return DEFAULT_ALARM_CHANNELS;
+  }
   if (!raw) return DEFAULT_ALARM_CHANNELS;
   let parsed: Partial<AlarmChannels> | null = null;
   try {
     parsed = JSON.parse(raw) as Partial<AlarmChannels> | null;
   } catch {
-    window.localStorage.removeItem(ALARM_CHANNELS_STORAGE_KEY);
+    try { window.localStorage.removeItem(ALARM_CHANNELS_STORAGE_KEY); } catch {}
     return DEFAULT_ALARM_CHANNELS;
   }
   if (!parsed || typeof parsed !== "object") {
-    window.localStorage.removeItem(ALARM_CHANNELS_STORAGE_KEY);
+    try { window.localStorage.removeItem(ALARM_CHANNELS_STORAGE_KEY); } catch {}
     return DEFAULT_ALARM_CHANNELS;
   }
   return {
@@ -78,6 +83,10 @@ export function readAlarmChannels(): AlarmChannels {
 export function writeAlarmChannels(channels: AlarmChannels) {
   if (typeof window === "undefined") return;
   const value = JSON.stringify(channels);
-  window.localStorage.setItem(ALARM_CHANNELS_STORAGE_KEY, value);
+  try {
+    window.localStorage.setItem(ALARM_CHANNELS_STORAGE_KEY, value);
+  } catch {
+    return;
+  }
   dispatchStorageEvent(ALARM_CHANNELS_STORAGE_KEY, value);
 }
