@@ -1,13 +1,17 @@
 import { type Accessor, createSignal, createEffect, Show, For, createMemo, onCleanup } from "solid-js"
-import { ChevronDown, ChevronRight, User, Bot, FileText, Copy, Check, Clock } from "lucide-solid"
+import { ChevronDown, ChevronRight, User, Bot, FileText, Copy, Check, Clock, ExternalLink } from "lucide-solid"
 import { Markdown } from "./markdown"
 import { MessageParts } from "./tool-part"
 import { ImagePreview } from "./image-preview"
 import { errorText } from "../types/message"
 import type { DisplayMessage, Turn } from "../types/message"
-import type { Part } from "../sdk/client"
+import type { Part, Session } from "../sdk/client"
 import { extractTextContent } from "../utils/message"
 import { formatRelativeTime, formatAbsoluteTime, formatDuration } from "../utils/time"
+import { useNavigate, useParams } from "@solidjs/router"
+import { useSync } from "../context/sync"
+import { useSDK } from "../context/sdk"
+import { base64Encode } from "../utils/path"
 
 // Type for file parts with image/PDF data
 interface FilePart {
@@ -40,6 +44,61 @@ function isRetryPart(p: Part): p is Extract<Part, { type: "retry" }> {
 function isPatchPart(p: Part): p is Extract<Part, { type: "patch" }> {
   return p.type === "patch"
 }
+
+function isSubtaskPart(p: Part): p is Extract<Part, { type: "subtask" }> {
+  return p.type === "subtask"
+}
+
+const MAX_SHARED_CHILDREN = 400
+const MAX_SHARED_CHILDREN_INFLIGHT = 200
+const MAX_SHARED_SYNCED_CHILDREN = 600
+const CHILDREN_RETRY_DELAY_MS = 5000
+const CHILDREN_EMPTY_RETRY_DELAY_MS = 1500
+const CHILDREN_EMPTY_RETRY_MAX_DELAY_MS = 30000
+const MAX_SHARED_CHILDREN_RETRY = 400
+
+function childCacheKey(sessionID: string, directory: string | undefined) {
+  return `${directory ?? ""}::${sessionID}`
+}
+
+function lruGet<V>(map: Map<string, V>, key: string) {
+  const value = map.get(key)
+  if (value === undefined) return undefined
+  map.delete(key)
+  map.set(key, value)
+  return value
+}
+
+function lruSet<V>(map: Map<string, V>, key: string, value: V, max: number) {
+  if (map.has(key)) map.delete(key)
+  map.set(key, value)
+  if (map.size <= max) return
+  const oldest = map.keys().next().value
+  if (oldest === undefined) return
+  map.delete(oldest)
+}
+
+function lruHas(set: Set<string>, value: string) {
+  if (!set.has(value)) return false
+  set.delete(value)
+  set.add(value)
+  return true
+}
+
+function lruAdd(set: Set<string>, value: string, max: number) {
+  if (set.has(value)) set.delete(value)
+  set.add(value)
+  if (set.size <= max) return
+  const oldest = set.values().next().value
+  if (oldest === undefined) return
+  set.delete(oldest)
+}
+
+const sharedChildren = new Map<string, Session[]>()
+const sharedChildrenInflight = new Map<string, Promise<Session[]>>()
+const sharedChildrenEmptyBackoff = new Map<string, number>()
+const sharedChildrenRetryAt = new Map<string, number>()
+const sharedSyncedChildren = new Set<string>()
 
 function renderMetaPart(part: Part) {
   if (isAgentPart(part)) {
@@ -253,6 +312,73 @@ function TurnDetails(props: { turn: Turn }) {
   )
 }
 
+function SubtaskCard(props: {
+  part: Extract<Part, { type: "subtask" }>
+  child?: Session
+  state: "waiting" | "running" | "open"
+  onOpen: (childID: string) => void
+}) {
+  const clickable = () => !!props.child?.id
+  const title = () => {
+    if (!clickable()) return "Waiting for delegated session link"
+    if (props.state === "running") return "Open delegated session (still running)"
+    return "Open delegated session"
+  }
+
+  return (
+    <button
+      type="button"
+      onClick={() => props.child?.id && props.onOpen(props.child.id)}
+      class="w-full text-left rounded-md px-3 py-2 transition-colors"
+      style={{
+        border: "1px solid var(--border-base)",
+        background: "var(--background-base)",
+        cursor: clickable() ? "pointer" : "default",
+      }}
+      onMouseEnter={(e) => {
+        if (!clickable()) return
+        e.currentTarget.style.background = "var(--surface-inset)"
+      }}
+      onMouseLeave={(e) => {
+        if (!clickable()) return
+        e.currentTarget.style.background = "var(--background-base)"
+      }}
+      title={title()}
+      aria-label={`Delegated subtask for ${props.part.agent} (${props.state})`}
+      disabled={!clickable()}
+    >
+      <div class="flex items-start gap-2">
+        <span
+          class="inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-medium whitespace-nowrap"
+          style={{
+            background: "var(--surface-brand-muted)",
+            color: "var(--text-interactive-base)",
+            border: "1px solid var(--border-base)",
+          }}
+        >
+          {props.part.agent}
+        </span>
+        <div class="flex-1 min-w-0 text-sm" style={{ color: "var(--text-base)" }}>
+          {props.part.description || props.part.prompt}
+        </div>
+        <div class="shrink-0 flex items-center gap-1 text-xs" style={{ color: "var(--text-weak)" }}>
+          <Show when={props.state === "running"}>
+            <span class="w-3 h-3 rounded-full border-2 border-current border-r-transparent animate-spin" />
+            <span>running</span>
+          </Show>
+          <Show when={props.state === "open"}>
+            <ExternalLink class="w-3 h-3" />
+            <span>open</span>
+          </Show>
+          <Show when={props.state === "waiting"}>
+            <span>waiting</span>
+          </Show>
+        </div>
+      </div>
+    </button>
+  )
+}
+
 export function MessageTurn(props: {
   turn: Turn
   now: Accessor<number>
@@ -260,6 +386,10 @@ export function MessageTurn(props: {
   isLast?: boolean
   onToggle?: (turnId: string, expanded: boolean) => void
 }) {
+  const sync = useSync()
+  const { client, directory } = useSDK()
+  const params = useParams<{ dir: string }>()
+  const navigate = useNavigate()
   const [expanded, setExpanded] = createSignal(props.defaultExpanded ?? props.isLast ?? false)
   const [previewUrl, setPreviewUrl] = createSignal<string | null>(null)
   const [textExpanded, setTextExpanded] = createSignal(false)
@@ -268,6 +398,14 @@ export function MessageTurn(props: {
   const [focused, setFocused] = createSignal(false)
   const [detailsOpen, setDetailsOpen] = createSignal(false)
   const [hovered, setHovered] = createSignal(false)
+  const [children, setChildren] = createSignal<Record<string, Session[]>>({})
+  const [childRetry, setChildRetry] = createSignal(0)
+
+  const dirSlug = createMemo(() => (directory ? base64Encode(directory) : params.dir))
+
+  const openChild = (childID: string) => {
+    navigate(`/${dirSlug()}/session/${childID}`)
+  }
 
   // Relative timestamp driven by shared `now` signal from parent
   const relativeTime = createMemo(() => {
@@ -285,10 +423,13 @@ export function MessageTurn(props: {
   // Ref for text overflow detection
   let textRef: HTMLDivElement | undefined
   let copyTimeoutId: ReturnType<typeof setTimeout> | undefined
+  const retryTimers = new Map<string, ReturnType<typeof setTimeout>>()
 
   // Cleanup timeout on unmount
   onCleanup(() => {
     if (copyTimeoutId) clearTimeout(copyTimeoutId)
+    for (const timer of retryTimers.values()) clearTimeout(timer)
+    retryTimers.clear()
   })
 
   // Extract image/PDF attachments from user message (single pass)
@@ -329,16 +470,180 @@ export function MessageTurn(props: {
     copyTimeoutId = setTimeout(() => setCopied(false), 2000)
   }
 
-  const assistantText = createMemo(() => {
-    const msgs = props.turn.assistantMessages
-    if (msgs.length === 0) return ""
-    // Get text from last assistant message
-    for (let i = msgs.length - 1; i >= 0; i--) {
-      const text = extractTextContent(msgs[i].parts).trim()
-      if (text) return text
+  const parentIDs = createMemo(() => {
+    const ids = new Set<string>()
+    for (const message of props.turn.assistantMessages) {
+      for (const part of message.parts) {
+        if (!isSubtaskPart(part)) continue
+        ids.add(part.sessionID)
+      }
     }
-    return ""
+    return [...ids]
   })
+
+  createEffect(() => {
+    childRetry()
+    const expectedCounts = new Map<string, number>()
+    for (const sessionID of parentIDs()) {
+      const key = childCacheKey(sessionID, directory)
+      const known = children()[sessionID]
+      const expected = expectedCounts.get(sessionID) ?? subtasksForParent(sessionID).length
+      if (!expectedCounts.has(sessionID)) expectedCounts.set(sessionID, expected)
+      if (known && known.length >= expected) continue
+      const now = Date.now()
+      const retryAt = lruGet(sharedChildrenRetryAt, key)
+      if (retryAt !== undefined && retryAt > now) {
+        if (!retryTimers.has(key)) {
+          const timer = setTimeout(() => {
+            retryTimers.delete(key)
+            setChildRetry((n) => n + 1)
+          }, retryAt - now)
+          retryTimers.set(key, timer)
+        }
+        continue
+      }
+      if (retryAt !== undefined) {
+        sharedChildrenRetryAt.delete(key)
+      }
+      const cached = lruGet(sharedChildren, key)
+      if (cached !== undefined) {
+        if (cached.length >= expected) {
+          setChildren((prev) => ({ ...prev, [sessionID]: cached }))
+          continue
+        }
+      }
+      const inflight = lruGet(sharedChildrenInflight, key)
+      if (inflight !== undefined) {
+        inflight.then((list) => {
+          setChildren((prev) => {
+            if (list.length === 0) return prev
+            if ((prev[sessionID]?.length ?? 0) >= list.length) return prev
+            return { ...prev, [sessionID]: list }
+          })
+        }).catch(() => {})
+        continue
+      }
+
+      const pending = client.session
+        .children({ sessionID, directory })
+        .then((res) => {
+          const list = (res.data ?? []).slice().sort((a, b) => a.time.created - b.time.created)
+          const retryTimer = retryTimers.get(key)
+          if (retryTimer) {
+            clearTimeout(retryTimer)
+            retryTimers.delete(key)
+          }
+          if (list.length >= expected) {
+            sharedChildrenEmptyBackoff.delete(key)
+            sharedChildrenRetryAt.delete(key)
+            lruSet(sharedChildren, key, list, MAX_SHARED_CHILDREN)
+            return list
+          }
+          const previousDelay = lruGet(sharedChildrenEmptyBackoff, key)
+          const delay = previousDelay
+            ? Math.min(previousDelay * 2, CHILDREN_EMPTY_RETRY_MAX_DELAY_MS)
+            : CHILDREN_EMPTY_RETRY_DELAY_MS
+          lruSet(sharedChildrenEmptyBackoff, key, delay, MAX_SHARED_CHILDREN_RETRY)
+          lruSet(sharedChildrenRetryAt, key, Date.now() + delay, MAX_SHARED_CHILDREN_RETRY)
+          const timer = setTimeout(() => {
+            retryTimers.delete(key)
+            setChildRetry((n) => n + 1)
+          }, delay)
+          retryTimers.set(key, timer)
+          return list
+        })
+        .catch((error) => {
+          console.error("Failed to load session children", error)
+          const retryTimer = retryTimers.get(key)
+          if (retryTimer) clearTimeout(retryTimer)
+          const previousDelay = lruGet(sharedChildrenEmptyBackoff, key)
+          const delay = previousDelay
+            ? Math.min(previousDelay * 2, CHILDREN_EMPTY_RETRY_MAX_DELAY_MS)
+            : CHILDREN_RETRY_DELAY_MS
+          lruSet(sharedChildrenEmptyBackoff, key, delay, MAX_SHARED_CHILDREN_RETRY)
+          lruSet(sharedChildrenRetryAt, key, Date.now() + delay, MAX_SHARED_CHILDREN_RETRY)
+          const timer = setTimeout(() => {
+            retryTimers.delete(key)
+            setChildRetry((n) => n + 1)
+          }, delay)
+          retryTimers.set(key, timer)
+          throw error
+        })
+        .finally(() => {
+          sharedChildrenInflight.delete(key)
+        })
+
+      lruSet(sharedChildrenInflight, key, pending, MAX_SHARED_CHILDREN_INFLIGHT)
+      pending.then((list) => {
+        if (list.length === 0) return
+        setChildren((prev) => {
+          if ((prev[sessionID]?.length ?? 0) >= list.length) return prev
+          return { ...prev, [sessionID]: list }
+        })
+      }).catch(() => {})
+    }
+  })
+
+  function subtasksForParent(sessionID: string) {
+    const all = sync.messages(sessionID).flatMap((message) => {
+      const orderedParts = sync.parts(message.info.id)
+      if (orderedParts.length > 0) {
+        return orderedParts.filter((part) => isSubtaskPart(part) && part.sessionID === sessionID)
+      }
+      return message.parts
+        .filter(isSubtaskPart)
+        .filter((part) => part.sessionID === sessionID)
+        .slice()
+        .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
+    })
+    all.sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
+    if (all.length > 0) return all
+    return props.turn.assistantMessages
+      .flatMap((message) => message.parts.filter(isSubtaskPart))
+      .filter((part) => part.sessionID === sessionID)
+      .slice()
+      .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
+  }
+
+  const childForSubtask = (part: Extract<Part, { type: "subtask" }>) => {
+    const list = children()[part.sessionID]
+    if (!list || list.length === 0) return undefined
+    const all = subtasksForParent(part.sessionID)
+    if (all.length !== list.length) return undefined
+    const index = all.findIndex((candidate) => candidate.id === part.id)
+    if (index < 0) return undefined
+    return list[index]
+  }
+
+  createEffect(() => {
+    const ids = new Set<string>()
+    for (const message of props.turn.assistantMessages) {
+      for (const part of message.parts) {
+        if (!isSubtaskPart(part)) continue
+        const child = childForSubtask(part)
+        if (!child?.id) continue
+        ids.add(child.id)
+      }
+    }
+    for (const childID of ids) {
+      const key = childCacheKey(childID, directory)
+      if (lruHas(sharedSyncedChildren, key)) continue
+      lruAdd(sharedSyncedChildren, key, MAX_SHARED_SYNCED_CHILDREN)
+      void sync.session.sync(childID)
+    }
+  })
+
+  const childState = (childID: string | undefined) => {
+    if (!childID) return "waiting"
+    const messages = sync.messages(childID)
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const info = messages[i].info
+      if (info.role !== "assistant") continue
+      if (info.time.completed == null) return "running"
+      return "open"
+    }
+    return "running"
+  }
 
   const hasError = createMemo(() => props.turn.assistantMessages.some((m) => m.error))
 
@@ -594,6 +899,7 @@ export function MessageTurn(props: {
               const text = extractTextContent(message.parts).trim()
               const tools = hasTools(message)
               const meta = () => message.parts.filter((part) => isAgentPart(part) || isSnapshotPart(part) || isRetryPart(part) || isPatchPart(part))
+              const subtasks = () => message.parts.filter(isSubtaskPart)
 
               return (
                 <div class="flex gap-3">
@@ -626,6 +932,24 @@ export function MessageTurn(props: {
                     <Show when={meta().length > 0}>
                       <div class="space-y-2 mt-2">
                         <For each={meta()}>{(part) => renderMetaPart(part)}</For>
+                      </div>
+                    </Show>
+                    <Show when={subtasks().length > 0}>
+                      <div class="space-y-2 mt-2">
+                        <For each={subtasks()}>
+                          {(part) => {
+                            const child = createMemo(() => childForSubtask(part))
+                            const state = createMemo(() => childState(child()?.id))
+                            return (
+                              <SubtaskCard
+                                part={part}
+                                child={child()}
+                                state={state()}
+                                onOpen={openChild}
+                              />
+                            )
+                          }}
+                        </For>
                       </div>
                     </Show>
                     {/* Tool calls */}
