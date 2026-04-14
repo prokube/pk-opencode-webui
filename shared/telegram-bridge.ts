@@ -1329,6 +1329,8 @@ export async function readTelegramBridgeHealth(runtime: Runtime): Promise<Bridge
       openCodeApi,
     },
   }
+}
+
 async function sendTelegramQuestionPrompt(config: BridgeConfig, chatId: number, question: TelegramPendingQuestion) {
   const text = questionPromptText(question)
   const markup = questionMarkup(question)
