@@ -694,7 +694,7 @@ Add your project-specific instructions here.
 
   const tabs = createMemo(() => {
     const base: Array<{ id: string; label: string; icon: () => JSX.Element; scope: ScopeBadge }> = [
-      { id: "providers", label: "Providers", icon: () => <Plug class="w-4 h-4" />, scope: "Global" },
+      { id: "providers", label: "Providers", icon: () => <Plug class="w-4 h-4" />, scope: "Global + Project" },
       { id: "servers", label: "Servers", icon: () => <Globe class="w-4 h-4" />, scope: "Global" },
       { id: "git", label: "Git", icon: () => <GitBranch class="w-4 h-4" />, scope: "Global" },
       { id: "mcp", label: "MCP Servers", icon: () => <Server class="w-4 h-4" />, scope: "Global + Project" },
