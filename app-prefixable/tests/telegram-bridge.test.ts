@@ -2569,7 +2569,7 @@ describe("telegram bridge config and cache", () => {
     const sentTexts = calls
       .filter((x) => x.url.includes("/sendMessage"))
       .map((x) => String(x.body.text || ""));
-    expect(sentTexts.some((text) => text.includes("Choose an option using the buttons below."))).toBe(true);
+    expect(sentTexts.some((text) => text.includes("1) Alpha"))).toBe(true);
     expect(sentTexts.some((text) => text.includes("Open session session-1"))).toBe(true);
     expect(sentTexts.some((text) => text.includes("Thanks, your answer was sent."))).toBe(true);
   });
@@ -2698,8 +2698,7 @@ describe("telegram bridge config and cache", () => {
     const promptText = String(prompt?.body.text || "");
     expect(prompt).toBeDefined();
     expect(promptText.length).toBeLessThanOrEqual(3900);
-    expect(promptText).toContain("Choose an option using the buttons below.");
-    expect(promptText).not.toContain(longLabel.slice(0, 40));
+    expect(promptText).toContain("1)");
     expect(calls.some((x) => String(x.body.text || "").includes("Open session session-inline-long"))).toBe(true);
   });
 

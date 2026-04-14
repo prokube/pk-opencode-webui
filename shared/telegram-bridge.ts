@@ -350,11 +350,7 @@ function pendingAdapter(runtime: Runtime) {
 }
 
 function pendingFallbackEnabled(runtime: Runtime): boolean {
-  if (runtime.store.inboxGet) return false
-  if (runtime.store.inboxSet) return false
-  if (runtime.store.pendingGet) return false
-  if (runtime.store.pendingSet) return false
-  return true
+  return !pendingAdapter(runtime)
 }
 
 async function pendingGet(runtime: Runtime, key: string): Promise<TelegramPendingItem[]> {
@@ -673,7 +669,7 @@ function permissionText(properties: Record<string, unknown>): string {
   return `Permission request: ${permission} (${patterns.join(", ")})`
 }
 
-function questionPromptText(question: TelegramPendingQuestion, compactOptions = false): string {
+function questionPromptText(question: TelegramPendingQuestion): string {
   const lines = ["Question pending:"]
   for (let i = 0; i < question.questions.length; i++) {
     const row = question.questions[i]
@@ -688,13 +684,8 @@ function questionPromptText(question: TelegramPendingQuestion, compactOptions = 
     }
     const detail = row.question && row.question !== row.header ? row.question : ""
     if (detail) lines.push(detail)
-    if (row.options.length && compactOptions) {
-      lines.push("Choose an option using the buttons below.")
-    }
-    if (!compactOptions) {
-      for (let index = 0; index < row.options.length; index++) {
-        lines.push(`${index + 1}) ${row.options[index]}`)
-      }
+    for (let index = 0; index < row.options.length; index++) {
+      lines.push(`${index + 1}) ${row.options[index]}`)
     }
     if (!row.options.length && row.custom) {
       lines.push("Reply with your answer as text.")
@@ -1357,8 +1348,7 @@ async function sendTelegramQuestionPrompt(config: BridgeConfig, chatId: number, 
     await sendTelegramMessage(config, chatId, questionPromptText(question))
     return
   }
-  const compact = questionPromptText(question, true)
-  const text = truncateTelegramText(compact, telegramMessageSoftLimit)
+  const text = truncateTelegramText(questionPromptText(question), telegramMessageSoftLimit)
   await telegramRequest(config, "sendMessage", {
     chat_id: chatId,
     text,
@@ -1395,7 +1385,7 @@ export async function handleCallbackUpdate(runtime: Runtime, update: TelegramUpd
       return
     }
 
-    const key = await pendingLookupKeys(chatId, userId)
+    const match = await pendingLookupKeys(chatId, userId)
       .reduce(async (found, itemKey) => {
         const previous = await found
         if (previous) return previous
@@ -1404,14 +1394,14 @@ export async function handleCallbackUpdate(runtime: Runtime, update: TelegramUpd
         if (!pending) return
         return { itemKey, pending }
       }, Promise.resolve(undefined as { itemKey: string; pending: TelegramPendingQuestion } | undefined))
-    if (!key) {
+    if (!match) {
       await answerCallback(runtime.config, callbackId, "This question has expired.")
       state.acknowledged = true
       await sendTelegramMessage(runtime.config, chatId, "That question is no longer pending. Wait for the next prompt or use /status.")
       return
     }
 
-    const pending = key.pending
+    const pending = match.pending
     const row = pending.questions[parsed.questionIndex]
     const option = row?.options[parsed.optionIndex]
     if (pending.questions.length !== 1 || row?.multiple) {
@@ -1432,8 +1422,8 @@ export async function handleCallbackUpdate(runtime: Runtime, update: TelegramUpd
     state.acknowledged = true
     await sendQuestionReply(runtime.config, pending.requestId, answers)
       .then(async () => {
-        await deletePendingQuestionByKey(runtime, key.itemKey, pending.requestId)
-        const remaining = await readPendingQuestionsByKey(runtime, key.itemKey)
+        await deletePendingQuestionByKey(runtime, match.itemKey, pending.requestId)
+        const remaining = await readPendingQuestionsByKey(runtime, match.itemKey)
         if (remaining.length) {
           const next = remaining[0]
           if (next) {
@@ -1445,7 +1435,7 @@ export async function handleCallbackUpdate(runtime: Runtime, update: TelegramUpd
       })
       .catch(async (error) => {
         if (!isMissingQuestion(error)) throw error
-        await deletePendingQuestionByKey(runtime, key.itemKey, pending.requestId)
+        await deletePendingQuestionByKey(runtime, match.itemKey, pending.requestId)
         await sendTelegramMessage(runtime.config, chatId, "That question is no longer pending. Wait for the next prompt or use /status.")
       })
   } catch (error) {

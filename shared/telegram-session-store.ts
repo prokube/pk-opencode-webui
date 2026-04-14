@@ -75,6 +75,15 @@ function parsePendingQuestionEntry(value: unknown): TelegramPendingQuestionEntry
   }
 }
 
+function shortId(input: string): string {
+  let hash = 2166136261
+  for (const ch of input) {
+    hash ^= ch.charCodeAt(0)
+    hash = Math.imul(hash, 16777619)
+  }
+  return (hash >>> 0).toString(36)
+}
+
 function parsePendingQuestion(value: unknown): TelegramPendingQuestion | undefined {
   if (!value || typeof value !== "object") return
   const row = value as Record<string, unknown>
@@ -91,7 +100,7 @@ function parsePendingQuestion(value: unknown): TelegramPendingQuestion | undefin
   const questions = list as TelegramPendingQuestionEntry[]
   if (!requestId || !sessionId || !questions.length) return
   const compact = callbackId.toLowerCase().replace(/[^a-z0-9]/g, "").slice(0, 24)
-  const derived = requestId.toLowerCase().replace(/[^a-z0-9]/g, "").slice(0, 24)
+  const derived = `${requestId.toLowerCase().replace(/[^a-z0-9]/g, "").slice(0, 16)}${shortId(requestId)}`.slice(0, 24)
   const pendingId = (compact || derived || "000000").padStart(6, "0").slice(0, 24)
   return {
     requestId,
