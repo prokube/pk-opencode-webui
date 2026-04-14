@@ -17,6 +17,7 @@ const checklist = Object.freeze([
 const commands = ["/pending", "/inbox", "/notify on", "/notify off", "/notify status", "/new", "/status", "/help"] as const
 const sections = ["Readiness checklist", "Prerequisites", "Setup steps", "Command usage", "Security best practices", "Troubleshooting quick checks"] as const
 const title = "Telegram Setup Guide"
+const requiredKeys = ["TELEGRAM_BOT_TOKEN", "TELEGRAM_WEBHOOK_SECRET", "openCodeUrl", "webhookUrl"] as const
 
 export function TelegramSetupGuide() {
   const [done, setDone] = createSignal(new Set<string>())
@@ -37,9 +38,9 @@ export function TelegramSetupGuide() {
   return (
     <div class="space-y-6">
       <header>
-        <h1 class="text-lg font-medium" style={{ color: "var(--text-strong)" }}>
+        <h2 class="text-base font-medium" style={{ color: "var(--text-strong)" }}>
           {title}
-        </h1>
+        </h2>
         <p class="text-sm mt-1" style={{ color: "var(--text-weak)" }}>
           Configure the prokube.ai Telegram bridge with a quick readiness checklist, mode-specific setup, and troubleshooting checks.
         </p>
@@ -47,9 +48,9 @@ export function TelegramSetupGuide() {
 
       <section class="rounded-lg p-4 space-y-3" style={{ background: "var(--background-base)", border: "1px solid var(--border-base)" }}>
         <div class="flex items-center justify-between gap-3">
-          <h2 class="text-sm font-medium" style={{ color: "var(--text-strong)" }}>
+          <h3 class="text-sm font-medium" style={{ color: "var(--text-strong)" }}>
             Readiness checklist
-          </h2>
+          </h3>
           <span class="text-xs px-2 py-1 rounded" style={{ background: "var(--surface-inset)", color: "var(--text-weak)" }}>
             {done().size}/{checklist.length}
           </span>
@@ -68,29 +69,39 @@ export function TelegramSetupGuide() {
       </section>
 
       <section class="rounded-lg p-4 space-y-3" style={{ background: "var(--background-base)", border: "1px solid var(--border-base)" }}>
-        <h2 class="text-sm font-medium" style={{ color: "var(--text-strong)" }}>
+        <h3 class="text-sm font-medium" style={{ color: "var(--text-strong)" }}>
           Prerequisites
-        </h2>
+        </h3>
         <ul class="text-sm space-y-1 list-disc pl-5" style={{ color: "var(--text-base)" }}>
-          <li>Telegram bot created with BotFather and a valid bot token.</li>
+          <li>
+            Create your bot in Telegram with BotFather (<code>/newbot</code>) and copy the token into <code>TELEGRAM_BOT_TOKEN</code>.
+          </li>
           <li>Mode choice: polling (default) or webhook.</li>
-          <li>OpenCode API reachable from the bridge via openCodeUrl (from OPENCODE_API_URL or API_URL by default).</li>
-          <li>Bridge runtime enabled with TELEGRAM_BRIDGE_ENABLED=true in supported deployments.</li>
+          <li>
+            <code>openCodeUrl</code> should be the API endpoint the bridge can reach from inside your deployment (for example <code>http://127.0.0.1:4096</code>).
+          </li>
+          <li>
+            Bridge runtime enabled with <code>TELEGRAM_BRIDGE_ENABLED=true</code> in supported deployments.
+          </li>
         </ul>
       </section>
 
       <section class="rounded-lg p-4 space-y-3" style={{ background: "var(--background-base)", border: "1px solid var(--border-base)" }}>
-        <h2 class="text-sm font-medium" style={{ color: "var(--text-strong)" }}>
+        <h3 class="text-sm font-medium" style={{ color: "var(--text-strong)" }}>
           Setup steps
-        </h2>
+        </h3>
         <div class="space-y-2 text-sm" style={{ color: "var(--text-base)" }}>
           <p>
-            <strong>Polling mode:</strong> set <code>mode=polling</code> (or TELEGRAM_MODE=polling), configure token, and start the bridge. Polling clears webhook
-            registration automatically.
+            <strong>Bot token:</strong> in BotFather run <code>/token</code> for your bot to rotate/copy credentials, then save the value as <code>TELEGRAM_BOT_TOKEN</code> or set it in the Bot token field.
           </p>
           <p>
-            <strong>Webhook mode:</strong> set <code>mode=webhook</code>, configure <code>webhookUrl</code>, <code>webhookPath</code>, and optional <code>webhookSecret</code>.
-            Expose only HTTPS ingress and forward <code>x-telegram-bot-api-secret-token</code> unchanged.
+            <strong>Webhook secret:</strong> generate a random value (for example <code>openssl rand -hex 32</code>), store it in <code>TELEGRAM_WEBHOOK_SECRET</code>, and configure your ingress to pass Telegram's <code>x-telegram-bot-api-secret-token</code> header unchanged.
+          </p>
+          <p>
+            <strong>URL fields:</strong> set <code>openCodeUrl</code> to the bridge-reachable OpenCode API URL, and set <code>webhookUrl</code> to the public HTTPS URL Telegram can call (for example <code>https://your-domain/telegram/webhook</code>).
+          </p>
+          <p>
+            <strong>Mode:</strong> set <code>mode=polling</code> for local/simple setups, or <code>mode=webhook</code> for production ingress. Polling clears webhook registration automatically.
           </p>
           <p>
             Persisted UI fields map to runtime settings: <code>mode</code>, <code>token</code>, <code>openCodeUrl</code>, <code>directory</code>, <code>sessionCacheMax</code>,
@@ -101,9 +112,9 @@ export function TelegramSetupGuide() {
       </section>
 
       <section class="rounded-lg p-4 space-y-3" style={{ background: "var(--background-base)", border: "1px solid var(--border-base)" }}>
-        <h2 class="text-sm font-medium" style={{ color: "var(--text-strong)" }}>
+        <h3 class="text-sm font-medium" style={{ color: "var(--text-strong)" }}>
           Command usage
-        </h2>
+        </h3>
         <div class="flex flex-wrap gap-2">
           <For each={commands}>
             {(command) => (
@@ -116,26 +127,38 @@ export function TelegramSetupGuide() {
       </section>
 
       <section class="rounded-lg p-4 space-y-3" style={{ background: "var(--background-base)", border: "1px solid var(--border-base)" }}>
-        <h2 class="text-sm font-medium" style={{ color: "var(--text-strong)" }}>
+        <h3 class="text-sm font-medium" style={{ color: "var(--text-strong)" }}>
           Security best practices
-        </h2>
+        </h3>
         <ul class="text-sm space-y-1 list-disc pl-5" style={{ color: "var(--text-base)" }}>
-          <li>Store TELEGRAM_BOT_TOKEN and TELEGRAM_WEBHOOK_SECRET in a secret manager, never in git.</li>
-          <li>Use HTTPS-only ingress for webhook mode and limit exposure to TELEGRAM_WEBHOOK_PATH.</li>
-          <li>Preserve the x-telegram-bot-api-secret-token header end-to-end when TELEGRAM_WEBHOOK_SECRET is set.</li>
-          <li>Keep sessionStorePath on persistent storage for restart safety in containerized deployments.</li>
+          <li>
+            Store <code>TELEGRAM_BOT_TOKEN</code> and <code>TELEGRAM_WEBHOOK_SECRET</code> in a secret manager, never in git.
+          </li>
+          <li>
+            Use HTTPS-only ingress for webhook mode and limit exposure to <code>TELEGRAM_WEBHOOK_PATH</code>.
+          </li>
+          <li>
+            Preserve the <code>x-telegram-bot-api-secret-token</code> header end-to-end when <code>TELEGRAM_WEBHOOK_SECRET</code> is set.
+          </li>
+          <li>
+            Keep <code>sessionStorePath</code> on persistent storage for restart safety in containerized deployments.
+          </li>
         </ul>
       </section>
 
       <section class="rounded-lg p-4 space-y-3" style={{ background: "var(--background-base)", border: "1px solid var(--border-base)" }}>
-        <h2 class="text-sm font-medium" style={{ color: "var(--text-strong)" }}>
+        <h3 class="text-sm font-medium" style={{ color: "var(--text-strong)" }}>
           Troubleshooting quick checks
-        </h2>
+        </h3>
         <ul class="text-sm space-y-1 list-disc pl-5" style={{ color: "var(--text-base)" }}>
           <li>If replies fail, look for <code>Telegram sendMessage failed</code> and verify token validity and bot chat permissions.</li>
           <li>If outbound alerts stop, check for <code>[TelegramBridge] outbound event stream error</code> and confirm OpenCode event streaming availability.</li>
-          <li>If webhook updates are rejected, verify your secret header and confirm TELEGRAM_WEBHOOK_URL is publicly reachable over HTTPS.</li>
-          <li>If session links are incorrect in alerts, set TELEGRAM_SESSION_LINK_BASE to the public prokube.ai UI base URL.</li>
+          <li>
+            If webhook updates are rejected, verify your secret header and confirm <code>TELEGRAM_WEBHOOK_URL</code> is publicly reachable over HTTPS.
+          </li>
+          <li>
+            If session links are incorrect in alerts, set <code>TELEGRAM_SESSION_LINK_BASE</code> to the public prokube.ai UI base URL.
+          </li>
         </ul>
       </section>
     </div>
@@ -146,3 +169,4 @@ export const TELEGRAM_GUIDE_COMMANDS = [...commands]
 export const TELEGRAM_READINESS_CHECKS = checklist
 export const TELEGRAM_GUIDE_SECTIONS = [...sections]
 export const TELEGRAM_GUIDE_TITLE = title
+export const TELEGRAM_GUIDE_REQUIRED_KEYS = [...requiredKeys]
