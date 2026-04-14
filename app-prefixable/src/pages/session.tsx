@@ -1,4 +1,5 @@
 import {
+  batch,
   createSignal,
   createResource,
   Show,
@@ -97,6 +98,10 @@ interface FollowupItem {
 
 function followupStorageKey(dir: string) {
   return `opencode.followup.${dir}`;
+}
+
+function followupAutoSendStorageKey(dir: string) {
+  return `opencode.followup.auto-send.${dir}`;
 }
 
 function normalizeFollowupList(value: unknown) {
@@ -282,6 +287,16 @@ export function Session() {
   >([]);
   const [followups, setFollowups] = createSignal<FollowupItem[]>([]);
   const [followupSending, setFollowupSending] = createSignal<string | undefined>();
+  const [followupAutoSend, setFollowupAutoSend] = createSignal(
+    (() => {
+      const id = params.id;
+      if (!id) return true;
+      return readFollowupAutoSendMap()[id] ?? true;
+    })(),
+  );
+  const [followupAutoPaused, setFollowupAutoPaused] = createSignal<string | undefined>();
+  const [followupAutoPending, setFollowupAutoPending] = createSignal(false);
+  const followupAutoStatus = { previous: undefined as string | undefined };
   const [error, setError] = createSignal<string | null>(null);
   // Use session tree walk to find pending questions from this session or any descendant.
   // This surfaces child/grandchild session questions in the parent session view.
@@ -343,6 +358,104 @@ export function Session() {
     if (list.length > 0) map[id] = list;
     writeFollowupMap(map);
     setFollowups(list);
+  }
+
+  function clearFollowupAutoSendStorageKey(dir: string) {
+    if (typeof window === "undefined") return;
+    try {
+      window.localStorage.removeItem(followupAutoSendStorageKey(dir));
+    } catch {
+      return;
+    }
+  }
+
+  function readFollowupAutoSendMap(dir = params.dir) {
+    if (typeof window === "undefined") return {} as Record<string, boolean | undefined>;
+    const key = followupAutoSendStorageKey(dir);
+    try {
+      const raw = window.localStorage.getItem(key);
+      if (!raw) return {} as Record<string, boolean | undefined>;
+      const parsed = JSON.parse(raw);
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+        clearFollowupAutoSendStorageKey(dir);
+        return {} as Record<string, boolean | undefined>;
+      }
+      const map = {} as Record<string, boolean | undefined>;
+      for (const [id, value] of Object.entries(parsed)) {
+        if (value === false) map[id] = false;
+      }
+      return map;
+    } catch {
+      clearFollowupAutoSendStorageKey(dir);
+      return {} as Record<string, boolean | undefined>;
+    }
+  }
+
+  function writeFollowupAutoSendMap(map: Record<string, boolean | undefined>, dir = params.dir) {
+    if (typeof window === "undefined") return;
+    try {
+      window.localStorage.setItem(followupAutoSendStorageKey(dir), JSON.stringify(map));
+    } catch {
+      return;
+    }
+  }
+
+  function setSessionFollowupAutoSend(id: string, enabled: boolean) {
+    const map = readFollowupAutoSendMap();
+    if (enabled) delete map[id];
+    if (!enabled) map[id] = false;
+    writeFollowupAutoSendMap(map);
+    setFollowupAutoSend(enabled);
+    if (enabled) setFollowupAutoPaused(undefined);
+    if (!enabled) setFollowupAutoPending(false);
+  }
+
+  function queueAutoFollowupSend() {
+    if (!followupAutoSend()) return;
+    if (followups().length === 0) return;
+    setFollowupAutoPending(true);
+  }
+
+  function followupAutoDeferredMessage() {
+    if (inputBlocked()) {
+      return pendingQuestion()
+        ? "Auto send waiting: reply to the pending question above before sending queued followups."
+        : "Auto send waiting: resolve the pending permission request above before sending queued followups.";
+    }
+    const model = sessionModel();
+    if (!model) return "Auto send waiting: select a model to send queued followups.";
+    if (!providers.connected.includes(model.providerID)) {
+      return `Auto send waiting: provider "${model.providerID}" is not connected.`;
+    }
+    return undefined;
+  }
+
+  function isAutoFollowupStatusMessage(message: string | null | undefined) {
+    if (!message) return false;
+    return message.startsWith("Auto send waiting:") || message.startsWith("Auto send paused");
+  }
+
+  function clearAutoFollowupStatusError() {
+    if (!isAutoFollowupStatusMessage(error())) return;
+    setError(null);
+  }
+
+  function setAutoFollowupStatusError(message: string) {
+    const current = error();
+    if (current && !isAutoFollowupStatusMessage(current)) return;
+    setError(message);
+  }
+
+  function toggleFollowupAutoSend() {
+    const id = sessionId();
+    if (!id) return;
+    const enabled = !followupAutoSend();
+    setSessionFollowupAutoSend(id, enabled);
+    clearAutoFollowupStatusError();
+    if (!enabled) return;
+    const status = events.status[id]?.type;
+    if (status !== "idle") return;
+    queueAutoFollowupSend();
   }
 
   function queueFollowup(text: string) {
@@ -464,6 +577,10 @@ export function Session() {
     setPendingUserMessageText(null); // Clear pending text on session change
     setFollowupSending(undefined);
     setFollowups(id ? readFollowupMap()[id] ?? [] : []);
+    setFollowupAutoSend(id ? readFollowupAutoSendMap()[id] ?? true : true);
+    setFollowupAutoPaused(undefined);
+    setFollowupAutoPending(false);
+    followupAutoStatus.previous = undefined;
 
     // Restore draft for the new session (or clear if none saved)
     const saved = drafts.get(key);
@@ -514,6 +631,74 @@ export function Session() {
     if (type === "idle") {
       setProcessing(false);
     }
+  });
+
+  createEffect(() => {
+    const blocked = followupAutoPaused();
+    if (!blocked) return;
+    if (followups().some((item) => item.id === blocked)) return;
+    setFollowupAutoPaused(undefined);
+  });
+
+  createEffect(() => {
+    const sid = sessionId();
+    if (!sid) return;
+    const status = events.status[sid]?.type;
+    const prev = followupAutoStatus.previous;
+    followupAutoStatus.previous = status;
+    if (status !== "idle") return;
+    if (!prev || prev === "idle") return;
+    queueAutoFollowupSend();
+  });
+
+  createEffect(() => {
+    const sid = sessionId();
+    if (!sid) return;
+    if (!followupAutoSend()) return;
+    if (followupAutoPending()) return;
+    if (loading() || followupSending() || processing()) return;
+    const status = events.status[sid]?.type;
+    if (status !== "idle") return;
+    const next = followups()[0];
+    if (!next) return;
+    if (followupAutoPaused() === next.id) return;
+    const deferred = followupAutoDeferredMessage();
+    if (deferred) {
+      setAutoFollowupStatusError(deferred);
+      return;
+    }
+    queueAutoFollowupSend();
+  });
+
+  createEffect(() => {
+    const sid = sessionId();
+    if (!sid) return;
+    if (!followupAutoPending()) return;
+    if (!followupAutoSend()) {
+      setFollowupAutoPending(false);
+      return;
+    }
+    if (loading() || followupSending() || processing()) return;
+    const status = events.status[sid]?.type;
+    if (status !== "idle") return;
+    const next = followups()[0];
+    if (!next) {
+      setFollowupAutoPending(false);
+      return;
+    }
+    if (followupAutoPaused() === next.id) {
+      setFollowupAutoPending(false);
+      return;
+    }
+    const deferred = followupAutoDeferredMessage();
+    if (deferred) {
+      setAutoFollowupStatusError(deferred);
+      return;
+    }
+    batch(() => {
+      setFollowupAutoPending(false);
+      void sendFollowupNow(next.id, "auto");
+    });
   });
 
   // Get messages from sync context - reactive, automatically updated via SSE
@@ -1350,22 +1535,51 @@ export function Session() {
     } satisfies DisplayMessage;
   }
 
-  async function sendFollowupNow(id: string) {
+  async function sendFollowupNow(id: string, source: "auto" | "manual" = "manual") {
     const dir = params.dir;
     const sid = sessionId();
-    if (!sid || followupSending() || processing() || loading()) return;
+    const busy = events.status[sid ?? ""]?.type;
+    const autoAttempt = source === "auto";
+    const fail = (message: string) => {
+      setError(message);
+    };
+    const blockedMessage = pendingQuestion()
+      ? "Reply to the pending question above before sending queued followups."
+      : "Resolve the pending permission request above before sending queued followups.";
+    const autoBlockedMessage = pendingQuestion()
+      ? "Auto send waiting: reply to the pending question above before sending queued followups."
+      : "Auto send waiting: resolve the pending permission request above before sending queued followups.";
+    if (!sid || followupSending() || loading() || processing()) return false;
+    if (busy === "busy" || busy === "retry") return false;
+    if (inputBlocked()) {
+      if (autoAttempt) {
+        fail(autoBlockedMessage);
+        return false;
+      }
+      fail(blockedMessage);
+      return false;
+    }
     const model = sessionModel();
     if (!model) {
-      setError("Please select a model before sending messages. Click the model button in the header.");
-      return;
+      if (autoAttempt) {
+        fail("Auto send waiting: select a model to send queued followups.");
+        return false;
+      }
+      fail("Please select a model before sending messages. Click the model button in the header.");
+      return false;
     }
     if (!providers.connected.includes(model.providerID)) {
-      setError(`Provider "${model.providerID}" is not connected. Please configure it in Settings.`);
-      return;
+      if (autoAttempt) {
+        fail(`Auto send waiting: provider "${model.providerID}" is not connected.`);
+        return false;
+      }
+      fail(`Provider "${model.providerID}" is not connected. Please configure it in Settings.`);
+      return false;
     }
     const item = followups().find((entry) => entry.id === id);
-    if (!item) return;
+    if (!item) return false;
     setFollowupSending(id);
+    if (followupAutoPaused() === id) setFollowupAutoPaused(undefined);
     setError(null);
     setPendingUserMessageText(item.text);
     setOptimisticMessage(optimisticUserMessage(item.text, sid));
@@ -1387,10 +1601,23 @@ export function Session() {
       writeFollowupMap(map, dir);
       if (sessionId() === sid) setFollowups(next);
       startProcessing();
+      return true;
     } catch (err) {
+      const autoEnabled = followupAutoSend();
       setPendingUserMessageText(null);
       setOptimisticMessage(null);
-      setError(`Failed to send queued followup: ${err instanceof Error ? err.message : String(err)}`);
+      if (autoEnabled) setFollowupAutoPaused(id);
+      const reason = err instanceof Error ? err.message : String(err);
+      if (autoAttempt) {
+        fail(`Auto send paused after queued followup failed: ${reason}`);
+        return false;
+      }
+      if (autoEnabled) {
+        fail(`Failed to send queued followup: ${reason}. Auto send paused to prevent immediate retry loops.`);
+        return false;
+      }
+      fail(`Failed to send queued followup: ${reason}`);
+      return false;
     } finally {
       setFollowupSending(undefined);
     }
@@ -1421,8 +1648,16 @@ export function Session() {
 
     const files = fileContext();
     const images = imageAttachments();
-    if ((!text && files.length === 0 && images.length === 0) || loading() || inputBlocked() || !!followupSending())
+    if (!text && files.length === 0 && images.length === 0) return;
+    if (loading() || !!followupSending()) return;
+    if (inputBlocked()) {
+      setError(
+        pendingQuestion()
+          ? "Reply to the pending question above before sending another message."
+          : "Resolve the pending permission request above before sending another message.",
+      );
       return;
+    }
 
     if (processing() && text && files.length === 0 && images.length === 0) {
       if (!queueFollowup(text)) return;
@@ -2387,12 +2622,14 @@ export function Session() {
               </div>
             </form>
 
-            <Show when={followups().length > 0}>
+            <Show when={!!sessionId()}>
               <FollowupDock
                 items={followups()}
                 sending={followupSending()}
+                autoSend={followupAutoSend()}
                 processing={processing()}
                 loading={loading()}
+                onToggleAutoSend={toggleFollowupAutoSend}
                 onSend={sendFollowupNow}
                 onEdit={editFollowup}
               />
