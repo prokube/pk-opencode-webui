@@ -963,6 +963,56 @@ describe("telegram settings extended API", () => {
     expect(data.hint).toContain("service supervision")
   })
 
+  test("POST telegram restart returns actionable spawn failure", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "telegram-settings-"))
+    cleanupPaths.push(dir)
+    const settingsPath = join(dir, "telegram-settings.json")
+    const runtimeStatePath = join(dir, "telegram-runtime-state.json")
+
+    process.env.TELEGRAM_SETTINGS_PATH = settingsPath
+    process.env.TELEGRAM_RUNTIME_STATE_PATH = runtimeStatePath
+
+    const desired = readDesiredTelegramSettingsFingerprint()
+    await writeFile(
+      runtimeStatePath,
+      JSON.stringify(
+        {
+          version: 1,
+          appliedAt: new Date().toISOString(),
+          pid: 222,
+          mode: "polling",
+          port: 4097,
+          settingsFingerprint: `${desired}-old`,
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    )
+
+    const spawnSpy = spyOn(Bun, "spawn").mockImplementation(() => {
+      throw new Error("spawn ENOENT")
+    })
+
+    try {
+      const response = await handleExtendedEndpoint(
+        "/api/ext/telegram/restart",
+        "POST",
+        new URL("http://127.0.0.1/api/ext/telegram/restart"),
+        new Request("http://127.0.0.1/api/ext/telegram/restart", { method: "POST" }),
+      )
+
+      expect(response?.status).toBe(500)
+      const data = await response?.json()
+      expect(data.error).toBe("restart_failed")
+      expect(data.message).toContain("failed to start")
+      expect(data.stderr).toContain("spawn ENOENT")
+      expect(data.hint).toContain("service supervision")
+    } finally {
+      spawnSpy.mockRestore()
+    }
+  })
+
   test("POST telegram restart waits for applied runtime state and healthy bridge", async () => {
     const dir = await mkdtemp(join(tmpdir(), "telegram-settings-"))
     cleanupPaths.push(dir)

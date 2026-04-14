@@ -122,11 +122,29 @@ async function runRestartCommand() {
   const timeout = Number.parseInt(process.env.TELEGRAM_BRIDGE_RESTART_TIMEOUT_MS || "15000", 10)
   const timeoutMs = Number.isFinite(timeout) && timeout > 0 ? timeout : 15_000
   const info = restartCommand()
-  const p = Bun.spawn({
-    cmd: info.cmd,
-    stdout: "pipe",
-    stderr: "pipe",
-  })
+  const p = await Promise.resolve()
+    .then(() =>
+      Bun.spawn({
+        cmd: info.cmd,
+        stdout: "pipe",
+        stderr: "pipe",
+      }),
+    )
+    .catch((error) => {
+      const message = error instanceof Error ? error.message : String(error)
+      return {
+        ...info,
+        timedOut: false,
+        code: null,
+        stdout: "",
+        stderr: message,
+        spawnFailed: true,
+        ok: false,
+      }
+    })
+  if (!("exited" in p)) {
+    return p
+  }
   const done = await Promise.race([
     p.exited.then((code) => ({ code, timedOut: false as const })),
     wait(timeoutMs).then(() => ({ code: null, timedOut: true as const })),
@@ -146,6 +164,7 @@ async function runRestartCommand() {
     code: done.code,
     stdout: stdout.trim(),
     stderr: stderr.trim(),
+    spawnFailed: false,
     ok: !done.timedOut && done.code === 0,
   }
 }
@@ -520,9 +539,11 @@ export async function handleExtendedEndpoint(
 
     const run = await runRestartCommand()
     if (!run.ok) {
-      const reason = run.timedOut
-        ? `restart command timed out after ${process.env.TELEGRAM_BRIDGE_RESTART_TIMEOUT_MS || "15000"}ms`
-        : `restart command failed with exit code ${run.code ?? "unknown"}`
+      const reason = run.spawnFailed
+        ? `restart command failed to start: ${run.stderr || "unknown error"}`
+        : run.timedOut
+          ? `restart command timed out after ${process.env.TELEGRAM_BRIDGE_RESTART_TIMEOUT_MS || "15000"}ms`
+          : `restart command failed with exit code ${run.code ?? "unknown"}`
       return Response.json(
         {
           error: "restart_failed",
