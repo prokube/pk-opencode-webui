@@ -24,9 +24,13 @@ const envKeys = [
   "TELEGRAM_SESSION_LINK_BASE",
   "TELEGRAM_RUNTIME_STATE_PATH",
   "TELEGRAM_BRIDGE_RESTART_COMMAND",
+  "TELEGRAM_BRIDGE_RESTART_COMMAND_ARGV",
   "TELEGRAM_BRIDGE_S6_SERVICE_PATH",
   "TELEGRAM_BRIDGE_RESTART_TIMEOUT_MS",
   "TELEGRAM_BRIDGE_APPLY_TIMEOUT_MS",
+  "TELEGRAM_BRIDGE_RESTART_TOKEN",
+  "TELEGRAM_BRIDGE_ALLOW_UNAUTH_RESTART",
+  "TELEGRAM_BRIDGE_RESTART_DEBUG",
 ] as const
 
 const envSnapshot = new Map<string, string | undefined>()
@@ -915,10 +919,49 @@ describe("telegram settings extended API", () => {
       expect(data.status).toBe("pending_restart")
       expect(data.pendingRestart).toBe(true)
       expect(data.bridgeReachable).toBe(false)
-      expect(data.runtimeStatePath).toBe(runtimeStatePath)
     } finally {
       fetchSpy.mockRestore()
     }
+  })
+
+  test("POST telegram restart requires explicit authorization", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "telegram-settings-"))
+    cleanupPaths.push(dir)
+    const settingsPath = join(dir, "telegram-settings.json")
+    const runtimeStatePath = join(dir, "telegram-runtime-state.json")
+
+    process.env.TELEGRAM_SETTINGS_PATH = settingsPath
+    process.env.TELEGRAM_RUNTIME_STATE_PATH = runtimeStatePath
+
+    const desired = readDesiredTelegramSettingsFingerprint()
+    await writeFile(
+      runtimeStatePath,
+      JSON.stringify(
+        {
+          version: 1,
+          appliedAt: new Date().toISOString(),
+          pid: 222,
+          mode: "polling",
+          port: 4097,
+          settingsFingerprint: `${desired}-old`,
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    )
+
+    const response = await handleExtendedEndpoint(
+      "/api/ext/telegram/restart",
+      "POST",
+      new URL("http://127.0.0.1/api/ext/telegram/restart"),
+      new Request("http://127.0.0.1/api/ext/telegram/restart", { method: "POST" }),
+    )
+
+    expect(response?.status).toBe(403)
+    const data = await response?.json()
+    expect(data.error).toBe("forbidden")
+    expect(data.message).toContain("not authorized")
   })
 
   test("POST telegram restart returns actionable command failure", async () => {
@@ -930,6 +973,7 @@ describe("telegram settings extended API", () => {
     process.env.TELEGRAM_SETTINGS_PATH = settingsPath
     process.env.TELEGRAM_RUNTIME_STATE_PATH = runtimeStatePath
     process.env.TELEGRAM_BRIDGE_RESTART_COMMAND = "exit 37"
+    process.env.TELEGRAM_BRIDGE_ALLOW_UNAUTH_RESTART = "true"
 
     const desired = readDesiredTelegramSettingsFingerprint()
     await writeFile(
@@ -959,7 +1003,10 @@ describe("telegram settings extended API", () => {
     expect(response?.status).toBe(500)
     const data = await response?.json()
     expect(data.error).toBe("restart_failed")
-    expect(data.command).toContain("sh -lc")
+    expect(data.message).toContain("exit code 37")
+    expect(data.command).toBeUndefined()
+    expect(data.stdout).toBeUndefined()
+    expect(data.stderr).toBeUndefined()
     expect(data.hint).toContain("service supervision")
   })
 
@@ -971,6 +1018,7 @@ describe("telegram settings extended API", () => {
 
     process.env.TELEGRAM_SETTINGS_PATH = settingsPath
     process.env.TELEGRAM_RUNTIME_STATE_PATH = runtimeStatePath
+    process.env.TELEGRAM_BRIDGE_ALLOW_UNAUTH_RESTART = "true"
 
     const desired = readDesiredTelegramSettingsFingerprint()
     await writeFile(
@@ -1006,7 +1054,7 @@ describe("telegram settings extended API", () => {
       const data = await response?.json()
       expect(data.error).toBe("restart_failed")
       expect(data.message).toContain("failed to start")
-      expect(data.stderr).toContain("spawn ENOENT")
+      expect(data.stderr).toBeUndefined()
       expect(data.hint).toContain("service supervision")
     } finally {
       spawnSpy.mockRestore()
@@ -1024,6 +1072,7 @@ describe("telegram settings extended API", () => {
     process.env.TELEGRAM_RUNTIME_STATE_PATH = runtimeStatePath
     process.env.TELEGRAM_BRIDGE_RESTART_COMMAND = `cp "${appliedRuntimeStatePath}" "${runtimeStatePath}"`
     process.env.TELEGRAM_BRIDGE_APPLY_TIMEOUT_MS = "6000"
+    process.env.TELEGRAM_BRIDGE_ALLOW_UNAUTH_RESTART = "true"
 
     const desired = readDesiredTelegramSettingsFingerprint()
     await writeFile(
