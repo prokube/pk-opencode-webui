@@ -226,6 +226,24 @@ describe("telegram session store", () => {
     expect(keys?.sort()).toEqual([telegramSessionKey(400, 1), telegramSessionKey(401, 2)])
   })
 
+  test("persists session history entries across store instances", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "telegram-session-store-"))
+    const path = join(dir, "sessions.json")
+    const key = telegramSessionKey(990, 12)
+    files.push(path)
+    files.push(dir)
+
+    const first = createTelegramSessionStore(path)
+    await first.historySet?.(key, ["session-z", "session-y", "session-z", "  "])
+
+    const second = createTelegramSessionStore(path)
+    expect(await second.historyGet?.(key)).toEqual(["session-z", "session-y"])
+
+    await second.historySet?.(key, [])
+    const third = createTelegramSessionStore(path)
+    expect(await third.historyGet?.(key)).toEqual([])
+  })
+
   test("persists pending question queue across store instances", async () => {
     const dir = await mkdtemp(join(tmpdir(), "telegram-session-store-"))
     const path = join(dir, "sessions.json")

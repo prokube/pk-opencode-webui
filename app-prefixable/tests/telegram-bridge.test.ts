@@ -295,8 +295,8 @@ describe("telegram bridge config and cache", () => {
     expect(calls[0]?.body.commands).toEqual([
       { command: "new", description: "Start a fresh OpenCode session" },
       { command: "status", description: "Show current session mapping" },
-      { command: "sessions", description: "List known sessions for this chat" },
-      { command: "switch", description: "Switch chat to an existing session" },
+      { command: "sessions", description: "List known sessions for this chat/user mapping" },
+      { command: "switch", description: "Switch this chat/user mapping to an existing session" },
       { command: "notify", description: "Control proactive notifications" },
       { command: "pending", description: "Show pending inbox items" },
       { command: "inbox", description: "Alias for /pending" },
@@ -515,6 +515,9 @@ describe("telegram bridge config and cache", () => {
         const url = String(input);
         const body = init?.body ? (JSON.parse(String(init.body)) as Record<string, unknown>) : {};
         calls.push({ url, body });
+        if (url.includes("/session/")) {
+          return new Response(JSON.stringify({ id: "exists" }), { status: 200 });
+        }
         if (url.includes("/sendMessage")) {
           return new Response(JSON.stringify({ ok: true, result: { message_id: 1 } }), { status: 200 });
         }
@@ -576,6 +579,9 @@ describe("telegram bridge config and cache", () => {
         if (url === "http://127.0.0.1:4096/session") {
           const id = createdSessions.shift();
           return new Response(JSON.stringify({ id }), { status: 200 });
+        }
+        if (url.includes("/session/")) {
+          return new Response(JSON.stringify({ id: "exists" }), { status: 200 });
         }
         if (url.includes("/sendMessage")) {
           return new Response(JSON.stringify({ ok: true, result: { message_id: 1 } }), { status: 200 });
@@ -645,6 +651,9 @@ describe("telegram bridge config and cache", () => {
           const id = createdSessions.shift();
           return new Response(JSON.stringify({ id }), { status: 200 });
         }
+        if (url.includes("/session/")) {
+          return new Response(JSON.stringify({ id: "exists" }), { status: 200 });
+        }
         if (url.includes("/sendMessage")) {
           return new Response(JSON.stringify({ ok: true, result: { message_id: 1 } }), { status: 200 });
         }
@@ -703,7 +712,7 @@ describe("telegram bridge config and cache", () => {
       const sent = calls
         .filter((x) => x.url.includes("/sendMessage"))
         .map((x) => String(x.body.text || ""));
-      expect(sent[2]).toContain("Known sessions for this chat:");
+      expect(sent[2]).toContain("Known sessions for this chat/user mapping:");
       expect(sent[2]).toContain("1. session-2 (current)");
       expect(sent[2]).toContain("2. session-1");
       expect(sent[3]).toBe("Switched to session: session-1");
@@ -767,6 +776,62 @@ describe("telegram bridge config and cache", () => {
     }
   });
 
+  test("/switch validates explicit session ids before remapping", async () => {
+    const calls: Array<{ url: string; body: Record<string, unknown> }> = [];
+    const originalFetch = globalThis.fetch;
+    try {
+      globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        const body = init?.body ? (JSON.parse(String(init.body)) as Record<string, unknown>) : {};
+        calls.push({ url, body });
+        if (url.includes("/session/missing-session")) {
+          return new Response(JSON.stringify({ error: "not found" }), { status: 404 });
+        }
+        if (url.includes("/sendMessage")) {
+          return new Response(JSON.stringify({ ok: true, result: { message_id: 1 } }), { status: 200 });
+        }
+        throw new Error(`Unexpected fetch ${url}`);
+      };
+
+      const map = new Map<string, string>([["chat:35:user:3", "session-a"]]);
+      const runtime = {
+        config: {
+          mode: "polling" as const,
+          token: "token",
+          openCodeUrl: "http://127.0.0.1:4096",
+          sessionCacheMax: 10,
+          sessionCacheTtlMs: 10_000,
+          notificationDebounceMs: 20_000,
+          port: 4097,
+          webhookPath: "/webhook",
+          sessionStorePath: "/tmp/test-store.json",
+        },
+        store: {
+          get: async (key: string) => map.get(key),
+          set: async (key: string, value: string) => {
+            map.set(key, value);
+          },
+          delete: async (key: string) => {
+            map.delete(key);
+          },
+        },
+      };
+
+      await handleTextUpdate(runtime, {
+        update_id: 1,
+        message: { message_id: 1, text: "/switch missing-session", chat: { id: 35 }, from: { id: 3 } },
+      });
+
+      const sent = calls
+        .filter((x) => x.url.includes("/sendMessage"))
+        .map((x) => String(x.body.text || ""));
+      expect(sent[0]).toBe("Session not found: missing-session. Use /sessions to select a known session or /new to create one.");
+      expect(map.get("chat:35:user:3")).toBe("session-a");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   test("queued switch commands are serialized and /status reflects latest mapping", async () => {
     const calls: Array<{ url: string; body: Record<string, unknown> }> = [];
     const originalFetch = globalThis.fetch;
@@ -775,6 +840,9 @@ describe("telegram bridge config and cache", () => {
         const url = String(input);
         const body = init?.body ? (JSON.parse(String(init.body)) as Record<string, unknown>) : {};
         calls.push({ url, body });
+        if (url.includes("/session/")) {
+          return new Response(JSON.stringify({ id: "exists" }), { status: 200 });
+        }
         if (url.includes("/sendMessage")) {
           return new Response(JSON.stringify({ ok: true, result: { message_id: 1 } }), { status: 200 });
         }

@@ -4,6 +4,7 @@ import { basename, dirname, join } from "node:path"
 type StoreShape = {
   version: 3
   sessions: Record<string, string>
+  history: Record<string, string[]>
   notifications: Record<string, boolean>
   pending: Record<string, TelegramPendingQuestion[]>
 }
@@ -28,9 +29,18 @@ function emptyStore(): StoreShape {
   return {
     version: 3,
     sessions: {},
+    history: {},
     notifications: {},
     pending: {},
   }
+}
+
+function parseHistoryList(value: unknown): string[] {
+  if (!Array.isArray(value)) return []
+  return [...new Set(value
+    .filter((item) => typeof item === "string")
+    .map((item) => item.trim())
+    .filter(Boolean))]
 }
 
 function parsePendingQuestionEntry(value: unknown): TelegramPendingQuestionEntry | undefined {
@@ -104,9 +114,11 @@ function parseStore(input: string): StoreShape {
   if (!input.trim()) return emptyStore()
   const data = JSON.parse(input) as Partial<StoreShape>
   const sessions = data.sessions && typeof data.sessions === "object" ? data.sessions : {}
+  const history = data.history && typeof data.history === "object" ? data.history : {}
   const notifications = data.notifications && typeof data.notifications === "object" ? data.notifications : {}
   const pending = data.pending && typeof data.pending === "object" ? data.pending : {}
   const out: Record<string, string> = {}
+  const historyOut: Record<string, string[]> = {}
   const notifyOut: Record<string, boolean> = {}
   const pendingOut: Record<string, TelegramPendingQuestion[]> = {}
   for (const key of Object.keys(sessions)) {
@@ -119,6 +131,11 @@ function parseStore(input: string): StoreShape {
     if (typeof value !== "boolean") continue
     notifyOut[key] = value
   }
+  for (const key of Object.keys(history)) {
+    const next = parseHistoryList(history[key])
+    if (!next.length) continue
+    historyOut[key] = next
+  }
   for (const key of Object.keys(pending)) {
     const rows = Array.isArray(pending[key]) ? pending[key] : []
     const next = rows
@@ -130,6 +147,7 @@ function parseStore(input: string): StoreShape {
   return {
     version: 3,
     sessions: out,
+    history: historyOut,
     notifications: notifyOut,
     pending: pendingOut,
   }
@@ -266,6 +284,8 @@ export type TelegramSessionStore = {
   set: (key: string, sessionId: string) => Promise<void>
   delete: (key: string) => Promise<void>
   sessionKeys?: (sessionId: string) => Promise<string[]>
+  historyGet?: (key: string) => Promise<string[]>
+  historySet?: (key: string, ids: string[]) => Promise<void>
   notificationGet?: (key: string) => Promise<boolean>
   notificationSet?: (key: string, enabled: boolean) => Promise<void>
   questionList?: (key: string) => Promise<TelegramPendingQuestion[]>
@@ -278,6 +298,7 @@ export function createTelegramSessionStore(path: string): TelegramSessionStore {
   // Cross-process writers need an external coordinated store.
   const sessions = new Map<string, string>()
   const sessionIndex = new Map<string, Set<string>>()
+  const history = new Map<string, string[]>()
   const notifications = new Map<string, boolean>()
   const pending = new Map<string, TelegramPendingQuestion[]>()
 
@@ -312,6 +333,9 @@ export function createTelegramSessionStore(path: string): TelegramSessionStore {
         sessions.set(key, value)
         indexAdd(value, key)
       }
+      for (const [key, value] of Object.entries(data.history)) {
+        history.set(key, value)
+      }
       for (const [key, value] of Object.entries(data.notifications)) {
         notifications.set(key, value)
       }
@@ -330,6 +354,7 @@ export function createTelegramSessionStore(path: string): TelegramSessionStore {
     const payload: StoreShape = {
       version: 3,
       sessions: Object.fromEntries(sessions),
+      history: Object.fromEntries(history),
       notifications: Object.fromEntries(notifications),
       pending: Object.fromEntries(pending),
     }
@@ -389,6 +414,27 @@ export function createTelegramSessionStore(path: string): TelegramSessionStore {
       const keys = sessionIndex.get(sessionId)
       if (!keys) return []
       return Array.from(keys)
+    },
+    async historyGet(key: string) {
+      await ready
+      return [...(history.get(key) || [])]
+    },
+    async historySet(key: string, ids: string[]) {
+      await ready
+      await run(async () => {
+        const next = parseHistoryList(ids)
+        const prev = history.get(key)
+        if (!next.length) history.delete(key)
+        if (next.length) history.set(key, next)
+        await flush().catch((error) => {
+          if (!prev?.length) {
+            history.delete(key)
+            throw error
+          }
+          history.set(key, prev)
+          throw error
+        })
+      })
     },
     async notificationGet(key: string) {
       await ready

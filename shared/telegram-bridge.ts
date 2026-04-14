@@ -143,11 +143,11 @@ const telegramCommands = Object.freeze([
   }),
   Object.freeze({
     name: "sessions",
-    text: "List known sessions for this chat",
+    text: "List known sessions for this chat/user mapping",
   }),
   Object.freeze({
     name: "switch",
-    text: "Switch chat to an existing session",
+    text: "Switch this chat/user mapping to an existing session",
     args: "<session-id|index>",
   }),
   Object.freeze({
@@ -882,33 +882,72 @@ function normalizeSessionHistory(input: string[]): string[] {
   return deduped.slice(0, sessionHistoryMax)
 }
 
-function rememberSession(chatKey: string, sessionId: string) {
-  const prior = sessionHistory.get(chatKey) || []
-  const next = normalizeSessionHistory([sessionId, ...prior])
+async function loadSessionHistory(runtime: Runtime, chatKey: string): Promise<string[]> {
+  const cached = sessionHistory.get(chatKey)
+  if (cached) return cached
+  if (!runtime.store.historyGet) return []
+  const stored = normalizeSessionHistory(await runtime.store.historyGet(chatKey))
+  if (!stored.length) return []
+  sessionHistory.set(chatKey, stored)
+  return stored
+}
+
+async function setSessionHistory(runtime: Runtime, chatKey: string, input: string[]): Promise<string[]> {
+  const next = normalizeSessionHistory(input)
   if (!next.length) {
     sessionHistory.delete(chatKey)
-    return
+    if (runtime.store.historySet) {
+      await runtime.store.historySet(chatKey, [])
+    }
+    return []
   }
   sessionHistory.set(chatKey, next)
-}
-
-function knownSessions(chatKey: string, current?: string): string[] {
-  if (current) {
-    rememberSession(chatKey, current)
+  if (runtime.store.historySet) {
+    await runtime.store.historySet(chatKey, next)
   }
-  return sessionHistory.get(chatKey) || []
+  return next
 }
 
-function sessionsText(chatKey: string, current?: string): string {
-  const list = knownSessions(chatKey, current)
+async function rememberSession(runtime: Runtime, chatKey: string, sessionId: string): Promise<string[]> {
+  const prior = await loadSessionHistory(runtime, chatKey)
+  const next = normalizeSessionHistory([sessionId, ...prior])
+  return setSessionHistory(runtime, chatKey, next)
+}
+
+async function knownSessions(runtime: Runtime, chatKey: string, current?: string): Promise<string[]> {
+  if (!current) {
+    return loadSessionHistory(runtime, chatKey)
+  }
+  return rememberSession(runtime, chatKey, current)
+}
+
+async function sessionsText(runtime: Runtime, chatKey: string, current?: string): Promise<string> {
+  const list = await knownSessions(runtime, chatKey, current)
   if (!list.length) {
-    return "No known sessions for this chat yet. Use /new to create one, then /sessions to view options."
+    return "No known sessions for this chat/user mapping yet. Use /new to create one, then /sessions to view options."
   }
   const lines = list.map((sessionId, index) => {
     const suffix = current === sessionId ? " (current)" : ""
     return `${index + 1}. ${sessionId}${suffix}`
   })
-  return `Known sessions for this chat:\n${lines.join("\n")}\n\nUse /switch <index|session-id> to switch.`
+  return `Known sessions for this chat/user mapping:\n${lines.join("\n")}\n\nUse /switch <index|session-id> to switch.`
+}
+
+async function sessionExists(config: BridgeConfig, sessionId: string): Promise<boolean> {
+  const id = sessionId.trim()
+  if (!id) return false
+  const url = opencodeUrl(config, `/session/${encodeURIComponent(id)}`)
+  if (config.directory) {
+    url.searchParams.set("directory", config.directory)
+  }
+  const res = await fetch(url, {
+    method: "GET",
+    signal: AbortSignal.timeout(12_000),
+  })
+  if (res.ok) return true
+  if (res.status === 404) return false
+  const body = await res.text().catch(() => "")
+  throw new Error(`OpenCode session lookup failed (${res.status}): ${body.slice(0, 300)}`)
 }
 
 function resolveSwitchTarget(target: string, list: string[]): { sessionId?: string; error?: string } {
@@ -964,7 +1003,7 @@ async function sessionForChat(runtime: Runtime, chatKey: string): Promise<string
   const mapped = await runtime.store.get(chatKey)
   if (mapped) {
     cacheSession(config, chatKey, mapped)
-    rememberSession(chatKey, mapped)
+    await rememberSession(runtime, chatKey, mapped)
   }
 
   const cached = sessionFromCache(config, chatKey)
@@ -977,9 +1016,10 @@ async function sessionForChat(runtime: Runtime, chatKey: string): Promise<string
     .then((id) => {
       return runtime.store.set(chatKey, id).then(() => {
         cacheSession(config, chatKey, id)
-        rememberSession(chatKey, id)
-        creatingSessions.delete(chatKey)
-        return id
+        return rememberSession(runtime, chatKey, id).then(() => {
+          creatingSessions.delete(chatKey)
+          return id
+        })
       })
     })
     .catch((error) => {
@@ -1186,19 +1226,19 @@ export async function handleTextUpdate(runtime: Runtime, update: TelegramUpdate)
       const next = await createSession(config)
       await runtime.store.set(key, next)
       cacheSession(config, key, next)
-      rememberSession(key, next)
+      await rememberSession(runtime, key, next)
       await sendTelegramMessage(config, chatId, `Started a new session: ${next}`)
       return true
     }
     if (known?.name === "sessions") {
       const current = await runtime.store.get(key) || sessionFromCache(config, key)
-      await sendTelegramMessage(config, chatId, sessionsText(key, current))
+      await sendTelegramMessage(config, chatId, await sessionsText(runtime, key, current))
       return true
     }
     if (known?.name === "switch") {
       const target = command.args.join(" ").trim()
       const current = await runtime.store.get(key) || sessionFromCache(config, key)
-      const list = knownSessions(key, current)
+      const list = await knownSessions(runtime, key, current)
       const resolved = resolveSwitchTarget(target, list)
       if (resolved.error) {
         await sendTelegramMessage(config, chatId, resolved.error)
@@ -1209,9 +1249,13 @@ export async function handleTextUpdate(runtime: Runtime, update: TelegramUpdate)
         await sendTelegramMessage(config, chatId, "Usage: /switch <session-id|index>")
         return true
       }
+      if (!(await sessionExists(config, next))) {
+        await sendTelegramMessage(config, chatId, `Session not found: ${next}. Use /sessions to select a known session or /new to create one.`)
+        return true
+      }
       await runtime.store.set(key, next)
       cacheSession(config, key, next)
-      rememberSession(key, next)
+      await rememberSession(runtime, key, next)
       await sendTelegramMessage(config, chatId, `Switched to session: ${next}`)
       return true
     }
