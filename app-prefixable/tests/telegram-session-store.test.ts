@@ -244,6 +244,23 @@ describe("telegram session store", () => {
     expect(await third.historyGet?.(key)).toEqual([])
   })
 
+  test("historySet avoids flush when normalized history is unchanged", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "telegram-session-store-"))
+    const parent = join(dir, "sessions")
+    const path = join(parent, "store.json")
+    const key = telegramSessionKey(991, 13)
+    files.push(path)
+    files.push(dir)
+
+    const store = createTelegramSessionStore(path)
+    await store.historySet?.(key, ["session-a", "session-b"])
+    await rm(parent, { force: true, recursive: true })
+    await Bun.write(parent, "blocked")
+
+    await expect(store.historySet?.(key, [" session-a ", "session-b", "session-a"])).resolves.toBeUndefined()
+    expect(await store.historyGet?.(key)).toEqual(["session-a", "session-b"])
+  })
+
   test("persists pending question queue across store instances", async () => {
     const dir = await mkdtemp(join(tmpdir(), "telegram-session-store-"))
     const path = join(dir, "sessions.json")

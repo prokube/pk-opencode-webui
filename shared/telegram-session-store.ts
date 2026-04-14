@@ -371,6 +371,15 @@ export function createTelegramSessionStore(path: string): TelegramSessionStore {
     return step
   }
 
+  function sameList(a: string[] | undefined, b: string[]): boolean {
+    if (!a) return b.length === 0
+    if (a.length !== b.length) return false
+    for (let i = 0; i < a.length; i++) {
+      if (a[i] !== b[i]) return false
+    }
+    return true
+  }
+
   return {
     async get(key: string) {
       await ready
@@ -424,6 +433,7 @@ export function createTelegramSessionStore(path: string): TelegramSessionStore {
       await run(async () => {
         const next = parseHistoryList(ids)
         const prev = history.get(key)
+        if (sameList(prev, next)) return
         if (!next.length) history.delete(key)
         if (next.length) history.set(key, next)
         await flush().catch((error) => {

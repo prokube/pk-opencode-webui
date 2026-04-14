@@ -724,6 +724,113 @@ describe("telegram bridge config and cache", () => {
     }
   });
 
+  test("/sessions is read-only and does not persist history", async () => {
+    const calls: Array<{ url: string; body: Record<string, unknown> }> = [];
+    const originalFetch = globalThis.fetch;
+    let historyWrites = 0;
+    try {
+      globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        const body = init?.body ? (JSON.parse(String(init.body)) as Record<string, unknown>) : {};
+        calls.push({ url, body });
+        if (url.includes("/sendMessage")) {
+          return new Response(JSON.stringify({ ok: true, result: { message_id: 1 } }), { status: 200 });
+        }
+        throw new Error(`Unexpected fetch ${url}`);
+      };
+
+      const runtime = {
+        config: {
+          mode: "polling" as const,
+          token: "token",
+          openCodeUrl: "http://127.0.0.1:4096",
+          sessionCacheMax: 10,
+          sessionCacheTtlMs: 10_000,
+          notificationDebounceMs: 20_000,
+          port: 4097,
+          webhookPath: "/webhook",
+          sessionStorePath: "/tmp/test-store.json",
+        },
+        store: {
+          get: async () => "session-current",
+          set: async () => undefined,
+          delete: async () => undefined,
+          historyGet: async () => ["session-old"],
+          historySet: async () => {
+            historyWrites += 1;
+          },
+        },
+      };
+
+      await handleTextUpdate(runtime, {
+        update_id: 1,
+        message: { message_id: 1, text: "/sessions", chat: { id: 63 }, from: { id: 8 } },
+      });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+
+    const sent = calls
+      .filter((x) => x.url.includes("/sendMessage"))
+      .map((x) => String(x.body.text || ""));
+    expect(sent[0]).toContain("1. session-current (current)");
+    expect(sent[0]).toContain("2. session-old");
+    expect(historyWrites).toBe(0);
+  });
+
+  test("/status avoids redundant history persistence when current session already first", async () => {
+    const calls: Array<{ url: string; body: Record<string, unknown> }> = [];
+    const originalFetch = globalThis.fetch;
+    let historyWrites = 0;
+    try {
+      globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        const body = init?.body ? (JSON.parse(String(init.body)) as Record<string, unknown>) : {};
+        calls.push({ url, body });
+        if (url.includes("/sendMessage")) {
+          return new Response(JSON.stringify({ ok: true, result: { message_id: 1 } }), { status: 200 });
+        }
+        throw new Error(`Unexpected fetch ${url}`);
+      };
+
+      const runtime = {
+        config: {
+          mode: "polling" as const,
+          token: "token",
+          openCodeUrl: "http://127.0.0.1:4096",
+          sessionCacheMax: 10,
+          sessionCacheTtlMs: 10_000,
+          notificationDebounceMs: 20_000,
+          port: 4097,
+          webhookPath: "/webhook",
+          sessionStorePath: "/tmp/test-store.json",
+        },
+        store: {
+          get: async () => "session-current",
+          set: async () => undefined,
+          delete: async () => undefined,
+          historyGet: async () => ["session-current", "session-old"],
+          historySet: async () => {
+            historyWrites += 1;
+          },
+        },
+      };
+
+      await handleTextUpdate(runtime, {
+        update_id: 1,
+        message: { message_id: 1, text: "/status", chat: { id: 64 }, from: { id: 8 } },
+      });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+
+    const sent = calls
+      .filter((x) => x.url.includes("/sendMessage"))
+      .map((x) => String(x.body.text || ""));
+    expect(sent[0]).toBe("Current session: session-current");
+    expect(historyWrites).toBe(0);
+  });
+
   test("/switch returns clear validation errors for missing and invalid index", async () => {
     const calls: Array<{ url: string; body: Record<string, unknown> }> = [];
     const originalFetch = globalThis.fetch;

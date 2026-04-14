@@ -910,6 +910,7 @@ async function setSessionHistory(runtime: Runtime, chatKey: string, input: strin
 
 async function rememberSession(runtime: Runtime, chatKey: string, sessionId: string): Promise<string[]> {
   const prior = await loadSessionHistory(runtime, chatKey)
+  if (prior[0] === sessionId) return prior
   const next = normalizeSessionHistory([sessionId, ...prior])
   return setSessionHistory(runtime, chatKey, next)
 }
@@ -922,7 +923,8 @@ async function knownSessions(runtime: Runtime, chatKey: string, current?: string
 }
 
 async function sessionsText(runtime: Runtime, chatKey: string, current?: string): Promise<string> {
-  const list = await knownSessions(runtime, chatKey, current)
+  const history = await loadSessionHistory(runtime, chatKey)
+  const list = current ? normalizeSessionHistory([current, ...history]) : history
   if (!list.length) {
     return "No known sessions for this chat/user mapping yet. Use /new to create one, then /sessions to view options."
   }
