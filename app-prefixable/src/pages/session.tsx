@@ -143,7 +143,7 @@ export function Session() {
 
   // Unified toast system — only one toast visible at a time
   const [toastMessage, setToastMessage] = createSignal<string | null>(null);
-  const [toastVariant, setToastVariant] = createSignal<"default" | "hint">("default");
+  const [toastVariant, setToastVariant] = createSignal<"default" | "hint" | "error">("default");
   const toastMsgTimer: { id: ReturnType<typeof setTimeout> | null } = { id: null };
   onCleanup(() => { if (toastMsgTimer.id !== null) clearTimeout(toastMsgTimer.id); });
 
@@ -153,7 +153,7 @@ export function Session() {
     setToastMessage(null);
   }
 
-  function showToast(msg: string, duration = 2500, variant: "default" | "hint" = "default") {
+  function showToast(msg: string, duration = 2500, variant: "default" | "hint" | "error" = "default") {
     if (toastMsgTimer.id !== null) clearTimeout(toastMsgTimer.id);
     setToastMessage(msg);
     setToastVariant(variant);
@@ -1285,8 +1285,7 @@ export function Session() {
   // Subscribe to events for status changes and session updates
   // Note: Message updates are handled by sync context, no need to manage here
   onMount(() => {
-    const unsub = events.subscribe(
-      (event: { type: string; properties: Record<string, unknown> }) => {
+    const unsub = events.subscribe((event) => {
         const id = sessionId();
         if (!id) return;
 
@@ -1341,8 +1340,7 @@ export function Session() {
         if (event.type === "session.updated") {
           refetchSession();
         }
-      },
-    );
+    });
 
     return unsub;
   });
@@ -2808,16 +2806,25 @@ export function Session() {
         <Show when={toastMessage()}>
           <div
             class="fixed bottom-20 left-1/2 -translate-x-1/2 z-[100] px-4 py-2 rounded-lg shadow-lg text-sm font-medium"
+            role={toastVariant() === "error" ? "alert" : "status"}
+            aria-live={toastVariant() === "error" ? "assertive" : "polite"}
+            aria-atomic="true"
             style={toastVariant() === "hint"
               ? {
                   background: "var(--surface-inset)",
                   color: "var(--text-strong)",
                   border: "1px solid var(--border-base)",
                 }
-              : {
-                  background: "var(--interactive-base)",
-                  color: "white",
-                }}
+              : toastVariant() === "error"
+                ? {
+                    background: "var(--status-danger-dim)",
+                    color: "var(--status-danger-text)",
+                    border: "1px solid var(--status-danger-text)",
+                  }
+                : {
+                    background: "var(--interactive-base)",
+                    color: "white",
+                  }}
           >
             {toastMessage()}
           </div>
