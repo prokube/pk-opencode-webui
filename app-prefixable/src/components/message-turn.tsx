@@ -319,6 +319,11 @@ function SubtaskCard(props: {
   onOpen: (childID: string) => void
 }) {
   const clickable = () => !!props.child?.id
+  const title = () => {
+    if (!clickable()) return "Waiting for delegated session link"
+    if (props.state === "running") return "Open delegated session (still running)"
+    return "Open delegated session"
+  }
 
   return (
     <button
@@ -338,7 +343,7 @@ function SubtaskCard(props: {
         if (!clickable()) return
         e.currentTarget.style.background = "var(--background-base)"
       }}
-      title={props.state === "open" ? "Open delegated session" : "Waiting for delegated session link"}
+      title={title()}
       aria-label={`Delegated subtask for ${props.part.agent} (${props.state})`}
       disabled={!clickable()}
     >
@@ -481,7 +486,8 @@ export function MessageTurn(props: {
     for (const sessionID of parentIDs()) {
       const key = childCacheKey(sessionID, directory)
       const known = children()[sessionID]
-      if (known) continue
+      const expected = subtasksForParent(sessionID).length
+      if (known && known.length >= expected) continue
       const now = Date.now()
       const retryAt = lruGet(sharedChildrenRetryAt, key)
       if (retryAt !== undefined && retryAt > now) {
@@ -499,15 +505,17 @@ export function MessageTurn(props: {
       }
       const cached = lruGet(sharedChildren, key)
       if (cached !== undefined) {
-        setChildren((prev) => ({ ...prev, [sessionID]: cached }))
-        continue
+        if (cached.length >= expected) {
+          setChildren((prev) => ({ ...prev, [sessionID]: cached }))
+          continue
+        }
       }
       const inflight = lruGet(sharedChildrenInflight, key)
       if (inflight !== undefined) {
         inflight.then((list) => {
           setChildren((prev) => {
             if (list.length === 0) return prev
-            if (prev[sessionID]) return prev
+            if ((prev[sessionID]?.length ?? 0) >= list.length) return prev
             return { ...prev, [sessionID]: list }
           })
         }).catch(() => {})
@@ -518,12 +526,13 @@ export function MessageTurn(props: {
         .children({ sessionID, directory })
         .then((res) => {
           const list = (res.data ?? []).slice().sort((a, b) => a.time.created - b.time.created)
+          const needed = subtasksForParent(sessionID).length
           const retryTimer = retryTimers.get(key)
           if (retryTimer) {
             clearTimeout(retryTimer)
             retryTimers.delete(key)
           }
-          if (list.length > 0) {
+          if (list.length >= needed) {
             sharedChildrenEmptyBackoff.delete(key)
             sharedChildrenRetryAt.delete(key)
             lruSet(sharedChildren, key, list, MAX_SHARED_CHILDREN)
@@ -561,14 +570,14 @@ export function MessageTurn(props: {
       pending.then((list) => {
         if (list.length === 0) return
         setChildren((prev) => {
-          if (prev[sessionID]) return prev
+          if ((prev[sessionID]?.length ?? 0) >= list.length) return prev
           return { ...prev, [sessionID]: list }
         })
       }).catch(() => {})
     }
   })
 
-  const subtasksForParent = (sessionID: string) => {
+  function subtasksForParent(sessionID: string) {
     const all = sync.messages(sessionID).flatMap((message) => message.parts.filter(isSubtaskPart))
     if (all.length > 0) return all
     return props.turn.assistantMessages
