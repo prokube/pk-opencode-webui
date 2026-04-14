@@ -95,6 +95,11 @@ type CachedSession = {
   expiresAt: number
 }
 
+type CachedSessionInfo = {
+  title: string | null
+  expiresAt: number
+}
+
 function healthAccessPublic() {
   const value = (process.env.TELEGRAM_HEALTH_PUBLIC || "").trim().toLowerCase()
   if (value === "1") return true
@@ -153,6 +158,7 @@ const fallbackNotifications = new Map<string, boolean>()
 const fallbackPending = new Map<string, TelegramPendingItem[]>()
 const pendingQuestions = new Map<string, TelegramPendingQuestion[]>()
 const sessionHistory = new Map<string, string[]>()
+const sessionInfo = new Map<string, CachedSessionInfo>()
 
 let pendingEntrySeq = 0
 
@@ -195,7 +201,7 @@ const telegramCommands = Object.freeze([
   Object.freeze({
     name: "switch",
     text: "Switch this chat/user mapping to an existing session",
-    args: "<session-id|index>",
+    args: "[session-id|index]",
   }),
   Object.freeze({
     name: "notify",
@@ -1202,11 +1208,89 @@ async function sessionsText(runtime: Runtime, chatKey: string, current?: string)
   if (!list.length) {
     return "No known sessions for this chat/user mapping yet. Use /new to create one, then /sessions to view options."
   }
+  const details = await Promise.all(list.map(async (sessionId) => {
+    const title = await safeSessionTitle(runtime.config, sessionId)
+    return formatSessionDisplay(sessionId, title)
+  }))
   const lines = list.map((sessionId, index) => {
     const suffix = current === sessionId ? " (current)" : ""
-    return `${index + 1}. ${sessionId}${suffix}`
+    return `${index + 1}. ${details[index]}${suffix}`
   })
-  return `Known sessions for this chat/user mapping:\n${lines.join("\n")}\n\nUse /switch <index|session-id> to switch.`
+  return `Known sessions for this chat/user mapping:\n${lines.join("\n")}\n\nUse /switch <index|session-id> to switch. Tip: run /switch to pick from recent sessions quickly.`
+}
+
+function trimSessionTitle(value: unknown): string | undefined {
+  if (typeof value !== "string") return
+  const text = value.trim()
+  if (!text) return
+  return text
+}
+
+function cacheSessionInfo(config: BridgeConfig, sessionId: string, title?: string) {
+  const expiresAt = Date.now() + config.sessionCacheTtlMs
+  sessionInfo.delete(sessionId)
+  sessionInfo.set(sessionId, { title: title || null, expiresAt })
+  for (const key of sessionInfo.keys()) {
+    if (sessionInfo.size <= config.sessionCacheMax * 2) return
+    sessionInfo.delete(key)
+  }
+}
+
+function cachedSessionTitle(sessionId: string): string | undefined {
+  const cached = sessionInfo.get(sessionId)
+  if (!cached) return
+  if (cached.expiresAt <= Date.now()) {
+    sessionInfo.delete(sessionId)
+    return
+  }
+  return cached.title || undefined
+}
+
+function formatSessionDisplay(sessionId: string, title?: string): string {
+  if (!title) return sessionId
+  return `${title} (${sessionId})`
+}
+
+type SessionLookup = {
+  exists: boolean
+  title?: string
+}
+
+async function readSessionInfo(config: BridgeConfig, sessionId: string): Promise<SessionLookup> {
+  const id = sessionId.trim()
+  if (!id) return { exists: false }
+  const url = opencodeUrl(config, `/session/${encodeURIComponent(id)}`)
+  if (config.directory) {
+    url.searchParams.set("directory", config.directory)
+  }
+  const res = await fetch(url, {
+    method: "GET",
+    signal: AbortSignal.timeout(12_000),
+  })
+  if (res.status === 404) return { exists: false }
+  if (!res.ok) {
+    const body = await res.text().catch(() => "")
+    throw new Error(`OpenCode session lookup failed (${res.status}): ${body.slice(0, 300)}`)
+  }
+  const payload = await res.json().catch(() => ({})) as { title?: unknown }
+  return {
+    exists: true,
+    title: trimSessionTitle(payload.title),
+  }
+}
+
+async function sessionTitle(config: BridgeConfig, sessionId: string): Promise<string | undefined> {
+  const cached = cachedSessionTitle(sessionId)
+  if (cached !== undefined) return cached
+  if (sessionInfo.has(sessionId)) return
+  const loaded = await readSessionInfo(config, sessionId)
+  if (!loaded.exists) return
+  cacheSessionInfo(config, sessionId, loaded.title)
+  return loaded.title
+}
+
+async function safeSessionTitle(config: BridgeConfig, sessionId: string): Promise<string | undefined> {
+  return sessionTitle(config, sessionId).catch(() => undefined)
 }
 
 function normalizeRecentCount(args: string[]): { count?: number; error?: string } {
@@ -1297,20 +1381,26 @@ async function recentText(config: BridgeConfig, sessionId: string, count: number
 }
 
 async function sessionExists(config: BridgeConfig, sessionId: string): Promise<boolean> {
-  const id = sessionId.trim()
-  if (!id) return false
-  const url = opencodeUrl(config, `/session/${encodeURIComponent(id)}`)
-  if (config.directory) {
-    url.searchParams.set("directory", config.directory)
+  const loaded = await readSessionInfo(config, sessionId)
+  if (!loaded.exists) return false
+  cacheSessionInfo(config, sessionId, loaded.title)
+  return true
+}
+
+async function switchPickerText(runtime: Runtime, chatKey: string, current?: string): Promise<string> {
+  const list = await switchCandidates(runtime, chatKey, current)
+  if (!list.length) {
+    return "No known sessions for this chat/user mapping yet. Use /new to create one, then /switch <session-id|index> to switch."
   }
-  const res = await fetch(url, {
-    method: "GET",
-    signal: AbortSignal.timeout(12_000),
+  const details = await Promise.all(list.map(async (sessionId) => {
+    const title = await safeSessionTitle(runtime.config, sessionId)
+    return formatSessionDisplay(sessionId, title)
+  }))
+  const lines = list.map((sessionId, index) => {
+    const suffix = current === sessionId ? " (current)" : ""
+    return `${index + 1}. ${details[index]}${suffix}`
   })
-  if (res.ok) return true
-  if (res.status === 404) return false
-  const body = await res.text().catch(() => "")
-  throw new Error(`OpenCode session lookup failed (${res.status}): ${body.slice(0, 300)}`)
+  return `Recent sessions for this chat/user mapping:\n${lines.join("\n")}\n\nReply with /switch <index> for quick switching, or /switch <session-id> when needed.`
 }
 
 function resolveSwitchTarget(target: string, list: string[]): { sessionId?: string; error?: string; fromKnownList: boolean } {
@@ -1842,7 +1932,8 @@ export async function handleTextUpdate(runtime: Runtime, update: TelegramUpdate)
     }
     if (known?.name === "status") {
       const sessionId = await sessionForChat(runtime, key)
-      await sendTelegramMessage(config, chatId, `Current session: ${sessionId}`)
+      const title = await safeSessionTitle(config, sessionId)
+      await sendTelegramMessage(config, chatId, `Current session: ${formatSessionDisplay(sessionId, title)}`)
       return true
     }
     if (known?.name === "new") {
@@ -1850,7 +1941,8 @@ export async function handleTextUpdate(runtime: Runtime, update: TelegramUpdate)
       await runtime.store.set(key, next)
       cacheSession(config, key, next)
       await rememberSession(runtime, key, next)
-      await sendTelegramMessage(config, chatId, `Started a new session: ${next}`)
+      const title = await safeSessionTitle(config, next)
+      await sendTelegramMessage(config, chatId, `Started a new session: ${formatSessionDisplay(next, title)}`)
       return true
     }
     if (known?.name === "sessions") {
@@ -1876,7 +1968,8 @@ export async function handleTextUpdate(runtime: Runtime, update: TelegramUpdate)
     if (known?.name === "switch") {
       const target = command.args.join(" ").trim()
       if (!target) {
-        await sendTelegramMessage(config, chatId, "Usage: /switch <session-id|index>")
+        const current = await runtime.store.get(key) || sessionFromCache(config, key)
+        await sendTelegramMessage(config, chatId, await switchPickerText(runtime, key, current))
         return true
       }
       const current = await runtime.store.get(key) || sessionFromCache(config, key)
@@ -1898,7 +1991,8 @@ export async function handleTextUpdate(runtime: Runtime, update: TelegramUpdate)
       await runtime.store.set(key, next)
       cacheSession(config, key, next)
       await rememberSession(runtime, key, next)
-      await sendTelegramMessage(config, chatId, `Switched to session: ${next}`)
+      const title = await safeSessionTitle(config, next)
+      await sendTelegramMessage(config, chatId, `Switched to session: ${formatSessionDisplay(next, title)}`)
       return true
     }
     if (known?.name === "notify") {
@@ -2401,4 +2495,5 @@ export function resetSessionCacheForTest() {
   fallbackPending.clear()
   pendingQuestions.clear()
   sessionHistory.clear()
+  sessionInfo.clear()
 }
