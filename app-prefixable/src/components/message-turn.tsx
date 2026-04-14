@@ -503,6 +503,7 @@ export function MessageTurn(props: {
       if (inflight !== undefined) {
         inflight.then((list) => {
           setChildren((prev) => {
+            if (list.length === 0) return prev
             if (prev[sessionID]) return prev
             return { ...prev, [sessionID]: list }
           })
