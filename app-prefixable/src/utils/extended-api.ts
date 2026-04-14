@@ -212,8 +212,12 @@ export async function setSessionAlarm(serverUrl: string, sessionId: string, enab
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ sessionId, enabled }),
   }).catch(() => null)
-  if (!res?.ok) {
-    console.warn("[extended-api] setSessionAlarm failed:", res?.status)
+  if (!res) {
+    console.warn("[extended-api] setSessionAlarm: network error for session", sessionId)
+    return false
+  }
+  if (!res.ok) {
+    console.warn("[extended-api] setSessionAlarm failed:", res.status)
     return false
   }
   return true

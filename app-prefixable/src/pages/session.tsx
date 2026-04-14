@@ -549,11 +549,7 @@ export function Session() {
 
   /** Mirror bell toggle to server-side alarm state (fire-and-forget). */
   function syncAlarmToServer(id: string, enabled: boolean) {
-    setSessionAlarm(url, id, enabled).then((ok) => {
-      if (!ok) {
-        console.warn("[Session] Failed to sync alarm state to server for session:", id);
-      }
-    });
+    setSessionAlarm(url, id, enabled);
   }
 
   function toggleNotify() {
