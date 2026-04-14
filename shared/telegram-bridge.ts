@@ -1532,25 +1532,64 @@ async function savedPromptsForDirectory(config: BridgeConfig, directory?: string
   }
 }
 
+function savedPromptsStatus(error: unknown): number | undefined {
+  if (!(error instanceof Error)) return
+  const match = error.message.match(/^OpenCode saved prompts failed \((\d+)\):/)
+  if (!match) return
+  const status = Number.parseInt(match[1] || "", 10)
+  if (!Number.isFinite(status)) return
+  return status
+}
+
+function savedPromptsFailureGuidance(status: number | undefined, directory?: string): string {
+  if (status === 403 && directory) {
+    return `OpenCode rejected saved prompts access for directory ${directory} (HTTP 403). Run /status in a session mapped to the right project, or update Telegram directory in bridge settings.`
+  }
+  if (status === 403) {
+    return "OpenCode rejected saved prompts access (HTTP 403). Check bridge permissions, then run /prompts again."
+  }
+  if (directory) {
+    return `Saved prompts for directory ${directory} are temporarily unavailable. Try /prompts again, or run /status to verify your active session mapping.`
+  }
+  return "Saved prompts are temporarily unavailable. Try /prompts again in a moment."
+}
+
 async function savedPrompts(runtime: Runtime, key: string): Promise<{ prompts: SavedPrompt[]; guidance?: string }> {
   const config = runtime.config
   const current = await runtime.store.get(key) || sessionFromCache(config, key)
   const bySession = current ? await sessionDirectory(config, current) : undefined
-  const resolved = bySession || config.directory
-  const scoped = await savedPromptsForDirectory(config, resolved)
-  const merged = mergeSavedPrompts(scoped.global, scoped.project)
-  if (merged.length) {
-    return { prompts: merged }
-  }
-  if (resolved) {
+  const candidates = [bySession, config.directory]
+    .filter((value): value is string => Boolean(value))
+    .filter((value, index, list) => list.indexOf(value) === index)
+  const contexts = [...candidates, undefined]
+  let fallbackGuidance: string | undefined
+
+  for (const directory of contexts) {
+    const scoped = await savedPromptsForDirectory(config, directory).catch((error) => {
+      const status = savedPromptsStatus(error)
+      fallbackGuidance = savedPromptsFailureGuidance(status, directory)
+      return
+    })
+    if (!scoped) continue
+    const merged = mergeSavedPrompts(scoped.global, scoped.project)
+    if (merged.length) {
+      return { prompts: merged }
+    }
+    if (directory) {
+      return {
+        prompts: [],
+        guidance: "No saved prompts found for this context. If prompts exist in another project, run /status in that project first or configure Telegram directory in bridge settings.",
+      }
+    }
     return {
       prompts: [],
-      guidance: "No saved prompts found for this context. If prompts exist in another project, run /status in that project first or configure Telegram directory in bridge settings.",
+      guidance: fallbackGuidance || "No saved prompts found. If your prompts are project-scoped, run /status in the target project first or configure Telegram directory in bridge settings.",
     }
   }
+
   return {
     prompts: [],
-    guidance: "No saved prompts found. If your prompts are project-scoped, run /status in the target project first or configure Telegram directory in bridge settings.",
+    guidance: fallbackGuidance || "No saved prompts found. If your prompts are project-scoped, run /status in the target project first or configure Telegram directory in bridge settings.",
   }
 }
 
