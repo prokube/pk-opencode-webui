@@ -305,6 +305,7 @@ describe("telegram session store", () => {
           custom: true,
         },
       ],
+      answers: [],
     })
 
     const second = createTelegramSessionStore(path)
@@ -367,6 +368,7 @@ describe("telegram session store", () => {
           custom: true,
         },
       ],
+      answers: [],
     })
 
     const first = await store.questionList?.("chat:90:user:1")

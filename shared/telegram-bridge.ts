@@ -581,6 +581,22 @@ function callbackData(question: TelegramPendingQuestion, questionIndex: number, 
   return `q:${question.callbackId}:${row}:${option}`
 }
 
+function answeredQuestions(question: TelegramPendingQuestion): number {
+  if (!question.answers.length) return 0
+  return Math.min(question.questions.length, question.answers.length)
+}
+
+function pendingQuestionIndex(question: TelegramPendingQuestion): number {
+  const answered = answeredQuestions(question)
+  if (answered >= question.questions.length) return question.questions.length - 1
+  return answered
+}
+
+function activeQuestion(question: TelegramPendingQuestion): TelegramPendingQuestion["questions"][number] | undefined {
+  const index = pendingQuestionIndex(question)
+  return question.questions[index]
+}
+
 function parseCallbackData(input: string): { callbackId: string; questionIndex: number; optionIndex: number } | undefined {
   const match = input.match(/^q:([a-z0-9]{6,24}):(\d+):(\d+)$/)
   if (!match) return
@@ -596,15 +612,15 @@ function parseCallbackData(input: string): { callbackId: string; questionIndex: 
 }
 
 function questionMarkup(question: TelegramPendingQuestion): { inline_keyboard: Array<Array<{ text: string; callback_data: string }>> } | undefined {
-  if (question.questions.length !== 1) return
   if (!question.callbackId) return
-  const row = question.questions[0]
+  const index = pendingQuestionIndex(question)
+  const row = question.questions[index]
   if (!row) return
   if (row.multiple) return
   if (!row.options.length) return
   if (row.options.length > inlineButtonMaxOptions) return
   const inline = row.options.map((option, optionIndex) => {
-    const callback = callbackData(question, 0, optionIndex)
+    const callback = callbackData(question, index, optionIndex)
     const safe = option.trim().slice(0, inlineButtonTextMax)
     if (!safe) return
     if (callback.length > callbackDataMax) return
@@ -657,6 +673,7 @@ function parsePendingQuestion(properties: Record<string, unknown>): TelegramPend
     createdAt: now,
     expiresAt: now + pendingQuestionTtlMs,
     questions: parsed,
+    answers: [],
   }
 }
 
@@ -702,7 +719,40 @@ function questionPromptText(question: TelegramPendingQuestion): string {
   }
   if (question.questions.length > 1) {
     lines.push("")
-    lines.push("Reply format: 1:<answer>; 2:<answer>")
+    const answered = answeredQuestions(question)
+    lines.push(`Progress: ${answered}/${question.questions.length} answered.`)
+  }
+  lines.push("")
+  lines.push("Use /status to see your current session.")
+  return lines.join("\n")
+}
+
+function questionStepText(question: TelegramPendingQuestion, hasButtons = false): string {
+  const index = pendingQuestionIndex(question)
+  const row = question.questions[index]
+  if (!row) return questionPromptText(question)
+  const title = row.header || row.question || `Question ${index + 1}`
+  const lines = ["Question pending:"]
+  if (question.questions.length > 1) {
+    lines.push(`Step ${index + 1}/${question.questions.length}`)
+  }
+  lines.push(title)
+  const detail = row.question && row.question !== row.header ? row.question : ""
+  if (detail) lines.push(detail)
+  for (let optionIndex = 0; optionIndex < row.options.length; optionIndex++) {
+    lines.push(`${optionIndex + 1}) ${row.options[optionIndex]}`)
+  }
+  if (!row.options.length && row.custom) {
+    lines.push("Reply with your answer as text.")
+  }
+  if (row.options.length && row.multiple) {
+    lines.push("You can pick multiple options: reply like 1,3")
+  }
+  if (row.options.length && !row.multiple) {
+    lines.push(hasButtons ? "Choose using the buttons below, or reply with an option number or label." : "Reply with an option number or label.")
+  }
+  if (row.options.length && row.custom) {
+    lines.push("You can also reply with custom text.")
   }
   lines.push("")
   lines.push("Use /status to see your current session.")
@@ -717,15 +767,15 @@ function truncateTelegramText(input: string, size: number): string {
 }
 
 function questionAnswerGuidance(question: TelegramPendingQuestion): string {
-  if (question.questions.length === 1) {
-    const first = question.questions[0]
-    if (!first) return "No pending question was found."
-    if (first.options.length) {
-      return `Please reply with an option number between 1 and ${first.options.length}, or send /help for commands.`
+  const row = activeQuestion(question)
+  if (!row) return "No pending question was found."
+  if (row.options.length) {
+    if (row.multiple) {
+      return `Please reply with one or more option numbers between 1 and ${row.options.length} (for example: 1,3), or send /help for commands.`
     }
-    return "Please reply with text for the pending question, or send /help for commands."
+    return `Please reply with an option number between 1 and ${row.options.length}, or send /help for commands.`
   }
-  return "Please reply using question-number format: 1:<answer>; 2:<answer>."
+  return "Please reply with text for the pending question, or send /help for commands."
 }
 
 function parseNumericChoices(input: string): number[] | undefined {
@@ -804,6 +854,21 @@ function parseQuestionAnswers(question: TelegramPendingQuestion, text: string): 
     answers.push(parsed)
   }
   return answers
+}
+
+function nextAnswers(question: TelegramPendingQuestion, answer: string[]): string[][] | undefined {
+  const answered = answeredQuestions(question)
+  const row = question.questions[answered]
+  if (!row) return
+  const existing = question.answers.slice(0, answered)
+  return [...existing, answer]
+}
+
+function withAnswers(question: TelegramPendingQuestion, answers: string[][]): TelegramPendingQuestion {
+  return {
+    ...question,
+    answers: answers.slice(0, question.questions.length),
+  }
 }
 
 function parseEvent(rawData: string): { type: string; properties: Record<string, unknown> } | undefined {
@@ -1355,10 +1420,10 @@ export async function readTelegramBridgeHealth(runtime: Runtime): Promise<Bridge
 async function sendTelegramQuestionPrompt(config: BridgeConfig, chatId: number, question: TelegramPendingQuestion) {
   const markup = questionMarkup(question)
   if (!markup) {
-    await sendTelegramMessage(config, chatId, questionPromptText(question))
+    await sendTelegramMessage(config, chatId, questionStepText(question, false))
     return
   }
-  const text = truncateTelegramText(questionPromptText(question), telegramMessageSoftLimit)
+  const text = truncateTelegramText(questionStepText(question, true), telegramMessageSoftLimit)
   await telegramRequest(config, "sendMessage", {
     chat_id: chatId,
     text,
@@ -1412,24 +1477,50 @@ export async function handleCallbackUpdate(runtime: Runtime, update: TelegramUpd
     }
 
     const pending = match.pending
-    const row = pending.questions[parsed.questionIndex]
+    const index = pendingQuestionIndex(pending)
+    if (parsed.questionIndex !== index) {
+      await answerCallback(runtime.config, callbackId, "That step has already been answered.")
+      state.acknowledged = true
+      await sendTelegramQuestionPrompt(runtime.config, chatId, pending)
+      return
+    }
+    const row = pending.questions[index]
     const option = row?.options[parsed.optionIndex]
-    if (pending.questions.length !== 1 || row?.multiple) {
+    if (row?.multiple) {
       await answerCallback(runtime.config, callbackId, "Use text reply for this question.")
       state.acknowledged = true
-      await sendTelegramMessage(runtime.config, chatId, `${questionAnswerGuidance(pending)}\n\n${questionPromptText(pending)}`)
+      await sendTelegramMessage(runtime.config, chatId, `${questionAnswerGuidance(pending)}\n\n${questionStepText(pending)}`)
       return
     }
     if (!row || !option) {
       await answerCallback(runtime.config, callbackId, "That option is no longer available.")
       state.acknowledged = true
-      await sendTelegramMessage(runtime.config, chatId, `${questionAnswerGuidance(pending)}\n\n${questionPromptText(pending)}`)
+      await sendTelegramQuestionPrompt(runtime.config, chatId, pending)
       return
     }
 
-    const answers = [[option]]
+    const answers = nextAnswers(pending, [option])
+    if (!answers) {
+      await answerCallback(runtime.config, callbackId, "This question has expired.")
+      state.acknowledged = true
+      await deletePendingQuestionByKey(runtime, match.itemKey, pending.requestId)
+      await sendTelegramMessage(runtime.config, chatId, "That question is no longer pending. Wait for the next prompt or use /status.")
+      return
+    }
     await answerCallback(runtime.config, callbackId, callbackAckText)
     state.acknowledged = true
+    if (answers.length < pending.questions.length) {
+      await upsertPendingQuestion(runtime, match.itemKey, withAnswers(pending, answers))
+      const next = await readPendingQuestionsByKey(runtime, match.itemKey)
+        .then((rows) => rows.find((item) => item.requestId === pending.requestId))
+      if (!next) {
+        await sendTelegramMessage(runtime.config, chatId, "That question is no longer pending. Wait for the next prompt or use /status.")
+        return
+      }
+      await sendTelegramMessage(runtime.config, chatId, "Thanks, answer recorded.")
+      await sendTelegramQuestionPrompt(runtime.config, chatId, next)
+      return
+    }
     await sendQuestionReply(runtime.config, pending.requestId, answers)
       .then(async () => {
         await deletePendingQuestionByKey(runtime, match.itemKey, pending.requestId)
@@ -1574,9 +1665,26 @@ export async function handleTextUpdate(runtime: Runtime, update: TelegramUpdate)
     const queuedQuestions = await readPendingQuestions(runtime, chatId, userId)
     const pending = queuedQuestions[0]
     if (pending) {
-      const answers = parseQuestionAnswers(pending, text)
-      if (!answers) {
-        await sendTelegramMessage(config, chatId, `${questionAnswerGuidance(pending)}\n\n${questionPromptText(pending)}`)
+      const index = pendingQuestionIndex(pending)
+      const row = pending.questions[index]
+      const current = row ? answerFromInput(row, text) : undefined
+      const complete = parseQuestionAnswers(pending, text)
+      const answers = complete || (current ? nextAnswers(pending, current) : undefined)
+      if (!answers || answers.length < pending.questions.length && !current) {
+        await sendTelegramMessage(config, chatId, `${questionAnswerGuidance(pending)}\n\n${questionStepText(pending)}`)
+        return
+      }
+      if (answers.length < pending.questions.length) {
+        const keyForPending = pendingKey(chatId, userId)
+        await upsertPendingQuestion(runtime, keyForPending, withAnswers(pending, answers))
+        const queue = await readPendingQuestions(runtime, chatId, userId)
+        const next = queue.find((item) => item.requestId === pending.requestId)
+        if (!next) {
+          await sendTelegramMessage(config, chatId, "That question is no longer pending. Wait for the next prompt or use /status.")
+          return
+        }
+        await sendTelegramMessage(config, chatId, "Thanks, answer recorded.")
+        await sendTelegramQuestionPrompt(config, chatId, next)
         return
       }
       await sendQuestionReply(config, pending.requestId, answers)

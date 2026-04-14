@@ -2921,6 +2921,90 @@ describe("telegram bridge config and cache", () => {
     expect(sentTexts.some((text) => text.includes("Thanks, your answer was sent."))).toBe(true);
   });
 
+  test("callback query with stale option re-sends prompt with inline buttons", async () => {
+    const calls: Array<{ url: string; body: Record<string, unknown> }> = [];
+    const originalFetch = globalThis.fetch;
+    const pending = new Map<string, unknown[]>();
+    try {
+      globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        const body = init?.body ? (JSON.parse(String(init.body)) as Record<string, unknown>) : {};
+        calls.push({ url, body });
+        if (url.includes("/sendMessage")) {
+          return new Response(JSON.stringify({ ok: true, result: { message_id: 1 } }), { status: 200 });
+        }
+        if (url.includes("/answerCallbackQuery")) {
+          return new Response(JSON.stringify({ ok: true, result: true }), { status: 200 });
+        }
+        throw new Error(`Unexpected fetch ${url}`);
+      };
+
+      const runtime = {
+        config: {
+          mode: "polling" as const,
+          token: "token",
+          openCodeUrl: "http://127.0.0.1:4096",
+          sessionCacheMax: 10,
+          sessionCacheTtlMs: 10_000,
+          notificationDebounceMs: 0,
+          port: 4097,
+          webhookPath: "/webhook",
+          sessionStorePath: "/tmp/test-store.json",
+        },
+        store: {
+          get: async () => undefined,
+          set: async () => undefined,
+          delete: async () => undefined,
+          questionList: async (name: string) => (pending.get(name) || []) as unknown[],
+          questionUpsert: async (name: string, row: unknown) => {
+            pending.set(name, [row]);
+          },
+          questionDelete: async (name: string, requestId: string) => {
+            const rows = (pending.get(name) || []) as Array<{ requestId?: string }>;
+            pending.set(name, rows.filter((row) => row.requestId !== requestId));
+          },
+          sessionKeys: async () => ["chat:93:user:6"],
+          notificationGet: async () => true,
+        },
+      };
+
+      await handleBridgeEvent(runtime, {
+        type: "question.asked",
+        properties: {
+          id: "req-stale-option",
+          sessionID: "session-stale-option",
+          questions: [{ header: "Pick one", options: [{ label: "Alpha" }, { label: "Beta" }] }],
+        },
+      });
+
+      const prompt = calls.find((x) => x.url.includes("/sendMessage") && String(x.body.text || "").includes("Question pending:"));
+      const firstData = String(
+        ((prompt?.body.reply_markup as { inline_keyboard?: Array<Array<{ callback_data?: string }>> } | undefined)
+          ?.inline_keyboard?.[0]?.[0]?.callback_data) || "",
+      );
+      const staleData = firstData.replace(/:\d+$/, ":9");
+
+      await handleCallbackUpdate(runtime, {
+        update_id: 82,
+        callback_query: {
+          id: "cb-stale-option",
+          data: staleData,
+          from: { id: 6 },
+          message: { message_id: 7, chat: { id: 93 } },
+        },
+      });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+
+    const callbackAcks = calls.filter((x) => x.url.includes("/answerCallbackQuery"));
+    expect(String(callbackAcks[0]?.body.text || "")).toContain("no longer available");
+    const prompts = calls.filter((x) => x.url.includes("/sendMessage") && String(x.body.text || "").includes("Question pending:"));
+    const resent = prompts[prompts.length - 1];
+    expect(resent).toBeDefined();
+    expect((resent?.body.reply_markup as { inline_keyboard?: unknown } | undefined)?.inline_keyboard).toBeDefined();
+  });
+
   test("callback query returns explicit guidance on non-missing reply errors", async () => {
     const calls: Array<{ url: string; body: Record<string, unknown> }> = [];
     const originalFetch = globalThis.fetch;
@@ -3384,7 +3468,7 @@ describe("telegram bridge config and cache", () => {
     expect(replyCall?.body.answers).toEqual([["Beta"], ["ship it"]]);
   });
 
-  test("multi-question replies require indexes and send guidance when missing", async () => {
+  test("multi-question replies advance step-by-step without index formatting", async () => {
     const calls: Array<{ url: string; body: Record<string, unknown> }> = [];
     const originalFetch = globalThis.fetch;
     const pending = new Map<string, unknown[]>();
@@ -3456,9 +3540,109 @@ describe("telegram bridge config and cache", () => {
     const sentTexts = calls
       .filter((x) => x.url.includes("/sendMessage"))
       .map((x) => String(x.body.text || ""));
-    const guidance = sentTexts.find((text) => text.includes("Please reply using question-number format"));
-    expect(guidance).toBeDefined();
-    expect(guidance || "").toContain("Reply format: 1:<answer>; 2:<answer>");
+    expect(sentTexts.some((text) => text.includes("Please reply using question-number format"))).toBe(false);
+    expect(sentTexts.some((text) => text.includes("Thanks, answer recorded."))).toBe(true);
+    expect(sentTexts.some((text) => text.includes("Step 2/2"))).toBe(true);
+  });
+
+  test("multi-question single-select callbacks submit one question at a time", async () => {
+    const calls: Array<{ url: string; body: Record<string, unknown> }> = [];
+    const originalFetch = globalThis.fetch;
+    const pending = new Map<string, unknown[]>();
+    try {
+      globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        const body = init?.body ? (JSON.parse(String(init.body)) as Record<string, unknown>) : {};
+        calls.push({ url, body });
+        if (url.includes("/sendMessage")) {
+          return new Response(JSON.stringify({ ok: true, result: { message_id: 1 } }), { status: 200 });
+        }
+        if (url.includes("/answerCallbackQuery")) {
+          return new Response(JSON.stringify({ ok: true, result: true }), { status: 200 });
+        }
+        if (url.includes("/question/req-step-callback/reply")) {
+          return new Response(JSON.stringify(true), { status: 200 });
+        }
+        throw new Error(`Unexpected fetch ${url}`);
+      };
+
+      const runtime = {
+        config: {
+          mode: "polling" as const,
+          token: "token",
+          openCodeUrl: "http://127.0.0.1:4096",
+          sessionCacheMax: 10,
+          sessionCacheTtlMs: 10_000,
+          notificationDebounceMs: 0,
+          port: 4097,
+          webhookPath: "/webhook",
+          sessionStorePath: "/tmp/test-store.json",
+        },
+        store: {
+          get: async () => undefined,
+          set: async () => undefined,
+          delete: async () => undefined,
+          questionList: async (name: string) => (pending.get(name) || []) as unknown[],
+          questionUpsert: async (name: string, row: unknown) => {
+            pending.set(name, [row]);
+          },
+          questionDelete: async (name: string, requestId: string) => {
+            const rows = (pending.get(name) || []) as Array<{ requestId?: string }>;
+            pending.set(name, rows.filter((row) => row.requestId !== requestId));
+          },
+          sessionKeys: async () => ["chat:96:user:4"],
+          notificationGet: async () => true,
+        },
+      };
+
+      await handleBridgeEvent(runtime, {
+        type: "question.asked",
+        properties: {
+          id: "req-step-callback",
+          sessionID: "session-step-callback",
+          questions: [
+            { header: "Pick first", options: [{ label: "A1" }, { label: "A2" }], custom: false },
+            { header: "Pick second", options: [{ label: "B1" }, { label: "B2" }], custom: false },
+          ],
+        },
+      });
+
+      const firstPrompt = calls.find((x) => x.url.includes("/sendMessage") && String(x.body.text || "").includes("Step 1/2"));
+      const firstData = String(
+        ((firstPrompt?.body.reply_markup as { inline_keyboard?: Array<Array<{ callback_data?: string }>> } | undefined)
+          ?.inline_keyboard?.[1]?.[0]?.callback_data) || "",
+      );
+      await handleCallbackUpdate(runtime, {
+        update_id: 200,
+        callback_query: {
+          id: "cb-step-1",
+          data: firstData,
+          from: { id: 4 },
+          message: { message_id: 9, chat: { id: 96 } },
+        },
+      });
+
+      const secondPrompt = calls.find((x) => x.url.includes("/sendMessage") && String(x.body.text || "").includes("Step 2/2"));
+      const secondData = String(
+        ((secondPrompt?.body.reply_markup as { inline_keyboard?: Array<Array<{ callback_data?: string }>> } | undefined)
+          ?.inline_keyboard?.[0]?.[0]?.callback_data) || "",
+      );
+      await handleCallbackUpdate(runtime, {
+        update_id: 201,
+        callback_query: {
+          id: "cb-step-2",
+          data: secondData,
+          from: { id: 4 },
+          message: { message_id: 10, chat: { id: 96 } },
+        },
+      });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+
+    const replyCalls = calls.filter((x) => x.url.includes("/question/req-step-callback/reply"));
+    expect(replyCalls).toHaveLength(1);
+    expect(replyCalls[0]?.body.answers).toEqual([["A2"], ["B1"]]);
   });
 
   test("question notifications do not debounce distinct request ids", async () => {

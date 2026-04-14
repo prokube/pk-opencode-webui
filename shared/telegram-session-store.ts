@@ -34,6 +34,7 @@ export type TelegramPendingQuestion = {
   createdAt: number
   expiresAt: number
   questions: TelegramPendingQuestionEntry[]
+  answers: string[][]
 }
 
 function emptyStore(): StoreShape {
@@ -98,6 +99,19 @@ function parsePendingQuestion(value: unknown): TelegramPendingQuestion | undefin
       .filter((item) => item !== undefined)
     : []
   const questions = list as TelegramPendingQuestionEntry[]
+  const answers = Array.isArray(row.answers)
+    ? row.answers
+      .map((entry) => {
+        if (!Array.isArray(entry)) return
+        const next = entry
+          .filter((item) => typeof item === "string")
+          .map((item) => item.trim())
+          .filter(Boolean)
+        if (!next.length) return
+        return next
+      })
+      .filter((entry) => entry !== undefined)
+    : []
   if (!requestId || !sessionId || !questions.length) return
   const compact = callbackId.toLowerCase().replace(/[^a-z0-9]/g, "").slice(0, 24)
   const derived = `${requestId.toLowerCase().replace(/[^a-z0-9]/g, "").slice(0, 16)}${shortId(requestId)}`.slice(0, 24)
@@ -109,6 +123,7 @@ function parsePendingQuestion(value: unknown): TelegramPendingQuestion | undefin
     createdAt,
     expiresAt,
     questions,
+    answers: (answers as string[][]).slice(0, questions.length),
   }
 }
 
