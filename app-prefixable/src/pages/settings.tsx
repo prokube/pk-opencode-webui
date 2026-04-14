@@ -2358,7 +2358,7 @@ Add your project-specific instructions here.
                         Browser alarm channel
                       </h3>
                       <p class="text-xs mt-1" style={{ color: "var(--text-weak)" }}>
-                        Delivers tab flash, browser notifications, and notification sounds for bell-enabled sessions.
+                        Delivers tab flash and browser notifications for bell-enabled sessions. Sound playback still depends on Enable Sound below.
                       </p>
                     </div>
                     <button

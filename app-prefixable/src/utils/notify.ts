@@ -15,6 +15,18 @@ const DEFAULT_ALARM_CHANNELS: AlarmChannels = {
   telegram: false,
 }
 
+function defaultAlarmChannels(): AlarmChannels {
+  return { ...DEFAULT_ALARM_CHANNELS }
+}
+
+function removeStorageKey(key: string) {
+  try {
+    window.localStorage.removeItem(key)
+  } catch {
+    return
+  }
+}
+
 /** Read the per-session notification toggle map from localStorage */
 export function readNotifyMap(): Record<string, boolean> {
   if (typeof window === "undefined") return {};
@@ -28,7 +40,7 @@ export function readNotifyMap(): Record<string, boolean> {
     }
     return parsed;
   } catch {
-    try { window.localStorage.removeItem(NOTIFY_STORAGE_KEY); } catch {}
+    removeStorageKey(NOTIFY_STORAGE_KEY)
     return {};
   }
 }
@@ -55,29 +67,32 @@ export function cleanupNotifyState(id: string) {
 }
 
 export function readAlarmChannels(): AlarmChannels {
-  if (typeof window === "undefined") return DEFAULT_ALARM_CHANNELS;
-  let raw: string | null = null;
+  if (typeof window === "undefined") return defaultAlarmChannels();
+  const raw = (() => {
+    try {
+      return window.localStorage.getItem(ALARM_CHANNELS_STORAGE_KEY)
+    } catch {
+      return null
+    }
+  })();
+  if (raw === null) {
+    return defaultAlarmChannels();
+  }
+  if (!raw) return defaultAlarmChannels();
   try {
-    raw = window.localStorage.getItem(ALARM_CHANNELS_STORAGE_KEY);
+    const parsed = JSON.parse(raw) as Partial<AlarmChannels> | null;
+    if (!parsed || typeof parsed !== "object") {
+      removeStorageKey(ALARM_CHANNELS_STORAGE_KEY)
+      return defaultAlarmChannels();
+    }
+    return {
+      browser: parsed.browser !== false,
+      telegram: parsed.telegram === true,
+    };
   } catch {
-    return DEFAULT_ALARM_CHANNELS;
+    removeStorageKey(ALARM_CHANNELS_STORAGE_KEY)
+    return defaultAlarmChannels();
   }
-  if (!raw) return DEFAULT_ALARM_CHANNELS;
-  let parsed: Partial<AlarmChannels> | null = null;
-  try {
-    parsed = JSON.parse(raw) as Partial<AlarmChannels> | null;
-  } catch {
-    try { window.localStorage.removeItem(ALARM_CHANNELS_STORAGE_KEY); } catch {}
-    return DEFAULT_ALARM_CHANNELS;
-  }
-  if (!parsed || typeof parsed !== "object") {
-    try { window.localStorage.removeItem(ALARM_CHANNELS_STORAGE_KEY); } catch {}
-    return DEFAULT_ALARM_CHANNELS;
-  }
-  return {
-    browser: parsed.browser !== false,
-    telegram: parsed.telegram === true,
-  };
 }
 
 export function writeAlarmChannels(channels: AlarmChannels) {
