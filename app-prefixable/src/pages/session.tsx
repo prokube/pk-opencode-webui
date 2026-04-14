@@ -1286,25 +1286,6 @@ export function Session() {
   // Note: Message updates are handled by sync context, no need to manage here
   onMount(() => {
     const unsub = events.subscribe((event) => {
-        if (event.type === "worktree.ready") {
-          const name = typeof event.properties.name === "string"
-            ? event.properties.name.trim() || "unknown"
-            : "unknown";
-          const branch = typeof event.properties.branch === "string"
-            ? event.properties.branch.trim() || "unknown"
-            : "unknown";
-          showToast(`Worktree '${name}' ready on branch '${branch}'`);
-          return;
-        }
-
-        if (event.type === "worktree.failed") {
-          const msg = typeof event.properties.message === "string"
-            ? event.properties.message.trim() || "unknown error"
-            : "unknown error";
-          showToast(`Worktree creation failed: ${msg}`, 4000, "error");
-          return;
-        }
-
         const id = sessionId();
         if (!id) return;
 
