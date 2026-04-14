@@ -430,6 +430,20 @@ async function appendPending(runtime: Runtime, chatId: number, entry: TelegramPe
   })
 }
 
+function pendingEntryId(sessionId: string, kind: string, chatId: number, requestId?: string): string {
+  const base = requestId?.trim()
+  if (base) return `${sessionId}:${kind}:${base}:${chatId}`
+  const seq = String(pendingEntrySeq).padStart(8, "0")
+  pendingEntrySeq += 1
+  return `${sessionId}:${kind}:${Date.now()}:${seq}:${chatId}`
+}
+
+function pendingQuestionText(question: TelegramPendingQuestion): string {
+  const row = question.questions[0]
+  const title = row?.header || row?.question || "The assistant is waiting for your answer."
+  return `Question pending: ${title}`
+}
+
 async function resolvePendingForSession(runtime: Runtime, chatId: number, sessionId: string) {
   await queueChatUpdate(`pending:${chatId}`, async () => {
     const key = pendingChatKey(chatId)
@@ -1741,16 +1755,14 @@ async function notifySessionKeys(runtime: Runtime, sessionId: string, kind: stri
       if (!parsed) continue
       if (!chats.has(parsed.chatId)) {
         chats.add(parsed.chatId)
-        const seq = String(pendingEntrySeq).padStart(8, "0")
         const entry: TelegramPendingItem = {
-          id: `${sessionId}:${kind}:${Date.now()}:${seq}:${parsed.chatId}`,
+          id: pendingEntryId(sessionId, kind, parsed.chatId),
           kind: kind === "task-finished" ? "task-finished" : kind === "permission" ? "permission" : "question",
           sessionId,
           text,
           stampedAt: Date.now(),
           resolved: kind === "task-finished",
         }
-        pendingEntrySeq += 1
         await appendPending(runtime, parsed.chatId, entry)
         if (kind === "task-finished") {
           await resolvePendingForSession(runtime, parsed.chatId, sessionId)
@@ -1773,13 +1785,25 @@ async function notifyQuestion(runtime: Runtime, sessionId: string, question: Tel
   if (!runtime.store.sessionKeys) return
   const keys = await runtime.store.sessionKeys(sessionId)
   const kind = `question:${question.requestId}`
+  const chats = new Set<number>()
   for (const key of keys) {
     try {
       const parsed = parseTelegramKey(key)
       if (!parsed) continue
+      await upsertPendingQuestion(runtime, key, question)
+      if (!chats.has(parsed.chatId)) {
+        chats.add(parsed.chatId)
+        await appendPending(runtime, parsed.chatId, {
+          id: pendingEntryId(sessionId, "question", parsed.chatId, question.requestId),
+          kind: "question",
+          sessionId,
+          text: pendingQuestionText(question),
+          stampedAt: Date.now(),
+          resolved: false,
+        })
+      }
       if (!(await notificationEnabled(runtime, notificationKey(parsed.chatId)))) continue
       if (!shouldNotify(runtime.config, parsed.chatId, kind, sessionId)) continue
-      await upsertPendingQuestion(runtime, key, question)
       await queueChatUpdate(String(parsed.chatId), async () => {
         await sendTelegramQuestionPrompt(runtime.config, parsed.chatId, question)
         await sendTelegramMessage(runtime.config, parsed.chatId, `Open ${sessionLabel(runtime.config, sessionId)}`)
