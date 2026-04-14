@@ -18,8 +18,19 @@ import {
 import { createTelegramSessionStore, type TelegramSessionStore } from "./telegram-session-store"
 
 const MAX_TELEGRAM_SESSION_STORES = 8
+const MAX_SESSION_ALARM_SESSION_ID_LENGTH = 256
 const telegramSessionStores = new Map<string, TelegramSessionStore>()
 let telegramSessionStoreFactory = createTelegramSessionStore
+
+function sessionAlarmSessionIdError(sessionId: string) {
+  if (!sessionId) return "sessionId parameter is required"
+  if (sessionId.length > MAX_SESSION_ALARM_SESSION_ID_LENGTH) {
+    return `sessionId must be ${MAX_SESSION_ALARM_SESSION_ID_LENGTH} characters or fewer`
+  }
+  if (/[\x00-\x1F\x7F]/.test(sessionId)) {
+    return "sessionId contains unsupported control characters"
+  }
+}
 
 function evictTelegramSessionStoresIfNeeded() {
   while (telegramSessionStores.size > MAX_TELEGRAM_SESSION_STORES) {
@@ -598,8 +609,9 @@ export async function handleExtendedEndpoint(
 
   if (path === "/api/ext/telegram/session-alarm" && method === "GET") {
     const sessionId = (url.searchParams.get("sessionId") || "").trim()
-    if (!sessionId) {
-      return Response.json({ error: "sessionId query parameter is required" }, { status: 400 })
+    const sessionIdError = sessionAlarmSessionIdError(sessionId)
+    if (sessionIdError) {
+      return Response.json({ error: sessionIdError }, { status: 400 })
     }
     const settings = await readTelegramSettings().catch((error) => {
       console.error("[ExtAPI] telegram settings read error", error)
@@ -633,8 +645,9 @@ export async function handleExtendedEndpoint(
     const payload = body && typeof body === "object" && !Array.isArray(body) ? (body as Record<string, unknown>) : null
     const sessionId = typeof payload?.sessionId === "string" ? payload.sessionId.trim() : ""
     const enabled = payload?.enabled
-    if (!sessionId) {
-      return Response.json({ error: "sessionId is required" }, { status: 400 })
+    const sessionIdError = sessionAlarmSessionIdError(sessionId)
+    if (sessionIdError) {
+      return Response.json({ error: sessionIdError }, { status: 400 })
     }
     if (typeof enabled !== "boolean") {
       return Response.json({ error: "enabled must be a boolean" }, { status: 400 })
