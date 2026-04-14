@@ -26,6 +26,7 @@ export function Settings() {
   const mcp = useMCP()
   const { client, global, url, directory } = useSDK()
   const permission = useOptionalPermission()
+  const autoAcceptEnabled = () => permission?.autoAcceptEnabled() ?? false
   const theme = useTheme()
   const [selectedProvider, setSelectedProvider] = createSignal<string | null>(null)
   const [apiKey, setApiKey] = createSignal("")
@@ -887,18 +888,18 @@ Add your project-specific instructions here.
                     onClick={() => permission?.toggleAutoAccept()}
                     disabled={!directory || !permission}
                     role="switch"
-                    aria-checked={permission?.autoAcceptEnabled() ?? false}
+                    aria-checked={autoAcceptEnabled()}
                     aria-label="Auto-accept permissions"
                     class="relative w-10 h-5 rounded-full transition-colors disabled:opacity-50"
                     style={{
-                      background: (permission?.autoAcceptEnabled() ?? false) ? "var(--interactive-base)" : "var(--surface-inset)",
+                      background: autoAcceptEnabled() ? "var(--interactive-base)" : "var(--surface-inset)",
                     }}
                   >
                     <div
                       class="absolute top-0.5 w-4 h-4 rounded-full transition-all"
                       style={{
                         background: "var(--background-base)",
-                        left: (permission?.autoAcceptEnabled() ?? false) ? "calc(100% - 18px)" : "2px",
+                        left: autoAcceptEnabled() ? "calc(100% - 18px)" : "2px",
                       }}
                     />
                   </button>
