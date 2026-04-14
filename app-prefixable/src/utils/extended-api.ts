@@ -189,8 +189,12 @@ export interface SessionAlarmState {
 export async function getSessionAlarm(serverUrl: string, sessionId: string): Promise<SessionAlarmState | null> {
   const params = new URLSearchParams({ sessionId })
   const res = await fetch(`${serverUrl}/api/ext/telegram/session-alarm?${params}`).catch(() => null)
-  if (!res?.ok) {
-    if (res) console.warn("[extended-api] getSessionAlarm failed:", res.status)
+  if (!res) {
+    console.warn("[extended-api] getSessionAlarm: network error for session", sessionId)
+    return null
+  }
+  if (!res.ok) {
+    console.warn("[extended-api] getSessionAlarm failed:", res.status)
     return null
   }
   const data = (await res.json().catch(() => null)) as { sessionId?: string; enabled?: boolean } | null

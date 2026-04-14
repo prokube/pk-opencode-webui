@@ -532,7 +532,9 @@ export function Session() {
     onCleanup(() => { cancelled = true });
     // Then fetch server-side alarm state asynchronously
     getSessionAlarm(url, id).then((state) => {
+      // Skip if effect was cleaned up, session changed, or user already toggled
       if (cancelled || !state || params.id !== id) return;
+      if (notifyEnabled() !== local) return; // user toggled since fetch started
       setNotifyEnabled(state.enabled);
       // Sync localStorage to match server truth
       const map = readNotifyMap();
