@@ -414,6 +414,30 @@ export function createTelegramSessionStore(path: string): TelegramSessionStore {
     return true
   }
 
+  async function inboxGet(key: string) {
+    await ready
+    const rows = inbox.get(key)
+    if (!rows) return []
+    return [...rows]
+  }
+
+  async function inboxSet(key: string, items: TelegramPendingItem[]) {
+    await ready
+    await run(async () => {
+      const prev = inbox.get(key) || []
+      if (items.length) inbox.set(key, [...items])
+      if (!items.length) inbox.delete(key)
+      await flush().catch((error) => {
+        if (!prev.length) {
+          inbox.delete(key)
+          throw error
+        }
+        inbox.set(key, prev)
+        throw error
+      })
+    })
+  }
+
   return {
     async get(key: string) {
       await ready
@@ -500,50 +524,10 @@ export function createTelegramSessionStore(path: string): TelegramSessionStore {
         })
       })
     },
-    async inboxGet(key: string) {
-      await ready
-      const rows = inbox.get(key)
-      if (!rows) return []
-      return [...rows]
-    },
-    async inboxSet(key: string, items: TelegramPendingItem[]) {
-      await ready
-      await run(async () => {
-        const prev = inbox.get(key) || []
-        if (items.length) inbox.set(key, [...items])
-        if (!items.length) inbox.delete(key)
-        await flush().catch((error) => {
-          if (!prev.length) {
-            inbox.delete(key)
-            throw error
-          }
-          inbox.set(key, prev)
-          throw error
-        })
-      })
-    },
-    async pendingGet(key: string) {
-      await ready
-      const rows = inbox.get(key)
-      if (!rows) return []
-      return [...rows]
-    },
-    async pendingSet(key: string, items: TelegramPendingItem[]) {
-      await ready
-      await run(async () => {
-        const prev = inbox.get(key) || []
-        if (items.length) inbox.set(key, [...items])
-        if (!items.length) inbox.delete(key)
-        await flush().catch((error) => {
-          if (!prev.length) {
-            inbox.delete(key)
-            throw error
-          }
-          inbox.set(key, prev)
-          throw error
-        })
-      })
-    },
+    inboxGet,
+    inboxSet,
+    pendingGet: inboxGet,
+    pendingSet: inboxSet,
     async questionList(key: string) {
       await ready
       const rows = pending.get(key)
