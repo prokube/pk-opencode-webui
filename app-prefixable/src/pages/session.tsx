@@ -1522,7 +1522,6 @@ export function Session() {
     const dir = params.dir;
     const sid = sessionId();
     const busy = events.status[sid ?? ""]?.type;
-    const autoEnabled = followupAutoSend();
     const autoAttempt = source === "auto";
     const fail = (message: string) => {
       setError(message);
@@ -1587,6 +1586,7 @@ export function Session() {
       startProcessing();
       return true;
     } catch (err) {
+      const autoEnabled = followupAutoSend();
       setPendingUserMessageText(null);
       setOptimisticMessage(null);
       if (autoEnabled) setFollowupAutoPaused(id);
