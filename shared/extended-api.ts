@@ -17,13 +17,28 @@ import {
 } from "./telegram-settings"
 import { createTelegramSessionStore, type TelegramSessionStore } from "./telegram-session-store"
 
+const MAX_TELEGRAM_SESSION_STORES = 8
 const telegramSessionStores = new Map<string, TelegramSessionStore>()
+let telegramSessionStoreFactory = createTelegramSessionStore
+
+function evictTelegramSessionStoresIfNeeded() {
+  while (telegramSessionStores.size > MAX_TELEGRAM_SESSION_STORES) {
+    const oldest = telegramSessionStores.keys().next().value
+    if (oldest === undefined) return
+    telegramSessionStores.delete(oldest)
+  }
+}
 
 function telegramSessionStore(sessionStorePath: string) {
   const cached = telegramSessionStores.get(sessionStorePath)
-  if (cached) return cached
-  const next = createTelegramSessionStore(sessionStorePath)
+  if (cached) {
+    telegramSessionStores.delete(sessionStorePath)
+    telegramSessionStores.set(sessionStorePath, cached)
+    return cached
+  }
+  const next = telegramSessionStoreFactory(sessionStorePath)
   telegramSessionStores.set(sessionStorePath, next)
+  evictTelegramSessionStoresIfNeeded()
   return next
 }
 
@@ -33,6 +48,16 @@ export function resetTelegramSessionStoreCacheForTest() {
 
 export function telegramSessionStoreCacheSizeForTest() {
   return telegramSessionStores.size
+}
+
+export function setTelegramSessionStoreFactoryForTest(factory: typeof createTelegramSessionStore) {
+  telegramSessionStoreFactory = factory
+  telegramSessionStores.clear()
+}
+
+export function resetTelegramSessionStoreFactoryForTest() {
+  telegramSessionStoreFactory = createTelegramSessionStore
+  telegramSessionStores.clear()
 }
 
 type TelegramBridgeHealthResponse = {
