@@ -1398,22 +1398,28 @@ async function runPolling(runtime: Runtime) {
   }
 }
 
-function runPollingHealthServer(runtime: Runtime) {
+export function runPollingHealthServer(runtime: Runtime): boolean {
   const config = runtime.config
   const host = telegramHealthHost(config.mode)
-  Bun.serve({
-    port: config.port,
-    hostname: host,
-    async fetch(req) {
-      const url = new URL(req.url)
-      if (req.method !== "GET" || url.pathname !== "/health") {
-        return new Response("Not Found", { status: 404 })
-      }
-      const report = await readTelegramBridgeHealth(runtime)
-      return Response.json(report)
-    },
-  })
+  try {
+    Bun.serve({
+      port: config.port,
+      hostname: host,
+      async fetch(req) {
+        const url = new URL(req.url)
+        if (req.method !== "GET" || url.pathname !== "/health") {
+          return new Response("Not Found", { status: 404 })
+        }
+        const report = await readTelegramBridgeHealth(runtime)
+        return Response.json(report)
+      },
+    })
+  } catch (error) {
+    console.warn(`[TelegramBridge] health server failed to start on ${host}:${config.port}`, error)
+    return false
+  }
   console.log(`[TelegramBridge] health server listening on ${host}:${config.port}`)
+  return true
 }
 
 async function runWebhook(runtime: Runtime) {

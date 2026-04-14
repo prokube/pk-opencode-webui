@@ -721,6 +721,51 @@ describe("telegram settings extended API", () => {
     }
   })
 
+  test("GET telegram health waits for bridge dependency budget before timing out", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "telegram-settings-"))
+    cleanupPaths.push(dir)
+    process.env.TELEGRAM_SETTINGS_PATH = join(dir, "telegram-settings.json")
+
+    const timeoutSpy = spyOn(AbortSignal, "timeout")
+    const fetchSpy = spyOn(globalThis, "fetch").mockImplementation(async () => {
+      return new Response(
+        JSON.stringify({
+          status: "healthy",
+          checkedAt: new Date().toISOString(),
+          process: { status: "up", pid: 123, uptimeSec: 10, mode: "polling" },
+          config: {
+            status: "ok",
+            tokenConfigured: true,
+            webhookSecretConfigured: false,
+            openCodeUrlConfigured: true,
+            sessionStorePathConfigured: true,
+            directoryConfigured: false,
+            mode: "polling",
+          },
+          dependencies: {
+            telegramApi: { status: "ok", message: "Telegram API is reachable" },
+            openCodeApi: { status: "ok", message: "OpenCode API is reachable" },
+          },
+        }),
+        { status: 200 },
+      )
+    })
+
+    try {
+      await handleExtendedEndpoint(
+        "/api/ext/telegram/health",
+        "GET",
+        new URL("http://127.0.0.1/api/ext/telegram/health"),
+        new Request("http://127.0.0.1/api/ext/telegram/health"),
+      )
+
+      expect(timeoutSpy).toHaveBeenCalledWith(7_000)
+    } finally {
+      fetchSpy.mockRestore()
+      timeoutSpy.mockRestore()
+    }
+  })
+
   test("GET telegram health strips unexpected bridge secret fields", async () => {
     const dir = await mkdtemp(join(tmpdir(), "telegram-settings-"))
     cleanupPaths.push(dir)

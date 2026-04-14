@@ -169,9 +169,10 @@ function internalError(message: string): Response {
 }
 
 async function queryTelegramBridgeHealth(port: number): Promise<TelegramBridgeHealthResponse | undefined> {
+  const timeoutMs = 7_000
   const url = `http://127.0.0.1:${port}/health`
   const res = await fetch(url, {
-    signal: AbortSignal.timeout(3_000),
+    signal: AbortSignal.timeout(timeoutMs),
   }).catch(() => undefined)
   if (!res?.ok) return
   return res.json().catch(() => undefined)

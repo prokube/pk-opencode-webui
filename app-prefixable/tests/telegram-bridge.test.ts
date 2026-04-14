@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -17,6 +17,7 @@ import {
   readTelegramBridgeHealth,
   registerTelegramCommands,
   resetSessionCacheForTest,
+  runPollingHealthServer,
   setRetryDelayForTest,
   telegramHealthHost,
   sessionFromCache,
@@ -466,6 +467,42 @@ describe("telegram bridge config and cache", () => {
     process.env.TELEGRAM_HEALTH_PUBLIC = "true";
     expect(telegramHealthHost("polling")).toBe("0.0.0.0");
     expect(allowTelegramHealthRequest("10.0.0.12")).toBe(true);
+  });
+
+  test("runPollingHealthServer tolerates bind failures", () => {
+    const warnSpy = spyOn(console, "warn").mockImplementation(() => undefined);
+    const bunRef = Bun as unknown as { serve: typeof Bun.serve };
+    const originalServe = bunRef.serve;
+    bunRef.serve = (() => {
+      throw new Error("EADDRINUSE");
+    }) as typeof Bun.serve;
+
+    try {
+      const started = runPollingHealthServer({
+        config: {
+          mode: "polling",
+          token: "token",
+          openCodeUrl: "http://127.0.0.1:4096",
+          sessionCacheMax: 10,
+          sessionCacheTtlMs: 10_000,
+          notificationDebounceMs: 20_000,
+          port: 4097,
+          webhookPath: "/webhook",
+          sessionStorePath: "/tmp/test-store.json",
+        },
+        store: {
+          get: async () => undefined,
+          set: async () => undefined,
+          delete: async () => undefined,
+        },
+      });
+
+      expect(started).toBe(false);
+      expect(warnSpy).toHaveBeenCalled();
+    } finally {
+      bunRef.serve = originalServe;
+      warnSpy.mockRestore();
+    }
   });
 
   test("handleTextUpdate parses whitespace and bot-qualified help command", async () => {
