@@ -1363,8 +1363,7 @@ export function Session() {
       setError(`Provider "${model.providerID}" is not connected. Please configure it in Settings.`);
       return;
     }
-    const queued = followups();
-    const item = queued.find((entry) => entry.id === id);
+    const item = followups().find((entry) => entry.id === id);
     if (!item) return;
     setFollowupSending(id);
     setError(null);
@@ -1378,13 +1377,12 @@ export function Session() {
         agent: providers.selectedAgent || "build",
         model,
       });
-      const next = queued.filter((entry) => entry.id !== id);
-      if (sessionId() === sid) setFollowups(next);
-
       const map = readFollowupMap(dir);
+      const next = (map[sid] ?? []).filter((entry) => entry.id !== id);
       if (next.length === 0) delete map[sid];
       if (next.length > 0) map[sid] = next;
       writeFollowupMap(map, dir);
+      if (sessionId() === sid) setFollowups(next);
       startProcessing();
     } catch (err) {
       setPendingUserMessageText(null);
