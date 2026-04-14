@@ -1058,6 +1058,7 @@ describe("telegram bridge config and cache", () => {
       expect(sent[2]).toContain("Known sessions for this chat/user mapping:");
       expect(sent[2]).toContain("1. Second chat (session-2) (current)");
       expect(sent[2]).toContain("2. First chat (session-1)");
+      expect(sent[2]).toContain("Use /switch [session-id|index] to switch.");
       expect(sent[3]).toBe("Switched to session: First chat (session-1)");
       expect(sent[4]).toBe("Switched to session: Custom thread (custom-session)");
       expect(sent[5]).toBe("Current session: Custom thread (custom-session)");
@@ -1232,6 +1233,58 @@ describe("telegram bridge config and cache", () => {
 
     expect(calls.filter((x) => x.url.includes("/session/session-current")).length).toBe(1);
     expect(calls.filter((x) => x.url.includes("/session/session-old")).length).toBe(1);
+  });
+
+  test("session metadata cache normalizes whitespace in session ids", async () => {
+    const calls: Array<{ url: string; body: Record<string, unknown> }> = [];
+    const originalFetch = globalThis.fetch;
+    try {
+      globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        const body = init?.body ? (JSON.parse(String(init.body)) as Record<string, unknown>) : {};
+        calls.push({ url, body });
+        if (url.includes("/session/session-current")) {
+          return new Response(JSON.stringify({ id: "session-current", title: "Current thread" }), { status: 200 });
+        }
+        if (url.includes("/sendMessage")) {
+          return new Response(JSON.stringify({ ok: true, result: { message_id: 1 } }), { status: 200 });
+        }
+        throw new Error(`Unexpected fetch ${url}`);
+      };
+
+      const runtime = {
+        config: {
+          mode: "polling" as const,
+          token: "token",
+          openCodeUrl: "http://127.0.0.1:4096",
+          sessionCacheMax: 10,
+          sessionCacheTtlMs: 10_000,
+          notificationDebounceMs: 20_000,
+          port: 4097,
+          webhookPath: "/webhook",
+          sessionStorePath: "/tmp/test-store.json",
+        },
+        store: {
+          get: async () => " session-current ",
+          set: async () => undefined,
+          delete: async () => undefined,
+        },
+      };
+
+      await handleTextUpdate(runtime, {
+        update_id: 1,
+        message: { message_id: 1, text: "/status", chat: { id: 88 }, from: { id: 8 } },
+      });
+      await handleTextUpdate(runtime, {
+        update_id: 2,
+        message: { message_id: 2, text: "/status", chat: { id: 88 }, from: { id: 8 } },
+      });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+
+    expect(calls.filter((x) => x.url.includes("/session/session-current")).length).toBe(1);
+    expect(calls.some((x) => x.url.includes("/session/%20session-current%20"))).toBe(false);
   });
 
   test("/recent returns latest user and assistant exchanges", async () => {
@@ -1942,6 +1995,54 @@ describe("telegram bridge config and cache", () => {
     expect(sent).toContain("1. Alpha (session-a) (current)");
     expect(sent).toContain("2. Beta (session-b)");
     expect(sent).toContain("Reply with /switch <index> for quick switching");
+  });
+
+  test("/switch empty-state copy advertises optional argument usage", async () => {
+    const calls: Array<{ url: string; body: Record<string, unknown> }> = [];
+    const originalFetch = globalThis.fetch;
+    try {
+      globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        const body = init?.body ? (JSON.parse(String(init.body)) as Record<string, unknown>) : {};
+        calls.push({ url, body });
+        if (url.includes("/sendMessage")) {
+          return new Response(JSON.stringify({ ok: true, result: { message_id: 1 } }), { status: 200 });
+        }
+        throw new Error(`Unexpected fetch ${url}`);
+      };
+
+      const runtime = {
+        config: {
+          mode: "polling" as const,
+          token: "token",
+          openCodeUrl: "http://127.0.0.1:4096",
+          sessionCacheMax: 10,
+          sessionCacheTtlMs: 10_000,
+          notificationDebounceMs: 20_000,
+          port: 4097,
+          webhookPath: "/webhook",
+          sessionStorePath: "/tmp/test-store.json",
+        },
+        store: {
+          get: async () => undefined,
+          set: async () => undefined,
+          delete: async () => undefined,
+          historyGet: async () => [],
+        },
+      };
+
+      await handleTextUpdate(runtime, {
+        update_id: 1,
+        message: { message_id: 1, text: "/switch", chat: { id: 77 }, from: { id: 3 } },
+      });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+
+    const sent = String(calls.filter((x) => x.url.includes("/sendMessage")).at(-1)?.body.text || "");
+    expect(sent).toContain("Use /new to create one.");
+    expect(sent).toContain("/switch with no args");
+    expect(sent).toContain("/switch [session-id|index]");
   });
 
   test("session history cache is bounded and evicts oldest chat keys", async () => {

@@ -1209,15 +1209,8 @@ async function sessionsText(runtime: Runtime, chatKey: string, current?: string)
   if (!list.length) {
     return "No known sessions for this chat/user mapping yet. Use /new to create one, then /sessions to view options."
   }
-  const details = await Promise.all(list.map(async (sessionId) => {
-    const title = await safeSessionTitle(runtime.config, sessionId)
-    return formatSessionDisplay(sessionId, title)
-  }))
-  const lines = list.map((sessionId, index) => {
-    const suffix = current === sessionId ? " (current)" : ""
-    return `${index + 1}. ${details[index]}${suffix}`
-  })
-  return `Known sessions for this chat/user mapping:\n${lines.join("\n")}\n\nUse /switch <index|session-id> to switch. Tip: run /switch to pick from recent sessions quickly.`
+  const lines = await formatSessionList(runtime.config, list, current)
+  return `Known sessions for this chat/user mapping:\n${lines.join("\n")}\n\nUse /switch [session-id|index] to switch. Tip: run /switch to pick from recent sessions quickly.`
 }
 
 function trimSessionTitle(value: unknown): string | undefined {
@@ -1264,6 +1257,23 @@ function formatSessionDisplay(sessionId: string, title?: string): string {
   return `${title} (${sessionId})`
 }
 
+async function formatSessionList(config: BridgeConfig, list: string[], current?: string): Promise<string[]> {
+  const details = await Promise.all(list.map(async (sessionId) => {
+    const title = await safeSessionTitle(config, sessionId)
+    return formatSessionDisplay(sessionId, title)
+  }))
+  return list.map((sessionId, index) => {
+    const suffix = current === sessionId ? " (current)" : ""
+    return `${index + 1}. ${details[index]}${suffix}`
+  })
+}
+
+function normalizeSessionLookupId(sessionId: string): string | undefined {
+  const id = sessionId.trim()
+  if (!id) return
+  return id
+}
+
 type SessionLookup = {
   exists: boolean
   title?: string
@@ -1293,13 +1303,15 @@ async function readSessionInfo(config: BridgeConfig, sessionId: string): Promise
 }
 
 async function sessionTitle(config: BridgeConfig, sessionId: string): Promise<string | undefined> {
-  const cached = cachedSessionLookup(sessionId)
+  const id = normalizeSessionLookupId(sessionId)
+  if (!id) return
+  const cached = cachedSessionLookup(id)
   if (cached) {
     if (!cached.exists) return
     return cached.title
   }
-  const loaded = await readSessionInfo(config, sessionId)
-  cacheSessionInfo(config, sessionId, loaded)
+  const loaded = await readSessionInfo(config, id)
+  cacheSessionInfo(config, id, loaded)
   if (!loaded.exists) return
   return loaded.title
 }
@@ -1396,10 +1408,12 @@ async function recentText(config: BridgeConfig, sessionId: string, count: number
 }
 
 async function sessionExists(config: BridgeConfig, sessionId: string): Promise<boolean> {
-  const cached = cachedSessionLookup(sessionId)
+  const id = normalizeSessionLookupId(sessionId)
+  if (!id) return false
+  const cached = cachedSessionLookup(id)
   if (cached) return cached.exists
-  const loaded = await readSessionInfo(config, sessionId)
-  cacheSessionInfo(config, sessionId, loaded)
+  const loaded = await readSessionInfo(config, id)
+  cacheSessionInfo(config, id, loaded)
   return loaded.exists
 }
 
@@ -1413,16 +1427,9 @@ function pruneExpiredSessions(now: number) {
 async function switchPickerText(runtime: Runtime, chatKey: string, current?: string): Promise<string> {
   const list = await switchCandidates(runtime, chatKey, current)
   if (!list.length) {
-    return "No known sessions for this chat/user mapping yet. Use /new to create one, then /switch <session-id|index> to switch."
+    return "No known sessions for this chat/user mapping yet. Use /new to create one. You can also run /switch with no args to view recent sessions, or /switch [session-id|index] to switch."
   }
-  const details = await Promise.all(list.map(async (sessionId) => {
-    const title = await safeSessionTitle(runtime.config, sessionId)
-    return formatSessionDisplay(sessionId, title)
-  }))
-  const lines = list.map((sessionId, index) => {
-    const suffix = current === sessionId ? " (current)" : ""
-    return `${index + 1}. ${details[index]}${suffix}`
-  })
+  const lines = await formatSessionList(runtime.config, list, current)
   return `Recent sessions for this chat/user mapping:\n${lines.join("\n")}\n\nReply with /switch <index> for quick switching, or /switch <session-id> when needed.`
 }
 
