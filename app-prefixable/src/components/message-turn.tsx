@@ -944,7 +944,7 @@ export function MessageTurn(props: {
                     <Show when={text}>
                       <Markdown content={text} class="text-sm" />
                     </Show>
-                    {/* Agent, snapshot, retry, and patch parts */}
+                    {/* Agent, snapshot, retry, patch, and compaction parts */}
                     <Show when={meta().length > 0}>
                       <div class="space-y-2 mt-2">
                         <For each={meta()}>{(part) => renderMetaPart(part)}</For>
