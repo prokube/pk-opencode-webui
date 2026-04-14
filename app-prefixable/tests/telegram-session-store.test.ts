@@ -38,7 +38,7 @@ describe("telegram session store", () => {
     expect(await third.get(key)).toBeUndefined()
   })
 
-  test("reads and upgrades v1 store while defaulting notifications to off", async () => {
+  test("reads and upgrades v1 store while defaulting notifications and session alarms to off", async () => {
     const dir = await mkdtemp(join(tmpdir(), "telegram-session-store-"))
     const path = join(dir, "sessions.json")
     const keyA = telegramSessionKey(2001, 11)
@@ -58,6 +58,8 @@ describe("telegram session store", () => {
     expect(await store.sessionKeys?.(session)).toEqual(expect.arrayContaining([keyA, keyB]))
     expect(await store.notificationGet?.(keyA)).toBe(false)
     expect(await store.notificationGet?.(telegramSessionKey(2999, 99))).toBe(false)
+    expect(await store.sessionAlarmGet?.(session)).toBe(false)
+    expect(await store.sessionAlarmGet?.("session-missing")).toBe(false)
 
     await store.set(telegramSessionKey(2003, 13), "session-new")
 
@@ -65,12 +67,14 @@ describe("telegram session store", () => {
       version?: number
       sessions?: Record<string, string>
       notifications?: Record<string, boolean>
+      sessionAlarms?: Record<string, boolean>
       inbox?: Record<string, unknown>
     }
-    expect(stored.version).toBe(3)
+    expect(stored.version).toBe(4)
     expect(stored.sessions?.[keyA]).toBe(session)
     expect(stored.sessions?.[keyB]).toBe(session)
     expect(stored.notifications).toEqual({})
+    expect(stored.sessionAlarms).toEqual({})
     expect(stored.inbox).toEqual({})
   })
 
@@ -183,6 +187,22 @@ describe("telegram session store", () => {
     expect(await second.notificationGet?.(key)).toBe(true)
     await second.notificationSet?.(key, false)
     expect(await second.notificationGet?.(key)).toBe(false)
+  })
+
+  test("persists session alarm flags", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "telegram-session-store-"))
+    const path = join(dir, "sessions.json")
+    files.push(path)
+    files.push(dir)
+
+    const first = createTelegramSessionStore(path)
+    await first.sessionAlarmSet?.("session-a", true)
+    expect(await first.sessionAlarmGet?.("session-a")).toBe(true)
+
+    const second = createTelegramSessionStore(path)
+    expect(await second.sessionAlarmGet?.("session-a")).toBe(true)
+    await second.sessionAlarmSet?.("session-a", false)
+    expect(await second.sessionAlarmGet?.("session-a")).toBe(false)
   })
 
   test("persists inbox entries across restarts", async () => {

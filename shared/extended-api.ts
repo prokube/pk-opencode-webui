@@ -15,6 +15,57 @@ import {
   readTelegramSettings,
   updateTelegramSettings,
 } from "./telegram-settings"
+import { createTelegramSessionStore, type TelegramSessionStore } from "./telegram-session-store"
+
+const MAX_TELEGRAM_SESSION_STORES = 8
+const MAX_SESSION_ALARM_SESSION_ID_LENGTH = 256
+const telegramSessionStores = new Map<string, TelegramSessionStore>()
+let telegramSessionStoreFactory = createTelegramSessionStore
+
+function sessionAlarmSessionIdError(sessionId: string) {
+  if (!sessionId) return "sessionId parameter is required"
+  if (sessionId.length > MAX_SESSION_ALARM_SESSION_ID_LENGTH) {
+    return `sessionId must be ${MAX_SESSION_ALARM_SESSION_ID_LENGTH} characters or fewer`
+  }
+  if (/[\x00-\x1F\x7F]/.test(sessionId)) {
+    return "sessionId contains unsupported control characters"
+  }
+}
+
+function evictTelegramSessionStoresIfNeeded() {
+  while (telegramSessionStores.size > MAX_TELEGRAM_SESSION_STORES) {
+    const oldest = telegramSessionStores.keys().next().value
+    if (oldest === undefined) return
+    telegramSessionStores.delete(oldest)
+  }
+}
+
+function telegramSessionStore(sessionStorePath: string) {
+  const cached = telegramSessionStores.get(sessionStorePath)
+  if (cached) {
+    telegramSessionStores.delete(sessionStorePath)
+    telegramSessionStores.set(sessionStorePath, cached)
+    return cached
+  }
+  const next = telegramSessionStoreFactory(sessionStorePath)
+  telegramSessionStores.set(sessionStorePath, next)
+  evictTelegramSessionStoresIfNeeded()
+  return next
+}
+
+export function telegramSessionStoreCacheSizeForTest() {
+  return telegramSessionStores.size
+}
+
+export function setTelegramSessionStoreFactoryForTest(factory: typeof createTelegramSessionStore) {
+  telegramSessionStoreFactory = factory
+  telegramSessionStores.clear()
+}
+
+export function resetTelegramSessionStoreFactoryForTest() {
+  telegramSessionStoreFactory = createTelegramSessionStore
+  telegramSessionStores.clear()
+}
 
 type TelegramBridgeHealthResponse = {
   status?: "healthy" | "degraded"
@@ -554,6 +605,81 @@ export async function handleExtendedEndpoint(
       return Response.json({ error: "validation_failed", errors: result.errors }, { status: 400 })
     }
     return Response.json(result)
+  }
+
+  if (path === "/api/ext/telegram/session-alarm" && method === "GET") {
+    const sessionId = (url.searchParams.get("sessionId") || "").trim()
+    const sessionIdError = sessionAlarmSessionIdError(sessionId)
+    if (sessionIdError) {
+      return Response.json({ error: sessionIdError }, { status: 400 })
+    }
+    const settings = await readTelegramSettings().catch((error) => {
+      console.error("[ExtAPI] telegram settings read error", error)
+      return null
+    })
+    if (!settings) {
+      return Response.json({ error: "failed to read telegram settings" }, { status: 500 })
+    }
+    const store = telegramSessionStore(settings.settings.sessionStorePath)
+    if (!store.sessionAlarmGet) {
+      return Response.json(
+        {
+          error: "not_implemented",
+          message: "telegram session alarm read is not supported by the configured session store",
+        },
+        { status: 501 },
+      )
+    }
+    const enabled = await store.sessionAlarmGet(sessionId).catch((error) => {
+      console.error("[ExtAPI] telegram session alarm read error", error)
+      return undefined
+    })
+    if (enabled === undefined) {
+      return Response.json({ error: "failed to read telegram session alarm" }, { status: 500 })
+    }
+    return Response.json({ sessionId, enabled: enabled === true })
+  }
+
+  if (path === "/api/ext/telegram/session-alarm" && method === "PUT") {
+    const body = await req.json().catch(() => null)
+    const payload = body && typeof body === "object" && !Array.isArray(body) ? (body as Record<string, unknown>) : null
+    const sessionId = typeof payload?.sessionId === "string" ? payload.sessionId.trim() : ""
+    const enabled = payload?.enabled
+    const sessionIdError = sessionAlarmSessionIdError(sessionId)
+    if (sessionIdError) {
+      return Response.json({ error: sessionIdError }, { status: 400 })
+    }
+    if (typeof enabled !== "boolean") {
+      return Response.json({ error: "enabled must be a boolean" }, { status: 400 })
+    }
+    const settings = await readTelegramSettings().catch((error) => {
+      console.error("[ExtAPI] telegram settings read error", error)
+      return null
+    })
+    if (!settings) {
+      return Response.json({ error: "failed to read telegram settings" }, { status: 500 })
+    }
+    const store = telegramSessionStore(settings.settings.sessionStorePath)
+    if (!store.sessionAlarmSet) {
+      return Response.json(
+        {
+          error: "not_implemented",
+          message: "telegram session alarm update is not supported by the configured session store",
+        },
+        { status: 501 },
+      )
+    }
+    const ok = await store.sessionAlarmSet(sessionId, enabled).then(
+      () => true,
+      (error) => {
+        console.error("[ExtAPI] telegram session alarm write error", error)
+        return false
+      },
+    )
+    if (ok === false) {
+      return Response.json({ error: "failed to update telegram session alarm" }, { status: 500 })
+    }
+    return Response.json({ sessionId, enabled })
   }
 
   if (path === "/api/ext/telegram/restart" && method === "GET") {
