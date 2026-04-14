@@ -1556,6 +1556,7 @@ function savedPromptsFailureGuidance(status: number | undefined, directory?: str
 
 async function savedPrompts(runtime: Runtime, key: string): Promise<{ prompts: SavedPrompt[]; guidance?: string }> {
   const config = runtime.config
+  const noPromptsGuidance = "No saved prompts found. If your prompts are project-scoped, run /status in the target project first or configure Telegram directory in bridge settings."
   const current = await runtime.store.get(key) || sessionFromCache(config, key)
   const bySession = current ? await sessionDirectory(config, current) : undefined
   const candidates = [bySession, config.directory]
@@ -1563,6 +1564,7 @@ async function savedPrompts(runtime: Runtime, key: string): Promise<{ prompts: S
     .filter((value, index, list) => list.indexOf(value) === index)
   const contexts = [...candidates, undefined]
   let fallbackGuidance: string | undefined
+  let hasSuccess = false
 
   for (const directory of contexts) {
     const scoped = await savedPromptsForDirectory(config, directory).catch((error) => {
@@ -1571,6 +1573,7 @@ async function savedPrompts(runtime: Runtime, key: string): Promise<{ prompts: S
       return
     })
     if (!scoped) continue
+    hasSuccess = true
     const merged = mergeSavedPrompts(scoped.global, scoped.project)
     if (merged.length) {
       return { prompts: merged }
@@ -1579,7 +1582,7 @@ async function savedPrompts(runtime: Runtime, key: string): Promise<{ prompts: S
 
   return {
     prompts: [],
-    guidance: fallbackGuidance || "No saved prompts found. If your prompts are project-scoped, run /status in the target project first or configure Telegram directory in bridge settings.",
+    guidance: hasSuccess ? noPromptsGuidance : fallbackGuidance || noPromptsGuidance,
   }
 }
 
