@@ -180,8 +180,8 @@ function parseStore(input: string): StoreShape {
   }
   for (const key of Object.keys(sessionAlarms)) {
     const value = sessionAlarms[key]
-    if (typeof value !== "boolean") continue
-    sessionAlarmOut[key] = value
+    if (value !== true) continue
+    sessionAlarmOut[key] = true
   }
   for (const key of Object.keys(history)) {
     const next = parseHistoryList(history[key])
@@ -573,6 +573,7 @@ export function createTelegramSessionStore(path: string): TelegramSessionStore {
       await ready
       await run(async () => {
         const prev = sessionAlarms.get(sessionId)
+        if ((prev === true && enabled) || (prev === undefined && !enabled)) return
         if (enabled) sessionAlarms.set(sessionId, true)
         if (!enabled) sessionAlarms.delete(sessionId)
         await flush().catch((error) => {

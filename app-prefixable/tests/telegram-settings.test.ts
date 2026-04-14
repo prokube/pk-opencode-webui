@@ -6,7 +6,6 @@ import * as fsp from "node:fs/promises"
 import {
   handleExtendedEndpoint,
   resetTelegramSessionStoreFactoryForTest,
-  resetTelegramSessionStoreCacheForTest,
   setTelegramSessionStoreFactoryForTest,
   telegramSessionStoreCacheSizeForTest,
 } from "../../shared/extended-api"
@@ -44,7 +43,6 @@ const cleanupPaths: string[] = []
 
 beforeEach(() => {
   resetTelegramSessionStoreFactoryForTest()
-  resetTelegramSessionStoreCacheForTest()
   for (const key of envKeys) {
     envSnapshot.set(key, process.env[key])
     delete process.env[key]
