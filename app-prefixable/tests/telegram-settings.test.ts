@@ -72,6 +72,7 @@ describe("telegram settings extended API", () => {
     expect(data.settings.webhookSecretConfigured).toBe(true)
     expect(data.settings.token).toBeUndefined()
     expect(data.settings.webhookSecret).toBeUndefined()
+    expect(data.settings.telegramAlarmChannelEnabled).toBe(true)
     expect(data.storage.path).toBeUndefined()
   })
 
@@ -95,6 +96,7 @@ describe("telegram settings extended API", () => {
             mode: "invalid",
             port: 70000,
             sessionStorePath: "relative/store.json",
+            telegramAlarmChannelEnabled: "yes",
           },
         }),
       }),
@@ -111,6 +113,10 @@ describe("telegram settings extended API", () => {
           field: "sessionStorePath",
           message:
             "sessionStorePath must be an absolute path within OPENCODE_WORKSPACE_ROOT, HOME, OPENCODE_CONFIG_DIR, or the system temp directory",
+        },
+        {
+          field: "telegramAlarmChannelEnabled",
+          message: "telegramAlarmChannelEnabled must be a boolean or null",
         },
       ]),
     )
@@ -136,6 +142,7 @@ describe("telegram settings extended API", () => {
             token: "persisted-secret-token",
             openCodeUrl: "http://127.0.0.1:4199",
             notificationDebounceMs: 30000,
+            telegramAlarmChannelEnabled: false,
           },
         }),
       }),
@@ -144,11 +151,11 @@ describe("telegram settings extended API", () => {
     expect(update?.status).toBe(200)
     const updateData = await update?.json()
     expect(updateData.changedFields).toEqual(
-      expect.arrayContaining(["token", "openCodeUrl", "notificationDebounceMs"]),
+      expect.arrayContaining(["token", "openCodeUrl", "notificationDebounceMs", "telegramAlarmChannelEnabled"]),
     )
     expect(updateData.restartRequired).toBe(true)
     expect(updateData.restartRequiredFields).toEqual(
-      expect.arrayContaining(["token", "openCodeUrl", "notificationDebounceMs"]),
+      expect.arrayContaining(["token", "openCodeUrl", "notificationDebounceMs", "telegramAlarmChannelEnabled"]),
     )
     expect(updateData.storage.path).toBeUndefined()
 
@@ -162,14 +169,16 @@ describe("telegram settings extended API", () => {
     expect(readData.settings.tokenConfigured).toBe(true)
     expect(readData.settings.tokenSource).toBe("persisted")
     expect(readData.settings.openCodeUrl).toBe("http://127.0.0.1:4199/")
+    expect(readData.settings.telegramAlarmChannelEnabled).toBe(false)
     expect(readData.settings.token).toBeUndefined()
     expect(readData.metadata.runtimeReloadableFields).toEqual([])
     expect(readData.metadata.restartRequiredFields).toContain("token")
 
     const stored = JSON.parse(await Bun.file(path).text()) as {
-      settings?: Record<string, string | number>
+      settings?: Record<string, string | number | boolean>
     }
     expect(stored.settings?.token).toBe("persisted-secret-token")
+    expect(stored.settings?.telegramAlarmChannelEnabled).toBe(false)
   })
 
   test("PUT allows null to clear persisted required and numeric fields", async () => {
@@ -238,7 +247,7 @@ describe("telegram settings extended API", () => {
     expect(data.settings.port).toBe(4197)
 
     const stored = JSON.parse(await Bun.file(path).text()) as {
-      settings?: Record<string, string | number>
+      settings?: Record<string, string | number | boolean>
     }
     expect(stored.settings?.token).toBeUndefined()
     expect(stored.settings?.openCodeUrl).toBeUndefined()
@@ -299,7 +308,7 @@ describe("telegram settings extended API", () => {
     expect(data.settings.openCodeUrl).toBe("http://127.0.0.1:4299/")
 
     const stored = JSON.parse(await Bun.file(path).text()) as {
-      settings?: Record<string, string | number>
+      settings?: Record<string, string | number | boolean>
     }
     expect(stored.settings?.openCodeUrl).toBeUndefined()
   })
@@ -359,7 +368,7 @@ describe("telegram settings extended API", () => {
     expect(data.settings.sessionStorePath).toBe(envStore)
 
     const stored = JSON.parse(await Bun.file(path).text()) as {
-      settings?: Record<string, string | number>
+      settings?: Record<string, string | number | boolean>
     }
     expect(stored.settings?.sessionStorePath).toBeUndefined()
   })

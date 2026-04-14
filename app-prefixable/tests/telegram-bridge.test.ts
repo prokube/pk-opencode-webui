@@ -3004,6 +3004,108 @@ describe("telegram bridge config and cache", () => {
     expect(items.map((item) => item.kind).sort()).toEqual(["permission", "question"]);
   });
 
+  test("question, permission, and task-finished skip proactive send when telegram channel is disabled", async () => {
+    const calls: Array<{ url: string; body: Record<string, unknown> }> = [];
+    const originalFetch = globalThis.fetch;
+    const inbox = new Map<string, Array<{
+      id: string;
+      kind: "question" | "permission" | "task-finished";
+      sessionId: string;
+      text: string;
+      stampedAt: number;
+      resolved: boolean;
+    }>>();
+    const pending = new Map<string, unknown[]>();
+    try {
+      globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        const body = init?.body ? (JSON.parse(String(init.body)) as Record<string, unknown>) : {};
+        calls.push({ url, body });
+        if (url.includes("/sendMessage")) {
+          return new Response(JSON.stringify({ ok: true, result: { message_id: 1 } }), { status: 200 });
+        }
+        throw new Error(`Unexpected fetch ${url}`);
+      };
+
+      const runtime = {
+        config: {
+          mode: "polling" as const,
+          token: "token",
+          openCodeUrl: "http://127.0.0.1:4096",
+          sessionCacheMax: 10,
+          sessionCacheTtlMs: 10_000,
+          notificationDebounceMs: 0,
+          telegramAlarmChannelEnabled: false,
+          port: 4097,
+          webhookPath: "/webhook",
+          sessionStorePath: "/tmp/test-store.json",
+        },
+        store: {
+          get: async () => undefined,
+          set: async () => undefined,
+          delete: async () => undefined,
+          sessionKeys: async () => ["chat:88:user:9"],
+          notificationGet: async () => true,
+          pendingGet: async (chatKey: string) => inbox.get(chatKey) || [],
+          pendingSet: async (chatKey: string, items: Array<{
+            id: string;
+            kind: "question" | "permission" | "task-finished";
+            sessionId: string;
+            text: string;
+            stampedAt: number;
+            resolved: boolean;
+          }>) => {
+            inbox.set(chatKey, [...items]);
+          },
+          questionList: async (name: string) => (pending.get(name) || []) as unknown[],
+          questionUpsert: async (name: string, row: unknown) => {
+            pending.set(name, [row]);
+          },
+          questionDelete: async () => undefined,
+        },
+      };
+
+      await handleBridgeEvent(runtime, {
+        type: "question.asked",
+        properties: {
+          id: "req-channel-off",
+          sessionID: "session-1",
+          questions: [{ header: "Need approval", options: [{ label: "Yes" }, { label: "No" }] }],
+        },
+      });
+      await handleBridgeEvent(runtime, {
+        type: "permission.asked",
+        properties: {
+          id: "perm-channel-off",
+          sessionID: "session-1",
+          permission: "shell",
+          patterns: ["docker *"],
+        },
+      });
+      await handleBridgeEvent(runtime, {
+        type: "session.status",
+        properties: {
+          sessionID: "session-1",
+          status: { type: "busy" },
+        },
+      });
+      await handleBridgeEvent(runtime, {
+        type: "session.status",
+        properties: {
+          sessionID: "session-1",
+          status: { type: "idle" },
+        },
+      });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+
+    expect(calls.some((x) => x.url.includes("/sendMessage"))).toBe(false);
+    const items = inbox.get("chat:88") || [];
+    expect(items).toHaveLength(3);
+    expect(items.map((item) => item.kind).sort()).toEqual(["permission", "question", "task-finished"]);
+  });
+
   test("/pending response is chunked under Telegram message limits", async () => {
     const calls: Array<{ url: string; body: Record<string, unknown> }> = [];
     const originalFetch = globalThis.fetch;

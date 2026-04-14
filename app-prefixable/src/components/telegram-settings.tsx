@@ -218,7 +218,7 @@ export function TelegramSettings(props: Props) {
           Configure Telegram bridge runtime settings. Saving changes writes persisted values and may require restarting the bridge service.
         </p>
         <p class="text-xs mt-2" style={{ color: "var(--text-weak)" }}>
-          Telegram alarms are proactive when enabled. If you miss a ping, use <code class="px-1 py-0.5 rounded" style={{ background: "var(--surface-inset)" }}>/pending</code> in Telegram to review outstanding prompts.
+          Proactive Telegram delivery is controlled from Settings / Sounds / Telegram alarm channel. If you miss a ping, use <code class="px-1 py-0.5 rounded" style={{ background: "var(--surface-inset)" }}>/pending</code> in Telegram to review outstanding prompts.
         </p>
       </header>
 

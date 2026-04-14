@@ -20,6 +20,7 @@ import { SETTINGS_BASE_TABS } from "./settings-tabs"
 import { TelegramSettings } from "../components/telegram-settings"
 import { writeFile } from "../utils/extended-api"
 import { ALARM_CHANNELS_STORAGE_KEY, readAlarmChannels, writeAlarmChannels, type AlarmChannels } from "../utils/notify"
+import type { TelegramHealthResponse, TelegramSettingsResponse } from "../utils/telegram-settings"
 import type { Config, PermissionActionConfig } from "../sdk/client"
 
 export function Settings() {
@@ -63,6 +64,7 @@ export function Settings() {
   const [soundSettings, setSoundSettings] = createSignal<SoundSettings>(readSoundSettings())
   const [alarmChannels, setAlarmChannels] = createSignal<AlarmChannels>(readAlarmChannels())
   const [telegramAlarmReady, setTelegramAlarmReady] = createSignal(false)
+  const [telegramAlarmSaving, setTelegramAlarmSaving] = createSignal(false)
   const [telegramAlarmHint, setTelegramAlarmHint] = createSignal("Telegram bridge health check has not run yet.")
 
   // Keep soundSettings in sync with localStorage changes from other tabs
@@ -88,26 +90,61 @@ export function Settings() {
   }
 
   async function loadTelegramAlarmState() {
-    const res = await fetch(`${basePath.serverUrl}/api/ext/telegram/health`).catch(() => null)
-    if (!res?.ok) {
+    const [settingsRes, healthRes] = await Promise.all([
+      fetch(`${basePath.serverUrl}/api/ext/telegram/settings`).catch(() => null),
+      fetch(`${basePath.serverUrl}/api/ext/telegram/health`).catch(() => null),
+    ])
+
+    const settings = await settingsRes?.json().catch(() => null) as TelegramSettingsResponse | null
+    if (settings?.settings) {
+      updateAlarmChannels({ telegram: settings.settings.telegramAlarmChannelEnabled })
+    }
+
+    if (!healthRes?.ok) {
       setTelegramAlarmReady(false)
       setTelegramAlarmHint("Telegram bridge is not reachable. Configure the bridge on the Telegram tab, then refresh this page.")
       return
     }
-    const data = await res.json().catch(() => null) as {
-      status?: "healthy" | "degraded" | "down"
-      bridgeReachable?: boolean
-      config?: { tokenConfigured?: boolean }
-      messages?: Array<{ text?: string }>
-    } | null
-    const ready = !!data?.bridgeReachable && !!data?.config?.tokenConfigured && data?.status !== "down"
+    const data = await healthRes.json().catch(() => null) as TelegramHealthResponse | null
+    const ready = !!data?.bridgeReachable
+      && data?.config?.status === "ok"
+      && !!data?.config?.tokenConfigured
+      && data?.status !== "down"
     setTelegramAlarmReady(ready)
     if (ready) {
-      setTelegramAlarmHint("Telegram alarms send proactive pings for bell-enabled sessions. Use /pending in Telegram for backlog and history.")
+      setTelegramAlarmHint("Telegram channel is ready. This toggle controls proactive Telegram pings for bell-enabled sessions.")
       return
     }
     const msg = data?.messages?.[0]?.text
     setTelegramAlarmHint(msg || "Telegram alarms need a healthy bridge and bot token before they can be enabled.")
+  }
+
+  async function toggleTelegramAlarmChannel() {
+    if (telegramAlarmSaving()) return
+    const current = alarmChannels().telegram
+    if (!telegramAlarmReady() && !current) return
+
+    setTelegramAlarmSaving(true)
+    const target = !current
+    const res = await fetch(`${basePath.serverUrl}/api/ext/telegram/settings`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ settings: { telegramAlarmChannelEnabled: target } }),
+    }).catch(() => null)
+    setTelegramAlarmSaving(false)
+
+    if (!res?.ok) {
+      setTelegramAlarmHint("Failed to update Telegram channel setting. Check Telegram tab configuration and retry.")
+      void loadTelegramAlarmState()
+      return
+    }
+
+    const data = await res.json().catch(() => null) as TelegramSettingsResponse | null
+    const enabled = data?.settings?.telegramAlarmChannelEnabled
+    if (typeof enabled === "boolean") {
+      updateAlarmChannels({ telegram: enabled })
+    }
+    void loadTelegramAlarmState()
   }
 
   // Provider search
@@ -2334,7 +2371,7 @@ Add your project-specific instructions here.
                   Sound Notifications
                 </h1>
                 <p class="text-sm mt-1" style={{ color: "var(--text-weak)" }}>
-                  Play a sound when notification-worthy events occur (task complete, permission request, agent question)
+                  Configure browser and Telegram alarm channels for notification-worthy events (task complete, permission request, agent question)
                 </p>
               </header>
 
@@ -2391,16 +2428,13 @@ Add your project-specific instructions here.
                         {telegramAlarmHint()}
                       </p>
                       <p id="telegram-alarm-fallback" class="text-xs mt-1" style={{ color: "var(--text-weak)" }}>
-                        Telegram alarms are proactive. If alerts are missed, use <code class="px-1 py-0.5 rounded" style={{ background: "var(--surface-inset)" }}>/pending</code> in Telegram as fallback/history.
+                        If proactive alerts are missed or disabled, use <code class="px-1 py-0.5 rounded" style={{ background: "var(--surface-inset)" }}>/pending</code> in Telegram for fallback/history.
                       </p>
                     </div>
                     <button
                       type="button"
-                      onClick={() => {
-                        if (!telegramAlarmReady() && !alarmChannels().telegram) return
-                        updateAlarmChannels({ telegram: !alarmChannels().telegram })
-                      }}
-                      disabled={!telegramAlarmReady() && !alarmChannels().telegram}
+                      onClick={() => void toggleTelegramAlarmChannel()}
+                      disabled={telegramAlarmSaving() || (!telegramAlarmReady() && !alarmChannels().telegram)}
                       class="relative w-10 h-5 rounded-full transition-colors disabled:opacity-50"
                       style={{
                         background: alarmChannels().telegram ? "var(--interactive-base)" : "var(--surface-inset)",

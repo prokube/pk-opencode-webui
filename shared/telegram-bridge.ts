@@ -37,6 +37,7 @@ type BridgeConfig = {
   sessionCacheMax: number
   sessionCacheTtlMs: number
   notificationDebounceMs: number
+  telegramAlarmChannelEnabled?: boolean
   port: number
   webhookPath: string
   webhookSecret?: string
@@ -495,6 +496,10 @@ function sessionLabel(config: BridgeConfig, sessionId: string): string {
 
 function notificationKey(chatId: number): string {
   return telegramSessionKey(chatId)
+}
+
+function proactiveTelegramEnabled(config: BridgeConfig): boolean {
+  return config.telegramAlarmChannelEnabled !== false
 }
 
 function shouldNotify(config: BridgeConfig, chatId: number, kind: string, sessionId: string): boolean {
@@ -2071,6 +2076,7 @@ async function notifySessionKeys(
         }
       }
       if (!(await notificationEnabled(runtime, notificationKey(parsed.chatId)))) continue
+      if (!proactiveTelegramEnabled(runtime.config)) continue
       if (!shouldNotify(runtime.config, parsed.chatId, dedupeKey, sessionId)) continue
       const message = `${text}\n\nOpen ${sessionLabel(runtime.config, sessionId)}`
       await queueChatUpdate(String(parsed.chatId), async () => {
@@ -2105,6 +2111,7 @@ async function notifyQuestion(runtime: Runtime, sessionId: string, question: Tel
         })
       }
       if (!(await notificationEnabled(runtime, notificationKey(parsed.chatId)))) continue
+      if (!proactiveTelegramEnabled(runtime.config)) continue
       if (!shouldNotify(runtime.config, parsed.chatId, kind, sessionId)) continue
       await queueChatUpdate(String(parsed.chatId), async () => {
         await sendTelegramQuestionPrompt(runtime.config, parsed.chatId, question)
