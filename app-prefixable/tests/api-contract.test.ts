@@ -338,6 +338,13 @@ describe("OpenCode API Contract", () => {
         expect(typeof data?.error).toBe("string");
       }
     });
+
+    test("GET /api/ext/telegram/session-alarm endpoint exists", async () => {
+      if (skipIfNoServer()) return;
+      const res = await fetch(`${BASE_URL}/api/ext/telegram/session-alarm`);
+      expect(res.status).not.toBe(404);
+      expect([200, 400]).toContain(res.status);
+    });
   });
 
   // SSE Event Endpoint

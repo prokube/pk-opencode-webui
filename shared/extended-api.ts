@@ -15,6 +15,7 @@ import {
   readTelegramSettings,
   updateTelegramSettings,
 } from "./telegram-settings"
+import { createTelegramSessionStore } from "./telegram-session-store"
 
 type TelegramBridgeHealthResponse = {
   status?: "healthy" | "degraded"
@@ -554,6 +555,46 @@ export async function handleExtendedEndpoint(
       return Response.json({ error: "validation_failed", errors: result.errors }, { status: 400 })
     }
     return Response.json(result)
+  }
+
+  if (path === "/api/ext/telegram/session-alarm" && method === "GET") {
+    const sessionId = (url.searchParams.get("sessionId") || "").trim()
+    if (!sessionId) {
+      return Response.json({ error: "sessionId query parameter is required" }, { status: 400 })
+    }
+    const settings = await readTelegramSettings().catch((error) => {
+      console.error("[ExtAPI] telegram settings read error", error)
+      return null
+    })
+    if (!settings) {
+      return Response.json({ error: "failed to read telegram settings" }, { status: 500 })
+    }
+    const store = createTelegramSessionStore(settings.settings.sessionStorePath)
+    const enabled = await store.sessionAlarmGet?.(sessionId)
+    return Response.json({ sessionId, enabled: enabled === true })
+  }
+
+  if (path === "/api/ext/telegram/session-alarm" && method === "PUT") {
+    const body = await req.json().catch(() => null)
+    const payload = body && typeof body === "object" && !Array.isArray(body) ? (body as Record<string, unknown>) : null
+    const sessionId = typeof payload?.sessionId === "string" ? payload.sessionId.trim() : ""
+    const enabled = payload?.enabled
+    if (!sessionId) {
+      return Response.json({ error: "sessionId is required" }, { status: 400 })
+    }
+    if (typeof enabled !== "boolean") {
+      return Response.json({ error: "enabled must be a boolean" }, { status: 400 })
+    }
+    const settings = await readTelegramSettings().catch((error) => {
+      console.error("[ExtAPI] telegram settings read error", error)
+      return null
+    })
+    if (!settings) {
+      return Response.json({ error: "failed to read telegram settings" }, { status: 500 })
+    }
+    const store = createTelegramSessionStore(settings.settings.sessionStorePath)
+    await store.sessionAlarmSet?.(sessionId, enabled)
+    return Response.json({ sessionId, enabled })
   }
 
   if (path === "/api/ext/telegram/restart" && method === "GET") {

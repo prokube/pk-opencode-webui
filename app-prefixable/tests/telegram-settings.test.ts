@@ -132,6 +132,72 @@ describe("telegram settings extended API", () => {
     )
   })
 
+  test("session alarm endpoint persists and reads state by session id", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "telegram-settings-"))
+    const path = join(dir, "telegram-settings.json")
+    const storePath = join(dir, "telegram-sessions.json")
+    cleanupPaths.push(dir)
+
+    process.env.TELEGRAM_SETTINGS_PATH = path
+    process.env.TELEGRAM_SESSION_STORE_PATH = storePath
+
+    const set = await handleExtendedEndpoint(
+      "/api/ext/telegram/session-alarm",
+      "PUT",
+      new URL("http://127.0.0.1/api/ext/telegram/session-alarm"),
+      new Request("http://127.0.0.1/api/ext/telegram/session-alarm", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ sessionId: "session-alarm-a", enabled: true }),
+      }),
+    )
+
+    expect(set?.status).toBe(200)
+    const setData = await set?.json()
+    expect(setData).toEqual({ sessionId: "session-alarm-a", enabled: true })
+
+    const get = await handleExtendedEndpoint(
+      "/api/ext/telegram/session-alarm",
+      "GET",
+      new URL("http://127.0.0.1/api/ext/telegram/session-alarm?sessionId=session-alarm-a"),
+      new Request("http://127.0.0.1/api/ext/telegram/session-alarm?sessionId=session-alarm-a"),
+    )
+
+    expect(get?.status).toBe(200)
+    const getData = await get?.json()
+    expect(getData).toEqual({ sessionId: "session-alarm-a", enabled: true })
+
+    const stored = JSON.parse(await Bun.file(storePath).text()) as { sessionAlarms?: Record<string, boolean> }
+    expect(stored.sessionAlarms?.["session-alarm-a"]).toBe(true)
+  })
+
+  test("session alarm endpoint validates session id and enabled payload", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "telegram-settings-"))
+    cleanupPaths.push(dir)
+    process.env.TELEGRAM_SETTINGS_PATH = join(dir, "telegram-settings.json")
+    process.env.TELEGRAM_SESSION_STORE_PATH = join(dir, "telegram-sessions.json")
+
+    const missing = await handleExtendedEndpoint(
+      "/api/ext/telegram/session-alarm",
+      "GET",
+      new URL("http://127.0.0.1/api/ext/telegram/session-alarm"),
+      new Request("http://127.0.0.1/api/ext/telegram/session-alarm"),
+    )
+    expect(missing?.status).toBe(400)
+
+    const invalid = await handleExtendedEndpoint(
+      "/api/ext/telegram/session-alarm",
+      "PUT",
+      new URL("http://127.0.0.1/api/ext/telegram/session-alarm"),
+      new Request("http://127.0.0.1/api/ext/telegram/session-alarm", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ sessionId: "session-alarm-b", enabled: "yes" }),
+      }),
+    )
+    expect(invalid?.status).toBe(400)
+  })
+
   test("PUT persists settings and marks restart-required fields", async () => {
     const dir = await mkdtemp(join(tmpdir(), "telegram-settings-"))
     const path = join(dir, "telegram-settings.json")

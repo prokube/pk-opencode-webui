@@ -2,10 +2,11 @@ import { mkdir, readdir, rename, rm } from "node:fs/promises"
 import { basename, dirname, join } from "node:path"
 
 type StoreShape = {
-  version: 3
+  version: 4
   sessions: Record<string, string>
   history: Record<string, string[]>
   notifications: Record<string, boolean>
+  sessionAlarms: Record<string, boolean>
   inbox: Record<string, TelegramPendingItem[]>
   pending: Record<string, TelegramPendingQuestion[]>
 }
@@ -39,10 +40,11 @@ export type TelegramPendingQuestion = {
 
 function emptyStore(): StoreShape {
   return {
-    version: 3,
+    version: 4,
     sessions: {},
     history: {},
     notifications: {},
+    sessionAlarms: {},
     inbox: {},
     pending: {},
   }
@@ -157,11 +159,13 @@ function parseStore(input: string): StoreShape {
   const sessions = data.sessions && typeof data.sessions === "object" ? data.sessions : {}
   const history = data.history && typeof data.history === "object" ? data.history : {}
   const notifications = data.notifications && typeof data.notifications === "object" ? data.notifications : {}
+  const sessionAlarms = data.sessionAlarms && typeof data.sessionAlarms === "object" ? data.sessionAlarms : {}
   const inbox = data.inbox && typeof data.inbox === "object" ? data.inbox : {}
   const pending = data.pending && typeof data.pending === "object" ? data.pending : {}
   const out: Record<string, string> = {}
   const historyOut: Record<string, string[]> = {}
   const notifyOut: Record<string, boolean> = {}
+  const sessionAlarmOut: Record<string, boolean> = {}
   const inboxOut: Record<string, TelegramPendingItem[]> = {}
   const pendingOut: Record<string, TelegramPendingQuestion[]> = {}
   for (const key of Object.keys(sessions)) {
@@ -173,6 +177,11 @@ function parseStore(input: string): StoreShape {
     const value = notifications[key]
     if (typeof value !== "boolean") continue
     notifyOut[key] = value
+  }
+  for (const key of Object.keys(sessionAlarms)) {
+    const value = sessionAlarms[key]
+    if (typeof value !== "boolean") continue
+    sessionAlarmOut[key] = value
   }
   for (const key of Object.keys(history)) {
     const next = parseHistoryList(history[key])
@@ -193,10 +202,11 @@ function parseStore(input: string): StoreShape {
     pendingOut[key] = next as TelegramPendingQuestion[]
   }
   return {
-    version: 3,
+    version: 4,
     sessions: out,
     history: historyOut,
     notifications: notifyOut,
+    sessionAlarms: sessionAlarmOut,
     inbox: inboxOut,
     pending: pendingOut,
   }
@@ -337,6 +347,8 @@ export type TelegramSessionStore = {
   historySet?: (key: string, ids: string[]) => Promise<void>
   notificationGet?: (key: string) => Promise<boolean>
   notificationSet?: (key: string, enabled: boolean) => Promise<void>
+  sessionAlarmGet?: (sessionId: string) => Promise<boolean>
+  sessionAlarmSet?: (sessionId: string, enabled: boolean) => Promise<void>
   inboxGet?: (key: string) => Promise<TelegramPendingItem[]>
   inboxSet?: (key: string, items: TelegramPendingItem[]) => Promise<void>
   pendingGet?: (key: string) => Promise<TelegramPendingItem[]>
@@ -353,6 +365,7 @@ export function createTelegramSessionStore(path: string): TelegramSessionStore {
   const sessionIndex = new Map<string, Set<string>>()
   const history = new Map<string, string[]>()
   const notifications = new Map<string, boolean>()
+  const sessionAlarms = new Map<string, boolean>()
   const inbox = new Map<string, TelegramPendingItem[]>()
   const pending = new Map<string, TelegramPendingQuestion[]>()
 
@@ -393,6 +406,9 @@ export function createTelegramSessionStore(path: string): TelegramSessionStore {
       for (const [key, value] of Object.entries(data.notifications)) {
         notifications.set(key, value)
       }
+      for (const [key, value] of Object.entries(data.sessionAlarms)) {
+        sessionAlarms.set(key, value)
+      }
       for (const [key, value] of Object.entries(data.inbox)) {
         inbox.set(key, value)
       }
@@ -409,10 +425,11 @@ export function createTelegramSessionStore(path: string): TelegramSessionStore {
 
   function flush() {
     const payload: StoreShape = {
-      version: 3,
+      version: 4,
       sessions: Object.fromEntries(sessions),
       history: Object.fromEntries(history),
       notifications: Object.fromEntries(notifications),
+      sessionAlarms: Object.fromEntries(sessionAlarms),
       inbox: Object.fromEntries(inbox),
       pending: Object.fromEntries(pending),
     }
@@ -544,6 +561,26 @@ export function createTelegramSessionStore(path: string): TelegramSessionStore {
             throw error
           }
           notifications.set(key, prev)
+          throw error
+        })
+      })
+    },
+    async sessionAlarmGet(sessionId: string) {
+      await ready
+      return sessionAlarms.get(sessionId) === true
+    },
+    async sessionAlarmSet(sessionId: string, enabled: boolean) {
+      await ready
+      await run(async () => {
+        const prev = sessionAlarms.get(sessionId)
+        if (enabled) sessionAlarms.set(sessionId, true)
+        if (!enabled) sessionAlarms.delete(sessionId)
+        await flush().catch((error) => {
+          if (prev === undefined) {
+            sessionAlarms.delete(sessionId)
+            throw error
+          }
+          sessionAlarms.set(sessionId, prev)
           throw error
         })
       })
