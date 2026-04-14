@@ -1341,8 +1341,8 @@ describe("telegram bridge config and cache", () => {
       .filter((x) => x.url.includes("/sendMessage"))
       .map((x) => String(x.body.text || ""));
     expect(texts).toEqual([
-      "Usage: /recent [count] (count must be 1-12)",
-      "Usage: /recent [count] (count must be 1-12)",
+      "Usage: /recent [count] (count must be >= 1; values above 12 are clamped to 12)",
+      "Usage: /recent [count] (count must be >= 1; values above 12 are clamped to 12)",
     ]);
     expect(calls.some((x) => x.url.includes("/session/session-current/message"))).toBe(false);
   });

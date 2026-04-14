@@ -1205,14 +1205,15 @@ async function sessionsText(runtime: Runtime, chatKey: string, current?: string)
 }
 
 function normalizeRecentCount(args: string[]): { count?: number; error?: string } {
+  const usage = `Usage: /recent [count] (count must be >= 1; values above ${recentMaxCount} are clamped to ${recentMaxCount})`
   const raw = args[0]?.trim()
   if (!raw) return { count: recentDefaultCount }
   if (!/^\d+$/.test(raw)) {
-    return { error: `Usage: /recent [count] (count must be 1-${recentMaxCount})` }
+    return { error: usage }
   }
   const parsed = Number.parseInt(raw, 10)
   if (!Number.isFinite(parsed) || parsed < 1) {
-    return { error: `Usage: /recent [count] (count must be 1-${recentMaxCount})` }
+    return { error: usage }
   }
   return { count: Math.min(parsed, recentMaxCount) }
 }
@@ -1254,26 +1255,26 @@ async function recentText(config: BridgeConfig, sessionId: string, count: number
   const data = await res.json().catch(() => [])
   const rows = Array.isArray(data) ? data : []
   const assistants = new Map<string, string>()
-  const users = rows
-    .map((entry) => {
-      if (!entry || typeof entry !== "object") return
-      const row = entry as { info?: unknown; parts?: unknown }
-      const info = row.info && typeof row.info === "object"
-        ? row.info as { id?: unknown; role?: unknown; parentID?: unknown }
-        : undefined
-      if (!info) return
-      const id = typeof info.id === "string" ? info.id : ""
-      const parentID = typeof info.parentID === "string" ? info.parentID : ""
-      const role = info.role === "assistant" || info.role === "user" ? info.role : ""
-      const text = parseRecentText(row.parts)
-      if (!id || !role || !text) return
-      if (role === "assistant" && parentID && !assistants.has(parentID)) {
-        assistants.set(parentID, text)
-      }
-      if (role !== "user") return
-      return { id, text }
-    })
-    .filter((item) => item !== undefined) as Array<{ id: string; text: string }>
+  const users: Array<{ id: string; text: string }> = []
+  for (const entry of rows) {
+    if (!entry || typeof entry !== "object") continue
+    const row = entry as { info?: unknown; parts?: unknown }
+    const info = row.info && typeof row.info === "object"
+      ? row.info as { id?: unknown; role?: unknown; parentID?: unknown }
+      : undefined
+    if (!info) continue
+    const id = typeof info.id === "string" ? info.id : ""
+    const parentID = typeof info.parentID === "string" ? info.parentID : ""
+    const role = info.role === "assistant" || info.role === "user" ? info.role : ""
+    const text = parseRecentText(row.parts)
+    if (!id || !role || !text) continue
+    if (role === "assistant" && parentID && !assistants.has(parentID)) {
+      assistants.set(parentID, text)
+      continue
+    }
+    if (role !== "user") continue
+    users.push({ id, text })
+  }
   if (!users.length) {
     return `No recent chat messages found for session ${sessionId}. Send a new message first.`
   }
