@@ -5,7 +5,7 @@ import { MessageParts } from "./tool-part"
 import { ImagePreview } from "./image-preview"
 import { errorText } from "../types/message"
 import type { DisplayMessage, Turn } from "../types/message"
-import type { Message, Part, Session } from "../sdk/client"
+import type { Part, Session } from "../sdk/client"
 import { extractTextContent } from "../utils/message"
 import { formatRelativeTime, formatAbsoluteTime, formatDuration } from "../utils/time"
 import { useNavigate, useParams } from "@solidjs/router"
@@ -47,10 +47,6 @@ function isPatchPart(p: Part): p is Extract<Part, { type: "patch" }> {
 
 function isSubtaskPart(p: Part): p is Extract<Part, { type: "subtask" }> {
   return p.type === "subtask"
-}
-
-function isAssistantMessage(message: Message): message is Extract<Message, { role: "assistant" }> {
-  return message.role === "assistant"
 }
 
 function renderMetaPart(part: Part) {
@@ -344,6 +340,7 @@ export function MessageTurn(props: {
   const [detailsOpen, setDetailsOpen] = createSignal(false)
   const [hovered, setHovered] = createSignal(false)
   const [children, setChildren] = createSignal<Record<string, Session[]>>({})
+  const [loadingChildren, setLoadingChildren] = createSignal<Record<string, boolean>>({})
 
   const dirSlug = createMemo(() => (directory ? base64Encode(directory) : params.dir))
 
@@ -414,28 +411,46 @@ export function MessageTurn(props: {
   const parentIDs = createMemo(() => {
     const ids = new Set<string>()
     for (const message of props.turn.assistantMessages) {
-      if (!message.parts.some(isSubtaskPart)) continue
-      ids.add(message.sessionID)
+      for (const part of message.parts) {
+        if (!isSubtaskPart(part)) continue
+        ids.add(part.sessionID)
+      }
     }
     return [...ids]
   })
 
   createEffect(() => {
     for (const sessionID of parentIDs()) {
+      const expected = (() => {
+        const all = sync.messages(sessionID).flatMap((message) => message.parts.filter(isSubtaskPart))
+        if (all.length > 0) return all.length
+        return props.turn.assistantMessages
+          .flatMap((message) => message.parts.filter(isSubtaskPart))
+          .filter((part) => part.sessionID === sessionID).length
+      })()
       const known = children()[sessionID]
-      if (known) {
+      if (known && known.length >= expected) {
         for (const child of known) sync.session.sync(child.id)
         continue
       }
+      if (loadingChildren()[sessionID]) continue
+      setLoadingChildren((prev) => ({ ...prev, [sessionID]: true }))
       client.session
         .children({ sessionID, directory })
         .then((res) => {
           const list = (res.data ?? []).slice().sort((a, b) => a.time.created - b.time.created)
-          setChildren((prev) => ({ ...prev, [sessionID]: list }))
+          setChildren((prev) => {
+            const current = prev[sessionID]
+            if (current && current.length === list.length && current.every((child, i) => child.id === list[i]?.id)) return prev
+            return { ...prev, [sessionID]: list }
+          })
           for (const child of list) sync.session.sync(child.id)
         })
         .catch((error) => {
           console.error("Failed to load session children", error)
+        })
+        .finally(() => {
+          setLoadingChildren((prev) => ({ ...prev, [sessionID]: false }))
         })
     }
   })
@@ -454,15 +469,12 @@ export function MessageTurn(props: {
     const child = sync.session.get(childID)
     if (!child) return true
     const messages = sync.messages(childID)
-    const assistant = (() => {
-      for (let i = messages.length - 1; i >= 0; i--) {
-        const message = messages[i]
-        if (isAssistantMessage(message.info)) return message
-      }
-      return undefined
-    })()
-    if (!assistant) return true
-    return assistant.info.time.completed == null
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const info = messages[i].info
+      if (info.role !== "assistant") continue
+      return info.time.completed == null
+    }
+    return true
   }
 
   const hasError = createMemo(() => props.turn.assistantMessages.some((m) => m.error))
