@@ -53,6 +53,9 @@ const MAX_SHARED_CHILDREN = 400
 const MAX_SHARED_CHILDREN_INFLIGHT = 200
 const MAX_SHARED_SYNCED_CHILDREN = 600
 const CHILDREN_RETRY_DELAY_MS = 5000
+const CHILDREN_EMPTY_RETRY_DELAY_MS = 1500
+const CHILDREN_EMPTY_RETRY_MAX_DELAY_MS = 30000
+const MAX_SHARED_CHILDREN_RETRY = 400
 
 function childCacheKey(sessionID: string, directory: string | undefined) {
   return `${directory ?? ""}::${sessionID}`
@@ -93,6 +96,8 @@ function lruAdd(set: Set<string>, value: string, max: number) {
 
 const sharedChildren = new Map<string, Session[]>()
 const sharedChildrenInflight = new Map<string, Promise<Session[]>>()
+const sharedChildrenEmptyBackoff = new Map<string, number>()
+const sharedChildrenRetryAt = new Map<string, number>()
 const sharedSyncedChildren = new Set<string>()
 
 function renderMetaPart(part: Part) {
@@ -474,6 +479,21 @@ export function MessageTurn(props: {
       const key = childCacheKey(sessionID, directory)
       const known = children()[sessionID]
       if (known) continue
+      const now = Date.now()
+      const retryAt = lruGet(sharedChildrenRetryAt, key)
+      if (retryAt !== undefined && retryAt > now) {
+        if (!retryTimers.has(key)) {
+          const timer = setTimeout(() => {
+            retryTimers.delete(key)
+            setChildRetry((n) => n + 1)
+          }, retryAt - now)
+          retryTimers.set(key, timer)
+        }
+        continue
+      }
+      if (retryAt !== undefined) {
+        sharedChildrenRetryAt.delete(key)
+      }
       const cached = lruGet(sharedChildren, key)
       if (cached !== undefined) {
         setChildren((prev) => ({ ...prev, [sessionID]: cached }))
@@ -499,7 +519,23 @@ export function MessageTurn(props: {
             clearTimeout(retryTimer)
             retryTimers.delete(key)
           }
-          lruSet(sharedChildren, key, list, MAX_SHARED_CHILDREN)
+          if (list.length > 0) {
+            sharedChildrenEmptyBackoff.delete(key)
+            sharedChildrenRetryAt.delete(key)
+            lruSet(sharedChildren, key, list, MAX_SHARED_CHILDREN)
+            return list
+          }
+          const previousDelay = lruGet(sharedChildrenEmptyBackoff, key)
+          const delay = previousDelay
+            ? Math.min(previousDelay * 2, CHILDREN_EMPTY_RETRY_MAX_DELAY_MS)
+            : CHILDREN_EMPTY_RETRY_DELAY_MS
+          lruSet(sharedChildrenEmptyBackoff, key, delay, MAX_SHARED_CHILDREN_RETRY)
+          lruSet(sharedChildrenRetryAt, key, Date.now() + delay, MAX_SHARED_CHILDREN_RETRY)
+          const timer = setTimeout(() => {
+            retryTimers.delete(key)
+            setChildRetry((n) => n + 1)
+          }, delay)
+          retryTimers.set(key, timer)
           return list
         })
         .catch((error) => {
@@ -519,6 +555,7 @@ export function MessageTurn(props: {
 
       lruSet(sharedChildrenInflight, key, pending, MAX_SHARED_CHILDREN_INFLIGHT)
       pending.then((list) => {
+        if (list.length === 0) return
         setChildren((prev) => {
           if (prev[sessionID]) return prev
           return { ...prev, [sessionID]: list }
