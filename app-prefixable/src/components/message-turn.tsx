@@ -104,6 +104,18 @@ const sharedChildrenEmptyBackoff = new Map<string, number>()
 const sharedChildrenRetryAt = new Map<string, number>()
 const sharedSyncedChildren = new Set<string>()
 
+function renderCenteredDivider(label: string) {
+  return (
+    <div class="flex items-center gap-2" role="separator" aria-label={label}>
+      <div class="h-px flex-1" style={{ background: "var(--border-base)" }} />
+      <span class="text-[11px] uppercase tracking-wide" style={{ color: "var(--text-weak)" }}>
+        {label}
+      </span>
+      <div class="h-px flex-1" style={{ background: "var(--border-base)" }} />
+    </div>
+  )
+}
+
 function renderMetaPart(part: Part) {
   if (isAgentPart(part)) {
     const source = part.source?.value?.trim()
@@ -128,15 +140,7 @@ function renderMetaPart(part: Part) {
     )
   }
   if (isSnapshotPart(part)) {
-    return (
-      <div class="flex items-center gap-2" aria-label={`Snapshot ${part.snapshot.slice(0, 8)}`}>
-        <div class="h-px flex-1" style={{ background: "var(--border-base)" }} />
-        <span class="text-[11px] uppercase tracking-wide" style={{ color: "var(--text-weak)" }}>
-          Snapshot {part.snapshot.slice(0, 8)}
-        </span>
-        <div class="h-px flex-1" style={{ background: "var(--border-base)" }} />
-      </div>
-    )
+    return renderCenteredDivider(`Snapshot ${part.snapshot.slice(0, 8)}`)
   }
   if (isRetryPart(part)) {
     return (
@@ -182,15 +186,7 @@ function renderMetaPart(part: Part) {
   }
   if (isCompactionPart(part)) {
     const label = part.auto ? "Context auto-compacted" : "Context compacted"
-    return (
-      <div class="flex items-center gap-2" aria-label={label}>
-        <div class="h-px flex-1" style={{ background: "var(--border-base)" }} />
-        <span class="text-[11px] uppercase tracking-wide" style={{ color: "var(--text-weak)" }}>
-          {label}
-        </span>
-        <div class="h-px flex-1" style={{ background: "var(--border-base)" }} />
-      </div>
-    )
+    return renderCenteredDivider(label)
   }
   return null
 }
