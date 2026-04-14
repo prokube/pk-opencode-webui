@@ -1454,11 +1454,11 @@ export function Session() {
     const dir = params.dir;
     const sid = sessionId();
     const busy = events.status[sid ?? ""]?.type;
+    const pauseAuto = source === "auto" || (source === "manual" && followupAutoSend());
     const fail = (message: string) => {
-      if (source === "auto") setFollowupAutoPaused(id);
       setError(message);
     };
-    if (!sid || followupSending() || loading()) return;
+    if (!sid || followupSending() || loading() || processing()) return;
     if (busy === "busy" || busy === "retry") return;
     if (inputBlocked()) return;
     const model = sessionModel();
@@ -1498,6 +1498,7 @@ export function Session() {
     } catch (err) {
       setPendingUserMessageText(null);
       setOptimisticMessage(null);
+      if (pauseAuto) setFollowupAutoPaused(id);
       fail(`Failed to send queued followup: ${err instanceof Error ? err.message : String(err)}`);
     } finally {
       setFollowupSending(undefined);
