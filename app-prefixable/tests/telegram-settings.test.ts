@@ -271,6 +271,39 @@ describe("telegram settings extended API", () => {
     }
   })
 
+  test("session alarm endpoint returns 501 when store read method is unavailable", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "telegram-settings-"))
+    cleanupPaths.push(dir)
+    process.env.TELEGRAM_SETTINGS_PATH = join(dir, "telegram-settings.json")
+    process.env.TELEGRAM_SESSION_STORE_PATH = join(dir, "telegram-sessions-read-missing.json")
+
+    const createSpy = spyOn(telegramSessionStore, "createTelegramSessionStore").mockImplementation(() => {
+      return {
+        get: async () => undefined,
+        set: async () => undefined,
+        delete: async () => undefined,
+      }
+    })
+
+    try {
+      const response = await handleExtendedEndpoint(
+        "/api/ext/telegram/session-alarm",
+        "GET",
+        new URL("http://127.0.0.1/api/ext/telegram/session-alarm?sessionId=session-alarm-read-missing"),
+        new Request("http://127.0.0.1/api/ext/telegram/session-alarm?sessionId=session-alarm-read-missing"),
+      )
+
+      expect(response?.status).toBe(501)
+      const data = await response?.json()
+      expect(data).toEqual({
+        error: "not_implemented",
+        message: "telegram session alarm read is not supported by the configured session store",
+      })
+    } finally {
+      createSpy.mockRestore()
+    }
+  })
+
   test("session alarm endpoint returns 500 when store write fails", async () => {
     const dir = await mkdtemp(join(tmpdir(), "telegram-settings-"))
     cleanupPaths.push(dir)
@@ -303,6 +336,43 @@ describe("telegram settings extended API", () => {
       expect(response?.status).toBe(500)
       const data = await response?.json()
       expect(data).toEqual({ error: "failed to update telegram session alarm" })
+    } finally {
+      createSpy.mockRestore()
+    }
+  })
+
+  test("session alarm endpoint returns 501 when store write method is unavailable", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "telegram-settings-"))
+    cleanupPaths.push(dir)
+    process.env.TELEGRAM_SETTINGS_PATH = join(dir, "telegram-settings.json")
+    process.env.TELEGRAM_SESSION_STORE_PATH = join(dir, "telegram-sessions-write-missing.json")
+
+    const createSpy = spyOn(telegramSessionStore, "createTelegramSessionStore").mockImplementation(() => {
+      return {
+        get: async () => undefined,
+        set: async () => undefined,
+        delete: async () => undefined,
+      }
+    })
+
+    try {
+      const response = await handleExtendedEndpoint(
+        "/api/ext/telegram/session-alarm",
+        "PUT",
+        new URL("http://127.0.0.1/api/ext/telegram/session-alarm"),
+        new Request("http://127.0.0.1/api/ext/telegram/session-alarm", {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ sessionId: "session-alarm-write-missing", enabled: true }),
+        }),
+      )
+
+      expect(response?.status).toBe(501)
+      const data = await response?.json()
+      expect(data).toEqual({
+        error: "not_implemented",
+        message: "telegram session alarm update is not supported by the configured session store",
+      })
     } finally {
       createSpy.mockRestore()
     }

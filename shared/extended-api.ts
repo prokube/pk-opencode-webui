@@ -580,11 +580,20 @@ export async function handleExtendedEndpoint(
       return Response.json({ error: "failed to read telegram settings" }, { status: 500 })
     }
     const store = telegramSessionStore(settings.settings.sessionStorePath)
-    const enabled = await store.sessionAlarmGet?.(sessionId).catch((error) => {
+    if (!store.sessionAlarmGet) {
+      return Response.json(
+        {
+          error: "not_implemented",
+          message: "telegram session alarm read is not supported by the configured session store",
+        },
+        { status: 501 },
+      )
+    }
+    const enabled = await store.sessionAlarmGet(sessionId).catch((error) => {
       console.error("[ExtAPI] telegram session alarm read error", error)
       return undefined
     })
-    if (enabled === undefined && store.sessionAlarmGet) {
+    if (enabled === undefined) {
       return Response.json({ error: "failed to read telegram session alarm" }, { status: 500 })
     }
     return Response.json({ sessionId, enabled: enabled === true })
@@ -609,7 +618,16 @@ export async function handleExtendedEndpoint(
       return Response.json({ error: "failed to read telegram settings" }, { status: 500 })
     }
     const store = telegramSessionStore(settings.settings.sessionStorePath)
-    const ok = await store.sessionAlarmSet?.(sessionId, enabled).then(
+    if (!store.sessionAlarmSet) {
+      return Response.json(
+        {
+          error: "not_implemented",
+          message: "telegram session alarm update is not supported by the configured session store",
+        },
+        { status: 501 },
+      )
+    }
+    const ok = await store.sessionAlarmSet(sessionId, enabled).then(
       () => true,
       (error) => {
         console.error("[ExtAPI] telegram session alarm write error", error)
