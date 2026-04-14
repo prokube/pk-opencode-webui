@@ -12,8 +12,13 @@ import type { Session } from "../sdk/client"
 
 interface SessionHeaderProps {
   session: Session | null | undefined
+  modelLabel: string | null
+  variantLabel: string | undefined
+  canPickVariant: boolean
   processing: boolean
   onOpenMCPDialog: () => void
+  onOpenVariantPicker: () => void
+  onCycleVariant: () => void
   notifyEnabled: boolean
   notifyDenied: boolean
   onToggleNotify: () => void
@@ -84,9 +89,35 @@ export function SessionHeader(props: SessionHeaderProps) {
             </h1>
           </div>
           <Show when={props.session}>
-            <p class="text-[11px] truncate" style={{ color: "var(--text-weak)" }}>
-              {parentId() ? "Sub-agent session" : props.session?.id}
-            </p>
+            <div class="flex items-center gap-2 text-[11px] truncate" style={{ color: "var(--text-weak)" }}>
+              <span class="truncate">{parentId() ? "Sub-agent session" : props.session?.id}</span>
+              <Show when={props.modelLabel}>
+                <span aria-hidden="true">-</span>
+                <Show
+                  when={props.canPickVariant}
+                  fallback={
+                    <span class="truncate" style={{ color: "var(--text-base)" }}>
+                      {props.modelLabel}
+                    </span>
+                  }
+                >
+                  <button
+                    type="button"
+                    class="truncate px-1.5 py-0.5 rounded-md transition-colors"
+                    style={{ color: "var(--text-base)" }}
+                    onClick={props.onOpenVariantPicker}
+                    onMouseEnter={(e) => ((e.currentTarget as HTMLElement).style.background = "var(--surface-inset)")}
+                    onMouseLeave={(e) => ((e.currentTarget as HTMLElement).style.background = "transparent")}
+                    title="Select model variant"
+                  >
+                    {props.modelLabel}
+                    <Show when={props.variantLabel}>
+                      <span style={{ color: "var(--text-interactive-base)" }}> [{props.variantLabel}]</span>
+                    </Show>
+                  </button>
+                </Show>
+              </Show>
+            </div>
           </Show>
         </div>
       </div>
@@ -150,6 +181,22 @@ export function SessionHeader(props: SessionHeaderProps) {
             <Spinner class="w-3.5 h-3.5" />
             <span>Processing...</span>
           </div>
+        </Show>
+
+        <Show when={props.canPickVariant}>
+          <button
+            onClick={props.onCycleVariant}
+            class="flex items-center gap-1.5 px-2 py-1 text-xs rounded-md transition-colors"
+            style={{
+              border: "1px solid var(--border-base)",
+              color: "var(--text-base)",
+            }}
+            onMouseEnter={(e) => ((e.currentTarget as HTMLElement).style.background = "var(--surface-inset)")}
+            onMouseLeave={(e) => ((e.currentTarget as HTMLElement).style.background = "transparent")}
+            title="Cycle model variant (Alt+V)"
+          >
+            <span>Variant</span>
+          </button>
         </Show>
       </div>
 

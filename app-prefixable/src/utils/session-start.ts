@@ -58,6 +58,7 @@ export async function createSessionWithPrompt(args: {
   text: string;
   agent: string;
   model: ModelKey;
+  variant?: string;
   onCreated?: (session: Session) => void | Promise<void>;
 }): Promise<Session> {
   const created = await args.client.session.create({});
@@ -71,6 +72,7 @@ export async function createSessionWithPrompt(args: {
       parts: [{ type: "text", text: args.text }],
       agent: args.agent,
       model: args.model,
+      variant: args.variant,
     });
     if ("error" in prompted && prompted.error) {
       throw new Error(formatStartError(prompted.error));

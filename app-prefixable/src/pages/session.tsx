@@ -25,6 +25,7 @@ import { useBranding } from "../context/branding";
 import { useSavedPrompts, type PromptScope } from "../context/saved-prompts";
 import { useTerminal } from "../context/terminal";
 import { useConfig } from "../context/config";
+import { useCommand } from "../context/command";
 import { MessageTimeline } from "../components/message-timeline";
 import { MCPDialog } from "../components/mcp-dialog";
 import { MCPAddDialog } from "../components/mcp-add-dialog";
@@ -131,6 +132,7 @@ export function Session() {
   const savedPrompts = useSavedPrompts();
   const terminal = useTerminal();
   const appConfig = useConfig();
+  const command = useCommand();
 
   const [sessionId, setSessionId] = createSignal(params.id);
 
@@ -140,6 +142,28 @@ export function Session() {
     if (!id) return providers.selectedModel;
     return providers.getSessionModel(id) ?? providers.selectedModel;
   });
+
+  const modelDetails = createMemo(() => {
+    const model = sessionModel();
+    if (!model) return;
+    const provider = providers.providers.find((p) => p.id === model.providerID);
+    if (!provider) return;
+    const item = provider.models[model.modelID];
+    if (!item) return;
+    return { provider, model: item };
+  });
+  const modelLabel = createMemo(() => {
+    const item = modelDetails();
+    if (!item) return null;
+    return item.model.name || item.model.id;
+  });
+  const configuredVariant = createMemo(() =>
+    providers.variant.configured(sessionModel(), providers.selectedAgent),
+  );
+  const variantItems = createMemo(() => providers.variant.list(sessionModel()));
+  const currentVariant = createMemo(() =>
+    providers.variant.current(sessionId(), sessionModel(), providers.selectedAgent),
+  );
 
   // Unified toast system — only one toast visible at a time
   const [toastMessage, setToastMessage] = createSignal<string | null>(null);
@@ -269,6 +293,7 @@ export function Session() {
   const [showMCPDialog, setShowMCPDialog] = createSignal(false);
   const [showMCPAddDialog, setShowMCPAddDialog] = createSignal(false);
   const [showModelPicker, setShowModelPicker] = createSignal(false);
+  const [showVariantPicker, setShowVariantPicker] = createSignal(false);
   const [showAgentPicker, setShowAgentPicker] = createSignal(false);
   const [showPromptPicker, setShowPromptPicker] = createSignal(false);
   const [promptPickerFilter, setPromptPickerFilter] = createSignal("");
@@ -543,6 +568,11 @@ export function Session() {
         deniedTimer.id = setTimeout(() => setNotifyDenied(false), 4000);
       }
     });
+  }
+
+  function cycleVariant() {
+    if (variantItems().length === 0) return;
+    providers.variant.cycle(sessionId(), sessionModel(), providers.selectedAgent);
   }
 
   // Track whether the agent was genuinely processing (not initial load)
@@ -886,6 +916,18 @@ export function Session() {
       },
     ];
 
+    if (variantItems().length > 0) {
+      commands.push({
+        id: "model.variant",
+        title: "Choose Model Variant",
+        description: "Select a model variant (for example fast mode)",
+        slash: "variant",
+        onSelect: () => {
+          setShowVariantPicker(true);
+        },
+      });
+    }
+
     // /compact — requires a session with messages and a selected model
     if (id && hasMessages && !isProcessing && sessionModel()) {
       commands.push({
@@ -1182,6 +1224,7 @@ export function Session() {
       showMCPDialog() ||
       showMCPAddDialog() ||
       showModelPicker() ||
+      showVariantPicker() ||
       showAgentPicker() ||
       showPromptPicker() ||
       showFilePicker() ||
@@ -1208,6 +1251,23 @@ export function Session() {
 
   onCleanup(() => {
     window.removeEventListener("keydown", handleGlobalKeyDown);
+  });
+
+  onMount(() => {
+    command.register([
+      {
+        id: "model.variant.cycle",
+        title: "Cycle Model Variant",
+        description: "Switch to the next available model variant",
+        keybind: "alt+v",
+        global: true,
+        onSelect: cycleVariant,
+      },
+    ]);
+
+    onCleanup(() => {
+      command.unregister(["model.variant.cycle"]);
+    });
   });
 
   // Refetch is now just re-syncing
@@ -1583,11 +1643,13 @@ export function Session() {
     setOptimisticMessage(optimisticUserMessage(item.text, sid));
 
     try {
+      const variant = providers.variant.current(sid, model, providers.selectedAgent);
       const promptRes = await client.session.promptAsync({
         sessionID: sid,
         parts: [{ type: "text", text: item.text }],
         agent: providers.selectedAgent || "build",
         model,
+        variant,
       });
       if ("error" in promptRes && promptRes.error) {
         throw new Error(formatStartError(promptRes.error));
@@ -1782,6 +1844,7 @@ export function Session() {
         parts: typeof parts;
         agent: string;
         model?: { providerID: string; modelID: string };
+        variant?: string;
       } = {
         sessionID: id,
         parts,
@@ -1791,6 +1854,8 @@ export function Session() {
       if (model) {
         promptPayload.model = model;
       }
+
+      promptPayload.variant = providers.variant.current(id, model, providers.selectedAgent);
 
       const promptRes = await client.session.promptAsync(promptPayload);
       if ("error" in promptRes && promptRes.error) {
@@ -1846,6 +1911,7 @@ export function Session() {
         text,
         agent: providers.selectedAgent || "build",
         model,
+        variant: providers.variant.current(undefined, model, providers.selectedAgent),
       });
       const sid = created.id;
       setSessionId(sid);
@@ -2215,8 +2281,13 @@ export function Session() {
         {/* Header with panel toggle buttons */}
         <SessionHeader
           session={session()}
+          modelLabel={modelLabel()}
+          variantLabel={currentVariant()}
+          canPickVariant={variantItems().length > 0}
           processing={processing()}
           onOpenMCPDialog={() => setShowMCPDialog(true)}
+          onOpenVariantPicker={() => setShowVariantPicker(true)}
+          onCycleVariant={cycleVariant}
           notifyEnabled={notifyEnabled()}
           notifyDenied={notifyDenied()}
           onToggleNotify={toggleNotify}
@@ -2684,6 +2755,36 @@ export function Session() {
               providers.setSelectedModel(model);
             }}
             onClose={() => setShowModelPicker(false)}
+          />
+        </Show>
+
+        <Show when={showVariantPicker() && variantItems().length > 0}>
+          <PickerDialog
+            title="Select Variant"
+            placeholder="Filter variants..."
+            emptyMessage="No variants available for this model."
+            items={[
+              {
+                id: "__default__",
+                title: "Default",
+                description: configuredVariant()
+                  ? `Use agent default (${configuredVariant()})`
+                  : "No variant override",
+              },
+              ...variantItems().map((name) => ({
+                id: name,
+                title: name,
+                description: configuredVariant() === name ? "Agent default" : undefined,
+              })),
+            ]}
+            onSelect={(item) => {
+              if (item.id === "__default__") {
+                providers.variant.set(sessionId(), undefined);
+                return;
+              }
+              providers.variant.set(sessionId(), item.id);
+            }}
+            onClose={() => setShowVariantPicker(false)}
           />
         </Show>
 

@@ -2,9 +2,11 @@ import { createContext, useContext, createResource, createEffect, type ParentPro
 import { createStore } from "solid-js/store"
 import { useSDK } from "./sdk"
 import { useConfig } from "./config"
+import { cycleModelVariant, getConfiguredAgentVariant, resolveModelVariant } from "./model-variant"
 
 // Storage key prefix — scoped per project directory
 const MODELS_BY_AGENT_PREFIX = "opencode.modelsByAgent"
+const VARIANTS_BY_SESSION_PREFIX = "opencode.variantsBySession"
 // Legacy key (pre-namespacing) used for migration
 const LEGACY_MODELS_KEY = "opencode.modelsByAgent"
 
@@ -14,12 +16,26 @@ function modelsStorageKey(directory?: string): string {
   return `${MODELS_BY_AGENT_PREFIX}.${normalized}`
 }
 
+function variantsStorageKey(directory?: string): string {
+  if (!directory) return VARIANTS_BY_SESSION_PREFIX
+  const normalized = directory.replace(/[\\/]+$/, "")
+  return `${VARIANTS_BY_SESSION_PREFIX}.${normalized}`
+}
+
 // Validate that parsed localStorage data is a Record<string, ModelKey>
 function isValidModelsByAgent(value: unknown): value is Record<string, ModelKey> {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false
   for (const v of Object.values(value)) {
     if (!v || typeof v !== "object") return false
     if (typeof (v as ModelKey).providerID !== "string" || typeof (v as ModelKey).modelID !== "string") return false
+  }
+  return true
+}
+
+function isValidVariantsBySession(value: unknown): value is Record<string, string | null> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false
+  for (const v of Object.values(value)) {
+    if (v !== null && typeof v !== "string") return false
   }
   return true
 }
@@ -39,6 +55,7 @@ interface Model {
     input?: number
     output: number
   }
+  variants?: Record<string, { disabled?: boolean }>
 }
 
 interface Provider {
@@ -51,6 +68,8 @@ interface Agent {
   name: string
   mode: string
   hidden?: boolean
+  model?: ModelKey
+  variant?: string
 }
 
 interface ProviderAuthMethod {
@@ -89,6 +108,13 @@ interface ProviderContextValue {
   setSelectedAgent: (agent: string) => void
   getSessionModel: (sessionID: string) => ModelKey | null
   setSessionModel: (sessionID: string, model: ModelKey | null) => void
+  variant: {
+    list: (model: ModelKey | null) => string[]
+    configured: (model: ModelKey | null, agent?: string) => string | undefined
+    current: (sessionID: string | undefined, model: ModelKey | null, agent?: string) => string | undefined
+    set: (sessionID: string | undefined, value: string | undefined) => void
+    cycle: (sessionID: string | undefined, model: ModelKey | null, agent?: string) => string | undefined
+  }
   refetch: () => void
   connectProvider: (providerID: string, apiKey: string) => Promise<boolean>
   startOAuth: (providerID: string, methodIndex: number) => Promise<OAuthAuthorization | undefined>
@@ -101,61 +127,93 @@ export function ProviderProvider(props: ParentProps) {
   const { client, directory } = useSDK()
   const cfg = useConfig()
   const storageKey = modelsStorageKey(directory)
+  const variantKey = variantsStorageKey(directory)
 
   const [store, setStore] = createStore({
     modelsByAgent: {} as Record<string, ModelKey>,
     selectedAgent: FALLBACK_AGENT,
     sessionModels: {} as Record<string, ModelKey>,
+    sessionVariants: {} as Record<string, string | null>,
   })
 
   // Track whether the user has manually changed the agent via setSelectedAgent
   let userChangedAgent = false
   // Track whether localStorage has been hydrated (prevents saving the initial empty store)
-  let hydrated = false
+  let modelsHydrated = false
+  let variantsHydrated = false
 
   // Load models from localStorage (directory-scoped key, with migration from legacy global key)
   onMount(() => {
     try {
       const stored = localStorage.getItem(storageKey)
+      let loaded = false
       if (stored) {
         try {
           const parsed = JSON.parse(stored)
           if (isValidModelsByAgent(parsed)) {
             setStore("modelsByAgent", parsed)
-            hydrated = true
-            return
+            loaded = true
           }
         } catch (_) { /* invalid JSON, fall through to remove */ }
-        localStorage.removeItem(storageKey)
+        if (!loaded) localStorage.removeItem(storageKey)
       }
       // Migrate: if no per-directory data exists, copy from legacy global key
-      if (!directory) { hydrated = true; return }
-      const legacy = localStorage.getItem(LEGACY_MODELS_KEY)
-      if (!legacy) { hydrated = true; return }
-      try {
-        const parsed = JSON.parse(legacy)
-        if (isValidModelsByAgent(parsed)) {
-          setStore("modelsByAgent", parsed)
-          localStorage.setItem(storageKey, legacy)
-          // Remove legacy key so other projects fall through to their opencode.json defaults
-          localStorage.removeItem(LEGACY_MODELS_KEY)
+      if (!loaded && directory) {
+        const legacy = localStorage.getItem(LEGACY_MODELS_KEY)
+        if (legacy) {
+          try {
+            const parsed = JSON.parse(legacy)
+            if (isValidModelsByAgent(parsed)) {
+              setStore("modelsByAgent", parsed)
+              localStorage.setItem(storageKey, legacy)
+              // Remove legacy key so other projects fall through to their opencode.json defaults
+              localStorage.removeItem(LEGACY_MODELS_KEY)
+            }
+          } catch (_) { /* legacy key corrupted, ignore */ }
         }
-      } catch (_) { /* legacy key corrupted, ignore */ }
+      }
     } catch (e) {
       console.error("Failed to load models from storage:", e)
     }
-    hydrated = true
+    modelsHydrated = true
+
+    try {
+      const stored = localStorage.getItem(variantKey)
+      if (stored) {
+        try {
+          const parsed = JSON.parse(stored)
+          if (isValidVariantsBySession(parsed)) {
+            setStore("sessionVariants", parsed)
+            variantsHydrated = true
+          }
+        } catch (_) { /* invalid JSON, fall through to remove */ }
+        if (!variantsHydrated) localStorage.removeItem(variantKey)
+      }
+    } catch (e) {
+      console.error("Failed to load variants from storage:", e)
+    }
+    variantsHydrated = true
   })
 
   // Save models to localStorage whenever they change (directory-scoped).
   // The hydrated guard prevents the initial empty store from overwriting persisted data.
   createEffect(() => {
     const serialized = JSON.stringify(store.modelsByAgent)
-    if (!hydrated) return
+    if (!modelsHydrated) return
     try {
       localStorage.setItem(storageKey, serialized)
     } catch (e) {
       console.error("Failed to save models to storage:", e)
+    }
+  })
+
+  createEffect(() => {
+    const serialized = JSON.stringify(store.sessionVariants)
+    if (!variantsHydrated) return
+    try {
+      localStorage.setItem(variantKey, serialized)
+    } catch (e) {
+      console.error("Failed to save variants to storage:", e)
     }
   })
 
@@ -298,6 +356,63 @@ export function ProviderProvider(props: ParentProps) {
     }
   }
 
+  function modelForKey(model: ModelKey | null) {
+    if (!model) return undefined
+    const provider = providerData()?.all.find((p) => p.id === model.providerID)
+    if (!provider) return undefined
+    const item = provider.models[model.modelID]
+    if (!item) return undefined
+    return { ...item, providerID: model.providerID }
+  }
+
+  function variantList(model: ModelKey | null) {
+    const item = modelForKey(model)
+    if (!item?.variants) return []
+    return Object.entries(item.variants)
+      .filter(([, config]) => !config?.disabled)
+      .map(([name]) => name)
+  }
+
+  function configuredVariant(model: ModelKey | null, agent = store.selectedAgent) {
+    if (!model) return undefined
+    const info = modelForKey(model)
+    if (!info) return undefined
+    const configuredAgent = (agentsData() ?? []).find((item) => item.name === agent)
+    return getConfiguredAgentVariant(configuredAgent, {
+      providerID: model.providerID,
+      modelID: model.modelID,
+      variants: info.variants,
+    })
+  }
+
+  function selectedSessionVariant(sessionID: string | undefined) {
+    if (!sessionID) return undefined
+    return store.sessionVariants[sessionID]
+  }
+
+  function setSessionVariant(sessionID: string | undefined, value: string | undefined) {
+    if (!sessionID) return
+    setStore("sessionVariants", sessionID, value ?? null)
+  }
+
+  function currentVariant(sessionID: string | undefined, model: ModelKey | null, agent = store.selectedAgent) {
+    return resolveModelVariant(
+      selectedSessionVariant(sessionID),
+      configuredVariant(model, agent),
+      variantList(model),
+    )
+  }
+
+  function cycleVariant(sessionID: string | undefined, model: ModelKey | null, agent = store.selectedAgent) {
+    const value = cycleModelVariant(
+      selectedSessionVariant(sessionID),
+      configuredVariant(model, agent),
+      variantList(model),
+    )
+    setSessionVariant(sessionID, value)
+    return value
+  }
+
   async function connectProvider(providerID: string, apiKey: string): Promise<boolean> {
     try {
       await client.auth.set({
@@ -385,6 +500,13 @@ export function ProviderProvider(props: ParentProps) {
     setSelectedAgent,
     getSessionModel,
     setSessionModel,
+    variant: {
+      list: variantList,
+      configured: configuredVariant,
+      current: currentVariant,
+      set: setSessionVariant,
+      cycle: cycleVariant,
+    },
     refetch,
     connectProvider,
     startOAuth,
