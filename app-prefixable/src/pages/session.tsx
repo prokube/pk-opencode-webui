@@ -513,7 +513,6 @@ export function Session() {
     })(),
   );
   const [notifyDenied, setNotifyDenied] = createSignal(false);
-  const [notifySyncing, setNotifySyncing] = createSignal(false);
   const deniedTimer = { id: null as ReturnType<typeof setTimeout> | null };
   onCleanup(() => { if (deniedTimer.id !== null) clearTimeout(deniedTimer.id) });
 
@@ -529,8 +528,7 @@ export function Session() {
     const local = readNotifyMap()[id] === true;
     setNotifyEnabled(local);
     // Then fetch server-side alarm state asynchronously
-    const serverUrl = url;
-    getSessionAlarm(serverUrl, id).then((state) => {
+    getSessionAlarm(url, id).then((state) => {
       // If server returned a value and we're still on the same session, adopt it
       if (state && params.id === id) {
         setNotifyEnabled(state.enabled);
@@ -548,9 +546,7 @@ export function Session() {
 
   /** Mirror bell toggle to server-side alarm state (fire-and-forget). */
   function syncAlarmToServer(id: string, enabled: boolean) {
-    setNotifySyncing(true);
     setSessionAlarm(url, id, enabled).then((ok) => {
-      setNotifySyncing(false);
       if (!ok) {
         console.warn("[Session] Failed to sync alarm state to server for session:", id);
       }
