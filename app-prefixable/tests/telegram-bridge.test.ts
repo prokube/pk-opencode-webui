@@ -1828,6 +1828,128 @@ describe("telegram bridge config and cache", () => {
     expect(items.map((item) => item.kind).sort()).toEqual(["permission", "question"]);
   });
 
+  test("permission.asked reuses stable request id for pending entries", async () => {
+    const pending = new Map<string, Array<{
+      id: string;
+      kind: "question" | "permission" | "task-finished";
+      sessionId: string;
+      text: string;
+      stampedAt: number;
+      resolved: boolean;
+    }>>();
+    const runtime = {
+      config: {
+        mode: "polling" as const,
+        token: "token",
+        openCodeUrl: "http://127.0.0.1:4096",
+        sessionCacheMax: 10,
+        sessionCacheTtlMs: 10_000,
+        notificationDebounceMs: 20_000,
+        port: 4097,
+        webhookPath: "/webhook",
+        sessionStorePath: "/tmp/test-store.json",
+      },
+      store: {
+        get: async () => undefined,
+        set: async () => undefined,
+        delete: async () => undefined,
+        sessionKeys: async () => ["chat:77:user:5"],
+        notificationGet: async () => false,
+        pendingGet: async (chatKey: string) => pending.get(chatKey) || [],
+        pendingSet: async (chatKey: string, items: Array<{
+          id: string;
+          kind: "question" | "permission" | "task-finished";
+          sessionId: string;
+          text: string;
+          stampedAt: number;
+          resolved: boolean;
+        }>) => {
+          pending.set(chatKey, [...items]);
+        },
+      },
+    };
+
+    await handleBridgeEvent(runtime, {
+      type: "permission.asked",
+      properties: {
+        id: "perm-request-1",
+        sessionID: "session-1",
+        permission: "shell",
+        patterns: ["docker *"],
+      },
+    });
+    await handleBridgeEvent(runtime, {
+      type: "permission.asked",
+      properties: {
+        id: "perm-request-1",
+        sessionID: "session-1",
+        permission: "shell",
+        patterns: ["kubectl *"],
+      },
+    });
+
+    const items = pending.get("chat:77") || [];
+    expect(items).toHaveLength(1);
+    expect(items[0]?.id).toContain("perm-request-1");
+    expect(items[0]?.text).toContain("kubectl *");
+  });
+
+  test("question pending inbox text is truncated for oversized prompts", async () => {
+    const pending = new Map<string, Array<{
+      id: string;
+      kind: "question" | "permission" | "task-finished";
+      sessionId: string;
+      text: string;
+      stampedAt: number;
+      resolved: boolean;
+    }>>();
+    const runtime = {
+      config: {
+        mode: "polling" as const,
+        token: "token",
+        openCodeUrl: "http://127.0.0.1:4096",
+        sessionCacheMax: 10,
+        sessionCacheTtlMs: 10_000,
+        notificationDebounceMs: 20_000,
+        port: 4097,
+        webhookPath: "/webhook",
+        sessionStorePath: "/tmp/test-store.json",
+      },
+      store: {
+        get: async () => undefined,
+        set: async () => undefined,
+        delete: async () => undefined,
+        sessionKeys: async () => ["chat:77:user:5"],
+        notificationGet: async () => false,
+        pendingGet: async (chatKey: string) => pending.get(chatKey) || [],
+        pendingSet: async (chatKey: string, items: Array<{
+          id: string;
+          kind: "question" | "permission" | "task-finished";
+          sessionId: string;
+          text: string;
+          stampedAt: number;
+          resolved: boolean;
+        }>) => {
+          pending.set(chatKey, [...items]);
+        },
+      },
+    };
+
+    await handleBridgeEvent(runtime, {
+      type: "question.asked",
+      properties: {
+        id: "req-long-question",
+        sessionID: "session-1",
+        questions: [{ header: "Need confirmation ".repeat(30) }],
+      },
+    });
+
+    const text = pending.get("chat:77")?.[0]?.text || "";
+    expect(text.startsWith("Question pending:")).toBe(true);
+    expect(text.length).toBeLessThanOrEqual(240);
+    expect(text.endsWith("...")).toBe(true);
+  });
+
   test("question and permission events only queue pending when notifications are disabled", async () => {
     const calls: Array<{ url: string; body: Record<string, unknown> }> = [];
     const originalFetch = globalThis.fetch;

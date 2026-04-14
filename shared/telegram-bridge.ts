@@ -152,6 +152,7 @@ const startedAt = Date.now()
 const pendingRetentionMs = 3 * 24 * 60 * 60 * 1000
 const pendingMaxItems = 60
 const pendingDigestMax = 8
+const pendingTextMax = 240
 const sessionHistoryMax = 12
 const callbackIdLength = 24
 const callbackAckText = "Sending answer..."
@@ -441,7 +442,10 @@ function pendingEntryId(sessionId: string, kind: string, chatId: number, request
 function pendingQuestionText(question: TelegramPendingQuestion): string {
   const row = question.questions[0]
   const title = row?.header || row?.question || "The assistant is waiting for your answer."
-  return `Question pending: ${title}`
+  const text = `Question pending: ${title}`
+  if (text.length <= pendingTextMax) return text
+  if (pendingTextMax <= 3) return text.slice(0, pendingTextMax)
+  return `${text.slice(0, pendingTextMax - 3)}...`
 }
 
 async function resolvePendingForSession(runtime: Runtime, chatId: number, sessionId: string) {
@@ -1745,7 +1749,7 @@ export async function handleTextUpdate(runtime: Runtime, update: TelegramUpdate)
   }
 }
 
-async function notifySessionKeys(runtime: Runtime, sessionId: string, kind: string, text: string) {
+async function notifySessionKeys(runtime: Runtime, sessionId: string, kind: string, text: string, requestId?: string) {
   if (!runtime.store.sessionKeys) return
   const keys = await runtime.store.sessionKeys(sessionId)
   const chats = new Set<number>()
@@ -1756,7 +1760,7 @@ async function notifySessionKeys(runtime: Runtime, sessionId: string, kind: stri
       if (!chats.has(parsed.chatId)) {
         chats.add(parsed.chatId)
         const entry: TelegramPendingItem = {
-          id: pendingEntryId(sessionId, kind, parsed.chatId),
+          id: pendingEntryId(sessionId, kind, parsed.chatId, requestId),
           kind: kind === "task-finished" ? "task-finished" : kind === "permission" ? "permission" : "question",
           sessionId,
           text,
@@ -1884,7 +1888,8 @@ export async function handleBridgeEvent(runtime: Runtime, event: { type: string;
     return
   }
   if (event.type === "permission.asked") {
-    await notifySessionKeys(runtime, sessionId, "permission", permissionText(event.properties))
+    const requestId = typeof event.properties.id === "string" ? event.properties.id.trim() : ""
+    await notifySessionKeys(runtime, sessionId, "permission", permissionText(event.properties), requestId || undefined)
     return
   }
   if (event.type !== "session.status") return
