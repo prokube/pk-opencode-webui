@@ -1447,16 +1447,20 @@ export function Session() {
     const dir = params.dir;
     const sid = sessionId();
     const busy = events.status[sid ?? ""]?.type;
+    const fail = (message: string) => {
+      if (source === "auto") setFollowupAutoPaused(id);
+      setError(message);
+    };
     if (!sid || followupSending() || loading()) return;
     if (busy === "busy" || busy === "retry") return;
     if (source === "auto" && inputBlocked()) return;
     const model = sessionModel();
     if (!model) {
-      setError("Please select a model before sending messages. Click the model button in the header.");
+      fail("Please select a model before sending messages. Click the model button in the header.");
       return;
     }
     if (!providers.connected.includes(model.providerID)) {
-      setError(`Provider "${model.providerID}" is not connected. Please configure it in Settings.`);
+      fail(`Provider "${model.providerID}" is not connected. Please configure it in Settings.`);
       return;
     }
     const item = followups().find((entry) => entry.id === id);
@@ -1487,8 +1491,7 @@ export function Session() {
     } catch (err) {
       setPendingUserMessageText(null);
       setOptimisticMessage(null);
-      if (source === "auto") setFollowupAutoPaused(id);
-      setError(`Failed to send queued followup: ${err instanceof Error ? err.message : String(err)}`);
+      fail(`Failed to send queued followup: ${err instanceof Error ? err.message : String(err)}`);
     } finally {
       setFollowupSending(undefined);
     }
