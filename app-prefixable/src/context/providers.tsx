@@ -363,9 +363,14 @@ export function ProviderProvider(props: ParentProps) {
     }
   }
 
+  function availableProviders() {
+    const disabled = cfg.global.disabled_providers ?? []
+    return (providerData()?.all ?? []).filter((p) => !disabled.includes(p.id))
+  }
+
   function modelForKey(model: ModelKey | null) {
     if (!model) return undefined
-    const provider = providerData()?.all.find((p) => p.id === model.providerID)
+    const provider = availableProviders().find((p) => p.id === model.providerID)
     if (!provider) return undefined
     const item = provider.models[model.modelID]
     if (!item) return undefined
@@ -479,8 +484,7 @@ export function ProviderProvider(props: ParentProps) {
 
   const value: ProviderContextValue = {
     get providers() {
-      const disabled = cfg.global.disabled_providers ?? []
-      return (providerData()?.all ?? []).filter((p) => !disabled.includes(p.id))
+      return availableProviders()
     },
     get connected() {
       const disabled = cfg.global.disabled_providers ?? []
