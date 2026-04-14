@@ -113,6 +113,15 @@ type TelegramCommand = {
   args?: string
 }
 
+type TelegramPendingItem = {
+  id: string
+  kind: "question" | "permission" | "task-finished"
+  sessionId: string
+  text: string
+  stampedAt: number
+  resolved: boolean
+}
+
 const sessions = new Map<string, CachedSession>()
 const creatingSessions = new Map<string, Promise<string>>()
 const chatQueues = new Map<string, Promise<void>>()
@@ -1393,8 +1402,9 @@ async function notifySessionKeys(runtime: Runtime, sessionId: string, kind: stri
       if (!parsed) continue
       if (!chats.has(parsed.chatId)) {
         chats.add(parsed.chatId)
+        const seq = String(pendingEntrySeq).padStart(8, "0")
         const entry: TelegramPendingItem = {
-          id: `${sessionId}:${kind}:${Date.now()}:${pendingEntrySeq}:${parsed.chatId}`,
+          id: `${sessionId}:${kind}:${Date.now()}:${seq}:${parsed.chatId}`,
           kind: kind === "task-finished" ? "task-finished" : kind === "permission" ? "permission" : "question",
           sessionId,
           text,
