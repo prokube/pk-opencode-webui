@@ -430,11 +430,28 @@ export function Session() {
     return undefined;
   }
 
+  function isAutoFollowupStatusMessage(message: string | null | undefined) {
+    if (!message) return false;
+    return message.startsWith("Auto send waiting:") || message.startsWith("Auto send paused");
+  }
+
+  function clearAutoFollowupStatusError() {
+    if (!isAutoFollowupStatusMessage(error())) return;
+    setError(null);
+  }
+
+  function setAutoFollowupStatusError(message: string) {
+    const current = error();
+    if (current && !isAutoFollowupStatusMessage(current)) return;
+    setError(message);
+  }
+
   function toggleFollowupAutoSend() {
     const id = sessionId();
     if (!id) return;
     const enabled = !followupAutoSend();
     setSessionFollowupAutoSend(id, enabled);
+    clearAutoFollowupStatusError();
     if (!enabled) return;
     const status = events.status[id]?.type;
     if (status !== "idle") return;
@@ -647,7 +664,7 @@ export function Session() {
     if (followupAutoPaused() === next.id) return;
     const deferred = followupAutoDeferredMessage();
     if (deferred) {
-      setError(deferred);
+      setAutoFollowupStatusError(deferred);
       return;
     }
     queueAutoFollowupSend();
@@ -675,7 +692,7 @@ export function Session() {
     }
     const deferred = followupAutoDeferredMessage();
     if (deferred) {
-      setError(deferred);
+      setAutoFollowupStatusError(deferred);
       return;
     }
     batch(() => {
