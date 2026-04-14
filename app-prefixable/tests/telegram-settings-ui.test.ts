@@ -1,5 +1,14 @@
 import { describe, expect, test } from "bun:test"
-import { createTelegramForm, createTelegramPatch, normalizeWebhookPathInput, validateTelegramForm, type TelegramPublicSettings } from "../src/utils/telegram-settings"
+import {
+  createTelegramForm,
+  createTelegramPatch,
+  normalizeWebhookPathInput,
+  telegramHealthHasConfigError,
+  telegramHealthLabel,
+  validateTelegramForm,
+  type TelegramHealthResponse,
+  type TelegramPublicSettings,
+} from "../src/utils/telegram-settings"
 
 const seed: TelegramPublicSettings = {
   mode: "polling",
@@ -129,5 +138,37 @@ describe("telegram settings form helpers", () => {
       port: null,
       webhookPath: null,
     })
+  })
+
+  test("labels telegram health states for UI badges", () => {
+    expect(telegramHealthLabel("healthy")).toBe("Healthy")
+    expect(telegramHealthLabel("degraded")).toBe("Degraded")
+    expect(telegramHealthLabel("down")).toBe("Down")
+  })
+
+  test("detects config errors from health messages", () => {
+    const base: TelegramHealthResponse = {
+      status: "down",
+      checkedAt: new Date().toISOString(),
+      bridgeReachable: false,
+      process: { status: "down" },
+      config: {
+        status: "error",
+        mode: "polling",
+        tokenConfigured: false,
+        webhookSecretConfigured: false,
+        openCodeUrlConfigured: true,
+        sessionStorePathConfigured: true,
+        directoryConfigured: false,
+      },
+      dependencies: {
+        telegramApi: { status: "unknown", message: "Bridge is down" },
+        openCodeApi: { status: "unknown", message: "Bridge is down" },
+      },
+      messages: [{ type: "config", text: "Telegram bot token is not configured" }],
+    }
+
+    expect(telegramHealthHasConfigError(base)).toBe(true)
+    expect(telegramHealthHasConfigError({ ...base, messages: [{ type: "runtime", text: "Bridge down" }] })).toBe(false)
   })
 })
