@@ -719,6 +719,10 @@ describe("telegram bridge config and cache", () => {
       expect(sent[4]).toBe("Switched to session: custom-session");
       expect(sent[5]).toBe("Current session: custom-session");
       expect(map.get("chat:19:user:4")).toBe("custom-session");
+      const indexLookupCalls = calls.filter((x) => x.url.includes("/session/session-1")).length;
+      const explicitLookupCalls = calls.filter((x) => x.url.includes("/session/custom-session")).length;
+      expect(indexLookupCalls).toBe(0);
+      expect(explicitLookupCalls).toBe(1);
     } finally {
       globalThis.fetch = originalFetch;
     }
@@ -834,6 +838,8 @@ describe("telegram bridge config and cache", () => {
   test("/switch returns clear validation errors for missing and invalid index", async () => {
     const calls: Array<{ url: string; body: Record<string, unknown> }> = [];
     const originalFetch = globalThis.fetch;
+    let historyWrites = 0;
+    const map = new Map<string, string>([["chat:33:user:2", "session-a"]]);
     try {
       globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
         const url = String(input);
@@ -858,9 +864,17 @@ describe("telegram bridge config and cache", () => {
           sessionStorePath: "/tmp/test-store.json",
         },
         store: {
-          get: async () => undefined,
-          set: async () => undefined,
-          delete: async () => undefined,
+          get: async (key: string) => map.get(key),
+          set: async (key: string, value: string) => {
+            map.set(key, value);
+          },
+          delete: async (key: string) => {
+            map.delete(key);
+          },
+          historyGet: async () => ["session-b"],
+          historySet: async () => {
+            historyWrites += 1;
+          },
         },
       };
 
@@ -877,7 +891,67 @@ describe("telegram bridge config and cache", () => {
         .filter((x) => x.url.includes("/sendMessage"))
         .map((x) => String(x.body.text || ""));
       expect(sent[0]).toBe("Usage: /switch <session-id|index>");
-      expect(sent[1]).toBe("Invalid session index: 9. Available indices: none.");
+      expect(sent[1]).toBe("Invalid session index: 9. Available indices: 1-2.");
+      expect(historyWrites).toBe(0);
+      expect(map.get("chat:33:user:2")).toBe("session-a");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test("session history cache is bounded and evicts oldest chat keys", async () => {
+    const calls: Array<{ url: string; body: Record<string, unknown> }> = [];
+    const originalFetch = globalThis.fetch;
+    const historyReads = new Map<string, number>();
+    try {
+      globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        const body = init?.body ? (JSON.parse(String(init.body)) as Record<string, unknown>) : {};
+        calls.push({ url, body });
+        if (url.includes("/sendMessage")) {
+          return new Response(JSON.stringify({ ok: true, result: { message_id: 1 } }), { status: 200 });
+        }
+        throw new Error(`Unexpected fetch ${url}`);
+      };
+
+      const runtime = {
+        config: {
+          mode: "polling" as const,
+          token: "token",
+          openCodeUrl: "http://127.0.0.1:4096",
+          sessionCacheMax: 2,
+          sessionCacheTtlMs: 10_000,
+          notificationDebounceMs: 20_000,
+          port: 4097,
+          webhookPath: "/webhook",
+          sessionStorePath: "/tmp/test-store.json",
+        },
+        store: {
+          get: async () => undefined,
+          set: async () => undefined,
+          delete: async () => undefined,
+          historyGet: async (key: string) => {
+            historyReads.set(key, (historyReads.get(key) || 0) + 1);
+            return ["session-old"];
+          },
+        },
+      };
+
+      const updates = [
+        { update_id: 1, message: { message_id: 1, text: "/sessions", chat: { id: 101 }, from: { id: 5 } } },
+        { update_id: 2, message: { message_id: 2, text: "/sessions", chat: { id: 102 }, from: { id: 5 } } },
+        { update_id: 3, message: { message_id: 3, text: "/sessions", chat: { id: 103 }, from: { id: 5 } } },
+        { update_id: 4, message: { message_id: 4, text: "/sessions", chat: { id: 101 }, from: { id: 5 } } },
+      ];
+
+      for (const update of updates) {
+        await handleTextUpdate(runtime, update);
+      }
+
+      expect(historyReads.get("chat:101:user:5")).toBe(2);
+      expect(historyReads.get("chat:102:user:5")).toBe(1);
+      expect(historyReads.get("chat:103:user:5")).toBe(1);
+      expect(calls.filter((x) => x.url.includes("/sendMessage")).length).toBe(4);
     } finally {
       globalThis.fetch = originalFetch;
     }

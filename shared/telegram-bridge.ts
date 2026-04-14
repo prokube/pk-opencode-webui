@@ -882,13 +882,27 @@ function normalizeSessionHistory(input: string[]): string[] {
   return deduped.slice(0, sessionHistoryMax)
 }
 
+function touchSessionHistory(runtime: Runtime, chatKey: string, list: string[]) {
+  sessionHistory.delete(chatKey)
+  if (!list.length) return
+  sessionHistory.set(chatKey, list)
+  const max = Math.max(1, runtime.config.sessionCacheMax)
+  for (const key of sessionHistory.keys()) {
+    if (sessionHistory.size <= max) return
+    sessionHistory.delete(key)
+  }
+}
+
 async function loadSessionHistory(runtime: Runtime, chatKey: string): Promise<string[]> {
   const cached = sessionHistory.get(chatKey)
-  if (cached) return cached
+  if (cached) {
+    touchSessionHistory(runtime, chatKey, cached)
+    return cached
+  }
   if (!runtime.store.historyGet) return []
   const stored = normalizeSessionHistory(await runtime.store.historyGet(chatKey))
   if (!stored.length) return []
-  sessionHistory.set(chatKey, stored)
+  touchSessionHistory(runtime, chatKey, stored)
   return stored
 }
 
@@ -901,11 +915,17 @@ async function setSessionHistory(runtime: Runtime, chatKey: string, input: strin
     }
     return []
   }
-  sessionHistory.set(chatKey, next)
+  touchSessionHistory(runtime, chatKey, next)
   if (runtime.store.historySet) {
     await runtime.store.historySet(chatKey, next)
   }
   return next
+}
+
+async function switchCandidates(runtime: Runtime, chatKey: string, current?: string): Promise<string[]> {
+  const history = await loadSessionHistory(runtime, chatKey)
+  if (!current) return history
+  return normalizeSessionHistory([current, ...history])
 }
 
 async function rememberSession(runtime: Runtime, chatKey: string, sessionId: string): Promise<string[]> {
@@ -913,13 +933,6 @@ async function rememberSession(runtime: Runtime, chatKey: string, sessionId: str
   if (prior[0] === sessionId) return prior
   const next = normalizeSessionHistory([sessionId, ...prior])
   return setSessionHistory(runtime, chatKey, next)
-}
-
-async function knownSessions(runtime: Runtime, chatKey: string, current?: string): Promise<string[]> {
-  if (!current) {
-    return loadSessionHistory(runtime, chatKey)
-  }
-  return rememberSession(runtime, chatKey, current)
 }
 
 async function sessionsText(runtime: Runtime, chatKey: string, current?: string): Promise<string> {
@@ -952,24 +965,24 @@ async function sessionExists(config: BridgeConfig, sessionId: string): Promise<b
   throw new Error(`OpenCode session lookup failed (${res.status}): ${body.slice(0, 300)}`)
 }
 
-function resolveSwitchTarget(target: string, list: string[]): { sessionId?: string; error?: string } {
+function resolveSwitchTarget(target: string, list: string[]): { sessionId?: string; error?: string; fromKnownList: boolean } {
   const value = target.trim()
   if (!value) {
-    return { error: "Usage: /switch <session-id|index>" }
+    return { error: "Usage: /switch <session-id|index>", fromKnownList: false }
   }
   if (/^\d+$/.test(value)) {
     const index = Number.parseInt(value, 10)
     if (index < 1 || index > list.length) {
       const range = list.length ? `1-${list.length}` : "none"
-      return { error: `Invalid session index: ${value}. Available indices: ${range}.` }
+      return { error: `Invalid session index: ${value}. Available indices: ${range}.`, fromKnownList: false }
     }
     const sessionId = list[index - 1]
     if (!sessionId) {
-      return { error: `Invalid session index: ${value}.` }
+      return { error: `Invalid session index: ${value}.`, fromKnownList: false }
     }
-    return { sessionId }
+    return { sessionId, fromKnownList: true }
   }
-  return { sessionId: value }
+  return { sessionId: value, fromKnownList: false }
 }
 
 export function cacheSession(config: BridgeConfig, chatId: string, sessionId: string) {
@@ -1239,8 +1252,12 @@ export async function handleTextUpdate(runtime: Runtime, update: TelegramUpdate)
     }
     if (known?.name === "switch") {
       const target = command.args.join(" ").trim()
+      if (!target) {
+        await sendTelegramMessage(config, chatId, "Usage: /switch <session-id|index>")
+        return true
+      }
       const current = await runtime.store.get(key) || sessionFromCache(config, key)
-      const list = await knownSessions(runtime, key, current)
+      const list = await switchCandidates(runtime, key, current)
       const resolved = resolveSwitchTarget(target, list)
       if (resolved.error) {
         await sendTelegramMessage(config, chatId, resolved.error)
@@ -1251,7 +1268,7 @@ export async function handleTextUpdate(runtime: Runtime, update: TelegramUpdate)
         await sendTelegramMessage(config, chatId, "Usage: /switch <session-id|index>")
         return true
       }
-      if (!(await sessionExists(config, next))) {
+      if (!resolved.fromKnownList && !(await sessionExists(config, next))) {
         await sendTelegramMessage(config, chatId, `Session not found: ${next}. Use /sessions to select a known session or /new to create one.`)
         return true
       }
