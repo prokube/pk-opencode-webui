@@ -270,6 +270,7 @@ describe("telegram session store", () => {
     const first = createTelegramSessionStore(path)
     await first.questionUpsert?.("chat:77", {
       requestId: "req-1",
+      callbackId: "cbreq1",
       sessionId: "session-a",
       createdAt: 1,
       expiresAt: Date.now() + 30_000,
@@ -331,6 +332,7 @@ describe("telegram session store", () => {
     const store = createTelegramSessionStore(path)
     await store.questionUpsert?.("chat:90:user:1", {
       requestId: "req-copy",
+      callbackId: "cbcopy1",
       sessionId: "session-copy",
       createdAt: 1,
       expiresAt: Date.now() + 30_000,

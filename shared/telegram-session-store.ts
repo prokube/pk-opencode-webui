@@ -6,7 +6,17 @@ type StoreShape = {
   sessions: Record<string, string>
   history: Record<string, string[]>
   notifications: Record<string, boolean>
+  inbox: Record<string, TelegramPendingItem[]>
   pending: Record<string, TelegramPendingQuestion[]>
+}
+
+type TelegramPendingItem = {
+  id: string
+  kind: "question" | "permission" | "task-finished"
+  sessionId: string
+  text: string
+  stampedAt: number
+  resolved: boolean
 }
 
 type TelegramPendingQuestionEntry = {
@@ -19,6 +29,7 @@ type TelegramPendingQuestionEntry = {
 
 export type TelegramPendingQuestion = {
   requestId: string
+  callbackId: string
   sessionId: string
   createdAt: number
   expiresAt: number
@@ -31,6 +42,7 @@ function emptyStore(): StoreShape {
     sessions: {},
     history: {},
     notifications: {},
+    inbox: {},
     pending: {},
   }
 }
@@ -67,6 +79,7 @@ function parsePendingQuestion(value: unknown): TelegramPendingQuestion | undefin
   if (!value || typeof value !== "object") return
   const row = value as Record<string, unknown>
   const requestId = typeof row.requestId === "string" ? row.requestId.trim() : ""
+  const callbackId = typeof row.callbackId === "string" ? row.callbackId.trim() : ""
   const sessionId = typeof row.sessionId === "string" ? row.sessionId.trim() : ""
   const createdAt = typeof row.createdAt === "number" && Number.isFinite(row.createdAt) ? row.createdAt : Date.now()
   const expiresAt = typeof row.expiresAt === "number" && Number.isFinite(row.expiresAt) ? row.expiresAt : Date.now()
@@ -77,8 +90,12 @@ function parsePendingQuestion(value: unknown): TelegramPendingQuestion | undefin
     : []
   const questions = list as TelegramPendingQuestionEntry[]
   if (!requestId || !sessionId || !questions.length) return
+  const compact = callbackId.toLowerCase().replace(/[^a-z0-9]/g, "").slice(0, 8)
+  const derived = requestId.toLowerCase().replace(/[^a-z0-9]/g, "").slice(0, 8)
+  const pendingId = (compact || derived || "000000").padStart(6, "0").slice(0, 8)
   return {
     requestId,
+    callbackId: pendingId,
     sessionId,
     createdAt,
     expiresAt,
@@ -112,14 +129,16 @@ function parsePendingList(value: unknown): TelegramPendingItem[] {
 
 function parseStore(input: string): StoreShape {
   if (!input.trim()) return emptyStore()
-  const data = JSON.parse(input) as Partial<StoreShape>
+  const data = JSON.parse(input) as Partial<StoreShape> & { inbox?: unknown }
   const sessions = data.sessions && typeof data.sessions === "object" ? data.sessions : {}
   const history = data.history && typeof data.history === "object" ? data.history : {}
   const notifications = data.notifications && typeof data.notifications === "object" ? data.notifications : {}
+  const inbox = data.inbox && typeof data.inbox === "object" ? data.inbox : {}
   const pending = data.pending && typeof data.pending === "object" ? data.pending : {}
   const out: Record<string, string> = {}
   const historyOut: Record<string, string[]> = {}
   const notifyOut: Record<string, boolean> = {}
+  const inboxOut: Record<string, TelegramPendingItem[]> = {}
   const pendingOut: Record<string, TelegramPendingQuestion[]> = {}
   for (const key of Object.keys(sessions)) {
     const value = sessions[key]
@@ -136,6 +155,11 @@ function parseStore(input: string): StoreShape {
     if (!next.length) continue
     historyOut[key] = next
   }
+  for (const key of Object.keys(inbox)) {
+    const rows = parsePendingList(inbox[key])
+    if (!rows.length) continue
+    inboxOut[key] = rows
+  }
   for (const key of Object.keys(pending)) {
     const rows = Array.isArray(pending[key]) ? pending[key] : []
     const next = rows
@@ -149,6 +173,7 @@ function parseStore(input: string): StoreShape {
     sessions: out,
     history: historyOut,
     notifications: notifyOut,
+    inbox: inboxOut,
     pending: pendingOut,
   }
 }
@@ -288,6 +313,8 @@ export type TelegramSessionStore = {
   historySet?: (key: string, ids: string[]) => Promise<void>
   notificationGet?: (key: string) => Promise<boolean>
   notificationSet?: (key: string, enabled: boolean) => Promise<void>
+  pendingGet?: (key: string) => Promise<TelegramPendingItem[]>
+  pendingSet?: (key: string, items: TelegramPendingItem[]) => Promise<void>
   questionList?: (key: string) => Promise<TelegramPendingQuestion[]>
   questionUpsert?: (key: string, question: TelegramPendingQuestion) => Promise<void>
   questionDelete?: (key: string, requestId: string) => Promise<void>
@@ -300,6 +327,7 @@ export function createTelegramSessionStore(path: string): TelegramSessionStore {
   const sessionIndex = new Map<string, Set<string>>()
   const history = new Map<string, string[]>()
   const notifications = new Map<string, boolean>()
+  const inbox = new Map<string, TelegramPendingItem[]>()
   const pending = new Map<string, TelegramPendingQuestion[]>()
 
   function indexAdd(sessionId: string, key: string) {
@@ -339,6 +367,9 @@ export function createTelegramSessionStore(path: string): TelegramSessionStore {
       for (const [key, value] of Object.entries(data.notifications)) {
         notifications.set(key, value)
       }
+      for (const [key, value] of Object.entries(data.inbox)) {
+        inbox.set(key, value)
+      }
       for (const [key, value] of Object.entries(data.pending)) {
         pending.set(key, value)
       }
@@ -356,6 +387,7 @@ export function createTelegramSessionStore(path: string): TelegramSessionStore {
       sessions: Object.fromEntries(sessions),
       history: Object.fromEntries(history),
       notifications: Object.fromEntries(notifications),
+      inbox: Object.fromEntries(inbox),
       pending: Object.fromEntries(pending),
     }
     writes = writes.then(
@@ -462,6 +494,28 @@ export function createTelegramSessionStore(path: string): TelegramSessionStore {
             throw error
           }
           notifications.set(key, prev)
+          throw error
+        })
+      })
+    },
+    async pendingGet(key: string) {
+      await ready
+      const rows = inbox.get(key)
+      if (!rows) return []
+      return [...rows]
+    },
+    async pendingSet(key: string, items: TelegramPendingItem[]) {
+      await ready
+      await run(async () => {
+        const prev = inbox.get(key) || []
+        if (items.length) inbox.set(key, [...items])
+        if (!items.length) inbox.delete(key)
+        await flush().catch((error) => {
+          if (!prev.length) {
+            inbox.delete(key)
+            throw error
+          }
+          inbox.set(key, prev)
           throw error
         })
       })
