@@ -169,7 +169,8 @@ const pendingRetentionMs = 3 * 24 * 60 * 60 * 1000
 const pendingMaxItems = 60
 const pendingDigestMax = 8
 const pendingTextMax = 240
-const sessionHistoryMax = 12
+const sessionHistoryMax = 60
+const switchPageSize = 10
 const recentDefaultCount = 5
 const recentMaxCount = 12
 const recentPartTextMax = 500
@@ -666,6 +667,36 @@ function parseCallbackData(input: string): { callbackId: string; questionIndex: 
     questionIndex: questionIndex - 1,
     optionIndex: optionIndex - 1,
   }
+}
+
+type SwitchCallbackData =
+  | { action: "page"; page: number }
+  | { action: "select"; index: number; token: string }
+
+function switchToken(sessionId: string): string {
+  return shortId(sessionId).slice(0, 8).padStart(6, "0")
+}
+
+function switchPageCallback(page: number): string {
+  return `s:p:${page + 1}`
+}
+
+function switchSelectCallback(index: number, sessionId: string): string {
+  return `s:s:${index + 1}:${switchToken(sessionId)}`
+}
+
+function parseSwitchCallbackData(input: string): SwitchCallbackData | undefined {
+  const page = input.match(/^s:p:(\d+)$/)
+  if (page) {
+    const raw = Number.parseInt(page[1] || "", 10)
+    if (!Number.isFinite(raw) || raw < 1) return
+    return { action: "page", page: raw - 1 }
+  }
+  const selected = input.match(/^s:s:(\d+):([a-z0-9]{6,24})$/)
+  if (!selected) return
+  const index = Number.parseInt(selected[1] || "", 10)
+  if (!Number.isFinite(index) || index < 1) return
+  return { action: "select", index: index - 1, token: selected[2] || "" }
 }
 
 function questionMarkup(question: TelegramPendingQuestion): { inline_keyboard: Array<Array<{ text: string; callback_data: string }>> } | undefined {
@@ -1430,13 +1461,58 @@ function pruneExpiredSessions(now: number) {
   }
 }
 
-async function switchPickerText(runtime: Runtime, chatKey: string, current?: string): Promise<string> {
+function compactSessionId(sessionId: string): string {
+  const value = sessionId.trim()
+  if (value.length <= 18) return value
+  return `${value.slice(0, 10)}...${value.slice(-5)}`
+}
+
+function switchButtonText(index: number, sessionId: string, title: string | undefined, current?: string): string {
+  const single = (title || "").replace(/\s+/g, " ").trim()
+  const detail = single
+    ? `${single} (${compactSessionId(sessionId)})`
+    : compactSessionId(sessionId)
+  const marker = current?.trim() === sessionId.trim() ? " [current]" : ""
+  return truncateTelegramInlineText(`${index + 1}. ${detail}${marker}`, inlineButtonTextMax)
+}
+
+async function switchPicker(runtime: Runtime, chatKey: string, current?: string, requestedPage = 0): Promise<{
+  text: string
+  replyMarkup?: { inline_keyboard: Array<Array<{ text: string; callback_data: string }>> }
+}> {
   const list = await switchCandidates(runtime, chatKey, current)
   if (!list.length) {
-    return "No known sessions for this chat/user mapping yet. Use /new to create one. You can also run /switch with no args to view recent sessions, or /switch [session-id|index] to switch."
+    return {
+      text: "No known sessions for this chat/user mapping yet. Use /new to create one, then run /switch to pick from recent sessions.",
+    }
   }
-  const lines = await formatSessionList(runtime.config, list, current)
-  return `Recent sessions for this chat/user mapping:\n${lines.join("\n")}\n\nUse /switch [session-id|index] to switch. Tip: run /switch with no args for this recent-session picker.`
+  const maxPage = Math.max(0, Math.ceil(list.length / switchPageSize) - 1)
+  const safePage = Math.min(Math.max(requestedPage, 0), maxPage)
+  const start = safePage * switchPageSize
+  const end = Math.min(start + switchPageSize, list.length)
+  const rows = list.slice(start, end)
+  const titles = await Promise.all(rows.map((sessionId) => safeSessionTitle(runtime.config, sessionId)))
+  const buttons = rows.map((sessionId, itemIndex) => {
+    const index = start + itemIndex
+    return [{
+      text: switchButtonText(index, sessionId, titles[itemIndex], current),
+      callback_data: switchSelectCallback(index, sessionId),
+    }]
+  })
+  const nav: Array<{ text: string; callback_data: string }> = []
+  if (safePage > 0) {
+    nav.push({ text: "Back", callback_data: switchPageCallback(safePage - 1) })
+  }
+  if (safePage < maxPage) {
+    nav.push({ text: "More", callback_data: switchPageCallback(safePage + 1) })
+  }
+  const replyMarkup = {
+    inline_keyboard: nav.length ? [...buttons, nav] : buttons,
+  }
+  return {
+    text: `Recent sessions for this chat/user mapping (${start + 1}-${end} of ${list.length}). Tap a session button to switch instantly, or use /switch [session-id|index].`,
+    replyMarkup,
+  }
 }
 
 function resolveSwitchTarget(target: string, list: string[]): { sessionId?: string; error?: string; fromKnownList: boolean } {
@@ -1457,6 +1533,51 @@ function resolveSwitchTarget(target: string, list: string[]): { sessionId?: stri
     return { sessionId, fromKnownList: true }
   }
   return { sessionId: value, fromKnownList: false }
+}
+
+async function handleSwitchCallback(runtime: Runtime, chatId: number, userId: number, callbackId: string, parsed: SwitchCallbackData) {
+  const key = telegramSessionKey(chatId, userId)
+  const current = await runtime.store.get(key) || sessionFromCache(runtime.config, key)
+  if (parsed.action === "page") {
+    const picker = await switchPicker(runtime, key, current, parsed.page)
+    if (!picker.replyMarkup) {
+      await answerCallback(runtime.config, callbackId, "No sessions found.")
+      await sendTelegramMessage(runtime.config, chatId, picker.text)
+      return
+    }
+    await answerCallback(runtime.config, callbackId, "Session list updated.")
+    await sendTelegramInlineMessage(runtime.config, chatId, picker.text, picker.replyMarkup)
+    return
+  }
+
+  const list = await switchCandidates(runtime, key, current)
+  const next = list[parsed.index]
+  if (!next) {
+    await answerCallback(runtime.config, callbackId, "That session is no longer available.")
+    const picker = await switchPicker(runtime, key, current)
+    if (!picker.replyMarkup) {
+      await sendTelegramMessage(runtime.config, chatId, picker.text)
+      return
+    }
+    await sendTelegramInlineMessage(runtime.config, chatId, picker.text, picker.replyMarkup)
+    return
+  }
+  if (switchToken(next) !== parsed.token) {
+    await answerCallback(runtime.config, callbackId, "That session entry changed. Please pick again.")
+    const picker = await switchPicker(runtime, key, current)
+    if (!picker.replyMarkup) {
+      await sendTelegramMessage(runtime.config, chatId, picker.text)
+      return
+    }
+    await sendTelegramInlineMessage(runtime.config, chatId, picker.text, picker.replyMarkup)
+    return
+  }
+  await runtime.store.set(key, next)
+  cacheSession(runtime.config, key, next)
+  await rememberSession(runtime, key, next)
+  const title = await safeSessionTitle(runtime.config, next)
+  await answerCallback(runtime.config, callbackId, "Switched.")
+  await sendTelegramMessage(runtime.config, chatId, `Switched to session: ${formatSessionDisplay(next, title)}`)
 }
 
 export function cacheSession(config: BridgeConfig, chatId: string, sessionId: string) {
@@ -1827,6 +1948,19 @@ async function sendTelegramMessage(config: BridgeConfig, chatId: number, text: s
   }
 }
 
+async function sendTelegramInlineMessage(
+  config: BridgeConfig,
+  chatId: number,
+  text: string,
+  replyMarkup: { inline_keyboard: Array<Array<{ text: string; callback_data: string }>> },
+) {
+  await telegramRequest(config, "sendMessage", {
+    chat_id: chatId,
+    text: truncateTelegramText(text, telegramMessageSoftLimit),
+    reply_markup: replyMarkup,
+  })
+}
+
 async function checkTelegramApi(config: BridgeConfig): Promise<BridgeHealthCheck> {
   const url = `https://api.telegram.org/bot${config.token}/getMe`
   const res = await fetch(url, {
@@ -1926,6 +2060,12 @@ export async function handleCallbackUpdate(runtime: Runtime, update: TelegramUpd
   try {
     if (!chatId || !userId || !data) {
       await answerCallback(runtime.config, callbackId, "This button could not be processed.")
+      state.acknowledged = true
+      return
+    }
+    const switchParsed = parseSwitchCallbackData(data)
+    if (switchParsed) {
+      await handleSwitchCallback(runtime, chatId, userId, callbackId, switchParsed)
       state.acknowledged = true
       return
     }
@@ -2092,7 +2232,12 @@ export async function handleTextUpdate(runtime: Runtime, update: TelegramUpdate)
       const target = command.args.join(" ").trim()
       if (!target) {
         const current = await runtime.store.get(key) || sessionFromCache(config, key)
-        await sendTelegramMessage(config, chatId, await switchPickerText(runtime, key, current))
+        const picker = await switchPicker(runtime, key, current)
+        if (!picker.replyMarkup) {
+          await sendTelegramMessage(config, chatId, picker.text)
+          return true
+        }
+        await sendTelegramInlineMessage(config, chatId, picker.text, picker.replyMarkup)
         return true
       }
       const current = await runtime.store.get(key) || sessionFromCache(config, key)
