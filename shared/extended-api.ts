@@ -167,7 +167,7 @@ function restartCommand() {
   return { cmd: ["s6-svc", "-r", servicePath], reason: "s6 service restart" }
 }
 
-async function runRestartCommand() {
+async function runRestartCommand(debug: boolean) {
   const timeout = Number.parseInt(process.env.TELEGRAM_BRIDGE_RESTART_TIMEOUT_MS || "15000", 10)
   const timeoutMs = Number.isFinite(timeout) && timeout > 0 ? timeout : 15_000
   const info = restartCommand()
@@ -175,8 +175,8 @@ async function runRestartCommand() {
     .then(() =>
       Bun.spawn({
         cmd: info.cmd,
-        stdout: "pipe",
-        stderr: "pipe",
+        stdout: debug ? "pipe" : "inherit",
+        stderr: debug ? "pipe" : "inherit",
       }),
     )
     .catch((error) => {
@@ -201,10 +201,10 @@ async function runRestartCommand() {
   if (done.timedOut) {
     p.kill()
   }
-  const stdout = p.stdout
+  const stdout = debug && p.stdout
     ? await new Response(p.stdout).text().catch(() => "")
     : ""
-  const stderr = p.stderr
+  const stderr = debug && p.stderr
     ? await new Response(p.stderr).text().catch(() => "")
     : ""
   return {
@@ -605,14 +605,14 @@ export async function handleExtendedEndpoint(
       })
     }
 
-    const run = await runRestartCommand()
+    const debug = isDebugRestartResponseEnabled()
+    const run = await runRestartCommand(debug)
     if (!run.ok) {
       const reason = run.spawnFailed
         ? "restart command failed to start"
         : run.timedOut
           ? `restart command timed out after ${process.env.TELEGRAM_BRIDGE_RESTART_TIMEOUT_MS || "15000"}ms`
           : `restart command failed with exit code ${run.code ?? "unknown"}`
-      const debug = isDebugRestartResponseEnabled()
       return Response.json(
         {
           error: "restart_failed",
@@ -635,7 +635,6 @@ export async function handleExtendedEndpoint(
 
     const applied = await waitForBridgeApply()
     if (!applied.ok) {
-      const debug = isDebugRestartResponseEnabled()
       return Response.json(
         {
           error: "restart_unhealthy",
