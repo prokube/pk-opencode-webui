@@ -178,6 +178,8 @@ const recentPartTextMax = 500
 const sessionTitleInlineMax = 120
 const callbackIdLength = 24
 const callbackAckText = "Sending answer..."
+const promptCallbackAckText = "Running prompt..."
+const notifyCallbackAckText = "Updating notifications..."
 const inlineButtonMaxOptions = 20
 const inlineButtonTextMax = 48
 const callbackDataMax = 64
@@ -640,6 +642,19 @@ function callbackData(question: TelegramPendingQuestion, questionIndex: number, 
   return `q:${question.callbackId}:${row}:${option}`
 }
 
+function promptCallbackData(promptId: string): string | undefined {
+  const clean = promptId.trim()
+  if (!clean) return
+  if (!/^[A-Za-z0-9._:-]+$/.test(clean)) return
+  const payload = `p:${clean}`
+  if (payload.length > callbackDataMax) return
+  return payload
+}
+
+function notifyCallbackData(mode: "on" | "off" | "status"): string {
+  return `n:${mode}`
+}
+
 function answeredQuestions(question: TelegramPendingQuestion): number {
   if (!question.answers.length) return 0
   return Math.min(question.questions.length, question.answers.length)
@@ -656,17 +671,61 @@ function activeQuestion(question: TelegramPendingQuestion): TelegramPendingQuest
   return question.questions[index]
 }
 
-function parseCallbackData(input: string): { callbackId: string; questionIndex: number; optionIndex: number } | undefined {
-  const match = input.match(/^q:([a-z0-9]{6,24}):(\d+):(\d+)$/)
-  if (!match) return
-  const questionIndex = Number.parseInt(match[2] || "", 10)
-  const optionIndex = Number.parseInt(match[3] || "", 10)
-  if (!Number.isFinite(questionIndex) || !Number.isFinite(optionIndex)) return
-  if (questionIndex < 1 || optionIndex < 1) return
+function parseCallbackData(input: string):
+  | { kind: "question"; callbackId: string; questionIndex: number; optionIndex: number }
+  | { kind: "prompt"; promptId: string }
+  | { kind: "notify"; mode: "on" | "off" | "status" }
+  | undefined {
+  const question = input.match(/^q:([a-z0-9]{6,24}):(\d+):(\d+)$/)
+  if (question) {
+    const questionIndex = Number.parseInt(question[2] || "", 10)
+    const optionIndex = Number.parseInt(question[3] || "", 10)
+    if (!Number.isFinite(questionIndex) || !Number.isFinite(optionIndex)) return
+    if (questionIndex < 1 || optionIndex < 1) return
+    return {
+      kind: "question",
+      callbackId: question[1] || "",
+      questionIndex: questionIndex - 1,
+      optionIndex: optionIndex - 1,
+    }
+  }
+
+  if (input.startsWith("p:")) {
+    const promptId = input.slice(2)
+    if (!promptId) return
+    if (promptId.length > callbackDataMax - 2) return
+    if (!/^[A-Za-z0-9._:-]+$/.test(promptId)) return
+    return {
+      kind: "prompt",
+      promptId,
+    }
+  }
+
+  const notify = input.match(/^n:(on|off|status)$/)
+  if (!notify) return
   return {
-    callbackId: match[1] || "",
-    questionIndex: questionIndex - 1,
-    optionIndex: optionIndex - 1,
+    kind: "notify",
+    mode: (notify[1] as "on" | "off" | "status") || "status",
+  }
+}
+
+function notifyText(enabled: boolean, mode: "on" | "off" | "status"): string {
+  if (mode === "on") return "Notifications enabled for this chat."
+  if (mode === "off") return "Notifications disabled for this chat."
+  return enabled ? "Notifications are enabled." : "Notifications are disabled."
+}
+
+function notifyMarkup(enabled: boolean): { inline_keyboard: Array<Array<{ text: string; callback_data: string }>> } {
+  const on = enabled ? "On ✅" : "On"
+  const off = enabled ? "Off" : "Off ✅"
+  return {
+    inline_keyboard: [
+      [
+        { text: on, callback_data: notifyCallbackData("on") },
+        { text: off, callback_data: notifyCallbackData("off") },
+      ],
+      [{ text: "Status", callback_data: notifyCallbackData("status") }],
+    ],
   }
 }
 
@@ -1729,6 +1788,19 @@ function parseSavedPromptList(raw: unknown, scope: "global" | "project"): SavedP
     .filter((item) => item !== undefined) as SavedPrompt[]
 }
 
+function readSavedPromptArray(payload: Record<string, unknown>, field: "global" | "project"): unknown[] | undefined {
+  const direct = payload[field]
+  if (Array.isArray(direct)) return direct
+  if (direct && typeof direct === "object") {
+    const nested = (direct as { prompts?: unknown }).prompts
+    if (Array.isArray(nested)) return nested
+  }
+  const grouped = payload.prompts
+  if (!grouped || typeof grouped !== "object") return
+  const nested = (grouped as { global?: unknown; project?: unknown })[field]
+  if (Array.isArray(nested)) return nested
+}
+
 function mergeSavedPrompts(globalPrompts: SavedPrompt[], projectPrompts: SavedPrompt[]): SavedPrompt[] {
   const projectIds = new Set(projectPrompts.map((item) => item.id))
   const dedupedGlobal = globalPrompts.filter((item) => !projectIds.has(item.id))
@@ -1787,10 +1859,18 @@ async function savedPromptsForDirectory(config: BridgeConfig, directory?: string
     const body = await res.text().catch(() => "")
     throw new Error(`OpenCode saved prompts failed (${res.status}): ${body.slice(0, 300)}`)
   }
-  const data = await res.json().catch(() => ({})) as { global?: unknown; project?: unknown }
+  const data = await res.json().catch(() => undefined) as Record<string, unknown> | undefined
+  if (!data || typeof data !== "object") {
+    throw new Error("OpenCode saved prompts failed (invalid response): endpoint did not return JSON")
+  }
+  const global = readSavedPromptArray(data, "global")
+  const project = readSavedPromptArray(data, "project")
+  if (!global || !project) {
+    throw new Error("OpenCode saved prompts failed (invalid response): missing global/project arrays")
+  }
   return {
-    global: parseSavedPromptList(data.global, "global"),
-    project: parseSavedPromptList(data.project, "project"),
+    global: parseSavedPromptList(global, "global"),
+    project: parseSavedPromptList(project, "project"),
   }
 }
 
@@ -1803,7 +1883,11 @@ function savedPromptsStatus(error: unknown): number | undefined {
   return status
 }
 
-function savedPromptsFailureGuidance(status: number | undefined, directory?: string): string {
+function savedPromptsFailureGuidance(error: unknown, directory?: string): string {
+  const status = savedPromptsStatus(error)
+  if (error instanceof Error && error.message.includes("(invalid response):")) {
+    return "Saved prompts endpoint returned an unexpected response. Check Telegram bridge openCodeUrl and point it to the OpenCode API server that exposes /api/ext endpoints."
+  }
   if (status === 403 && directory) {
     return `OpenCode rejected saved prompts access for directory ${directory} (HTTP 403). Run /status in a session mapped to the right project, or update Telegram directory in bridge settings.`
   }
@@ -1830,8 +1914,7 @@ async function savedPrompts(runtime: Runtime, key: string): Promise<{ prompts: S
 
   for (const directory of contexts) {
     const scoped = await savedPromptsForDirectory(config, directory).catch((error) => {
-      const status = savedPromptsStatus(error)
-      fallbackGuidance = savedPromptsFailureGuidance(status, directory)
+      fallbackGuidance = savedPromptsFailureGuidance(error, directory)
       return
     })
     if (!scoped) continue
@@ -1855,6 +1938,27 @@ function promptScope(scope: SavedPrompt["scope"]): string {
 
 function promptChoice(prompt: SavedPrompt, index: number): string {
   return `${index + 1}. ${prompt.title} [${promptScope(prompt.scope)}] (${prompt.id})`
+}
+
+function promptsMarkup(prompts: SavedPrompt[]): { inline_keyboard: Array<Array<{ text: string; callback_data: string }>> } | undefined {
+  const rows = prompts
+    .map((prompt) => {
+      const callback = promptCallbackData(prompt.id)
+      if (!callback) return
+      const title = prompt.title.trim()
+      if (!title) return
+      return { title, callback_data: callback }
+    })
+    .filter((item) => item !== undefined)
+    .slice(0, inlineButtonMaxOptions)
+    .map((item) => [{
+      text: item.title.slice(0, inlineButtonTextMax),
+      callback_data: item.callback_data,
+    }])
+  if (!rows.length) return
+  return {
+    inline_keyboard: rows as Array<Array<{ text: string; callback_data: string }>>,
+  }
 }
 
 function promptsListText(prompts: SavedPrompt[], guidance?: string): string {
@@ -1901,6 +2005,22 @@ function lookupSavedPrompt(input: string, prompts: SavedPrompt[]): { prompt?: Sa
   return {
     error: `Saved prompt not found: ${value}. Use /prompts to list available options.`,
   }
+}
+
+async function runSavedPrompt(runtime: Runtime, chatId: number, key: string, prompt: SavedPrompt) {
+  const config = runtime.config
+  const sessionId = await sessionForChat(runtime, key)
+  await resolvePendingForSession(runtime, chatId, sessionId)
+  const reply = await sendPrompt(config, sessionId, prompt.text).catch(async (error) => {
+    if (!isMissingSession(error)) {
+      throw error
+    }
+    sessions.delete(key)
+    await runtime.store.delete(key)
+    const next = await sessionForChat(runtime, key)
+    return sendPrompt(config, next, prompt.text)
+  })
+  await sendTelegramMessage(config, chatId, reply)
 }
 
 function isMissingQuestion(error: unknown): boolean {
@@ -1970,11 +2090,24 @@ async function sendTelegramInlineMessage(
   text: string,
   replyMarkup: { inline_keyboard: Array<Array<{ text: string; callback_data: string }>> },
 ) {
-  await telegramRequest(config, "sendMessage", {
-    chat_id: chatId,
-    text: truncateTelegramText(text, telegramMessageSoftLimit),
-    reply_markup: replyMarkup,
-  })
+  await sendTelegramMessageWithMarkup(config, chatId, text, replyMarkup)
+}
+
+async function sendTelegramMessageWithMarkup(
+  config: BridgeConfig,
+  chatId: number,
+  text: string,
+  markup: { inline_keyboard: Array<Array<{ text: string; callback_data: string }>> },
+) {
+  const safe = text || "I could not produce a response."
+  const parts = chunks(safe, telegramMessageSoftLimit)
+  for (const [i, part] of parts.entries()) {
+    await telegramRequest(config, "sendMessage", {
+      chat_id: chatId,
+      text: part,
+      ...(i === 0 ? { reply_markup: markup } : {}),
+    })
+  }
 }
 
 async function checkTelegramApi(config: BridgeConfig): Promise<BridgeHealthCheck> {
@@ -2089,6 +2222,39 @@ export async function handleCallbackUpdate(runtime: Runtime, update: TelegramUpd
     if (!parsed) {
       await answerCallback(runtime.config, callbackId, "Unsupported button payload.")
       state.acknowledged = true
+      return
+    }
+
+    if (parsed.kind === "notify") {
+      const key = notificationKey(chatId)
+      await answerCallback(runtime.config, callbackId, notifyCallbackAckText)
+      state.acknowledged = true
+      if (parsed.mode === "on") {
+        await setNotificationEnabled(runtime, key, true)
+      }
+      if (parsed.mode === "off") {
+        await setNotificationEnabled(runtime, key, false)
+      }
+      const enabled = await notificationEnabled(runtime, key)
+      await sendTelegramMessageWithMarkup(runtime.config, chatId, notifyText(enabled, parsed.mode), notifyMarkup(enabled))
+      return
+    }
+
+    if (parsed.kind === "prompt") {
+      const key = telegramSessionKey(chatId, userId)
+      await answerCallback(runtime.config, callbackId, promptCallbackAckText)
+      state.acknowledged = true
+      const list = await savedPrompts(runtime, key)
+      if (!list.prompts.length) {
+        await sendTelegramMessage(runtime.config, chatId, list.guidance || "No saved prompts found. Run /prompts to refresh the list.")
+        return
+      }
+      const selected = list.prompts.find((item) => item.id === parsed.promptId)
+      if (!selected) {
+        await sendTelegramMessage(runtime.config, chatId, "That saved prompt is no longer available. Run /prompts to refresh the list.")
+        return
+      }
+      await runSavedPrompt(runtime, chatId, key, selected)
       return
     }
 
@@ -2284,17 +2450,19 @@ export async function handleTextUpdate(runtime: Runtime, update: TelegramUpdate)
       const notifyKey = notificationKey(chatId)
       if (mode === "on") {
         await setNotificationEnabled(runtime, notifyKey, true)
-        await sendTelegramMessage(config, chatId, "Notifications enabled for this chat.")
+        const enabled = await notificationEnabled(runtime, notifyKey)
+        await sendTelegramMessageWithMarkup(config, chatId, notifyText(enabled, "on"), notifyMarkup(enabled))
         return true
       }
       if (mode === "off") {
         await setNotificationEnabled(runtime, notifyKey, false)
-        await sendTelegramMessage(config, chatId, "Notifications disabled for this chat.")
+        const enabled = await notificationEnabled(runtime, notifyKey)
+        await sendTelegramMessageWithMarkup(config, chatId, notifyText(enabled, "off"), notifyMarkup(enabled))
         return true
       }
       if (mode === "status" || !mode) {
         const enabled = await notificationEnabled(runtime, notifyKey)
-        await sendTelegramMessage(config, chatId, enabled ? "Notifications are enabled." : "Notifications are disabled.")
+        await sendTelegramMessageWithMarkup(config, chatId, notifyText(enabled, "status"), notifyMarkup(enabled))
         return true
       }
       await sendTelegramMessage(config, chatId, "Usage: /notify on, /notify off, or /notify status")
@@ -2307,7 +2475,13 @@ export async function handleTextUpdate(runtime: Runtime, update: TelegramUpdate)
     }
     if (known?.name === "prompts") {
       const list = await savedPrompts(runtime, key)
-      await sendTelegramMessage(config, chatId, promptsListText(list.prompts, list.guidance))
+      const text = promptsListText(list.prompts, list.guidance)
+      const markup = promptsMarkup(list.prompts)
+      if (!markup) {
+        await sendTelegramMessage(config, chatId, text)
+        return true
+      }
+      await sendTelegramMessageWithMarkup(config, chatId, text, markup)
       return true
     }
     if (known?.name === "prompt") {
@@ -2331,18 +2505,7 @@ export async function handleTextUpdate(runtime: Runtime, update: TelegramUpdate)
         await sendTelegramMessage(config, chatId, "Usage: /prompt <name|id>")
         return true
       }
-      const sessionId = await sessionForChat(runtime, key)
-      await resolvePendingForSession(runtime, chatId, sessionId)
-      const reply = await sendPrompt(config, sessionId, selected.text).catch(async (error) => {
-        if (!isMissingSession(error)) {
-          throw error
-        }
-        sessions.delete(key)
-        await runtime.store.delete(key)
-        const next = await sessionForChat(runtime, key)
-        return sendPrompt(config, next, selected.text)
-      })
-      await sendTelegramMessage(config, chatId, reply)
+      await runSavedPrompt(runtime, chatId, key, selected)
       return true
     }
     const suggestions = commandSuggestions(command.name)
