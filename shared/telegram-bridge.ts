@@ -727,7 +727,7 @@ function questionPromptText(question: TelegramPendingQuestion): string {
   return lines.join("\n")
 }
 
-function questionStepText(question: TelegramPendingQuestion): string {
+function questionStepText(question: TelegramPendingQuestion, hasButtons = false): string {
   const index = pendingQuestionIndex(question)
   const row = question.questions[index]
   if (!row) return questionPromptText(question)
@@ -749,7 +749,7 @@ function questionStepText(question: TelegramPendingQuestion): string {
     lines.push("You can pick multiple options: reply like 1,3")
   }
   if (row.options.length && !row.multiple) {
-    lines.push("Choose using the buttons below, or reply with an option number or label.")
+    lines.push(hasButtons ? "Choose using the buttons below, or reply with an option number or label." : "Reply with an option number or label.")
   }
   if (row.options.length && row.custom) {
     lines.push("You can also reply with custom text.")
@@ -1420,10 +1420,10 @@ export async function readTelegramBridgeHealth(runtime: Runtime): Promise<Bridge
 async function sendTelegramQuestionPrompt(config: BridgeConfig, chatId: number, question: TelegramPendingQuestion) {
   const markup = questionMarkup(question)
   if (!markup) {
-    await sendTelegramMessage(config, chatId, questionStepText(question))
+    await sendTelegramMessage(config, chatId, questionStepText(question, false))
     return
   }
-  const text = truncateTelegramText(questionStepText(question), telegramMessageSoftLimit)
+  const text = truncateTelegramText(questionStepText(question, true), telegramMessageSoftLimit)
   await telegramRequest(config, "sendMessage", {
     chat_id: chatId,
     text,
@@ -1671,10 +1671,6 @@ export async function handleTextUpdate(runtime: Runtime, update: TelegramUpdate)
       const complete = parseQuestionAnswers(pending, text)
       const answers = complete || (current ? nextAnswers(pending, current) : undefined)
       if (!answers || answers.length < pending.questions.length && !current) {
-        await sendTelegramMessage(config, chatId, `${questionAnswerGuidance(pending)}\n\n${questionStepText(pending)}`)
-        return
-      }
-      if (!answers) {
         await sendTelegramMessage(config, chatId, `${questionAnswerGuidance(pending)}\n\n${questionStepText(pending)}`)
         return
       }
