@@ -1,4 +1,5 @@
 import {
+  batch,
   createSignal,
   createResource,
   Show,
@@ -653,8 +654,10 @@ export function Session() {
       setFollowupAutoPending(false);
       return;
     }
-    setFollowupAutoPending(false);
-    void sendFollowupNow(next.id, "auto");
+    batch(() => {
+      setFollowupAutoPending(false);
+      void sendFollowupNow(next.id, "auto");
+    });
   });
 
   // Get messages from sync context - reactive, automatically updated via SSE
