@@ -1327,15 +1327,80 @@ describe("telegram bridge config and cache", () => {
 
       await handleTextUpdate(runtime, {
         update_id: 4,
-        message: { message_id: 4, text: "/recent nope", chat: { id: 101 }, from: { id: 4 } },
+        message: { message_id: 4, text: "/recent foo", chat: { id: 101 }, from: { id: 4 } },
+      });
+      await handleTextUpdate(runtime, {
+        update_id: 5,
+        message: { message_id: 5, text: "/recent 0", chat: { id: 101 }, from: { id: 4 } },
+      });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+
+    const texts = calls
+      .filter((x) => x.url.includes("/sendMessage"))
+      .map((x) => String(x.body.text || ""));
+    expect(texts).toEqual([
+      "Usage: /recent [count] (count must be 1-12)",
+      "Usage: /recent [count] (count must be 1-12)",
+    ]);
+    expect(calls.some((x) => x.url.includes("/session/session-current/message"))).toBe(false);
+  });
+
+  test("/recent keeps truncated inline text on one line", async () => {
+    const calls: Array<{ url: string; body: Record<string, unknown> }> = [];
+    const originalFetch = globalThis.fetch;
+    const long = "z".repeat(600);
+    try {
+      globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        const body = init?.body ? (JSON.parse(String(init.body)) as Record<string, unknown>) : {};
+        calls.push({ url, body });
+        if (url.includes("/session/session-current/message")) {
+          return new Response(
+            JSON.stringify([
+              { info: { id: "u-1", role: "user" }, parts: [{ type: "text", text: long }] },
+              { info: { id: "a-1", role: "assistant", parentID: "u-1" }, parts: [{ type: "text", text: "ok" }] },
+            ]),
+            { status: 200 },
+          );
+        }
+        if (url.includes("/sendMessage")) {
+          return new Response(JSON.stringify({ ok: true, result: { message_id: 1 } }), { status: 200 });
+        }
+        throw new Error(`Unexpected fetch ${url}`);
+      };
+
+      const runtime = {
+        config: {
+          mode: "polling" as const,
+          token: "token",
+          openCodeUrl: "http://127.0.0.1:4096",
+          sessionCacheMax: 10,
+          sessionCacheTtlMs: 10_000,
+          notificationDebounceMs: 20_000,
+          port: 4097,
+          webhookPath: "/webhook",
+          sessionStorePath: "/tmp/test-store.json",
+        },
+        store: {
+          get: async () => "session-current",
+          set: async () => undefined,
+          delete: async () => undefined,
+        },
+      };
+
+      await handleTextUpdate(runtime, {
+        update_id: 6,
+        message: { message_id: 6, text: "/recent 1", chat: { id: 101 }, from: { id: 4 } },
       });
     } finally {
       globalThis.fetch = originalFetch;
     }
 
     const text = String(calls.filter((x) => x.url.includes("/sendMessage")).at(-1)?.body.text || "");
-    expect(text).toBe("Usage: /recent [count] (count must be 1-12)");
-    expect(calls.some((x) => x.url.includes("/session/session-current/message"))).toBe(false);
+    expect(text).toContain(`You: ${"z".repeat(497)}...`);
+    expect(text).not.toContain("\n\n...");
   });
 
   test("/recent reports missing active mapping", async () => {

@@ -810,6 +810,13 @@ function truncateTelegramText(input: string, size: number): string {
   return `${input.slice(0, size - suffix.length)}${suffix}`
 }
 
+function truncateTelegramInlineText(input: string, size: number): string {
+  if (input.length <= size) return input
+  const suffix = "..."
+  if (size <= suffix.length) return input.slice(0, size)
+  return `${input.slice(0, size - suffix.length)}${suffix}`
+}
+
 function questionAnswerGuidance(question: TelegramPendingQuestion): string {
   const row = activeQuestion(question)
   if (!row) return "No pending question was found."
@@ -1226,7 +1233,7 @@ function parseRecentText(parts: unknown): string {
     .replace(/\s+/g, " ")
     .trim()
   if (!text) return ""
-  return truncateTelegramText(text, recentPartTextMax)
+  return truncateTelegramInlineText(text, recentPartTextMax)
 }
 
 async function recentText(config: BridgeConfig, sessionId: string, count: number): Promise<string> {
@@ -1592,7 +1599,7 @@ function chunks(input: string, size: number): string[] {
 
 async function sendTelegramMessage(config: BridgeConfig, chatId: number, text: string) {
   const safe = text || "I could not produce a response."
-  for (const part of chunks(safe, 3900)) {
+  for (const part of chunks(safe, telegramMessageSoftLimit)) {
     await telegramRequest(config, "sendMessage", {
       chat_id: chatId,
       text: part,
