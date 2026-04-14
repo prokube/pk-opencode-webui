@@ -416,6 +416,20 @@ export function Session() {
     setFollowupAutoPending(true);
   }
 
+  function followupAutoDeferredMessage() {
+    if (inputBlocked()) {
+      return pendingQuestion()
+        ? "Auto send waiting: reply to the pending question above before sending queued followups."
+        : "Auto send waiting: resolve the pending permission request above before sending queued followups.";
+    }
+    const model = sessionModel();
+    if (!model) return "Auto send waiting: select a model to send queued followups.";
+    if (!providers.connected.includes(model.providerID)) {
+      return `Auto send waiting: provider "${model.providerID}" is not connected.`;
+    }
+    return undefined;
+  }
+
   function toggleFollowupAutoSend() {
     const id = sessionId();
     if (!id) return;
@@ -625,12 +639,17 @@ export function Session() {
     if (!sid) return;
     if (!followupAutoSend()) return;
     if (followupAutoPending()) return;
-    if (loading() || followupSending() || processing() || inputBlocked()) return;
+    if (loading() || followupSending() || processing()) return;
     const status = events.status[sid]?.type;
     if (status !== "idle") return;
     const next = followups()[0];
     if (!next) return;
     if (followupAutoPaused() === next.id) return;
+    const deferred = followupAutoDeferredMessage();
+    if (deferred) {
+      setError(deferred);
+      return;
+    }
     queueAutoFollowupSend();
   });
 
@@ -642,7 +661,7 @@ export function Session() {
       setFollowupAutoPending(false);
       return;
     }
-    if (loading() || followupSending() || processing() || inputBlocked()) return;
+    if (loading() || followupSending() || processing()) return;
     const status = events.status[sid]?.type;
     if (status !== "idle") return;
     const next = followups()[0];
@@ -652,6 +671,11 @@ export function Session() {
     }
     if (followupAutoPaused() === next.id) {
       setFollowupAutoPending(false);
+      return;
+    }
+    const deferred = followupAutoDeferredMessage();
+    if (deferred) {
+      setError(deferred);
       return;
     }
     batch(() => {
@@ -1498,7 +1522,8 @@ export function Session() {
     const dir = params.dir;
     const sid = sessionId();
     const busy = events.status[sid ?? ""]?.type;
-    const pauseAuto = source === "auto";
+    const autoEnabled = followupAutoSend();
+    const autoAttempt = source === "auto";
     const fail = (message: string) => {
       setError(message);
     };
@@ -1506,13 +1531,12 @@ export function Session() {
       ? "Reply to the pending question above before sending queued followups."
       : "Resolve the pending permission request above before sending queued followups.";
     const autoBlockedMessage = pendingQuestion()
-      ? "Auto send paused: reply to the pending question above before sending queued followups."
-      : "Auto send paused: resolve the pending permission request above before sending queued followups.";
+      ? "Auto send waiting: reply to the pending question above before sending queued followups."
+      : "Auto send waiting: resolve the pending permission request above before sending queued followups.";
     if (!sid || followupSending() || loading() || processing()) return false;
     if (busy === "busy" || busy === "retry") return false;
     if (inputBlocked()) {
-      if (pauseAuto) {
-        setFollowupAutoPaused(id);
+      if (autoAttempt) {
         fail(autoBlockedMessage);
         return false;
       }
@@ -1521,18 +1545,16 @@ export function Session() {
     }
     const model = sessionModel();
     if (!model) {
-      if (pauseAuto) {
-        setFollowupAutoPaused(id);
-        fail("Auto send paused: select a model to send queued followups.");
+      if (autoAttempt) {
+        fail("Auto send waiting: select a model to send queued followups.");
         return false;
       }
       fail("Please select a model before sending messages. Click the model button in the header.");
       return false;
     }
     if (!providers.connected.includes(model.providerID)) {
-      if (pauseAuto) {
-        setFollowupAutoPaused(id);
-        fail(`Auto send paused: provider "${model.providerID}" is not connected.`);
+      if (autoAttempt) {
+        fail(`Auto send waiting: provider "${model.providerID}" is not connected.`);
         return false;
       }
       fail(`Provider "${model.providerID}" is not connected. Please configure it in Settings.`);
@@ -1567,8 +1589,17 @@ export function Session() {
     } catch (err) {
       setPendingUserMessageText(null);
       setOptimisticMessage(null);
-      if (pauseAuto) setFollowupAutoPaused(id);
-      fail(`Failed to send queued followup: ${err instanceof Error ? err.message : String(err)}`);
+      if (autoEnabled) setFollowupAutoPaused(id);
+      const reason = err instanceof Error ? err.message : String(err);
+      if (autoAttempt) {
+        fail(`Auto send paused after queued followup failed: ${reason}`);
+        return false;
+      }
+      if (autoEnabled) {
+        fail(`Failed to send queued followup: ${reason}. Auto send paused to prevent immediate retry loops.`);
+        return false;
+      }
+      fail(`Failed to send queued followup: ${reason}`);
       return false;
     } finally {
       setFollowupSending(undefined);
