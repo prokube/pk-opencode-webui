@@ -1473,7 +1473,7 @@ export function Session() {
     const item = followups().find((entry) => entry.id === id);
     if (!item) return;
     setFollowupSending(id);
-    setFollowupAutoPaused(undefined);
+    if (followupAutoPaused() === id) setFollowupAutoPaused(undefined);
     setError(null);
     setPendingUserMessageText(item.text);
     setOptimisticMessage(optimisticUserMessage(item.text, sid));
