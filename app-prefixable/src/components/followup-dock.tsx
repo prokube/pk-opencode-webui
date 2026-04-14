@@ -15,9 +15,10 @@ export function FollowupDock(props: {
   const [collapsed, setCollapsed] = createSignal(true);
   const contentId = `followup-dock-${createUniqueId()}`;
   const count = createMemo(() => props.items.length);
+  const hasItems = createMemo(() => count() > 0);
   const preview = createMemo(() => props.items[0]?.text ?? "");
   const label = createMemo(() =>
-    count() === 1 ? "1 followup queued" : `${count()} followups queued`,
+    count() === 0 ? "No followups queued" : count() === 1 ? "1 followup queued" : `${count()} followups queued`,
   );
 
   function toggle() {
@@ -32,29 +33,40 @@ export function FollowupDock(props: {
         border: "1px solid var(--border-base)",
       }}
     >
-      <button
-        type="button"
-        class="w-full flex items-center gap-2 px-3 py-2 text-left"
-        onClick={toggle}
-        aria-expanded={!collapsed()}
-        aria-controls={contentId}
+      <Show
+        when={hasItems()}
+        fallback={
+          <div class="w-full flex items-center gap-2 px-3 py-2 text-left">
+            <span class="text-sm font-medium" style={{ color: "var(--text-strong)" }}>
+              {label()}
+            </span>
+          </div>
+        }
       >
-        <span class="text-sm font-medium" style={{ color: "var(--text-strong)" }}>
-          {label()}
-        </span>
-        <Show when={collapsed() && preview()}>
-          <span class="text-xs truncate min-w-0 flex-1" style={{ color: "var(--text-weak)" }}>
-            {preview()}
+        <button
+          type="button"
+          class="w-full flex items-center gap-2 px-3 py-2 text-left"
+          onClick={toggle}
+          aria-expanded={!collapsed()}
+          aria-controls={contentId}
+        >
+          <span class="text-sm font-medium" style={{ color: "var(--text-strong)" }}>
+            {label()}
           </span>
-        </Show>
-        <ChevronDown
-          class="w-4 h-4 shrink-0 transition-transform"
-          style={{
-            color: "var(--text-weak)",
-            transform: collapsed() ? "rotate(0deg)" : "rotate(180deg)",
-          }}
-        />
-      </button>
+          <Show when={collapsed() && preview()}>
+            <span class="text-xs truncate min-w-0 flex-1" style={{ color: "var(--text-weak)" }}>
+              {preview()}
+            </span>
+          </Show>
+          <ChevronDown
+            class="w-4 h-4 shrink-0 transition-transform"
+            style={{
+              color: "var(--text-weak)",
+              transform: collapsed() ? "rotate(0deg)" : "rotate(180deg)",
+            }}
+          />
+        </button>
+      </Show>
 
       <div class="px-3 pb-2 flex items-center justify-end">
         <label
@@ -71,7 +83,7 @@ export function FollowupDock(props: {
         </label>
       </div>
 
-      <Show when={!collapsed()}>
+      <Show when={hasItems() && !collapsed()}>
         <div
           id={contentId}
           class="px-3 pb-3 pt-1 flex flex-col gap-2 max-h-44 overflow-y-auto"

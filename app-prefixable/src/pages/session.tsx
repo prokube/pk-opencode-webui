@@ -1512,9 +1512,23 @@ export function Session() {
     const fail = (message: string) => {
       setError(message);
     };
+    const blockedMessage = pendingQuestion()
+      ? "Reply to the pending question above before sending queued followups."
+      : "Resolve the pending permission request above before sending queued followups.";
+    const autoBlockedMessage = pendingQuestion()
+      ? "Auto send paused: reply to the pending question above before sending queued followups."
+      : "Auto send paused: resolve the pending permission request above before sending queued followups.";
     if (!sid || followupSending() || loading() || processing()) return false;
     if (busy === "busy" || busy === "retry") return false;
-    if (inputBlocked()) return false;
+    if (inputBlocked()) {
+      if (pauseAuto) {
+        setFollowupAutoPaused(id);
+        fail(autoBlockedMessage);
+        return false;
+      }
+      fail(blockedMessage);
+      return false;
+    }
     const model = sessionModel();
     if (!model) {
       fail("Please select a model before sending messages. Click the model button in the header.");
@@ -2560,7 +2574,7 @@ export function Session() {
               </div>
             </form>
 
-            <Show when={sessionId() && followups().length > 0}>
+            <Show when={!!sessionId()}>
               <FollowupDock
                 items={followups()}
                 sending={followupSending()}
