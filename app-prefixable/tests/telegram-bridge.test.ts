@@ -2349,6 +2349,64 @@ describe("telegram bridge config and cache", () => {
     expect(digest).toContain("Next:");
   });
 
+  test("/inbox finished guidance points to /recent details", async () => {
+    const calls: Array<{ url: string; body: Record<string, unknown> }> = [];
+    const originalFetch = globalThis.fetch;
+    const now = Date.now();
+    try {
+      globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        const body = init?.body ? (JSON.parse(String(init.body)) as Record<string, unknown>) : {};
+        calls.push({ url, body });
+        if (url.includes("/sendMessage")) {
+          return new Response(JSON.stringify({ ok: true, result: { message_id: 1 } }), { status: 200 });
+        }
+        throw new Error(`Unexpected fetch ${url}`);
+      };
+
+      const runtime = {
+        config: {
+          mode: "polling" as const,
+          token: "token",
+          openCodeUrl: "http://127.0.0.1:4096",
+          sessionCacheMax: 10,
+          sessionCacheTtlMs: 10_000,
+          notificationDebounceMs: 20_000,
+          port: 4097,
+          webhookPath: "/webhook",
+          sessionStorePath: "/tmp/test-store.json",
+        },
+        store: {
+          get: async () => undefined,
+          set: async () => undefined,
+          delete: async () => undefined,
+          pendingGet: async () => [
+            {
+              id: "finished-1",
+              kind: "task-finished" as const,
+              sessionId: "session-1",
+              text: "Task finished: session is idle",
+              stampedAt: now,
+              resolved: false,
+            },
+          ],
+          pendingSet: async () => undefined,
+        },
+      };
+
+      await handleTextUpdate(runtime, {
+        update_id: 15,
+        message: { message_id: 15, text: "/inbox", chat: { id: 77 }, from: { id: 5 } },
+      });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+
+    const text = String(calls.find((x) => x.url.includes("/sendMessage"))?.body.text || "");
+    expect(text).toContain("Next: use /recent for details.");
+    expect(text.includes("/status for details")).toBe(false);
+  });
+
   test("/pending prunes expired entries and caps retained inbox size", async () => {
     const calls: Array<{ url: string; body: Record<string, unknown> }> = [];
     const originalFetch = globalThis.fetch;
