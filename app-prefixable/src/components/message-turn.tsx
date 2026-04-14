@@ -49,6 +49,10 @@ function isSubtaskPart(p: Part): p is Extract<Part, { type: "subtask" }> {
   return p.type === "subtask"
 }
 
+function isCompactionPart(p: Part): p is Extract<Part, { type: "compaction" }> {
+  return p.type === "compaction"
+}
+
 const MAX_SHARED_CHILDREN = 400
 const MAX_SHARED_CHILDREN_INFLIGHT = 200
 const MAX_SHARED_SYNCED_CHILDREN = 600
@@ -174,6 +178,18 @@ function renderMetaPart(part: Part) {
           </ul>
         </Show>
       </details>
+    )
+  }
+  if (isCompactionPart(part)) {
+    const label = part.auto ? "Context auto-compacted" : "Context compacted"
+    return (
+      <div class="flex items-center gap-2" aria-label={label}>
+        <div class="h-px flex-1" style={{ background: "var(--border-base)" }} />
+        <span class="text-[11px] uppercase tracking-wide" style={{ color: "var(--text-weak)" }}>
+          {label}
+        </span>
+        <div class="h-px flex-1" style={{ background: "var(--border-base)" }} />
+      </div>
     )
   }
   return null
@@ -898,7 +914,7 @@ export function MessageTurn(props: {
             {(message) => {
               const text = extractTextContent(message.parts).trim()
               const tools = hasTools(message)
-              const meta = () => message.parts.filter((part) => isAgentPart(part) || isSnapshotPart(part) || isRetryPart(part) || isPatchPart(part))
+              const meta = () => message.parts.filter((part) => isAgentPart(part) || isSnapshotPart(part) || isRetryPart(part) || isPatchPart(part) || isCompactionPart(part))
               const subtasks = () => message.parts.filter(isSubtaskPart)
 
               return (
