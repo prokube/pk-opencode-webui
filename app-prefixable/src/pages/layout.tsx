@@ -1692,8 +1692,8 @@ export function Layout(props: ParentProps) {
     if (typeof document !== "undefined" && document.hidden) flashTitle();
 
     // Play sound if enabled in settings
-    const sound = notificationCache();
-    if (sound.enabled) playSound(sound.sound);
+    const settings = notificationCache();
+    if (settings.enabled) playSound(settings.sound);
 
     if (typeof window === "undefined" || !("Notification" in window)) return;
     if (Notification.permission !== "granted") return;
