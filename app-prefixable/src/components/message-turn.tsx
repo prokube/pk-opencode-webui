@@ -25,6 +25,101 @@ function isImageOrPdf(file: FilePart): boolean {
   return file.mime.startsWith("image/") || file.mime === "application/pdf"
 }
 
+function isAgentPart(p: Part): p is Extract<Part, { type: "agent" }> {
+  return p.type === "agent"
+}
+
+function isSnapshotPart(p: Part): p is Extract<Part, { type: "snapshot" }> {
+  return p.type === "snapshot"
+}
+
+function isRetryPart(p: Part): p is Extract<Part, { type: "retry" }> {
+  return p.type === "retry"
+}
+
+function isPatchPart(p: Part): p is Extract<Part, { type: "patch" }> {
+  return p.type === "patch"
+}
+
+function renderMetaPart(part: Part) {
+  if (isAgentPart(part)) {
+    const source = part.source?.value?.trim()
+    return (
+      <div
+        class="inline-flex items-center gap-2 rounded-full px-2 py-1 text-xs max-w-full"
+        style={{
+          background: "var(--surface-inset)",
+          color: "var(--text-base)",
+          border: "1px solid var(--border-base)",
+        }}
+        title={source ? `Source: ${source}` : undefined}
+        aria-label={source ? `Agent ${part.name} from ${source}` : `Agent ${part.name}`}
+      >
+        <span>Agent: {part.name || "unknown"}</span>
+        <Show when={source}>
+          <span class="font-mono truncate" style={{ color: "var(--text-weak)", "max-width": "22ch" }}>
+            {source}
+          </span>
+        </Show>
+      </div>
+    )
+  }
+  if (isSnapshotPart(part)) {
+    return (
+      <div class="flex items-center gap-2" aria-label={`Snapshot ${part.snapshot.slice(0, 8)}`}>
+        <div class="h-px flex-1" style={{ background: "var(--border-base)" }} />
+        <span class="text-[11px] uppercase tracking-wide" style={{ color: "var(--text-weak)" }}>
+          Snapshot {part.snapshot.slice(0, 8)}
+        </span>
+        <div class="h-px flex-1" style={{ background: "var(--border-base)" }} />
+      </div>
+    )
+  }
+  if (isRetryPart(part)) {
+    return (
+      <div
+        class="px-3 py-2 rounded text-sm"
+        style={{
+          background: "var(--surface-inset)",
+          color: "var(--icon-warning-base)",
+          border: "1px solid var(--border-base)",
+        }}
+      >
+        <div class="font-medium">Retry attempt {part.attempt}</div>
+        <div>{errorText(part.error)}</div>
+        <div class="text-xs mt-1" style={{ color: "var(--text-weak)" }}>
+          {formatAbsoluteTime(part.time.created)}
+        </div>
+      </div>
+    )
+  }
+  if (isPatchPart(part)) {
+    const count = part.files.length
+    return (
+      <details
+        class="rounded"
+        style={{ border: "1px solid var(--border-base)", background: "var(--surface-inset)" }}
+        aria-label={`Patch ${part.hash.slice(0, 8)} with ${count} affected file${count === 1 ? "" : "s"}`}
+      >
+        <summary class="px-3 py-2 text-sm cursor-pointer" style={{ color: "var(--text-base)" }}>
+          Patch {part.hash.slice(0, 8)} · {count} file{count === 1 ? "" : "s"}
+        </summary>
+        <Show
+          when={count > 0}
+          fallback={<div class="px-3 pb-2 text-xs" style={{ color: "var(--text-weak)" }}>No files reported</div>}
+        >
+          <ul class="px-3 pb-2 text-xs space-y-1" style={{ color: "var(--text-weak)" }}>
+            <For each={part.files}>
+              {(file) => <li class="font-mono">{file}</li>}
+            </For>
+          </ul>
+        </Show>
+      </details>
+    )
+  }
+  return null
+}
+
 // Re-export Turn type for convenience
 export type { Turn, DisplayMessage }
 
@@ -498,6 +593,7 @@ export function MessageTurn(props: {
             {(message) => {
               const text = extractTextContent(message.parts).trim()
               const tools = hasTools(message)
+              const meta = () => message.parts.filter((part) => isAgentPart(part) || isSnapshotPart(part) || isRetryPart(part) || isPatchPart(part))
 
               return (
                 <div class="flex gap-3">
@@ -525,6 +621,12 @@ export function MessageTurn(props: {
                     {/* Text content */}
                     <Show when={text}>
                       <Markdown content={text} class="text-sm" />
+                    </Show>
+                    {/* Agent, snapshot, retry, and patch parts */}
+                    <Show when={meta().length > 0}>
+                      <div class="space-y-2 mt-2">
+                        <For each={meta()}>{(part) => renderMetaPart(part)}</For>
+                      </div>
                     </Show>
                     {/* Tool calls */}
                     <Show when={tools}>
