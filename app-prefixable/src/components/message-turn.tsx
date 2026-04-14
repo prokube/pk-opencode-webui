@@ -483,10 +483,12 @@ export function MessageTurn(props: {
 
   createEffect(() => {
     childRetry()
+    const expectedCounts = new Map<string, number>()
     for (const sessionID of parentIDs()) {
       const key = childCacheKey(sessionID, directory)
       const known = children()[sessionID]
-      const expected = subtasksForParent(sessionID).length
+      const expected = expectedCounts.get(sessionID) ?? subtasksForParent(sessionID).length
+      if (!expectedCounts.has(sessionID)) expectedCounts.set(sessionID, expected)
       if (known && known.length >= expected) continue
       const now = Date.now()
       const retryAt = lruGet(sharedChildrenRetryAt, key)
@@ -526,13 +528,12 @@ export function MessageTurn(props: {
         .children({ sessionID, directory })
         .then((res) => {
           const list = (res.data ?? []).slice().sort((a, b) => a.time.created - b.time.created)
-          const needed = subtasksForParent(sessionID).length
           const retryTimer = retryTimers.get(key)
           if (retryTimer) {
             clearTimeout(retryTimer)
             retryTimers.delete(key)
           }
-          if (list.length >= needed) {
+          if (list.length >= expected) {
             sharedChildrenEmptyBackoff.delete(key)
             sharedChildrenRetryAt.delete(key)
             lruSet(sharedChildren, key, list, MAX_SHARED_CHILDREN)
@@ -555,10 +556,16 @@ export function MessageTurn(props: {
           console.error("Failed to load session children", error)
           const retryTimer = retryTimers.get(key)
           if (retryTimer) clearTimeout(retryTimer)
+          const previousDelay = lruGet(sharedChildrenEmptyBackoff, key)
+          const delay = previousDelay
+            ? Math.min(previousDelay * 2, CHILDREN_EMPTY_RETRY_MAX_DELAY_MS)
+            : CHILDREN_RETRY_DELAY_MS
+          lruSet(sharedChildrenEmptyBackoff, key, delay, MAX_SHARED_CHILDREN_RETRY)
+          lruSet(sharedChildrenRetryAt, key, Date.now() + delay, MAX_SHARED_CHILDREN_RETRY)
           const timer = setTimeout(() => {
             retryTimers.delete(key)
             setChildRetry((n) => n + 1)
-          }, CHILDREN_RETRY_DELAY_MS)
+          }, delay)
           retryTimers.set(key, timer)
           throw error
         })
