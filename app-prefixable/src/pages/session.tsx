@@ -635,10 +635,23 @@ export function Session() {
       setFollowupAutoPending(false);
       return;
     }
-    if (followupAutoPaused() === next.id) return;
+    if (followupAutoPaused() === next.id) {
+      setFollowupAutoPending(false);
+      return;
+    }
     const model = sessionModel();
-    if (!model) return;
-    if (!providers.connected.includes(model.providerID)) return;
+    if (!model) {
+      setFollowupAutoPending(false);
+      setFollowupAutoPaused(next.id);
+      setError("Auto send paused: select a model to send queued followups.");
+      return;
+    }
+    if (!providers.connected.includes(model.providerID)) {
+      setFollowupAutoPending(false);
+      setFollowupAutoPaused(next.id);
+      setError(`Auto send paused: provider "${model.providerID}" is not connected.`);
+      return;
+    }
     setFollowupAutoPending(false);
     void sendFollowupNow(next.id, "auto");
   });
@@ -2525,16 +2538,18 @@ export function Session() {
               </div>
             </form>
 
-            <FollowupDock
-              items={followups()}
-              sending={followupSending()}
-              autoSend={followupAutoSend()}
-              processing={processing()}
-              loading={loading()}
-              onToggleAutoSend={toggleFollowupAutoSend}
-              onSend={sendFollowupNow}
-              onEdit={editFollowup}
-            />
+            <Show when={sessionId() && followups().length > 0}>
+              <FollowupDock
+                items={followups()}
+                sending={followupSending()}
+                autoSend={followupAutoSend()}
+                processing={processing()}
+                loading={loading()}
+                onToggleAutoSend={toggleFollowupAutoSend}
+                onSend={sendFollowupNow}
+                onEdit={editFollowup}
+              />
+            </Show>
           </div>
         </div>
 
