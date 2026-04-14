@@ -36,6 +36,37 @@ type Runtime = {
   store: ReturnType<typeof createTelegramSessionStore>
 }
 
+type BridgeHealthState = "healthy" | "degraded"
+
+type BridgeHealthCheck = {
+  status: "ok" | "error"
+  message: string
+}
+
+type BridgeHealthReport = {
+  status: BridgeHealthState
+  checkedAt: string
+  process: {
+    status: "up"
+    pid: number
+    uptimeSec: number
+    mode: "polling" | "webhook"
+  }
+  config: {
+    status: "ok"
+    tokenConfigured: boolean
+    webhookSecretConfigured: boolean
+    openCodeUrl: string
+    sessionStorePath: string
+    directoryConfigured: boolean
+    mode: "polling" | "webhook"
+  }
+  dependencies: {
+    telegramApi: BridgeHealthCheck
+    openCodeApi: BridgeHealthCheck
+  }
+}
+
 type CachedSession = {
   id: string
   expiresAt: number
@@ -56,6 +87,7 @@ const fallbackNotifications = new Map<string, boolean>()
 const pendingQuestions = new Map<string, TelegramPendingQuestion[]>()
 
 const pendingQuestionTtlMs = 30 * 60 * 1000
+const startedAt = Date.now()
 
 const telegramCommands = Object.freeze([
   Object.freeze({
@@ -943,6 +975,73 @@ async function sendTelegramMessage(config: BridgeConfig, chatId: number, text: s
   }
 }
 
+async function checkTelegramApi(config: BridgeConfig): Promise<BridgeHealthCheck> {
+  const url = `https://api.telegram.org/bot${config.token}/getMe`
+  const res = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: "{}",
+    signal: AbortSignal.timeout(6_000),
+  }).catch(() => undefined)
+  if (!res) {
+    return { status: "error", message: "Telegram API is unreachable" }
+  }
+  if (!res.ok) {
+    return { status: "error", message: `Telegram API returned HTTP ${res.status}` }
+  }
+  const body = (await res.json().catch(() => ({}))) as { ok?: boolean }
+  if (body.ok !== true) {
+    return { status: "error", message: "Telegram API rejected bridge credentials" }
+  }
+  return { status: "ok", message: "Telegram API is reachable" }
+}
+
+async function checkOpenCodeApi(config: BridgeConfig): Promise<BridgeHealthCheck> {
+  const url = opencodeUrl(config, "/session/status")
+  if (config.directory) {
+    url.searchParams.set("directory", config.directory)
+  }
+  const res = await fetch(url, {
+    signal: AbortSignal.timeout(6_000),
+  }).catch(() => undefined)
+  if (!res) {
+    return { status: "error", message: "OpenCode API is unreachable" }
+  }
+  if (!res.ok) {
+    return { status: "error", message: `OpenCode API returned HTTP ${res.status}` }
+  }
+  return { status: "ok", message: "OpenCode API is reachable" }
+}
+
+export async function readTelegramBridgeHealth(runtime: Runtime): Promise<BridgeHealthReport> {
+  const telegramApi = await checkTelegramApi(runtime.config)
+  const openCodeApi = await checkOpenCodeApi(runtime.config)
+  const healthy = telegramApi.status === "ok" && openCodeApi.status === "ok"
+  return {
+    status: healthy ? "healthy" : "degraded",
+    checkedAt: new Date().toISOString(),
+    process: {
+      status: "up",
+      pid: process.pid,
+      uptimeSec: Math.max(0, Math.floor((Date.now() - startedAt) / 1_000)),
+      mode: runtime.config.mode,
+    },
+    config: {
+      status: "ok",
+      tokenConfigured: Boolean(runtime.config.token),
+      webhookSecretConfigured: Boolean(runtime.config.webhookSecret),
+      openCodeUrl: runtime.config.openCodeUrl,
+      sessionStorePath: runtime.config.sessionStorePath,
+      directoryConfigured: Boolean(runtime.config.directory),
+      mode: runtime.config.mode,
+    },
+    dependencies: {
+      telegramApi,
+      openCodeApi,
+    },
+  }
+}
+
 export async function handleTextUpdate(runtime: Runtime, update: TelegramUpdate) {
   const config = runtime.config
   const message = update.message
@@ -1274,6 +1373,23 @@ async function runPolling(runtime: Runtime) {
   }
 }
 
+function runPollingHealthServer(runtime: Runtime) {
+  const config = runtime.config
+  Bun.serve({
+    port: config.port,
+    hostname: "0.0.0.0",
+    async fetch(req) {
+      const url = new URL(req.url)
+      if (req.method !== "GET" || url.pathname !== "/health") {
+        return new Response("Not Found", { status: 404 })
+      }
+      const report = await readTelegramBridgeHealth(runtime)
+      return Response.json(report)
+    },
+  })
+  console.log(`[TelegramBridge] health server listening on ${config.port}`)
+}
+
 async function runWebhook(runtime: Runtime) {
   const config = runtime.config
   if (config.webhookUrl) {
@@ -1290,6 +1406,10 @@ async function runWebhook(runtime: Runtime) {
     hostname: "0.0.0.0",
     async fetch(req) {
       const url = new URL(req.url)
+      if (req.method === "GET" && url.pathname === "/health") {
+        const report = await readTelegramBridgeHealth(runtime)
+        return Response.json(report)
+      }
       if (req.method !== "POST" || url.pathname !== config.webhookPath) {
         return new Response("Not Found", { status: 404 })
       }
@@ -1331,6 +1451,7 @@ export async function startTelegramBridge() {
   }
   registerTelegramCommandsWithoutBlocking(config)
   if (config.mode === "polling") {
+    runPollingHealthServer(runtime)
     await Promise.all([runPolling(runtime), runOutboundNotifications(runtime)])
     return
   }

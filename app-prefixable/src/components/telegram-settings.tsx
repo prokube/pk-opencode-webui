@@ -7,10 +7,12 @@ import {
   createTelegramPatch,
   normalizeWebhookPathInput,
   type TelegramSettingsResponse,
+  type TelegramHealthResponse,
   type TelegramUpdateFailure,
   type TelegramUpdateSuccess,
   type TelegramValidationError,
   type TelegramForm,
+  telegramHealthLabel,
   validateTelegramForm,
 } from "../utils/telegram-settings"
 import { TelegramSetupGuide } from "./telegram-setup-guide"
@@ -41,6 +43,9 @@ export function TelegramSettings(props: Props) {
   const [webhookSecretConfigured, setWebhookSecretConfigured] = createSignal(false)
   const [initial, setInitial] = createSignal<TelegramForm | null>(null)
   const [form, setForm] = createSignal<TelegramForm | null>(null)
+  const [healthLoading, setHealthLoading] = createSignal(false)
+  const [health, setHealth] = createSignal<TelegramHealthResponse | null>(null)
+  const [healthError, setHealthError] = createSignal<string | null>(null)
 
   async function load() {
     setLoading(true)
@@ -71,7 +76,29 @@ export function TelegramSettings(props: Props) {
     setLoading(false)
   }
 
-  onMount(load)
+  async function loadHealth() {
+    setHealthLoading(true)
+    setHealthError(null)
+    const res = await fetch(`${props.serverUrl}/api/ext/telegram/health`).catch(() => null)
+    if (!res?.ok) {
+      setHealthLoading(false)
+      setHealthError("Failed to load bridge health")
+      return
+    }
+    const data = (await res.json().catch(() => null)) as TelegramHealthResponse | null
+    if (!data) {
+      setHealthLoading(false)
+      setHealthError("Failed to load bridge health")
+      return
+    }
+    setHealth(data)
+    setHealthLoading(false)
+  }
+
+  onMount(() => {
+    void load()
+    void loadHealth()
+  })
 
   const dirty = createMemo(() => {
     const current = form()
@@ -154,6 +181,7 @@ export function TelegramSettings(props: Props) {
     setFieldErrors({})
     setError(null)
     setSuccess("Telegram settings saved.")
+    void loadHealth()
   }
 
   function setField<K extends keyof TelegramForm>(key: K, value: TelegramForm[K]) {
@@ -173,6 +201,12 @@ export function TelegramSettings(props: Props) {
     return fieldErrors()[name]
   }
 
+  function healthTone(state: "healthy" | "degraded" | "down") {
+    if (state === "healthy") return "var(--icon-success-base)"
+    if (state === "degraded") return "var(--icon-warning-base)"
+    return "var(--interactive-critical)"
+  }
+
   return (
     <div class="space-y-6">
       <header>
@@ -185,6 +219,58 @@ export function TelegramSettings(props: Props) {
       </header>
 
       <TelegramSetupGuide />
+
+      <section class="rounded-lg overflow-hidden" style={{ background: "var(--background-base)", border: "1px solid var(--border-base)" }}>
+        <div class="px-4 py-3 flex items-center justify-between" style={{ "border-bottom": "1px solid var(--border-base)" }}>
+          <h2 class="text-sm font-medium" style={{ color: "var(--text-strong)" }}>
+            Bridge Health
+          </h2>
+          <Button variant="secondary" onClick={() => void loadHealth()} disabled={healthLoading()}>
+            <RefreshCw class="w-4 h-4" /> Refresh Status
+          </Button>
+        </div>
+        <div class="p-4 space-y-3">
+          <Show when={healthLoading()}>
+            <div class="flex items-center gap-2 text-sm" style={{ color: "var(--text-weak)" }}>
+              <Spinner class="w-4 h-4" /> Checking bridge health...
+            </div>
+          </Show>
+          <Show when={healthError()}>
+            <div class="p-3 rounded-md text-sm" role="alert" style={{ background: "var(--surface-inset)", border: "1px solid var(--border-base)", "border-left": "3px solid var(--interactive-critical)", color: "var(--interactive-critical)" }}>
+              {healthError()}
+            </div>
+          </Show>
+          <Show when={health()}>
+            {(report) => (
+              <>
+                <div class="flex items-center gap-2 text-sm">
+                  <span class="px-2 py-1 rounded text-xs" style={{ background: "var(--surface-inset)", color: healthTone(report().status) }}>
+                    {telegramHealthLabel(report().status)}
+                  </span>
+                  <span style={{ color: "var(--text-weak)" }}>
+                    Checked {new Date(report().checkedAt).toLocaleString()}
+                  </span>
+                </div>
+                <div class="text-sm space-y-1" style={{ color: "var(--text-base)" }}>
+                  <p>Process: {report().process.status === "up" ? "running" : "not reachable"}</p>
+                  <p>Config: {report().config.status === "ok" ? "loaded" : "invalid"}</p>
+                  <p>Telegram API: {report().dependencies.telegramApi.status} - {report().dependencies.telegramApi.message}</p>
+                  <p>OpenCode API: {report().dependencies.openCodeApi.status} - {report().dependencies.openCodeApi.message}</p>
+                </div>
+                <Show when={report().messages.length > 0}>
+                  <div class="space-y-2">
+                    {report().messages.map((item) => (
+                      <div class="p-2 rounded-md text-xs" style={{ background: "var(--surface-inset)", border: "1px solid var(--border-base)", color: item.type === "config" ? "var(--interactive-critical)" : item.type === "runtime" ? "var(--interactive-critical)" : "var(--icon-warning-base)" }}>
+                        {item.type === "config" ? "Config" : item.type === "runtime" ? "Runtime" : "Dependency"}: {item.text}
+                      </div>
+                    ))}
+                  </div>
+                </Show>
+              </>
+            )}
+          </Show>
+        </div>
+      </section>
 
       <Show when={loading()}>
         <div class="flex items-center gap-2" style={{ color: "var(--text-weak)" }}>

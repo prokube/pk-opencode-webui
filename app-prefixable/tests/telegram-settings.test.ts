@@ -669,4 +669,84 @@ describe("telegram settings extended API", () => {
     expect(await Bun.file(path).exists()).toBe(true)
     expect(await Bun.file(backup).exists()).toBe(false)
   })
+
+  test("GET telegram health returns bridge checks and no secrets", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "telegram-settings-"))
+    cleanupPaths.push(dir)
+    process.env.TELEGRAM_SETTINGS_PATH = join(dir, "telegram-settings.json")
+    process.env.TELEGRAM_BOT_TOKEN = "test-secret-token"
+
+    const fetchSpy = spyOn(globalThis, "fetch").mockImplementation(async () => {
+      return new Response(
+        JSON.stringify({
+          status: "healthy",
+          checkedAt: new Date().toISOString(),
+          process: { status: "up", pid: 123, uptimeSec: 10, mode: "polling" },
+          config: {
+            status: "ok",
+            tokenConfigured: true,
+            webhookSecretConfigured: false,
+            openCodeUrl: "http://127.0.0.1:4096",
+            sessionStorePath: "/tmp/store.json",
+            directoryConfigured: false,
+            mode: "polling",
+          },
+          dependencies: {
+            telegramApi: { status: "ok", message: "Telegram API is reachable" },
+            openCodeApi: { status: "ok", message: "OpenCode API is reachable" },
+          },
+        }),
+        { status: 200 },
+      )
+    })
+
+    try {
+      const response = await handleExtendedEndpoint(
+        "/api/ext/telegram/health",
+        "GET",
+        new URL("http://127.0.0.1/api/ext/telegram/health"),
+        new Request("http://127.0.0.1/api/ext/telegram/health"),
+      )
+
+      expect(response?.status).toBe(200)
+      const data = await response?.json()
+      expect(data.status).toBe("healthy")
+      expect(data.bridgeReachable).toBe(true)
+      expect(data.dependencies.telegramApi.status).toBe("ok")
+      expect(JSON.stringify(data)).not.toContain("test-secret-token")
+    } finally {
+      fetchSpy.mockRestore()
+    }
+  })
+
+  test("GET telegram health reports config error when bridge is down", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "telegram-settings-"))
+    cleanupPaths.push(dir)
+    process.env.TELEGRAM_SETTINGS_PATH = join(dir, "telegram-settings.json")
+
+    const fetchSpy = spyOn(globalThis, "fetch").mockImplementation(async () => {
+      throw new Error("bridge unreachable")
+    })
+
+    try {
+      const response = await handleExtendedEndpoint(
+        "/api/ext/telegram/health",
+        "GET",
+        new URL("http://127.0.0.1/api/ext/telegram/health"),
+        new Request("http://127.0.0.1/api/ext/telegram/health"),
+      )
+
+      expect(response?.status).toBe(200)
+      const data = await response?.json()
+      expect(data.status).toBe("down")
+      expect(data.bridgeReachable).toBe(false)
+      expect(data.messages).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ type: "config" }),
+        ]),
+      )
+    } finally {
+      fetchSpy.mockRestore()
+    }
+  })
 })

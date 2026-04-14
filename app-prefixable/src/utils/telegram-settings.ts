@@ -40,6 +40,51 @@ export type TelegramSettingsResponse = {
   metadata: TelegramMetadata
 }
 
+export type TelegramHealthResponse = {
+  status: "healthy" | "degraded" | "down"
+  checkedAt: string
+  bridgeReachable: boolean
+  process: {
+    status: "up" | "down"
+    pid?: number
+    uptimeSec?: number
+    mode?: TelegramMode
+  }
+  config: {
+    status: "ok" | "error"
+    mode: TelegramMode
+    tokenConfigured: boolean
+    webhookSecretConfigured: boolean
+    openCodeUrl: string
+    sessionStorePath: string
+    directoryConfigured: boolean
+  }
+  dependencies: {
+    telegramApi: {
+      status: "ok" | "error" | "unknown"
+      message: string
+    }
+    openCodeApi: {
+      status: "ok" | "error" | "unknown"
+      message: string
+    }
+  }
+  messages: Array<{
+    type: "config" | "runtime" | "dependency"
+    text: string
+  }>
+}
+
+export function telegramHealthLabel(status: TelegramHealthResponse["status"]): string {
+  if (status === "healthy") return "Healthy"
+  if (status === "degraded") return "Degraded"
+  return "Down"
+}
+
+export function telegramHealthHasConfigError(health: TelegramHealthResponse): boolean {
+  return health.messages.some((item) => item.type === "config")
+}
+
 export type TelegramValidationError = {
   field: string
   message: string

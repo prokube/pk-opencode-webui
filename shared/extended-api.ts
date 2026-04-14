@@ -11,6 +11,30 @@ import * as nodePath from "node:path"
 import * as os from "node:os"
 import { readTelegramSettings, updateTelegramSettings } from "./telegram-settings"
 
+type TelegramBridgeHealthResponse = {
+  status?: "healthy" | "degraded"
+  checkedAt?: string
+  process?: {
+    status?: "up" | "down"
+    pid?: number
+    uptimeSec?: number
+    mode?: "polling" | "webhook"
+  }
+  config?: {
+    status?: "ok"
+    tokenConfigured?: boolean
+    webhookSecretConfigured?: boolean
+    openCodeUrl?: string
+    sessionStorePath?: string
+    directoryConfigured?: boolean
+    mode?: "polling" | "webhook"
+  }
+  dependencies?: {
+    telegramApi?: { status?: "ok" | "error" | "unknown"; message?: string }
+    openCodeApi?: { status?: "ok" | "error" | "unknown"; message?: string }
+  }
+}
+
 /** Resolve the working directory from a query param, falling back to cwd */
 function resolveDir(url: URL): string {
   return url.searchParams.get("directory") || process.cwd()
@@ -90,6 +114,15 @@ function getConfigDir(): string {
 
 function internalError(message: string): Response {
   return Response.json({ error: message }, { status: 500 })
+}
+
+async function queryTelegramBridgeHealth(port: number): Promise<TelegramBridgeHealthResponse | undefined> {
+  const url = `http://127.0.0.1:${port}/health`
+  const res = await fetch(url, {
+    signal: AbortSignal.timeout(3_000),
+  }).catch(() => undefined)
+  if (!res?.ok) return
+  return res.json().catch(() => undefined)
 }
 
 interface StoredPrompt {
@@ -289,6 +322,75 @@ export async function handleExtendedEndpoint(
       return Response.json({ error: "validation_failed", errors: result.errors }, { status: 400 })
     }
     return Response.json(result)
+  }
+
+  if (path === "/api/ext/telegram/health" && method === "GET") {
+    const settings = await readTelegramSettings().catch((error) => {
+      console.error("[ExtAPI] telegram health settings read error", error)
+      return null
+    })
+    if (!settings) {
+      return Response.json({ error: "failed to read telegram settings" }, { status: 500 })
+    }
+
+    const port = typeof settings.settings.port === "number" ? settings.settings.port : 4097
+    const bridge = await queryTelegramBridgeHealth(port)
+
+    if (bridge) {
+      const status = bridge.status || "degraded"
+      const messages = [] as Array<{ type: "config" | "runtime" | "dependency"; text: string }>
+      if (bridge.dependencies?.telegramApi?.status === "error") {
+        messages.push({ type: "dependency", text: bridge.dependencies.telegramApi.message || "Telegram API check failed" })
+      }
+      if (bridge.dependencies?.openCodeApi?.status === "error") {
+        messages.push({ type: "dependency", text: bridge.dependencies.openCodeApi.message || "OpenCode API check failed" })
+      }
+      return Response.json({
+        status,
+        checkedAt: bridge.checkedAt || new Date().toISOString(),
+        bridgeReachable: true,
+        process: bridge.process || { status: "up" },
+        config: bridge.config || {
+          status: "ok",
+          mode: settings.settings.mode,
+          tokenConfigured: settings.settings.tokenConfigured,
+          webhookSecretConfigured: settings.settings.webhookSecretConfigured,
+          openCodeUrl: settings.settings.openCodeUrl,
+          sessionStorePath: settings.settings.sessionStorePath,
+          directoryConfigured: Boolean(settings.settings.directory),
+        },
+        dependencies: bridge.dependencies || {
+          telegramApi: { status: "error", message: "Telegram API check unavailable" },
+          openCodeApi: { status: "error", message: "OpenCode API check unavailable" },
+        },
+        messages,
+      })
+    }
+
+    const configError = !settings.settings.tokenConfigured
+      ? "Telegram bot token is not configured"
+      : "Telegram bridge process is not reachable"
+    const messageType = !settings.settings.tokenConfigured ? "config" : "runtime"
+    return Response.json({
+      status: "down",
+      checkedAt: new Date().toISOString(),
+      bridgeReachable: false,
+      process: { status: "down" },
+      config: {
+        status: !settings.settings.tokenConfigured ? "error" : "ok",
+        mode: settings.settings.mode,
+        tokenConfigured: settings.settings.tokenConfigured,
+        webhookSecretConfigured: settings.settings.webhookSecretConfigured,
+        openCodeUrl: settings.settings.openCodeUrl,
+        sessionStorePath: settings.settings.sessionStorePath,
+        directoryConfigured: Boolean(settings.settings.directory),
+      },
+      dependencies: {
+        telegramApi: { status: "unknown", message: "Bridge is down" },
+        openCodeApi: { status: "unknown", message: "Bridge is down" },
+      },
+      messages: [{ type: messageType, text: configError }],
+    })
   }
 
   // GET /api/ext/saved-prompts - Read global + project prompts

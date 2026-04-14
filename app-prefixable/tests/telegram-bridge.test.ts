@@ -13,6 +13,7 @@ import {
   parseConfig,
   parseMode,
   queueChatUpdate,
+  readTelegramBridgeHealth,
   registerTelegramCommands,
   resetSessionCacheForTest,
   setRetryDelayForTest,
@@ -317,6 +318,88 @@ describe("telegram bridge config and cache", () => {
     expect(sessionFromCache(config, "chat-a")).toBeUndefined();
     expect(sessionFromCache(config, "chat-b")).toBe("session-b");
     expect(sessionFromCache(config, "chat-c")).toBe("session-c");
+  });
+
+  test("readTelegramBridgeHealth reports healthy when dependencies are reachable", async () => {
+    const originalFetch = globalThis.fetch;
+    try {
+      globalThis.fetch = async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.includes("/getMe")) {
+          return new Response(JSON.stringify({ ok: true, result: { id: 1 } }), { status: 200 });
+        }
+        if (url.includes("/session/status")) {
+          return new Response(JSON.stringify({}), { status: 200 });
+        }
+        throw new Error(`Unexpected fetch ${url}`);
+      };
+
+      const report = await readTelegramBridgeHealth({
+        config: {
+          mode: "polling",
+          token: "token",
+          openCodeUrl: "http://127.0.0.1:4096",
+          sessionCacheMax: 10,
+          sessionCacheTtlMs: 10_000,
+          notificationDebounceMs: 20_000,
+          port: 4097,
+          webhookPath: "/webhook",
+          sessionStorePath: "/tmp/test-store.json",
+        },
+        store: {
+          get: async () => undefined,
+          set: async () => undefined,
+          delete: async () => undefined,
+        },
+      });
+
+      expect(report.status).toBe("healthy");
+      expect(report.dependencies.telegramApi.status).toBe("ok");
+      expect(report.dependencies.openCodeApi.status).toBe("ok");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test("readTelegramBridgeHealth reports degraded when dependency fails", async () => {
+    const originalFetch = globalThis.fetch;
+    try {
+      globalThis.fetch = async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.includes("/getMe")) {
+          return new Response(JSON.stringify({ ok: false }), { status: 200 });
+        }
+        if (url.includes("/session/status")) {
+          return new Response(JSON.stringify({}), { status: 200 });
+        }
+        throw new Error(`Unexpected fetch ${url}`);
+      };
+
+      const report = await readTelegramBridgeHealth({
+        config: {
+          mode: "polling",
+          token: "token",
+          openCodeUrl: "http://127.0.0.1:4096",
+          sessionCacheMax: 10,
+          sessionCacheTtlMs: 10_000,
+          notificationDebounceMs: 20_000,
+          port: 4097,
+          webhookPath: "/webhook",
+          sessionStorePath: "/tmp/test-store.json",
+        },
+        store: {
+          get: async () => undefined,
+          set: async () => undefined,
+          delete: async () => undefined,
+        },
+      });
+
+      expect(report.status).toBe("degraded");
+      expect(report.dependencies.telegramApi.status).toBe("error");
+      expect(report.dependencies.openCodeApi.status).toBe("ok");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
   });
 
   test("handleTextUpdate parses whitespace and bot-qualified help command", async () => {
