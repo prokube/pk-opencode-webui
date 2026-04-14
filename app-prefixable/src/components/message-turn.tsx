@@ -49,6 +49,10 @@ function isSubtaskPart(p: Part): p is Extract<Part, { type: "subtask" }> {
   return p.type === "subtask"
 }
 
+const sharedChildren = new Map<string, Session[]>()
+const sharedChildrenInflight = new Map<string, Promise<Session[]>>()
+const sharedSyncedChildren = new Set<string>()
+
 function renderMetaPart(part: Part) {
   if (isAgentPart(part)) {
     const source = part.source?.value?.trim()
@@ -340,7 +344,6 @@ export function MessageTurn(props: {
   const [detailsOpen, setDetailsOpen] = createSignal(false)
   const [hovered, setHovered] = createSignal(false)
   const [children, setChildren] = createSignal<Record<string, Session[]>>({})
-  const [loadingChildren, setLoadingChildren] = createSignal<Record<string, boolean>>({})
 
   const dirSlug = createMemo(() => (directory ? base64Encode(directory) : params.dir))
 
@@ -421,48 +424,84 @@ export function MessageTurn(props: {
 
   createEffect(() => {
     for (const sessionID of parentIDs()) {
-      const expected = (() => {
-        const all = sync.messages(sessionID).flatMap((message) => message.parts.filter(isSubtaskPart))
-        if (all.length > 0) return all.length
-        return props.turn.assistantMessages
-          .flatMap((message) => message.parts.filter(isSubtaskPart))
-          .filter((part) => part.sessionID === sessionID).length
-      })()
       const known = children()[sessionID]
-      if (known && known.length >= expected) {
-        for (const child of known) sync.session.sync(child.id)
+      if (known) continue
+      const cached = sharedChildren.get(sessionID)
+      if (cached) {
+        setChildren((prev) => ({ ...prev, [sessionID]: cached }))
         continue
       }
-      if (loadingChildren()[sessionID]) continue
-      setLoadingChildren((prev) => ({ ...prev, [sessionID]: true }))
-      client.session
+      const inflight = sharedChildrenInflight.get(sessionID)
+      if (inflight) {
+        inflight.then((list) => {
+          setChildren((prev) => {
+            if (prev[sessionID]) return prev
+            return { ...prev, [sessionID]: list }
+          })
+        })
+        continue
+      }
+
+      const pending = client.session
         .children({ sessionID, directory })
         .then((res) => {
           const list = (res.data ?? []).slice().sort((a, b) => a.time.created - b.time.created)
-          setChildren((prev) => {
-            const current = prev[sessionID]
-            if (current && current.length === list.length && current.every((child, i) => child.id === list[i]?.id)) return prev
-            return { ...prev, [sessionID]: list }
-          })
-          for (const child of list) sync.session.sync(child.id)
+          sharedChildren.set(sessionID, list)
+          return list
         })
         .catch((error) => {
           console.error("Failed to load session children", error)
+          sharedChildren.set(sessionID, [])
+          return []
         })
         .finally(() => {
-          setLoadingChildren((prev) => ({ ...prev, [sessionID]: false }))
+          sharedChildrenInflight.delete(sessionID)
         })
+
+      sharedChildrenInflight.set(sessionID, pending)
+      pending.then((list) => {
+        setChildren((prev) => {
+          if (prev[sessionID]) return prev
+          return { ...prev, [sessionID]: list }
+        })
+      })
     }
   })
+
+  const subtasksForParent = (sessionID: string) => {
+    const all = sync.messages(sessionID).flatMap((message) => message.parts.filter(isSubtaskPart))
+    if (all.length > 0) return all
+    return props.turn.assistantMessages
+      .flatMap((message) => message.parts.filter(isSubtaskPart))
+      .filter((part) => part.sessionID === sessionID)
+  }
 
   const childForSubtask = (part: Extract<Part, { type: "subtask" }>) => {
     const list = children()[part.sessionID]
     if (!list || list.length === 0) return undefined
-    const all = sync.messages(part.sessionID).flatMap((message) => message.parts.filter(isSubtaskPart))
-    const index = all.findIndex((candidate) => candidate.id === part.id)
-    if (index < 0) return undefined
-    return list[index]
+    const all = subtasksForParent(part.sessionID)
+    if (all.length !== 1) return undefined
+    if (list.length !== 1) return undefined
+    if (all[0].id !== part.id) return undefined
+    return list[0]
   }
+
+  createEffect(() => {
+    const ids = new Set<string>()
+    for (const message of props.turn.assistantMessages) {
+      for (const part of message.parts) {
+        if (!isSubtaskPart(part)) continue
+        const child = childForSubtask(part)
+        if (!child?.id) continue
+        ids.add(child.id)
+      }
+    }
+    for (const childID of ids) {
+      if (sharedSyncedChildren.has(childID)) continue
+      sharedSyncedChildren.add(childID)
+      void sync.session.sync(childID)
+    }
+  })
 
   const isChildRunning = (childID: string | undefined) => {
     if (!childID) return true
