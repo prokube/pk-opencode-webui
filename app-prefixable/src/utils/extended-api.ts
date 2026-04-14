@@ -179,3 +179,32 @@ export async function writeSavedPrompts(
   }).catch(() => null)
   return !!res?.ok
 }
+
+export interface SessionAlarmState {
+  sessionId: string
+  enabled: boolean
+}
+
+/** Read session alarm state from the server (Telegram bridge). Returns null on failure. */
+export async function getSessionAlarm(serverUrl: string, sessionId: string): Promise<SessionAlarmState | null> {
+  const params = new URLSearchParams({ sessionId })
+  const res = await fetch(`${serverUrl}/api/ext/telegram/session-alarm?${params}`).catch(() => null)
+  if (!res?.ok) return null
+  const data = (await res.json().catch(() => null)) as { sessionId?: string; enabled?: boolean } | null
+  if (!data || typeof data.enabled !== "boolean") return null
+  return { sessionId: data.sessionId || sessionId, enabled: data.enabled }
+}
+
+/** Update session alarm state on the server (Telegram bridge). Returns true on success. */
+export async function setSessionAlarm(serverUrl: string, sessionId: string, enabled: boolean): Promise<boolean> {
+  const res = await fetch(`${serverUrl}/api/ext/telegram/session-alarm`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ sessionId, enabled }),
+  }).catch(() => null)
+  if (!res?.ok) {
+    console.warn("[extended-api] setSessionAlarm failed:", res?.status)
+    return false
+  }
+  return true
+}

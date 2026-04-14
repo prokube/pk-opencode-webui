@@ -50,6 +50,7 @@ import {
   type ImageAttachment,
 } from "../components/image-attachments";
 import { readNotifyMap, writeNotifyMap } from "../utils/notify";
+import { getSessionAlarm, setSessionAlarm } from "../utils/extended-api";
 import { sessionQuestionRequest } from "../utils/session-tree-request";
 import { createRootSession } from "../utils/root-session";
 import {
@@ -121,7 +122,7 @@ function normalizeFollowupList(value: unknown) {
 export function Session() {
   const params = useParams<{ dir: string; id?: string }>();
   const navigate = useNavigate();
-  const { client, directory } = useSDK();
+  const { client, directory, url } = useSDK();
   const events = useEvents();
   const sync = useSync();
   const providers = useProviders();
@@ -503,7 +504,7 @@ export function Session() {
   // Double-Escape to abort: track last Escape press timestamp
   const lastEsc = { ts: 0 };
 
-  // --- Notification toggle (per-session, persisted in localStorage) ---
+  // --- Notification toggle (per-session, persisted in localStorage + server) ---
   const [notifyEnabled, setNotifyEnabled] = createSignal(
     (() => {
       const id = params.id;
@@ -512,15 +513,49 @@ export function Session() {
     })(),
   );
   const [notifyDenied, setNotifyDenied] = createSignal(false);
+  const [notifySyncing, setNotifySyncing] = createSignal(false);
   const deniedTimer = { id: null as ReturnType<typeof setTimeout> | null };
   onCleanup(() => { if (deniedTimer.id !== null) clearTimeout(deniedTimer.id) });
 
-  // Re-read notification state when session changes
+  // Re-read notification state when session changes, and seed from server alarm state
   createEffect(() => {
     const id = params.id;
-    setNotifyEnabled(id ? readNotifyMap()[id] === true : false);
     setNotifyDenied(false);
+    if (!id) {
+      setNotifyEnabled(false);
+      return;
+    }
+    // Seed from localStorage first for instant UI
+    const local = readNotifyMap()[id] === true;
+    setNotifyEnabled(local);
+    // Then fetch server-side alarm state asynchronously
+    const serverUrl = url;
+    getSessionAlarm(serverUrl, id).then((state) => {
+      // If server returned a value and we're still on the same session, adopt it
+      if (state && params.id === id) {
+        setNotifyEnabled(state.enabled);
+        // Sync localStorage to match server truth
+        const map = readNotifyMap();
+        if (state.enabled) {
+          map[id] = true;
+        } else {
+          delete map[id];
+        }
+        writeNotifyMap(map);
+      }
+    });
   });
+
+  /** Mirror bell toggle to server-side alarm state (fire-and-forget). */
+  function syncAlarmToServer(id: string, enabled: boolean) {
+    setNotifySyncing(true);
+    setSessionAlarm(url, id, enabled).then((ok) => {
+      setNotifySyncing(false);
+      if (!ok) {
+        console.warn("[Session] Failed to sync alarm state to server for session:", id);
+      }
+    });
+  }
 
   function toggleNotify() {
     const id = sessionId();
@@ -533,6 +568,7 @@ export function Session() {
       writeNotifyMap(map);
       setNotifyEnabled(false);
       setNotifyDenied(false);
+      syncAlarmToServer(id, false);
       return;
     }
 
@@ -545,6 +581,7 @@ export function Session() {
       map[id] = true;
       writeNotifyMap(map);
       setNotifyEnabled(true);
+      syncAlarmToServer(id, true);
       return;
     }
     if (perm === "denied") {
@@ -560,6 +597,7 @@ export function Session() {
         map[id] = true;
         writeNotifyMap(map);
         setNotifyEnabled(true);
+        syncAlarmToServer(id, true);
         return;
       }
       if (result === "denied") {
