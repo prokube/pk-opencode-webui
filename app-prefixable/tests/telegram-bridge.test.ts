@@ -2015,6 +2015,61 @@ describe("telegram bridge config and cache", () => {
     expect(calls.filter((x) => x.url.includes("/session/session-old")).length).toBe(1);
   });
 
+  test("/sessions limits concurrent session title lookups", async () => {
+    const calls: Array<{ url: string; body: Record<string, unknown> }> = [];
+    const originalFetch = globalThis.fetch;
+    let activeLookups = 0;
+    let maxConcurrentLookups = 0;
+    try {
+      globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        const body = init?.body ? (JSON.parse(String(init.body)) as Record<string, unknown>) : {};
+        calls.push({ url, body });
+        if (url.includes("/session/") && !url.includes("/message")) {
+          activeLookups += 1;
+          maxConcurrentLookups = Math.max(maxConcurrentLookups, activeLookups);
+          await new Promise((resolve) => setTimeout(resolve, 5));
+          activeLookups -= 1;
+          return new Response(JSON.stringify({ id: "session-id", title: "Session title" }), { status: 200 });
+        }
+        if (url.includes("/sendMessage")) {
+          return new Response(JSON.stringify({ ok: true, result: { message_id: 1 } }), { status: 200 });
+        }
+        throw new Error(`Unexpected fetch ${url}`);
+      };
+
+      const runtime = {
+        config: {
+          mode: "polling" as const,
+          token: "token",
+          openCodeUrl: "http://127.0.0.1:4096",
+          sessionCacheMax: 10,
+          sessionCacheTtlMs: 10_000,
+          notificationDebounceMs: 20_000,
+          port: 4097,
+          webhookPath: "/webhook",
+          sessionStorePath: "/tmp/test-store.json",
+        },
+        store: {
+          get: async () => "session-01",
+          set: async () => undefined,
+          delete: async () => undefined,
+          historyGet: async () => Array.from({ length: 19 }, (_, idx) => `session-${String(idx + 2).padStart(2, "0")}`),
+        },
+      };
+
+      await handleTextUpdate(runtime, {
+        update_id: 1,
+        message: { message_id: 1, text: "/sessions", chat: { id: 68 }, from: { id: 8 } },
+      });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+
+    expect(maxConcurrentLookups).toBeLessThanOrEqual(6);
+    expect(calls.filter((x) => x.url.includes("/session/") && !x.url.includes("/message")).length).toBe(20);
+  });
+
   test("session metadata cache normalizes whitespace in session ids", async () => {
     const calls: Array<{ url: string; body: Record<string, unknown> }> = [];
     const originalFetch = globalThis.fetch;
@@ -2705,11 +2760,14 @@ describe("telegram bridge config and cache", () => {
       const sent = calls
         .filter((x) => x.url.includes("/sendMessage"))
         .map((x) => String(x.body.text || ""));
-      expect(sent[0]).toContain("Recent sessions for this chat/user mapping:");
-      expect(sent[0]).toContain("1. session-a (current)");
-      expect(sent[0]).toContain("2. session-b");
-      expect(sent[0]).toContain("Use /switch [session-id|index] to switch.");
-      expect(sent[0]).toContain("run /switch with no args for this recent-session picker");
+      expect(sent[0]).toContain("Recent sessions for this chat/user mapping (1-2 of 2).");
+      expect(sent[0]).toContain("Tap a session button to switch instantly");
+      const picker = calls.filter((x) => x.url.includes("/sendMessage"))[0]?.body.reply_markup as {
+        inline_keyboard?: Array<Array<{ text?: string; callback_data?: string }>>;
+      } | undefined;
+      expect(picker?.inline_keyboard?.[0]?.[0]?.text).toContain("session-a");
+      expect(picker?.inline_keyboard?.[1]?.[0]?.text).toContain("session-b");
+      expect(String(picker?.inline_keyboard?.[0]?.[0]?.callback_data || "")).toMatch(/^s:s:1:[a-z0-9]{6,24}$/);
       expect(sent[1]).toBe("Invalid session index: 9. Available indices: 1-2.");
       expect(historyWrites).toBe(0);
       expect(map.get("chat:33:user:2")).toBe("session-a");
@@ -2772,14 +2830,16 @@ describe("telegram bridge config and cache", () => {
     }
 
     const sent = String(calls.filter((x) => x.url.includes("/sendMessage")).at(-1)?.body.text || "");
-    expect(sent).toContain("Recent sessions for this chat/user mapping:");
-    expect(sent).toContain("1. Alpha (session-a) (current)");
-    expect(sent).toContain("2. Beta (session-b)");
-    expect(sent).toContain("Use /switch [session-id|index] to switch.");
-    expect(sent).toContain("run /switch with no args for this recent-session picker");
+    expect(sent).toContain("Recent sessions for this chat/user mapping (1-2 of 2).");
+    const picker = calls.filter((x) => x.url.includes("/sendMessage")).at(-1)?.body.reply_markup as {
+      inline_keyboard?: Array<Array<{ text?: string; callback_data?: string }>>;
+    } | undefined;
+    expect(picker?.inline_keyboard?.[0]?.[0]?.text).toContain("Alpha");
+    expect(picker?.inline_keyboard?.[1]?.[0]?.text).toContain("Beta");
+    expect(String(picker?.inline_keyboard?.[1]?.[0]?.callback_data || "")).toMatch(/^s:s:2:[a-z0-9]{6,24}$/);
   });
 
-  test("/switch empty-state copy advertises optional argument usage", async () => {
+  test("/switch empty-state copy advertises /new and picker usage", async () => {
     const calls: Array<{ url: string; body: Record<string, unknown> }> = [];
     const originalFetch = globalThis.fetch;
     try {
@@ -2822,9 +2882,157 @@ describe("telegram bridge config and cache", () => {
     }
 
     const sent = String(calls.filter((x) => x.url.includes("/sendMessage")).at(-1)?.body.text || "");
-    expect(sent).toContain("Use /new to create one.");
-    expect(sent).toContain("/switch with no args");
-    expect(sent).toContain("/switch [session-id|index]");
+    expect(sent).toContain("Use /new to create one");
+    expect(sent).toContain("run /switch to pick from recent sessions");
+  });
+
+  test("/switch picker paginates with More callbacks", async () => {
+    const calls: Array<{ url: string; body: Record<string, unknown> }> = [];
+    const originalFetch = globalThis.fetch;
+    const map = new Map<string, string>([["chat:81:user:3", "session-01"]]);
+    try {
+      globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        const body = init?.body ? (JSON.parse(String(init.body)) as Record<string, unknown>) : {};
+        calls.push({ url, body });
+        if (url.includes("/answerCallbackQuery")) {
+          return new Response(JSON.stringify({ ok: true, result: true }), { status: 200 });
+        }
+        if (url.includes("/sendMessage")) {
+          return new Response(JSON.stringify({ ok: true, result: { message_id: 1 } }), { status: 200 });
+        }
+        throw new Error(`Unexpected fetch ${url}`);
+      };
+
+      const runtime = {
+        config: {
+          mode: "polling" as const,
+          token: "token",
+          openCodeUrl: "http://127.0.0.1:4096",
+          sessionCacheMax: 10,
+          sessionCacheTtlMs: 10_000,
+          notificationDebounceMs: 20_000,
+          port: 4097,
+          webhookPath: "/webhook",
+          sessionStorePath: "/tmp/test-store.json",
+        },
+        store: {
+          get: async (key: string) => map.get(key),
+          set: async (key: string, value: string) => {
+            map.set(key, value);
+          },
+          delete: async (key: string) => {
+            map.delete(key);
+          },
+          historyGet: async () => Array.from({ length: 12 }, (_, idx) => `session-${String(idx + 1).padStart(2, "0")}`),
+        },
+      };
+
+      await handleTextUpdate(runtime, {
+        update_id: 1,
+        message: { message_id: 1, text: "/switch", chat: { id: 81 }, from: { id: 3 } },
+      });
+
+      await handleCallbackUpdate(runtime, {
+        update_id: 2,
+        callback_query: {
+          id: "cb-switch-more",
+          data: "s:p:2",
+          from: { id: 3 },
+          message: { message_id: 2, chat: { id: 81 } },
+        },
+      });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+
+    const messages = calls.filter((x) => x.url.includes("/sendMessage"));
+    expect(String(messages[0]?.body.text || "")).toContain("(1-10 of 12)");
+    expect(String(messages[1]?.body.text || "")).toContain("(11-12 of 12)");
+    const secondMarkup = messages[1]?.body.reply_markup as {
+      inline_keyboard?: Array<Array<{ text?: string; callback_data?: string }>>;
+    } | undefined;
+    const navRow = secondMarkup?.inline_keyboard?.at(-1);
+    expect(navRow?.some((button) => button.text === "Back")).toBe(true);
+    expect(navRow?.some((button) => button.text === "More")).toBe(false);
+  });
+
+  test("/switch picker callback switches to selected session", async () => {
+    const calls: Array<{ url: string; body: Record<string, unknown> }> = [];
+    const originalFetch = globalThis.fetch;
+    const map = new Map<string, string>([["chat:82:user:3", "session-a"]]);
+    try {
+      globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        const body = init?.body ? (JSON.parse(String(init.body)) as Record<string, unknown>) : {};
+        calls.push({ url, body });
+        if (url.includes("/answerCallbackQuery")) {
+          return new Response(JSON.stringify({ ok: true, result: true }), { status: 200 });
+        }
+        if (url.includes("/session/session-b")) {
+          return new Response(JSON.stringify({ id: "session-b", title: "Beta thread" }), { status: 200 });
+        }
+        if (url.includes("/sendMessage")) {
+          return new Response(JSON.stringify({ ok: true, result: { message_id: 1 } }), { status: 200 });
+        }
+        throw new Error(`Unexpected fetch ${url}`);
+      };
+
+      const runtime = {
+        config: {
+          mode: "polling" as const,
+          token: "token",
+          openCodeUrl: "http://127.0.0.1:4096",
+          sessionCacheMax: 10,
+          sessionCacheTtlMs: 10_000,
+          notificationDebounceMs: 20_000,
+          port: 4097,
+          webhookPath: "/webhook",
+          sessionStorePath: "/tmp/test-store.json",
+        },
+        store: {
+          get: async (key: string) => map.get(key),
+          set: async (key: string, value: string) => {
+            map.set(key, value);
+          },
+          delete: async (key: string) => {
+            map.delete(key);
+          },
+          historyGet: async () => ["session-b", "session-c"],
+        },
+      };
+
+      await handleTextUpdate(runtime, {
+        update_id: 1,
+        message: { message_id: 1, text: "/switch", chat: { id: 82 }, from: { id: 3 } },
+      });
+
+      const picker = calls.find((x) => x.url.includes("/sendMessage") && String(x.body.text || "").includes("Recent sessions"));
+      const data = String(
+        ((picker?.body.reply_markup as { inline_keyboard?: Array<Array<{ callback_data?: string }>> } | undefined)
+          ?.inline_keyboard?.[1]?.[0]?.callback_data) || "",
+      );
+
+      await handleCallbackUpdate(runtime, {
+        update_id: 2,
+        callback_query: {
+          id: "cb-switch-select",
+          data,
+          from: { id: 3 },
+          message: { message_id: 2, chat: { id: 82 } },
+        },
+      });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+
+    const callbackAck = calls.filter((x) => x.url.includes("/answerCallbackQuery")).at(-1);
+    expect(String(callbackAck?.body.text || "")).toContain("Switched");
+    const sentTexts = calls
+      .filter((x) => x.url.includes("/sendMessage"))
+      .map((x) => String(x.body.text || ""));
+    expect(sentTexts.some((text) => text.includes("Switched to session: Beta thread (session-b)"))).toBe(true);
+    expect(map.get("chat:82:user:3")).toBe("session-b");
   });
 
   test("session history cache is bounded and evicts oldest chat keys", async () => {
