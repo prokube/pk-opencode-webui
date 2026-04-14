@@ -1,6 +1,6 @@
 import * as fs from "node:fs"
 import * as fsp from "node:fs/promises"
-import { randomUUID } from "node:crypto"
+import { createHash, randomUUID } from "node:crypto"
 import * as nodePath from "node:path"
 import * as os from "node:os"
 
@@ -34,6 +34,15 @@ type TelegramSettingsStore = {
 type ValidationError = {
   field: string
   message: string
+}
+
+type TelegramRuntimeState = {
+  version: 1
+  appliedAt: string
+  pid: number
+  mode: "polling" | "webhook"
+  port: number
+  settingsFingerprint: string
 }
 
 const updateQueue = new Map<string, Promise<void>>()
@@ -315,8 +324,82 @@ function defaultSettingsPath() {
   return nodePath.join(configDir, "telegram-settings.json")
 }
 
+function defaultRuntimeStatePath() {
+  const home = process.env.HOME || os.homedir()
+  const configDir = process.env.OPENCODE_CONFIG_DIR || nodePath.join(home, ".config", "opencode")
+  return nodePath.join(configDir, "telegram-runtime-state.json")
+}
+
 export function telegramSettingsPath() {
   return env("TELEGRAM_SETTINGS_PATH") || defaultSettingsPath()
+}
+
+export function telegramRuntimeStatePath() {
+  return env("TELEGRAM_RUNTIME_STATE_PATH") || defaultRuntimeStatePath()
+}
+
+export function telegramSettingsFingerprint(settings: Record<string, unknown>) {
+  const stable = Object.fromEntries(telegramSettingFields.map((field) => [field, settings[field] ?? null]))
+  return createHash("sha256").update(JSON.stringify(stable)).digest("hex")
+}
+
+export function readDesiredTelegramSettingsFingerprint() {
+  return telegramSettingsFingerprint(loadTelegramBridgeSettings() as unknown as Record<string, unknown>)
+}
+
+function parseRuntimeState(text: string): TelegramRuntimeState | undefined {
+  if (!text.trim()) return
+  const data = JSON.parse(text) as Partial<TelegramRuntimeState>
+  if (data.version !== 1) return
+  if (typeof data.appliedAt !== "string" || !data.appliedAt.trim()) return
+  if (typeof data.pid !== "number" || !Number.isInteger(data.pid) || data.pid <= 0) return
+  if (data.mode !== "polling" && data.mode !== "webhook") return
+  if (typeof data.port !== "number" || !Number.isInteger(data.port) || data.port <= 0 || data.port > 65535) return
+  if (typeof data.settingsFingerprint !== "string" || !data.settingsFingerprint.trim()) return
+  return {
+    version: 1,
+    appliedAt: data.appliedAt,
+    pid: data.pid,
+    mode: data.mode,
+    port: data.port,
+    settingsFingerprint: data.settingsFingerprint,
+  }
+}
+
+export async function readTelegramRuntimeState() {
+  const path = telegramRuntimeStatePath()
+  const text = await Bun.file(path).text().catch(() => "")
+  return Promise.resolve()
+    .then(() => parseRuntimeState(text))
+    .catch(() => undefined)
+}
+
+export async function writeTelegramRuntimeState(config: {
+  mode: "polling" | "webhook"
+  port: number
+} & Record<string, unknown>) {
+  const path = telegramRuntimeStatePath()
+  const payload: TelegramRuntimeState = {
+    version: 1,
+    appliedAt: new Date().toISOString(),
+    pid: process.pid,
+    mode: config.mode,
+    port: config.port,
+    settingsFingerprint: telegramSettingsFingerprint(config),
+  }
+  await fsp.mkdir(nodePath.dirname(path), { recursive: true })
+  const tmpPath = nodePath.join(nodePath.dirname(path), `.${nodePath.basename(path)}.${process.pid}.${randomUUID()}.tmp`)
+  const handle = await fsp.open(tmpPath, "wx", 0o600)
+  try {
+    await handle.writeFile(`${JSON.stringify(payload, null, 2)}\n`, "utf-8")
+  } catch (error) {
+    await handle.close().catch(() => undefined)
+    await fsp.unlink(tmpPath).catch(() => undefined)
+    throw error
+  }
+  await handle.close()
+  await fsp.rename(tmpPath, path)
+  await fsp.chmod(path, 0o600).catch(() => undefined)
 }
 
 function envDefaults(): TelegramBridgeSettings {

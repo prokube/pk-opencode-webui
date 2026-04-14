@@ -1,5 +1,5 @@
 import { createTelegramSessionStore, telegramSessionKey, type TelegramPendingQuestion } from "./telegram-session-store"
-import { loadTelegramBridgeSettings } from "./telegram-settings"
+import { loadTelegramBridgeSettings, writeTelegramRuntimeState } from "./telegram-settings"
 
 type TelegramUpdate = {
   update_id: number
@@ -2372,6 +2372,9 @@ async function runWebhook(runtime: Runtime) {
 
 export async function startTelegramBridge() {
   const config = parseConfig()
+  await writeTelegramRuntimeState(config).catch((error) => {
+    console.warn("[TelegramBridge] failed to write runtime state", error)
+  })
   const store = createTelegramSessionStore(config.sessionStorePath)
   const runtime = { config, store }
   console.log(`[TelegramBridge] OpenCode API: ${config.openCodeUrl}`)

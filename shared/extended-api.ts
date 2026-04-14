@@ -9,7 +9,13 @@
 import * as fs from "node:fs"
 import * as nodePath from "node:path"
 import * as os from "node:os"
-import { readTelegramSettings, updateTelegramSettings } from "./telegram-settings"
+import {
+  readDesiredTelegramSettingsFingerprint,
+  readTelegramRuntimeState,
+  readTelegramSettings,
+  telegramRuntimeStatePath,
+  updateTelegramSettings,
+} from "./telegram-settings"
 
 type TelegramBridgeHealthResponse = {
   status?: "healthy" | "degraded"
@@ -85,6 +91,102 @@ function bridgeMessages(dependencies: {
     messages.push({ type: "dependency", text: dependencies.openCodeApi.message || "OpenCode API check failed" })
   }
   return messages
+}
+
+type TelegramRestartStatus = {
+  status: "applied" | "pending_restart"
+  pendingRestart: boolean
+  desiredSettingsFingerprint: string
+  appliedSettingsFingerprint: string | null
+  appliedAt: string | null
+  pid: number | null
+  mode: "polling" | "webhook" | null
+  port: number | null
+  runtimeStatePath: string
+}
+
+function wait(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+function restartCommand() {
+  const custom = (process.env.TELEGRAM_BRIDGE_RESTART_COMMAND || "").trim()
+  if (custom) {
+    return { cmd: ["sh", "-lc", custom], reason: "custom command" }
+  }
+  const servicePath = (process.env.TELEGRAM_BRIDGE_S6_SERVICE_PATH || "/run/service/telegram-bridge").trim() || "/run/service/telegram-bridge"
+  return { cmd: ["s6-svc", "-r", servicePath], reason: "s6 service restart" }
+}
+
+async function runRestartCommand() {
+  const timeout = Number.parseInt(process.env.TELEGRAM_BRIDGE_RESTART_TIMEOUT_MS || "15000", 10)
+  const timeoutMs = Number.isFinite(timeout) && timeout > 0 ? timeout : 15_000
+  const info = restartCommand()
+  const p = Bun.spawn({
+    cmd: info.cmd,
+    stdout: "pipe",
+    stderr: "pipe",
+  })
+  const done = await Promise.race([
+    p.exited.then((code) => ({ code, timedOut: false as const })),
+    wait(timeoutMs).then(() => ({ code: null, timedOut: true as const })),
+  ])
+  if (done.timedOut) {
+    p.kill()
+  }
+  const stdout = p.stdout
+    ? await new Response(p.stdout).text().catch(() => "")
+    : ""
+  const stderr = p.stderr
+    ? await new Response(p.stderr).text().catch(() => "")
+    : ""
+  return {
+    ...info,
+    timedOut: done.timedOut,
+    code: done.code,
+    stdout: stdout.trim(),
+    stderr: stderr.trim(),
+    ok: !done.timedOut && done.code === 0,
+  }
+}
+
+async function readTelegramRestartStatus(): Promise<TelegramRestartStatus> {
+  const desiredSettingsFingerprint = readDesiredTelegramSettingsFingerprint()
+  const runtime = await readTelegramRuntimeState()
+  const pendingRestart = runtime?.settingsFingerprint !== desiredSettingsFingerprint
+  return {
+    status: pendingRestart ? "pending_restart" : "applied",
+    pendingRestart,
+    desiredSettingsFingerprint,
+    appliedSettingsFingerprint: runtime?.settingsFingerprint || null,
+    appliedAt: runtime?.appliedAt || null,
+    pid: runtime?.pid || null,
+    mode: runtime?.mode || null,
+    port: runtime?.port || null,
+    runtimeStatePath: telegramRuntimeStatePath(),
+  }
+}
+
+async function waitForBridgeApply() {
+  const timeout = Number.parseInt(process.env.TELEGRAM_BRIDGE_APPLY_TIMEOUT_MS || "45000", 10)
+  const timeoutMs = Number.isFinite(timeout) && timeout > 0 ? timeout : 45_000
+  const pollMs = 1500
+  const started = Date.now()
+  while (Date.now() - started < timeoutMs) {
+    const status = await readTelegramRestartStatus()
+    const settings = await readTelegramSettings().catch(() => null)
+    const port = typeof settings?.settings?.port === "number" ? settings.settings.port : 4097
+    const health = await queryTelegramBridgeHealth(port)
+    if (!status.pendingRestart && health?.process?.status === "up") {
+      return { ok: true as const, status, health }
+    }
+    await wait(pollMs)
+  }
+  const status = await readTelegramRestartStatus()
+  const settings = await readTelegramSettings().catch(() => null)
+  const port = typeof settings?.settings?.port === "number" ? settings.settings.port : 4097
+  const health = await queryTelegramBridgeHealth(port)
+  return { ok: false as const, status, health }
 }
 
 /** Resolve the working directory from a query param, falling back to cwd */
@@ -375,6 +477,91 @@ export async function handleExtendedEndpoint(
       return Response.json({ error: "validation_failed", errors: result.errors }, { status: 400 })
     }
     return Response.json(result)
+  }
+
+  if (path === "/api/ext/telegram/restart" && method === "GET") {
+    const status = await readTelegramRestartStatus().catch((error) => {
+      console.error("[ExtAPI] telegram restart status read error", error)
+      return null
+    })
+    if (!status) {
+      return Response.json({ error: "failed to read telegram restart status" }, { status: 500 })
+    }
+
+    const settings = await readTelegramSettings().catch(() => null)
+    const port = typeof settings?.settings?.port === "number" ? settings.settings.port : 4097
+    const health = await queryTelegramBridgeHealth(port)
+    const bridgeReachable = Boolean(health)
+    const bridgeHealthy = health?.status === "healthy"
+    return Response.json({
+      ...status,
+      bridgeReachable,
+      bridgeHealthy,
+      checkedAt: new Date().toISOString(),
+    })
+  }
+
+  if (path === "/api/ext/telegram/restart" && method === "POST") {
+    const before = await readTelegramRestartStatus().catch((error) => {
+      console.error("[ExtAPI] telegram restart status read error", error)
+      return null
+    })
+    if (!before) {
+      return Response.json({ error: "failed to read telegram restart status" }, { status: 500 })
+    }
+    if (!before.pendingRestart) {
+      return Response.json({
+        ok: true,
+        restarted: false,
+        status: before,
+        message: "Telegram bridge is already using applied settings",
+      })
+    }
+
+    const run = await runRestartCommand()
+    if (!run.ok) {
+      const reason = run.timedOut
+        ? `restart command timed out after ${process.env.TELEGRAM_BRIDGE_RESTART_TIMEOUT_MS || "15000"}ms`
+        : `restart command failed with exit code ${run.code ?? "unknown"}`
+      return Response.json(
+        {
+          error: "restart_failed",
+          message: reason,
+          hint: "Verify telegram-bridge service supervision and restart command configuration",
+          command: run.cmd.join(" "),
+          commandReason: run.reason,
+          stdout: run.stdout,
+          stderr: run.stderr,
+        },
+        { status: 500 },
+      )
+    }
+
+    const applied = await waitForBridgeApply()
+    if (!applied.ok) {
+      return Response.json(
+        {
+          error: "restart_unhealthy",
+          message: "Telegram bridge restart triggered but service did not become healthy in time",
+          hint: "Check telegram-bridge logs and /api/ext/telegram/health for runtime failures",
+          command: run.cmd.join(" "),
+          commandReason: run.reason,
+          status: applied.status,
+          health: applied.health || null,
+          stdout: run.stdout,
+          stderr: run.stderr,
+        },
+        { status: 502 },
+      )
+    }
+
+    return Response.json({
+      ok: true,
+      restarted: true,
+      status: applied.status,
+      health: applied.health,
+      checkedAt: new Date().toISOString(),
+    })
   }
 
   if (path === "/api/ext/telegram/health" && method === "GET") {
