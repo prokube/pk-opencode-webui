@@ -95,7 +95,9 @@ export function Settings() {
       fetch(`${basePath.serverUrl}/api/ext/telegram/health`).catch(() => null),
     ])
 
-    const settings = await settingsRes?.json().catch(() => null) as TelegramSettingsResponse | null
+    const settings = settingsRes?.ok
+      ? await settingsRes.json().catch(() => null) as TelegramSettingsResponse | null
+      : null
     if (settings?.settings) {
       updateAlarmChannels({ telegram: settings.settings.telegramAlarmChannelEnabled })
     }
