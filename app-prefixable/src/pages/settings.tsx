@@ -9,8 +9,8 @@ import { useConfig } from "../context/config"
 import { MCPAddDialog } from "../components/mcp-add-dialog"
 import { ConfirmDialog } from "../components/confirm-dialog"
 import { Button } from "../components/ui/button"
-import { Check, Copy, Plug, GitBranch, Server, Globe, ExternalLink, Key, Search, X, Trash2, BookmarkPlus, Pencil, Palette, Sun, Moon, Monitor, BookOpen, Plus, Save, Volume2, Play, Settings2, Code, Shield, Cpu, Wrench, ChevronDown, ChevronRight, Info } from "lucide-solid"
-import { SOUND_OPTIONS, readSoundSettings, writeSoundSettings, playSound, primeAudioContext, SOUND_STORAGE_KEY, type SoundSettings } from "../utils/sound"
+import { Check, Copy, Plug, GitBranch, Server, Globe, ExternalLink, Key, Search, X, Trash2, BookmarkPlus, Pencil, Palette, Sun, Moon, Monitor, BookOpen, Plus, Save, Bell, Play, Settings2, Code, Shield, Cpu, Wrench, ChevronDown, ChevronRight, Info } from "lucide-solid"
+import { SOUND_OPTIONS, readNotificationSettings, writeNotificationSettings, playSound, primeAudioContext, NOTIFICATION_STORAGE_KEY, type NotificationSettings } from "../utils/notifications"
 import { useSavedPrompts, type PromptScope } from "../context/saved-prompts"
 import { useTheme } from "../context/theme"
 import { useServer } from "../context/server"
@@ -62,8 +62,8 @@ export function Settings() {
   const [promptToDelete, setPromptToDelete] = createSignal<string | null>(null)
   const [promptSaveError, setPromptSaveError] = createSignal<string | null>(null)
 
-  // Sound settings
-  const [soundSettings, setSoundSettings] = createSignal<SoundSettings>(readSoundSettings())
+  // Notification settings
+  const [notificationSettings, setNotificationSettings] = createSignal<NotificationSettings>(readNotificationSettings())
   const [alarmChannels, setAlarmChannels] = createSignal<AlarmChannels>(readAlarmChannels())
   const [telegramAlarmReady, setTelegramAlarmReady] = createSignal(false)
   const [telegramAlarmSaving, setTelegramAlarmSaving] = createSignal(false)
@@ -75,20 +75,20 @@ export function Settings() {
     return `${hint} Restart Telegram bridge before this change takes effect.`
   })
 
-  // Keep soundSettings in sync with localStorage changes from other tabs
+  // Keep notificationSettings in sync with localStorage changes from other tabs
   onMount(() => {
     function handleStorage(e: StorageEvent) {
-      if (e.key === SOUND_STORAGE_KEY) setSoundSettings(readSoundSettings())
+      if (e.key === NOTIFICATION_STORAGE_KEY) setNotificationSettings(readNotificationSettings())
       if (e.key === ALARM_CHANNELS_STORAGE_KEY) setAlarmChannels(readAlarmChannels())
     }
     window.addEventListener("storage", handleStorage)
     onCleanup(() => window.removeEventListener("storage", handleStorage))
   })
 
-  function updateSoundSettings(patch: Partial<SoundSettings>) {
-    const next = { ...soundSettings(), ...patch }
-    setSoundSettings(next)
-    writeSoundSettings(next)
+  function updateNotificationSettings(patch: Partial<NotificationSettings>) {
+    const next = { ...notificationSettings(), ...patch }
+    setNotificationSettings(next)
+    writeNotificationSettings(next)
   }
 
   function updateAlarmChannels(patch: Partial<AlarmChannels>) {
@@ -252,7 +252,7 @@ export function Settings() {
       setInstructionLoaded(true)
       loadInstructions()
     }
-    if (tabId === "sounds") {
+    if (tabId === "notifications") {
       void loadTelegramAlarmState()
     }
   }
@@ -267,7 +267,7 @@ export function Settings() {
       setInstructionLoaded(true)
       loadInstructions()
     }
-    if (activeTab() === "sounds") {
+    if (activeTab() === "notifications") {
       void loadTelegramAlarmState()
     }
   })
@@ -807,7 +807,7 @@ Add your project-specific instructions here.
       base.push({ id: "config", label: "Project Config", icon: () => <Settings2 class="w-4 h-4" />, scope: "Project" })
     }
     base.push({ id: "appearance", label: "Appearance", icon: () => <Palette class="w-4 h-4" />, scope: null })
-    base.push({ id: "sounds", label: "Sounds", icon: () => <Volume2 class="w-4 h-4" />, scope: null })
+    base.push({ id: "notifications", label: "Notifications", icon: () => <Bell class="w-4 h-4" />, scope: null })
     return base
   })
 
@@ -2385,12 +2385,12 @@ Add your project-specific instructions here.
             </div>
           </Show>
 
-          {/* Sounds Tab */}
-          <Show when={activeTab() === "sounds"}>
+          {/* Notifications Tab */}
+          <Show when={activeTab() === "notifications"}>
             <div class="space-y-6">
               <header>
                 <h1 class="text-lg font-medium" style={{ color: "var(--text-strong)" }}>
-                  Sound Notifications
+                  Notifications
                 </h1>
                 <p class="text-sm mt-1" style={{ color: "var(--text-weak)" }}>
                   Configure browser and Telegram alarm channels for notification-worthy events (task complete, permission request, agent question)
@@ -2491,23 +2491,23 @@ Add your project-specific instructions here.
                   </h2>
                   <button
                     onClick={() => {
-                      const enabling = !soundSettings().enabled
-                      updateSoundSettings({ enabled: enabling })
+                      const enabling = !notificationSettings().enabled
+                      updateNotificationSettings({ enabled: enabling })
                       if (enabling) primeAudioContext()
                     }}
                     class="relative w-10 h-5 rounded-full transition-colors"
                     style={{
-                      background: soundSettings().enabled ? "var(--interactive-base)" : "var(--surface-inset)",
+                      background: notificationSettings().enabled ? "var(--interactive-base)" : "var(--surface-inset)",
                     }}
                     role="switch"
-                    aria-checked={soundSettings().enabled}
+                    aria-checked={notificationSettings().enabled}
                     aria-label="Enable sound notifications"
                   >
                     <div
                       class="absolute top-0.5 w-4 h-4 rounded-full transition-all"
                       style={{
                         background: "var(--background-base)",
-                        left: soundSettings().enabled ? "calc(100% - 18px)" : "2px",
+                        left: notificationSettings().enabled ? "calc(100% - 18px)" : "2px",
                       }}
                     />
                   </button>
@@ -2529,14 +2529,14 @@ Add your project-specific instructions here.
                             for={`sound-option-${option.id}`}
                             class="flex items-center justify-between px-3 py-2 rounded-md transition-colors cursor-pointer"
                             style={{
-                              background: soundSettings().sound === option.id ? "var(--surface-inset)" : "transparent",
-                              border: soundSettings().sound === option.id ? "1px solid var(--interactive-base)" : "1px solid transparent",
+                              background: notificationSettings().sound === option.id ? "var(--surface-inset)" : "transparent",
+                              border: notificationSettings().sound === option.id ? "1px solid var(--interactive-base)" : "1px solid transparent",
                             }}
                             onMouseEnter={(e) => {
-                              if (soundSettings().sound !== option.id) e.currentTarget.style.background = "var(--surface-inset)"
+                              if (notificationSettings().sound !== option.id) e.currentTarget.style.background = "var(--surface-inset)"
                             }}
                             onMouseLeave={(e) => {
-                              if (soundSettings().sound !== option.id) e.currentTarget.style.background = "transparent"
+                              if (notificationSettings().sound !== option.id) e.currentTarget.style.background = "transparent"
                             }}
                           >
                             <div class="flex items-center gap-3">
@@ -2545,11 +2545,11 @@ Add your project-specific instructions here.
                                 type="radio"
                                 name="sound"
                                 value={option.id}
-                                checked={soundSettings().sound === option.id}
+                                checked={notificationSettings().sound === option.id}
                                 class="accent-[var(--interactive-base)]"
                                 onChange={(e) => {
                                   e.stopPropagation()
-                                  updateSoundSettings({ sound: option.id })
+                                  updateNotificationSettings({ sound: option.id })
                                   playSound(option.id)
                                 }}
                                 onClick={(e) => e.stopPropagation()}

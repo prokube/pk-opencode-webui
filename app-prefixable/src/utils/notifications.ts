@@ -1,5 +1,5 @@
 /**
- * Sound notification utilities.
+ * Notification utilities.
  *
  * Sounds are generated programmatically via the Web Audio API so no external
  * audio files are needed. Each sound option exposes a `play` function that
@@ -12,43 +12,43 @@ import { dispatchStorageEvent } from "./storage"
 // localStorage persistence
 // ---------------------------------------------------------------------------
 
-export const SOUND_STORAGE_KEY = "opencode.soundSettings"
+export const NOTIFICATION_STORAGE_KEY = "opencode.soundSettings"
 
-export interface SoundSettings {
+export interface NotificationSettings {
   enabled: boolean
   /** ID of the selected sound from SOUND_OPTIONS */
   sound: string
 }
 
-const DEFAULTS: SoundSettings = { enabled: false, sound: "chime" }
+const DEFAULTS: NotificationSettings = { enabled: false, sound: "chime" }
 
-export function readSoundSettings(): SoundSettings {
+export function readNotificationSettings(): NotificationSettings {
   if (typeof window === "undefined") return { ...DEFAULTS }
   try {
-    const raw = window.localStorage.getItem(SOUND_STORAGE_KEY)
+    const raw = window.localStorage.getItem(NOTIFICATION_STORAGE_KEY)
     if (!raw) return { ...DEFAULTS }
     const parsed = JSON.parse(raw) as unknown
     if (!parsed || typeof parsed !== "object") return { ...DEFAULTS }
-    const settings = parsed as Partial<SoundSettings>
+    const settings = parsed as Partial<NotificationSettings>
     return {
       enabled: typeof settings.enabled === "boolean" ? settings.enabled : DEFAULTS.enabled,
       sound: typeof settings.sound === "string" && SOUND_OPTIONS.some((o) => o.id === settings.sound) ? settings.sound : DEFAULTS.sound,
     }
   } catch {
-    try { window.localStorage.removeItem(SOUND_STORAGE_KEY) } catch { /* ignore */ }
+    try { window.localStorage.removeItem(NOTIFICATION_STORAGE_KEY) } catch { /* ignore */ }
     return { ...DEFAULTS }
   }
 }
 
-export function writeSoundSettings(settings: SoundSettings) {
+export function writeNotificationSettings(settings: NotificationSettings) {
   if (typeof window === "undefined") return
   const value = JSON.stringify(settings)
   try {
-    window.localStorage.setItem(SOUND_STORAGE_KEY, value)
+    window.localStorage.setItem(NOTIFICATION_STORAGE_KEY, value)
   } catch {
     return
   }
-  dispatchStorageEvent(SOUND_STORAGE_KEY, value)
+  dispatchStorageEvent(NOTIFICATION_STORAGE_KEY, value)
 }
 
 // ---------------------------------------------------------------------------
