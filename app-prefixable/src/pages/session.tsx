@@ -1287,6 +1287,21 @@ export function Session() {
   onMount(() => {
     const unsub = events.subscribe(
       (event: { type: string; properties: Record<string, unknown> }) => {
+        if (event.type === "worktree.ready") {
+          const props = event.properties as { name?: string; branch?: string };
+          const name = props.name?.trim() || "unknown";
+          const branch = props.branch?.trim() || "unknown";
+          showToast(`Worktree '${name}' ready on branch '${branch}'`);
+          return;
+        }
+
+        if (event.type === "worktree.failed") {
+          const props = event.properties as { message?: string };
+          const msg = props.message?.trim() || "unknown error";
+          showToast(`Worktree creation failed: ${msg}`, 4000);
+          return;
+        }
+
         const id = sessionId();
         if (!id) return;
 
