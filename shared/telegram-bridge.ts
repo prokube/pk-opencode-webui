@@ -13,6 +13,19 @@ type TelegramUpdate = {
       id: number
     }
   }
+  callback_query?: {
+    id: string
+    data?: string
+    from?: {
+      id: number
+    }
+    message?: {
+      message_id: number
+      chat?: {
+        id: number
+      }
+    }
+  }
 }
 
 type BridgeConfig = {
@@ -140,6 +153,12 @@ const pendingRetentionMs = 3 * 24 * 60 * 60 * 1000
 const pendingMaxItems = 60
 const pendingDigestMax = 8
 const sessionHistoryMax = 12
+const callbackIdLength = 24
+const callbackAckText = "Sending answer..."
+const inlineButtonMaxOptions = 20
+const inlineButtonTextMax = 48
+const callbackDataMax = 64
+const telegramMessageSoftLimit = 3900
 
 const telegramCommands = Object.freeze([
   Object.freeze({
@@ -315,18 +334,23 @@ function prunePending(items: TelegramPendingItem[], now: number): TelegramPendin
 }
 
 function pendingAdapter(runtime: Runtime) {
-  if (!runtime.store.pendingGet) return
-  if (!runtime.store.pendingSet) return
-  return {
-    get: runtime.store.pendingGet,
-    set: runtime.store.pendingSet,
+  if (runtime.store.inboxGet && runtime.store.inboxSet) {
+    return {
+      get: runtime.store.inboxGet,
+      set: runtime.store.inboxSet,
+    }
   }
+  if (runtime.store.pendingGet && runtime.store.pendingSet) {
+    return {
+      get: runtime.store.pendingGet,
+      set: runtime.store.pendingSet,
+    }
+  }
+  return
 }
 
 function pendingFallbackEnabled(runtime: Runtime): boolean {
-  if (runtime.store.pendingGet) return false
-  if (runtime.store.pendingSet) return false
-  return true
+  return !pendingAdapter(runtime)
 }
 
 async function pendingGet(runtime: Runtime, key: string): Promise<TelegramPendingItem[]> {
@@ -460,6 +484,13 @@ function pendingKey(chatId: number, userId?: number): string {
   return telegramSessionKey(chatId, userId)
 }
 
+function pendingLookupKeys(chatId: number, userId?: number): string[] {
+  const first = pendingKey(chatId, userId)
+  const second = pendingKey(chatId)
+  if (first === second) return [first]
+  return [first, second]
+}
+
 function trimQuestionList(list: TelegramPendingQuestion[]): TelegramPendingQuestion[] {
   const now = Date.now()
   return list
@@ -468,8 +499,7 @@ function trimQuestionList(list: TelegramPendingQuestion[]): TelegramPendingQuest
     .slice(-10)
 }
 
-async function readPendingQuestions(runtime: Runtime, chatId: number, userId?: number): Promise<TelegramPendingQuestion[]> {
-  const key = pendingKey(chatId, userId)
+async function readPendingQuestionsByKey(runtime: Runtime, key: string): Promise<TelegramPendingQuestion[]> {
   const stored = runtime.store.questionList
     ? await runtime.store.questionList(key)
     : pendingQuestions.get(key) || []
@@ -490,6 +520,11 @@ async function readPendingQuestions(runtime: Runtime, chatId: number, userId?: n
   return []
 }
 
+async function readPendingQuestions(runtime: Runtime, chatId: number, userId?: number): Promise<TelegramPendingQuestion[]> {
+  const key = pendingKey(chatId, userId)
+  return readPendingQuestionsByKey(runtime, key)
+}
+
 async function upsertPendingQuestion(runtime: Runtime, key: string, question: TelegramPendingQuestion) {
   if (runtime.store.questionUpsert) {
     await runtime.store.questionUpsert(key, question)
@@ -507,6 +542,10 @@ async function upsertPendingQuestion(runtime: Runtime, key: string, question: Te
 
 async function deletePendingQuestion(runtime: Runtime, chatId: number, requestId: string, userId?: number) {
   const key = pendingKey(chatId, userId)
+  await deletePendingQuestionByKey(runtime, key, requestId)
+}
+
+async function deletePendingQuestionByKey(runtime: Runtime, key: string, requestId: string) {
   if (runtime.store.questionDelete) {
     await runtime.store.questionDelete(key, requestId)
     return
@@ -518,6 +557,63 @@ async function deletePendingQuestion(runtime: Runtime, chatId: number, requestId
     return
   }
   pendingQuestions.delete(key)
+}
+
+function shortId(input: string): string {
+  let hash = 2166136261
+  for (const ch of input) {
+    hash ^= ch.charCodeAt(0)
+    hash = Math.imul(hash, 16777619)
+  }
+  return (hash >>> 0).toString(36).slice(0, 8)
+}
+
+function callbackQuestionId(requestId: string): string {
+  const clean = requestId.toLowerCase().replace(/[^a-z0-9]/g, "")
+  if (clean.length >= 12) return clean.slice(0, callbackIdLength)
+  const mixed = `${clean}${shortId(requestId)}`
+  return mixed.padStart(12, "0").slice(0, callbackIdLength)
+}
+
+function callbackData(question: TelegramPendingQuestion, questionIndex: number, optionIndex: number): string {
+  const row = questionIndex + 1
+  const option = optionIndex + 1
+  return `q:${question.callbackId}:${row}:${option}`
+}
+
+function parseCallbackData(input: string): { callbackId: string; questionIndex: number; optionIndex: number } | undefined {
+  const match = input.match(/^q:([a-z0-9]{6,24}):(\d+):(\d+)$/)
+  if (!match) return
+  const questionIndex = Number.parseInt(match[2] || "", 10)
+  const optionIndex = Number.parseInt(match[3] || "", 10)
+  if (!Number.isFinite(questionIndex) || !Number.isFinite(optionIndex)) return
+  if (questionIndex < 1 || optionIndex < 1) return
+  return {
+    callbackId: match[1] || "",
+    questionIndex: questionIndex - 1,
+    optionIndex: optionIndex - 1,
+  }
+}
+
+function questionMarkup(question: TelegramPendingQuestion): { inline_keyboard: Array<Array<{ text: string; callback_data: string }>> } | undefined {
+  if (question.questions.length !== 1) return
+  if (!question.callbackId) return
+  const row = question.questions[0]
+  if (!row) return
+  if (row.multiple) return
+  if (!row.options.length) return
+  if (row.options.length > inlineButtonMaxOptions) return
+  const inline = row.options.map((option, optionIndex) => {
+    const callback = callbackData(question, 0, optionIndex)
+    const safe = option.trim().slice(0, inlineButtonTextMax)
+    if (!safe) return
+    if (callback.length > callbackDataMax) return
+    return [{ text: safe, callback_data: callback }]
+  }).filter((item) => item !== undefined)
+  if (inline.length !== row.options.length) return
+  return {
+    inline_keyboard: inline as Array<Array<{ text: string; callback_data: string }>>,
+  }
 }
 
 function parsePendingQuestion(properties: Record<string, unknown>): TelegramPendingQuestion | undefined {
@@ -556,6 +652,7 @@ function parsePendingQuestion(properties: Record<string, unknown>): TelegramPend
   const now = Date.now()
   return {
     requestId,
+    callbackId: callbackQuestionId(requestId),
     sessionId,
     createdAt: now,
     expiresAt: now + pendingQuestionTtlMs,
@@ -610,6 +707,13 @@ function questionPromptText(question: TelegramPendingQuestion): string {
   lines.push("")
   lines.push("Use /status to see your current session.")
   return lines.join("\n")
+}
+
+function truncateTelegramText(input: string, size: number): string {
+  if (input.length <= size) return input
+  const suffix = "\n\n..."
+  if (size <= suffix.length) return input.slice(0, size)
+  return `${input.slice(0, size - suffix.length)}${suffix}`
 }
 
 function questionAnswerGuidance(question: TelegramPendingQuestion): string {
@@ -1238,6 +1342,122 @@ export async function readTelegramBridgeHealth(runtime: Runtime): Promise<Bridge
   }
 }
 
+async function sendTelegramQuestionPrompt(config: BridgeConfig, chatId: number, question: TelegramPendingQuestion) {
+  const markup = questionMarkup(question)
+  if (!markup) {
+    await sendTelegramMessage(config, chatId, questionPromptText(question))
+    return
+  }
+  const text = truncateTelegramText(questionPromptText(question), telegramMessageSoftLimit)
+  await telegramRequest(config, "sendMessage", {
+    chat_id: chatId,
+    text,
+    reply_markup: markup,
+  })
+}
+
+async function answerCallback(config: BridgeConfig, callbackId: string, text: string) {
+  await telegramRequest(config, "answerCallbackQuery", {
+    callback_query_id: callbackId,
+    text,
+    show_alert: false,
+  })
+}
+
+export async function handleCallbackUpdate(runtime: Runtime, update: TelegramUpdate) {
+  const callback = update.callback_query
+  const chatId = callback?.message?.chat?.id
+  const userId = callback?.from?.id
+  const callbackId = callback?.id
+  const data = callback?.data?.trim() || ""
+  if (!callbackId) return
+  const state = { acknowledged: false }
+  try {
+    if (!chatId || !userId || !data) {
+      await answerCallback(runtime.config, callbackId, "This button could not be processed.")
+      state.acknowledged = true
+      return
+    }
+    const parsed = parseCallbackData(data)
+    if (!parsed) {
+      await answerCallback(runtime.config, callbackId, "Unsupported button payload.")
+      state.acknowledged = true
+      return
+    }
+
+    const match = await pendingLookupKeys(chatId, userId)
+      .reduce(async (found, itemKey) => {
+        const previous = await found
+        if (previous) return previous
+        const queue = await readPendingQuestionsByKey(runtime, itemKey)
+        const pending = queue.find((item) => item.callbackId === parsed.callbackId)
+        if (!pending) return
+        return { itemKey, pending }
+      }, Promise.resolve(undefined as { itemKey: string; pending: TelegramPendingQuestion } | undefined))
+    if (!match) {
+      await answerCallback(runtime.config, callbackId, "This question has expired.")
+      state.acknowledged = true
+      await sendTelegramMessage(runtime.config, chatId, "That question is no longer pending. Wait for the next prompt or use /status.")
+      return
+    }
+
+    const pending = match.pending
+    const row = pending.questions[parsed.questionIndex]
+    const option = row?.options[parsed.optionIndex]
+    if (pending.questions.length !== 1 || row?.multiple) {
+      await answerCallback(runtime.config, callbackId, "Use text reply for this question.")
+      state.acknowledged = true
+      await sendTelegramMessage(runtime.config, chatId, `${questionAnswerGuidance(pending)}\n\n${questionPromptText(pending)}`)
+      return
+    }
+    if (!row || !option) {
+      await answerCallback(runtime.config, callbackId, "That option is no longer available.")
+      state.acknowledged = true
+      await sendTelegramMessage(runtime.config, chatId, `${questionAnswerGuidance(pending)}\n\n${questionPromptText(pending)}`)
+      return
+    }
+
+    const answers = [[option]]
+    await answerCallback(runtime.config, callbackId, callbackAckText)
+    state.acknowledged = true
+    await sendQuestionReply(runtime.config, pending.requestId, answers)
+      .then(async () => {
+        await deletePendingQuestionByKey(runtime, match.itemKey, pending.requestId)
+        const remaining = await readPendingQuestionsByKey(runtime, match.itemKey)
+        if (remaining.length) {
+          const next = remaining[0]
+          if (next) {
+            await sendTelegramQuestionPrompt(runtime.config, chatId, next)
+          }
+          return
+        }
+        await sendTelegramMessage(runtime.config, chatId, "Thanks, your answer was sent.")
+      })
+      .catch(async (error) => {
+        if (!isMissingQuestion(error)) throw error
+        await deletePendingQuestionByKey(runtime, match.itemKey, pending.requestId)
+        await sendTelegramMessage(runtime.config, chatId, "That question is no longer pending. Wait for the next prompt or use /status.")
+      })
+  } catch (error) {
+    console.error("[TelegramBridge] callback handling failed", { chatId, userId, callbackId, error })
+    const recovery = [
+      ...(state.acknowledged ? [] : [answerCallback(runtime.config, callbackId, "Sorry, this button could not be processed right now.")]),
+      ...(!chatId
+        ? []
+        : [sendTelegramMessage(runtime.config, chatId, "Sorry, something went wrong while processing that button. Please try again or reply with text.")]),
+    ]
+    await Promise.allSettled(recovery)
+  }
+}
+
+export async function handleTelegramUpdate(runtime: Runtime, update: TelegramUpdate) {
+  if (update.callback_query) {
+    await handleCallbackUpdate(runtime, update)
+    return
+  }
+  await handleTextUpdate(runtime, update)
+}
+
 export async function handleTextUpdate(runtime: Runtime, update: TelegramUpdate) {
   const config = runtime.config
   const message = update.message
@@ -1356,7 +1576,8 @@ export async function handleTextUpdate(runtime: Runtime, update: TelegramUpdate)
           if (remaining.length) {
             const next = remaining[0]
             if (next) {
-              await sendTelegramMessage(config, chatId, `Thanks, answer recorded.\n\n${questionPromptText(next)}`)
+              await sendTelegramMessage(config, chatId, "Thanks, answer recorded.")
+              await sendTelegramQuestionPrompt(config, chatId, next)
             }
             return
           }
@@ -1441,9 +1662,9 @@ async function notifyQuestion(runtime: Runtime, sessionId: string, question: Tel
       if (!(await notificationEnabled(runtime, notificationKey(parsed.chatId)))) continue
       if (!shouldNotify(runtime.config, parsed.chatId, kind, sessionId)) continue
       await upsertPendingQuestion(runtime, key, question)
-      const message = `${questionPromptText(question)}\n\nOpen ${sessionLabel(runtime.config, sessionId)}`
       await queueChatUpdate(String(parsed.chatId), async () => {
-        await sendTelegramMessage(runtime.config, parsed.chatId, message)
+        await sendTelegramQuestionPrompt(runtime.config, parsed.chatId, question)
+        await sendTelegramMessage(runtime.config, parsed.chatId, `Open ${sessionLabel(runtime.config, sessionId)}`)
       })
       stampNotification(parsed.chatId, kind, sessionId)
     } catch (error) {
@@ -1580,7 +1801,7 @@ async function runPolling(runtime: Runtime) {
         {
           offset,
           timeout: 30,
-          allowed_updates: ["message"],
+          allowed_updates: ["message", "callback_query"],
         },
         35_000,
       )) as TelegramUpdate[]
@@ -1589,9 +1810,10 @@ async function runPolling(runtime: Runtime) {
       for (const update of result || []) {
         offset = Math.max(offset, update.update_id + 1)
         const chatId = update.message?.chat?.id
+          || update.callback_query?.message?.chat?.id
         const run = !chatId
-          ? handleTextUpdate(runtime, update)
-          : queueChatUpdate(String(chatId), () => handleTextUpdate(runtime, update))
+          ? handleTelegramUpdate(runtime, update)
+          : queueChatUpdate(String(chatId), () => handleTelegramUpdate(runtime, update))
         runs.push(run)
       }
       if (runs.length) {
@@ -1634,7 +1856,7 @@ async function runWebhook(runtime: Runtime) {
     await telegramRequest(config, "setWebhook", {
       url: config.webhookUrl,
       secret_token: config.webhookSecret,
-      allowed_updates: ["message"],
+      allowed_updates: ["message", "callback_query"],
     })
     console.log(`[TelegramBridge] webhook registered: ${config.webhookUrl}`)
   }
@@ -1667,10 +1889,10 @@ async function runWebhook(runtime: Runtime) {
         return new Response("Bad Request", { status: 400 })
       }
 
-      const chatId = update.message?.chat?.id
+      const chatId = update.message?.chat?.id || update.callback_query?.message?.chat?.id
       const run = !chatId
-        ? handleTextUpdate(runtime, update)
-        : queueChatUpdate(String(chatId), () => handleTextUpdate(runtime, update))
+        ? handleTelegramUpdate(runtime, update)
+        : queueChatUpdate(String(chatId), () => handleTelegramUpdate(runtime, update))
       void run.catch((error) => {
         console.error("[TelegramBridge] webhook handling failed", error)
       })

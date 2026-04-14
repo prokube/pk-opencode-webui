@@ -185,7 +185,7 @@ describe("telegram session store", () => {
     expect(await second.notificationGet?.(key)).toBe(false)
   })
 
-  test("persists pending inbox entries across restarts", async () => {
+  test("persists inbox entries across restarts", async () => {
     const dir = await mkdtemp(join(tmpdir(), "telegram-session-store-"))
     const path = join(dir, "sessions.json")
     const key = telegramSessionKey(881)
@@ -193,7 +193,7 @@ describe("telegram session store", () => {
     files.push(dir)
 
     const first = createTelegramSessionStore(path)
-    await first.pendingSet?.(key, [
+    await first.inboxSet?.(key, [
       {
         id: "entry-1",
         kind: "question",
@@ -205,10 +205,32 @@ describe("telegram session store", () => {
     ])
 
     const second = createTelegramSessionStore(path)
-    const entries = await second.pendingGet?.(key)
+    const entries = await second.inboxGet?.(key)
     expect(entries).toHaveLength(1)
     expect(entries?.[0]?.id).toBe("entry-1")
     expect(entries?.[0]?.kind).toBe("question")
+  })
+
+  test("pending inbox aliases remain compatible", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "telegram-session-store-"))
+    const path = join(dir, "sessions.json")
+    const key = telegramSessionKey(882)
+    files.push(path)
+    files.push(dir)
+
+    const first = createTelegramSessionStore(path)
+    await first.pendingSet?.(key, [{
+      id: "entry-2",
+      kind: "permission",
+      sessionId: "session-b",
+      text: "Permission pending",
+      stampedAt: Date.now(),
+      resolved: false,
+    }])
+
+    const second = createTelegramSessionStore(path)
+    const entries = await second.pendingGet?.(key)
+    expect(entries?.map((item) => item.id)).toEqual(["entry-2"])
   })
 
   test("sessionKeys returns all mappings for a session", async () => {
@@ -270,6 +292,7 @@ describe("telegram session store", () => {
     const first = createTelegramSessionStore(path)
     await first.questionUpsert?.("chat:77", {
       requestId: "req-1",
+      callbackId: "cbreq1",
       sessionId: "session-a",
       createdAt: 1,
       expiresAt: Date.now() + 30_000,
@@ -331,6 +354,7 @@ describe("telegram session store", () => {
     const store = createTelegramSessionStore(path)
     await store.questionUpsert?.("chat:90:user:1", {
       requestId: "req-copy",
+      callbackId: "cbcopy1",
       sessionId: "session-copy",
       createdAt: 1,
       expiresAt: Date.now() + 30_000,
