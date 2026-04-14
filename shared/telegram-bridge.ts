@@ -1432,13 +1432,13 @@ async function switchPickerText(runtime: Runtime, chatKey: string, current?: str
     return "No known sessions for this chat/user mapping yet. Use /new to create one. You can also run /switch with no args to view recent sessions, or /switch [session-id|index] to switch."
   }
   const lines = await formatSessionList(runtime.config, list, current)
-  return `Recent sessions for this chat/user mapping:\n${lines.join("\n")}\n\nReply with /switch <index> for quick switching, or /switch <session-id> when needed.`
+  return `Recent sessions for this chat/user mapping:\n${lines.join("\n")}\n\nUse /switch [session-id|index] to switch. Tip: run /switch with no args for this recent-session picker.`
 }
 
 function resolveSwitchTarget(target: string, list: string[]): { sessionId?: string; error?: string; fromKnownList: boolean } {
   const value = target.trim()
   if (!value) {
-    return { error: "Usage: /switch <session-id|index>", fromKnownList: false }
+    return { error: "Usage: /switch [session-id|index]. Run /switch with no args to pick from recent sessions.", fromKnownList: false }
   }
   if (/^\d+$/.test(value)) {
     const index = Number.parseInt(value, 10)
@@ -1972,8 +1972,7 @@ export async function handleTextUpdate(runtime: Runtime, update: TelegramUpdate)
       await runtime.store.set(key, next)
       cacheSession(config, key, next)
       await rememberSession(runtime, key, next)
-      const title = await safeSessionTitle(config, next)
-      await sendTelegramMessage(config, chatId, `Started a new session: ${formatSessionDisplay(next, title)}`)
+      await sendTelegramMessage(config, chatId, `Started a new session: ${formatSessionDisplay(next)}`)
       return true
     }
     if (known?.name === "sessions") {
@@ -2012,7 +2011,7 @@ export async function handleTextUpdate(runtime: Runtime, update: TelegramUpdate)
       }
       const next = resolved.sessionId
       if (!next) {
-        await sendTelegramMessage(config, chatId, "Usage: /switch <session-id|index>")
+        await sendTelegramMessage(config, chatId, "Usage: /switch [session-id|index]. Run /switch with no args to pick from recent sessions.")
         return true
       }
       if (!resolved.fromKnownList && !(await sessionExists(config, next))) {

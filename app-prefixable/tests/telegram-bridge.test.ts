@@ -638,6 +638,7 @@ describe("telegram bridge config and cache", () => {
       expect(sentTexts[0]).toBe("Current session: session-1");
       expect(sentTexts[1]).toBe("Started a new session: session-2");
       expect(sentTexts[2]).toBe("Unknown command /statuz. Try /status, /sessions or use /help.");
+      expect(calls.filter((x) => x.url.includes("/session/")).length).toBe(1);
       expect(map.get("chat:7:user:9")).toBe("session-2");
     } finally {
       globalThis.fetch = originalFetch;
@@ -1984,7 +1985,8 @@ describe("telegram bridge config and cache", () => {
       expect(sent[0]).toContain("Recent sessions for this chat/user mapping:");
       expect(sent[0]).toContain("1. session-a (current)");
       expect(sent[0]).toContain("2. session-b");
-      expect(sent[0]).toContain("Reply with /switch <index> for quick switching");
+      expect(sent[0]).toContain("Use /switch [session-id|index] to switch.");
+      expect(sent[0]).toContain("run /switch with no args for this recent-session picker");
       expect(sent[1]).toBe("Invalid session index: 9. Available indices: 1-2.");
       expect(historyWrites).toBe(0);
       expect(map.get("chat:33:user:2")).toBe("session-a");
@@ -2050,7 +2052,8 @@ describe("telegram bridge config and cache", () => {
     expect(sent).toContain("Recent sessions for this chat/user mapping:");
     expect(sent).toContain("1. Alpha (session-a) (current)");
     expect(sent).toContain("2. Beta (session-b)");
-    expect(sent).toContain("Reply with /switch <index> for quick switching");
+    expect(sent).toContain("Use /switch [session-id|index] to switch.");
+    expect(sent).toContain("run /switch with no args for this recent-session picker");
   });
 
   test("/switch empty-state copy advertises optional argument usage", async () => {
