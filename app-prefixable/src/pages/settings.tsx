@@ -14,6 +14,7 @@ import { SOUND_OPTIONS, readSoundSettings, writeSoundSettings, playSound, primeA
 import { useSavedPrompts, type PromptScope } from "../context/saved-prompts"
 import { useTheme } from "../context/theme"
 import { useServer } from "../context/server"
+import { usePermission } from "../context/permission"
 import { ServerDialog } from "../components/server-dialog"
 import { SETTINGS_BASE_TABS } from "./settings-tabs"
 import { TelegramSettings } from "../components/telegram-settings"
@@ -24,6 +25,7 @@ export function Settings() {
   const providers = useProviders()
   const mcp = useMCP()
   const { client, global, url, directory } = useSDK()
+  const permission = usePermission()
   const theme = useTheme()
   const [selectedProvider, setSelectedProvider] = createSignal<string | null>(null)
   const [apiKey, setApiKey] = createSignal("")
@@ -859,6 +861,49 @@ Add your project-specific instructions here.
                   Connect AI providers to enable chat functionality
                 </p>
               </header>
+
+              <section
+                class="rounded-lg overflow-hidden"
+                style={{
+                  background: "var(--background-base)",
+                  border: "1px solid var(--border-base)",
+                }}
+              >
+                <div class="px-4 py-3" style={{ "border-bottom": "1px solid var(--border-base)" }}>
+                  <h2 class="text-sm font-medium" style={{ color: "var(--text-strong)" }}>
+                    Permissions
+                  </h2>
+                </div>
+                <div class="px-4 py-3 flex items-center justify-between gap-4">
+                  <div class="flex-1 min-w-0">
+                    <h3 class="text-sm font-medium" style={{ color: "var(--text-strong)" }}>
+                      Auto-accept permissions
+                    </h3>
+                    <p class="text-xs mt-0.5" style={{ color: "var(--text-weak)" }}>
+                      Automatically approve file operation permissions for this project
+                    </p>
+                  </div>
+                  <button
+                    onClick={() => permission.toggleAutoAccept()}
+                    disabled={!directory}
+                    role="switch"
+                    aria-checked={permission.autoAcceptEnabled()}
+                    aria-label="Auto-accept permissions"
+                    class="relative w-10 h-5 rounded-full transition-colors disabled:opacity-50"
+                    style={{
+                      background: permission.autoAcceptEnabled() ? "var(--interactive-base)" : "var(--surface-inset)",
+                    }}
+                  >
+                    <div
+                      class="absolute top-0.5 w-4 h-4 rounded-full transition-all"
+                      style={{
+                        background: "var(--background-base)",
+                        left: permission.autoAcceptEnabled() ? "calc(100% - 18px)" : "2px",
+                      }}
+                    />
+                  </button>
+                </div>
+              </section>
 
               {/* Connected Providers */}
               <section
