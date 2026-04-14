@@ -398,7 +398,35 @@ export async function writeTelegramRuntimeState(config: {
     throw error
   }
   await handle.close()
-  await fsp.rename(tmpPath, path)
+  await fsp.rename(tmpPath, path).catch(async (error) => {
+    const code = errorCode(error)
+    if (!isReplaceConflict(code)) {
+      await fsp.unlink(tmpPath).catch(() => undefined)
+      throw error
+    }
+
+    const backupPath = `${path}.bak.${Date.now()}.${randomUUID()}`
+    const moved = await fsp.rename(path, backupPath).then(
+      () => true,
+      async (backupError) => {
+        if (errorCode(backupError) === "ENOENT") return false
+        await fsp.unlink(tmpPath).catch(() => undefined)
+        throw backupError
+      },
+    )
+
+    await fsp.rename(tmpPath, path).catch(async (replaceError) => {
+      if (moved) {
+        await fsp.rename(backupPath, path).catch(() => undefined)
+      }
+      await fsp.unlink(tmpPath).catch(() => undefined)
+      throw replaceError
+    })
+
+    if (moved) {
+      await fsp.unlink(backupPath).catch(() => undefined)
+    }
+  })
   await fsp.chmod(path, 0o600).catch(() => undefined)
 }
 

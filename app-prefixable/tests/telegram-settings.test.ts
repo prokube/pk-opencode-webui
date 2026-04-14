@@ -1,10 +1,10 @@
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test"
-import { mkdtemp, readdir, rm, writeFile } from "node:fs/promises"
+import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises"
 import { join } from "node:path"
 import { tmpdir } from "node:os"
 import * as fsp from "node:fs/promises"
 import { handleExtendedEndpoint } from "../../shared/extended-api"
-import { readDesiredTelegramSettingsFingerprint } from "../../shared/telegram-settings"
+import { readDesiredTelegramSettingsFingerprint, writeTelegramRuntimeState } from "../../shared/telegram-settings"
 
 const envKeys = [
   "TELEGRAM_SETTINGS_PATH",
@@ -606,6 +606,45 @@ describe("telegram settings extended API", () => {
     }
   })
 
+  test("runtime state write replaces existing file when rename reports conflict", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "telegram-settings-"))
+    const path = join(dir, "telegram-runtime-state.json")
+    cleanupPaths.push(dir)
+
+    process.env.TELEGRAM_RUNTIME_STATE_PATH = path
+
+    await writeTelegramRuntimeState({ mode: "polling", port: 4097 })
+
+    const realRename = fsp.rename
+    let injected = false
+    const renameSpy = spyOn(fsp, "rename").mockImplementation(async (from, to) => {
+      const src = String(from)
+      const dest = String(to)
+      if (!injected && src.endsWith(".tmp") && dest === path) {
+        injected = true
+        const err = new Error("mock replace conflict") as Error & { code?: string }
+        err.code = "EPERM"
+        throw err
+      }
+      return realRename(from, to)
+    })
+
+    try {
+      await writeTelegramRuntimeState({ mode: "webhook", port: 4188 })
+
+      const text = await readFile(path, "utf-8")
+      const data = JSON.parse(text) as { mode: string; port: number }
+      expect(data.mode).toBe("webhook")
+      expect(data.port).toBe(4188)
+
+      const files = await readdir(dir)
+      const leftovers = files.filter((entry) => entry.startsWith(".telegram-runtime-state.json.") && entry.endsWith(".tmp"))
+      expect(leftovers).toEqual([])
+    } finally {
+      renameSpy.mockRestore()
+    }
+  })
+
   test("GET falls back to env when persisted token and webhookSecret are whitespace", async () => {
     const dir = await mkdtemp(join(tmpdir(), "telegram-settings-"))
     const path = join(dir, "telegram-settings.json")
@@ -924,6 +963,72 @@ describe("telegram settings extended API", () => {
     }
   })
 
+  test("GET telegram restart status probes applied runtime port first", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "telegram-settings-"))
+    cleanupPaths.push(dir)
+    const settingsPath = join(dir, "telegram-settings.json")
+    const runtimeStatePath = join(dir, "telegram-runtime-state.json")
+
+    process.env.TELEGRAM_SETTINGS_PATH = settingsPath
+    process.env.TELEGRAM_RUNTIME_STATE_PATH = runtimeStatePath
+
+    await writeFile(
+      settingsPath,
+      JSON.stringify(
+        {
+          version: 1,
+          updatedAt: new Date().toISOString(),
+          settings: { port: 4999 },
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    )
+
+    const desired = readDesiredTelegramSettingsFingerprint()
+    await writeFile(
+      runtimeStatePath,
+      JSON.stringify(
+        {
+          version: 1,
+          appliedAt: new Date().toISOString(),
+          pid: 123,
+          mode: "polling",
+          port: 4097,
+          settingsFingerprint: `${desired}-stale`,
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    )
+
+    const fetchSpy = spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+      const url = String(input)
+      if (url.includes(":4097/health")) {
+        return new Response(JSON.stringify({ status: "healthy", process: { status: "up" } }), { status: 200 })
+      }
+      throw new Error("bridge unavailable")
+    })
+
+    try {
+      const response = await handleExtendedEndpoint(
+        "/api/ext/telegram/restart",
+        "GET",
+        new URL("http://127.0.0.1/api/ext/telegram/restart"),
+        new Request("http://127.0.0.1/api/ext/telegram/restart"),
+      )
+
+      expect(response?.status).toBe(200)
+      const data = await response?.json()
+      expect(data.bridgeReachable).toBe(true)
+      expect(data.bridgeHealthy).toBe(true)
+    } finally {
+      fetchSpy.mockRestore()
+    }
+  })
+
   test("POST telegram restart requires explicit authorization", async () => {
     const dir = await mkdtemp(join(tmpdir(), "telegram-settings-"))
     cleanupPaths.push(dir)
@@ -1148,6 +1253,66 @@ describe("telegram settings extended API", () => {
       expect(data.health.process.status).toBe("up")
     } finally {
       fetchSpy.mockRestore()
+    }
+  })
+
+  test("POST telegram restart returns deterministic response when poll status read fails", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "telegram-settings-"))
+    cleanupPaths.push(dir)
+    const settingsPath = join(dir, "telegram-settings.json")
+    const runtimeStatePath = join(dir, "telegram-runtime-state.json")
+
+    process.env.TELEGRAM_SETTINGS_PATH = settingsPath
+    process.env.TELEGRAM_RUNTIME_STATE_PATH = runtimeStatePath
+    process.env.TELEGRAM_BRIDGE_APPLY_TIMEOUT_MS = "1200"
+    process.env.TELEGRAM_BRIDGE_ALLOW_UNAUTH_RESTART = "true"
+
+    const desired = readDesiredTelegramSettingsFingerprint()
+    await writeFile(
+      runtimeStatePath,
+      JSON.stringify(
+        {
+          version: 1,
+          appliedAt: new Date().toISOString(),
+          pid: 222,
+          mode: "polling",
+          port: 4097,
+          settingsFingerprint: `${desired}-old`,
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    )
+
+    const spawnSpy = spyOn(Bun, "spawn").mockImplementation(() => {
+      process.env.OPENCODE_API_URL = "not-a-url"
+      return {
+        exited: Promise.resolve(0),
+        stdout: undefined,
+        stderr: undefined,
+        kill: () => undefined,
+      } as unknown as ReturnType<typeof Bun.spawn>
+    })
+    const fetchSpy = spyOn(globalThis, "fetch").mockImplementation(async () => {
+      throw new Error("bridge unavailable")
+    })
+
+    try {
+      const response = await handleExtendedEndpoint(
+        "/api/ext/telegram/restart",
+        "POST",
+        new URL("http://127.0.0.1/api/ext/telegram/restart"),
+        new Request("http://127.0.0.1/api/ext/telegram/restart", { method: "POST" }),
+      )
+
+      expect(response?.status).toBe(502)
+      const data = await response?.json()
+      expect(data.error).toBe("restart_unhealthy")
+      expect(data.status).toBeNull()
+    } finally {
+      fetchSpy.mockRestore()
+      spawnSpy.mockRestore()
     }
   })
 })

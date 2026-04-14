@@ -103,6 +103,21 @@ type TelegramRestartStatus = {
   port: number | null
 }
 
+type TelegramSettingsResponse = Awaited<ReturnType<typeof readTelegramSettings>>
+
+function defaultTelegramBridgePort() {
+  return 4097
+}
+
+function telegramBridgePortFromSettings(settings: TelegramSettingsResponse | null) {
+  return typeof settings?.settings?.port === "number" ? settings.settings.port : defaultTelegramBridgePort()
+}
+
+function restartProbePort(status: TelegramRestartStatus | null, settings: TelegramSettingsResponse | null) {
+  if (typeof status?.port === "number") return status.port
+  return telegramBridgePortFromSettings(settings)
+}
+
 function wait(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms))
 }
@@ -224,21 +239,31 @@ async function waitForBridgeApply() {
   const timeoutMs = Number.isFinite(timeout) && timeout > 0 ? timeout : 45_000
   const pollMs = 1500
   const started = Date.now()
+  const readStatus = () =>
+    readTelegramRestartStatus()
+      .then((status) => ({ status, error: null as string | null }))
+      .catch((error) => {
+        const message = error instanceof Error ? error.message : String(error)
+        console.error("[ExtAPI] telegram restart status poll error", error)
+        return { status: null, error: message }
+      })
   while (Date.now() - started < timeoutMs) {
-    const status = await readTelegramRestartStatus()
+    const read = await readStatus()
+    const status = read.status
     const settings = await readTelegramSettings().catch(() => null)
-    const port = typeof settings?.settings?.port === "number" ? settings.settings.port : 4097
+    const port = restartProbePort(status, settings)
     const health = await queryTelegramBridgeHealth(port)
-    if (!status.pendingRestart && health?.process?.status === "up") {
+    if (status && !status.pendingRestart && health?.process?.status === "up") {
       return { ok: true as const, status, health }
     }
     await wait(pollMs)
   }
-  const status = await readTelegramRestartStatus()
+  const read = await readStatus()
+  const status = read.status
   const settings = await readTelegramSettings().catch(() => null)
-  const port = typeof settings?.settings?.port === "number" ? settings.settings.port : 4097
+  const port = restartProbePort(status, settings)
   const health = await queryTelegramBridgeHealth(port)
-  return { ok: false as const, status, health }
+  return { ok: false as const, status, health, error: read.error }
 }
 
 /** Resolve the working directory from a query param, falling back to cwd */
@@ -541,7 +566,7 @@ export async function handleExtendedEndpoint(
     }
 
     const settings = await readTelegramSettings().catch(() => null)
-    const port = typeof settings?.settings?.port === "number" ? settings.settings.port : 4097
+    const port = restartProbePort(status, settings)
     const health = await queryTelegramBridgeHealth(port)
     const bridgeReachable = Boolean(health)
     const bridgeHealthy = health?.status === "healthy"
