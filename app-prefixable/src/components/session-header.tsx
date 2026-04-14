@@ -109,6 +109,8 @@ export function SessionHeader(props: SessionHeaderProps) {
                     onMouseEnter={(e) => ((e.currentTarget as HTMLElement).style.background = "var(--surface-inset)")}
                     onMouseLeave={(e) => ((e.currentTarget as HTMLElement).style.background = "transparent")}
                     title="Select model variant"
+                    aria-label="Select model variant"
+                    aria-haspopup="dialog"
                   >
                     {props.modelLabel}
                     <Show when={props.variantLabel}>
@@ -185,6 +187,7 @@ export function SessionHeader(props: SessionHeaderProps) {
 
         <Show when={props.canPickVariant}>
           <button
+            type="button"
             onClick={props.onCycleVariant}
             class="flex items-center gap-1.5 px-2 py-1 text-xs rounded-md transition-colors"
             style={{
@@ -194,6 +197,8 @@ export function SessionHeader(props: SessionHeaderProps) {
             onMouseEnter={(e) => ((e.currentTarget as HTMLElement).style.background = "var(--surface-inset)")}
             onMouseLeave={(e) => ((e.currentTarget as HTMLElement).style.background = "transparent")}
             title="Cycle model variant (Alt+V)"
+            aria-label="Cycle model variant"
+            aria-keyshortcuts="Alt+V"
           >
             <span>Variant</span>
           </button>
