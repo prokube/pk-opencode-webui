@@ -893,6 +893,10 @@ function touchSessionHistory(runtime: Runtime, chatKey: string, list: string[]) 
   }
 }
 
+function logSessionHistoryError(chatKey: string, op: "load" | "store", error: unknown) {
+  console.error(`[TelegramBridge] session history ${op} failed`, { chatKey, error })
+}
+
 async function loadSessionHistory(runtime: Runtime, chatKey: string): Promise<string[]> {
   const cached = sessionHistory.get(chatKey)
   if (cached) {
@@ -900,7 +904,12 @@ async function loadSessionHistory(runtime: Runtime, chatKey: string): Promise<st
     return cached
   }
   if (!runtime.store.historyGet) return []
-  const stored = normalizeSessionHistory(await runtime.store.historyGet(chatKey))
+  const stored = await runtime.store.historyGet(chatKey)
+    .then((list) => normalizeSessionHistory(list))
+    .catch((error) => {
+      logSessionHistoryError(chatKey, "load", error)
+      return []
+    })
   if (!stored.length) return []
   touchSessionHistory(runtime, chatKey, stored)
   return stored
@@ -910,15 +919,17 @@ async function setSessionHistory(runtime: Runtime, chatKey: string, input: strin
   const next = normalizeSessionHistory(input)
   if (!next.length) {
     sessionHistory.delete(chatKey)
-    if (runtime.store.historySet) {
-      await runtime.store.historySet(chatKey, [])
-    }
+    if (!runtime.store.historySet) return []
+    await runtime.store.historySet(chatKey, []).catch((error) => {
+      logSessionHistoryError(chatKey, "store", error)
+    })
     return []
   }
   touchSessionHistory(runtime, chatKey, next)
-  if (runtime.store.historySet) {
-    await runtime.store.historySet(chatKey, next)
-  }
+  if (!runtime.store.historySet) return next
+  await runtime.store.historySet(chatKey, next).catch((error) => {
+    logSessionHistoryError(chatKey, "store", error)
+  })
   return next
 }
 
@@ -933,6 +944,12 @@ async function rememberSession(runtime: Runtime, chatKey: string, sessionId: str
   if (prior[0] === sessionId) return prior
   const next = normalizeSessionHistory([sessionId, ...prior])
   return setSessionHistory(runtime, chatKey, next)
+}
+
+function rememberSessionWithoutBlocking(runtime: Runtime, chatKey: string, sessionId: string) {
+  void rememberSession(runtime, chatKey, sessionId).catch((error) => {
+    console.error("[TelegramBridge] session history update failed", { chatKey, sessionId, error })
+  })
 }
 
 async function sessionsText(runtime: Runtime, chatKey: string, current?: string): Promise<string> {
@@ -1018,7 +1035,7 @@ async function sessionForChat(runtime: Runtime, chatKey: string): Promise<string
   const mapped = await runtime.store.get(chatKey)
   if (mapped) {
     cacheSession(config, chatKey, mapped)
-    await rememberSession(runtime, chatKey, mapped)
+    rememberSessionWithoutBlocking(runtime, chatKey, mapped)
   }
 
   const cached = sessionFromCache(config, chatKey)
@@ -1031,10 +1048,9 @@ async function sessionForChat(runtime: Runtime, chatKey: string): Promise<string
     .then((id) => {
       return runtime.store.set(chatKey, id).then(() => {
         cacheSession(config, chatKey, id)
-        return rememberSession(runtime, chatKey, id).then(() => {
-          creatingSessions.delete(chatKey)
-          return id
-        })
+        rememberSessionWithoutBlocking(runtime, chatKey, id)
+        creatingSessions.delete(chatKey)
+        return id
       })
     })
     .catch((error) => {
