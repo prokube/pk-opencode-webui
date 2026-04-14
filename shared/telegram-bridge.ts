@@ -1575,16 +1575,6 @@ async function savedPrompts(runtime: Runtime, key: string): Promise<{ prompts: S
     if (merged.length) {
       return { prompts: merged }
     }
-    if (directory) {
-      return {
-        prompts: [],
-        guidance: "No saved prompts found for this context. If prompts exist in another project, run /status in that project first or configure Telegram directory in bridge settings.",
-      }
-    }
-    return {
-      prompts: [],
-      guidance: fallbackGuidance || "No saved prompts found. If your prompts are project-scoped, run /status in the target project first or configure Telegram directory in bridge settings.",
-    }
   }
 
   return {
