@@ -95,6 +95,12 @@ type CachedSession = {
   expiresAt: number
 }
 
+type CachedSessionInfo = {
+  exists: boolean
+  title: string | null
+  expiresAt: number
+}
+
 function healthAccessPublic() {
   const value = (process.env.TELEGRAM_HEALTH_PUBLIC || "").trim().toLowerCase()
   if (value === "1") return true
@@ -153,6 +159,7 @@ const fallbackNotifications = new Map<string, boolean>()
 const fallbackPending = new Map<string, TelegramPendingItem[]>()
 const pendingQuestions = new Map<string, TelegramPendingQuestion[]>()
 const sessionHistory = new Map<string, string[]>()
+const sessionInfo = new Map<string, CachedSessionInfo>()
 
 let pendingEntrySeq = 0
 
@@ -166,6 +173,7 @@ const sessionHistoryMax = 12
 const recentDefaultCount = 5
 const recentMaxCount = 12
 const recentPartTextMax = 500
+const sessionTitleInlineMax = 120
 const callbackIdLength = 24
 const callbackAckText = "Sending answer..."
 const inlineButtonMaxOptions = 20
@@ -195,7 +203,7 @@ const telegramCommands = Object.freeze([
   Object.freeze({
     name: "switch",
     text: "Switch this chat/user mapping to an existing session",
-    args: "<session-id|index>",
+    args: "[session-id|index]",
   }),
   Object.freeze({
     name: "notify",
@@ -1202,11 +1210,120 @@ async function sessionsText(runtime: Runtime, chatKey: string, current?: string)
   if (!list.length) {
     return "No known sessions for this chat/user mapping yet. Use /new to create one, then /sessions to view options."
   }
-  const lines = list.map((sessionId, index) => {
-    const suffix = current === sessionId ? " (current)" : ""
-    return `${index + 1}. ${sessionId}${suffix}`
+  const lines = await formatSessionList(runtime.config, list, current)
+  return `Known sessions for this chat/user mapping:\n${lines.join("\n")}\n\nUse /switch [session-id|index] to switch. Tip: run /switch to pick from recent sessions quickly.`
+}
+
+function trimSessionTitle(value: unknown): string | undefined {
+  if (typeof value !== "string") return
+  const text = value.trim()
+  if (!text) return
+  return text
+}
+
+function pruneExpiredSessionInfo(now: number) {
+  for (const [key, value] of sessionInfo) {
+    if (value.expiresAt > now) continue
+    sessionInfo.delete(key)
+  }
+}
+
+function cacheSessionInfo(config: BridgeConfig, sessionId: string, info: SessionLookup) {
+  const now = Date.now()
+  const expiresAt = now + config.sessionCacheTtlMs
+  sessionInfo.delete(sessionId)
+  sessionInfo.set(sessionId, { exists: info.exists, title: info.title || null, expiresAt })
+  pruneExpiredSessionInfo(now)
+  for (const key of sessionInfo.keys()) {
+    if (sessionInfo.size <= config.sessionCacheMax * 2) return
+    sessionInfo.delete(key)
+  }
+}
+
+function cachedSessionLookup(sessionId: string): SessionLookup | undefined {
+  const cached = sessionInfo.get(sessionId)
+  if (!cached) return
+  if (cached.expiresAt <= Date.now()) {
+    sessionInfo.delete(sessionId)
+    return
+  }
+  return {
+    exists: cached.exists,
+    title: cached.title || undefined,
+  }
+}
+
+function formatSessionDisplay(sessionId: string, title?: string): string {
+  const id = sessionId.trim()
+  if (!title) return id
+  const single = title.replace(/\s+/g, " ").trim()
+  if (!single) return id
+  const safe = truncateTelegramInlineText(single, sessionTitleInlineMax)
+  return `${safe} (${id})`
+}
+
+async function formatSessionList(config: BridgeConfig, list: string[], current?: string): Promise<string[]> {
+  const active = current?.trim()
+  const details = await Promise.all(list.map(async (sessionId) => {
+    const title = await safeSessionTitle(config, sessionId)
+    return formatSessionDisplay(sessionId, title)
+  }))
+  return list.map((sessionId, index) => {
+    const suffix = active === sessionId.trim() ? " (current)" : ""
+    return `${index + 1}. ${details[index]}${suffix}`
   })
-  return `Known sessions for this chat/user mapping:\n${lines.join("\n")}\n\nUse /switch <index|session-id> to switch.`
+}
+
+function normalizeSessionLookupId(sessionId: string): string | undefined {
+  const id = sessionId.trim()
+  if (!id) return
+  return id
+}
+
+type SessionLookup = {
+  exists: boolean
+  title?: string
+}
+
+async function readSessionInfo(config: BridgeConfig, sessionId: string): Promise<SessionLookup> {
+  const id = sessionId.trim()
+  if (!id) return { exists: false }
+  const url = opencodeUrl(config, `/session/${encodeURIComponent(id)}`)
+  if (config.directory) {
+    url.searchParams.set("directory", config.directory)
+  }
+  const res = await fetch(url, {
+    method: "GET",
+    signal: AbortSignal.timeout(12_000),
+  })
+  if (res.status === 404) return { exists: false }
+  if (!res.ok) {
+    const body = await res.text().catch(() => "")
+    throw new Error(`OpenCode session lookup failed (${res.status}): ${body.slice(0, 300)}`)
+  }
+  const payload = await res.json().catch(() => ({})) as { title?: unknown }
+  return {
+    exists: true,
+    title: trimSessionTitle(payload.title),
+  }
+}
+
+async function sessionTitle(config: BridgeConfig, sessionId: string): Promise<string | undefined> {
+  const id = normalizeSessionLookupId(sessionId)
+  if (!id) return
+  const cached = cachedSessionLookup(id)
+  if (cached) {
+    if (!cached.exists) return
+    return cached.title
+  }
+  const loaded = await readSessionInfo(config, id)
+  cacheSessionInfo(config, id, loaded)
+  if (!loaded.exists) return
+  return loaded.title
+}
+
+async function safeSessionTitle(config: BridgeConfig, sessionId: string): Promise<string | undefined> {
+  return sessionTitle(config, sessionId).catch(() => undefined)
 }
 
 function normalizeRecentCount(args: string[]): { count?: number; error?: string } {
@@ -1297,26 +1414,35 @@ async function recentText(config: BridgeConfig, sessionId: string, count: number
 }
 
 async function sessionExists(config: BridgeConfig, sessionId: string): Promise<boolean> {
-  const id = sessionId.trim()
+  const id = normalizeSessionLookupId(sessionId)
   if (!id) return false
-  const url = opencodeUrl(config, `/session/${encodeURIComponent(id)}`)
-  if (config.directory) {
-    url.searchParams.set("directory", config.directory)
+  const cached = cachedSessionLookup(id)
+  if (cached) return cached.exists
+  const loaded = await readSessionInfo(config, id)
+  cacheSessionInfo(config, id, loaded)
+  return loaded.exists
+}
+
+function pruneExpiredSessions(now: number) {
+  for (const [key, value] of sessions) {
+    if (value.expiresAt > now) continue
+    sessions.delete(key)
   }
-  const res = await fetch(url, {
-    method: "GET",
-    signal: AbortSignal.timeout(12_000),
-  })
-  if (res.ok) return true
-  if (res.status === 404) return false
-  const body = await res.text().catch(() => "")
-  throw new Error(`OpenCode session lookup failed (${res.status}): ${body.slice(0, 300)}`)
+}
+
+async function switchPickerText(runtime: Runtime, chatKey: string, current?: string): Promise<string> {
+  const list = await switchCandidates(runtime, chatKey, current)
+  if (!list.length) {
+    return "No known sessions for this chat/user mapping yet. Use /new to create one. You can also run /switch with no args to view recent sessions, or /switch [session-id|index] to switch."
+  }
+  const lines = await formatSessionList(runtime.config, list, current)
+  return `Recent sessions for this chat/user mapping:\n${lines.join("\n")}\n\nUse /switch [session-id|index] to switch. Tip: run /switch with no args for this recent-session picker.`
 }
 
 function resolveSwitchTarget(target: string, list: string[]): { sessionId?: string; error?: string; fromKnownList: boolean } {
   const value = target.trim()
   if (!value) {
-    return { error: "Usage: /switch <session-id|index>", fromKnownList: false }
+    return { error: "Usage: /switch [session-id|index]. Run /switch with no args to pick from recent sessions.", fromKnownList: false }
   }
   if (/^\d+$/.test(value)) {
     const index = Number.parseInt(value, 10)
@@ -1334,9 +1460,11 @@ function resolveSwitchTarget(target: string, list: string[]): { sessionId?: stri
 }
 
 export function cacheSession(config: BridgeConfig, chatId: string, sessionId: string) {
-  const expiresAt = Date.now() + config.sessionCacheTtlMs
+  const now = Date.now()
+  const expiresAt = now + config.sessionCacheTtlMs
   sessions.delete(chatId)
   sessions.set(chatId, { id: sessionId, expiresAt })
+  pruneExpiredSessions(now)
   for (const key of sessions.keys()) {
     if (sessions.size <= config.sessionCacheMax) return
     sessions.delete(key)
@@ -1345,10 +1473,7 @@ export function cacheSession(config: BridgeConfig, chatId: string, sessionId: st
 
 export function sessionFromCache(config: BridgeConfig, chatId: string): string | undefined {
   const now = Date.now()
-  for (const [key, value] of sessions) {
-    if (value.expiresAt > now) continue
-    sessions.delete(key)
-  }
+  pruneExpiredSessions(now)
 
   const cached = sessions.get(chatId)
   if (!cached) return
@@ -1938,7 +2063,8 @@ export async function handleTextUpdate(runtime: Runtime, update: TelegramUpdate)
     }
     if (known?.name === "status") {
       const sessionId = await sessionForChat(runtime, key)
-      await sendTelegramMessage(config, chatId, `Current session: ${sessionId}`)
+      const title = await safeSessionTitle(config, sessionId)
+      await sendTelegramMessage(config, chatId, `Current session: ${formatSessionDisplay(sessionId, title)}`)
       return true
     }
     if (known?.name === "new") {
@@ -1946,7 +2072,7 @@ export async function handleTextUpdate(runtime: Runtime, update: TelegramUpdate)
       await runtime.store.set(key, next)
       cacheSession(config, key, next)
       await rememberSession(runtime, key, next)
-      await sendTelegramMessage(config, chatId, `Started a new session: ${next}`)
+      await sendTelegramMessage(config, chatId, `Started a new session: ${formatSessionDisplay(next)}`)
       return true
     }
     if (known?.name === "sessions") {
@@ -1972,7 +2098,8 @@ export async function handleTextUpdate(runtime: Runtime, update: TelegramUpdate)
     if (known?.name === "switch") {
       const target = command.args.join(" ").trim()
       if (!target) {
-        await sendTelegramMessage(config, chatId, "Usage: /switch <session-id|index>")
+        const current = await runtime.store.get(key) || sessionFromCache(config, key)
+        await sendTelegramMessage(config, chatId, await switchPickerText(runtime, key, current))
         return true
       }
       const current = await runtime.store.get(key) || sessionFromCache(config, key)
@@ -1984,7 +2111,7 @@ export async function handleTextUpdate(runtime: Runtime, update: TelegramUpdate)
       }
       const next = resolved.sessionId
       if (!next) {
-        await sendTelegramMessage(config, chatId, "Usage: /switch <session-id|index>")
+        await sendTelegramMessage(config, chatId, "Usage: /switch [session-id|index]. Run /switch with no args to pick from recent sessions.")
         return true
       }
       if (!resolved.fromKnownList && !(await sessionExists(config, next))) {
@@ -1994,7 +2121,8 @@ export async function handleTextUpdate(runtime: Runtime, update: TelegramUpdate)
       await runtime.store.set(key, next)
       cacheSession(config, key, next)
       await rememberSession(runtime, key, next)
-      await sendTelegramMessage(config, chatId, `Switched to session: ${next}`)
+      const title = await safeSessionTitle(config, next)
+      await sendTelegramMessage(config, chatId, `Switched to session: ${formatSessionDisplay(next, title)}`)
       return true
     }
     if (known?.name === "notify") {
@@ -2504,4 +2632,5 @@ export function resetSessionCacheForTest() {
   fallbackPending.clear()
   pendingQuestions.clear()
   sessionHistory.clear()
+  sessionInfo.clear()
 }
