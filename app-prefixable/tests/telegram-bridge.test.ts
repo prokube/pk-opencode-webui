@@ -1948,6 +1948,45 @@ describe("telegram bridge config and cache", () => {
     expect(kept.some((item) => item.text.includes("Need input B"))).toBe(true);
   });
 
+  test("pending adapter does not mix inboxGet with pendingSet", async () => {
+    let pendingSetCalled = false;
+    const runtime = {
+      config: {
+        mode: "polling" as const,
+        token: "token",
+        openCodeUrl: "http://127.0.0.1:4096",
+        sessionCacheMax: 10,
+        sessionCacheTtlMs: 10_000,
+        notificationDebounceMs: 20_000,
+        port: 4097,
+        webhookPath: "/webhook",
+        sessionStorePath: "/tmp/test-store.json",
+      },
+      store: {
+        get: async () => undefined,
+        set: async () => undefined,
+        delete: async () => undefined,
+        sessionKeys: async () => ["chat:77:user:5"],
+        notificationGet: async () => false,
+        inboxGet: async () => [],
+        pendingSet: async () => {
+          pendingSetCalled = true;
+          throw new Error("should not mix inboxGet with pendingSet");
+        },
+      },
+    };
+
+    await handleBridgeEvent(runtime, {
+      type: "permission.asked",
+      properties: {
+        sessionID: "session-1",
+        permission: { command: "npm test" },
+      },
+    });
+
+    expect(pendingSetCalled).toBe(false);
+  });
+
   test("handleBridgeEvent does not debounce failed key and still notifies another key in same chat", async () => {
     const calls: Array<{ url: string; body: Record<string, unknown> }> = [];
     const originalFetch = globalThis.fetch;

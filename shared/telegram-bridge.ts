@@ -334,17 +334,24 @@ function prunePending(items: TelegramPendingItem[], now: number): TelegramPendin
 }
 
 function pendingAdapter(runtime: Runtime) {
-  const get = runtime.store.inboxGet || runtime.store.pendingGet
-  const set = runtime.store.inboxSet || runtime.store.pendingSet
-  if (!get) return
-  if (!set) return
-  return {
-    get,
-    set,
+  if (runtime.store.inboxGet && runtime.store.inboxSet) {
+    return {
+      get: runtime.store.inboxGet,
+      set: runtime.store.inboxSet,
+    }
   }
+  if (runtime.store.pendingGet && runtime.store.pendingSet) {
+    return {
+      get: runtime.store.pendingGet,
+      set: runtime.store.pendingSet,
+    }
+  }
+  return
 }
 
 function pendingFallbackEnabled(runtime: Runtime): boolean {
+  if (runtime.store.inboxGet) return false
+  if (runtime.store.inboxSet) return false
   if (runtime.store.pendingGet) return false
   if (runtime.store.pendingSet) return false
   return true
