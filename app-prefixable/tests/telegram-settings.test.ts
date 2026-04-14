@@ -224,6 +224,28 @@ describe("telegram settings extended API", () => {
       }),
     )
     expect(tooLongPut?.status).toBe(400)
+
+    const badControl = "bad\nvalue"
+
+    const controlGet = await handleExtendedEndpoint(
+      "/api/ext/telegram/session-alarm",
+      "GET",
+      new URL(`http://127.0.0.1/api/ext/telegram/session-alarm?sessionId=${encodeURIComponent(badControl)}`),
+      new Request(`http://127.0.0.1/api/ext/telegram/session-alarm?sessionId=${encodeURIComponent(badControl)}`),
+    )
+    expect(controlGet?.status).toBe(400)
+
+    const controlPut = await handleExtendedEndpoint(
+      "/api/ext/telegram/session-alarm",
+      "PUT",
+      new URL("http://127.0.0.1/api/ext/telegram/session-alarm"),
+      new Request("http://127.0.0.1/api/ext/telegram/session-alarm", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ sessionId: badControl, enabled: true }),
+      }),
+    )
+    expect(controlPut?.status).toBe(400)
   })
 
   test("session alarm endpoint reuses cached store by session store path", async () => {
