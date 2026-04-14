@@ -49,6 +49,48 @@ function isSubtaskPart(p: Part): p is Extract<Part, { type: "subtask" }> {
   return p.type === "subtask"
 }
 
+const MAX_SHARED_CHILDREN = 400
+const MAX_SHARED_CHILDREN_INFLIGHT = 200
+const MAX_SHARED_SYNCED_CHILDREN = 600
+const CHILDREN_RETRY_DELAY_MS = 5000
+
+function childCacheKey(sessionID: string, directory: string | undefined) {
+  return `${directory ?? ""}::${sessionID}`
+}
+
+function lruGet<V>(map: Map<string, V>, key: string) {
+  const value = map.get(key)
+  if (value === undefined) return undefined
+  map.delete(key)
+  map.set(key, value)
+  return value
+}
+
+function lruSet<V>(map: Map<string, V>, key: string, value: V, max: number) {
+  if (map.has(key)) map.delete(key)
+  map.set(key, value)
+  if (map.size <= max) return
+  const oldest = map.keys().next().value
+  if (oldest === undefined) return
+  map.delete(oldest)
+}
+
+function lruHas(set: Set<string>, value: string) {
+  if (!set.has(value)) return false
+  set.delete(value)
+  set.add(value)
+  return true
+}
+
+function lruAdd(set: Set<string>, value: string, max: number) {
+  if (set.has(value)) set.delete(value)
+  set.add(value)
+  if (set.size <= max) return
+  const oldest = set.values().next().value
+  if (oldest === undefined) return
+  set.delete(oldest)
+}
+
 const sharedChildren = new Map<string, Session[]>()
 const sharedChildrenInflight = new Map<string, Promise<Session[]>>()
 const sharedSyncedChildren = new Set<string>()
@@ -344,6 +386,7 @@ export function MessageTurn(props: {
   const [detailsOpen, setDetailsOpen] = createSignal(false)
   const [hovered, setHovered] = createSignal(false)
   const [children, setChildren] = createSignal<Record<string, Session[]>>({})
+  const [childRetry, setChildRetry] = createSignal(0)
 
   const dirSlug = createMemo(() => (directory ? base64Encode(directory) : params.dir))
 
@@ -367,10 +410,13 @@ export function MessageTurn(props: {
   // Ref for text overflow detection
   let textRef: HTMLDivElement | undefined
   let copyTimeoutId: ReturnType<typeof setTimeout> | undefined
+  const retryTimers = new Map<string, ReturnType<typeof setTimeout>>()
 
   // Cleanup timeout on unmount
   onCleanup(() => {
     if (copyTimeoutId) clearTimeout(copyTimeoutId)
+    for (const timer of retryTimers.values()) clearTimeout(timer)
+    retryTimers.clear()
   })
 
   // Extract image/PDF attachments from user message (single pass)
@@ -423,22 +469,24 @@ export function MessageTurn(props: {
   })
 
   createEffect(() => {
+    childRetry()
     for (const sessionID of parentIDs()) {
+      const key = childCacheKey(sessionID, directory)
       const known = children()[sessionID]
       if (known) continue
-      const cached = sharedChildren.get(sessionID)
-      if (cached) {
+      const cached = lruGet(sharedChildren, key)
+      if (cached !== undefined) {
         setChildren((prev) => ({ ...prev, [sessionID]: cached }))
         continue
       }
-      const inflight = sharedChildrenInflight.get(sessionID)
-      if (inflight) {
+      const inflight = lruGet(sharedChildrenInflight, key)
+      if (inflight !== undefined) {
         inflight.then((list) => {
           setChildren((prev) => {
             if (prev[sessionID]) return prev
             return { ...prev, [sessionID]: list }
           })
-        })
+        }).catch(() => {})
         continue
       }
 
@@ -446,25 +494,36 @@ export function MessageTurn(props: {
         .children({ sessionID, directory })
         .then((res) => {
           const list = (res.data ?? []).slice().sort((a, b) => a.time.created - b.time.created)
-          sharedChildren.set(sessionID, list)
+          const retryTimer = retryTimers.get(key)
+          if (retryTimer) {
+            clearTimeout(retryTimer)
+            retryTimers.delete(key)
+          }
+          lruSet(sharedChildren, key, list, MAX_SHARED_CHILDREN)
           return list
         })
         .catch((error) => {
           console.error("Failed to load session children", error)
-          sharedChildren.set(sessionID, [])
-          return []
+          const retryTimer = retryTimers.get(key)
+          if (retryTimer) clearTimeout(retryTimer)
+          const timer = setTimeout(() => {
+            retryTimers.delete(key)
+            setChildRetry((n) => n + 1)
+          }, CHILDREN_RETRY_DELAY_MS)
+          retryTimers.set(key, timer)
+          throw error
         })
         .finally(() => {
-          sharedChildrenInflight.delete(sessionID)
+          sharedChildrenInflight.delete(key)
         })
 
-      sharedChildrenInflight.set(sessionID, pending)
+      lruSet(sharedChildrenInflight, key, pending, MAX_SHARED_CHILDREN_INFLIGHT)
       pending.then((list) => {
         setChildren((prev) => {
           if (prev[sessionID]) return prev
           return { ...prev, [sessionID]: list }
         })
-      })
+      }).catch(() => {})
     }
   })
 
@@ -497,8 +556,9 @@ export function MessageTurn(props: {
       }
     }
     for (const childID of ids) {
-      if (sharedSyncedChildren.has(childID)) continue
-      sharedSyncedChildren.add(childID)
+      const key = childCacheKey(childID, directory)
+      if (lruHas(sharedSyncedChildren, key)) continue
+      lruAdd(sharedSyncedChildren, key, MAX_SHARED_SYNCED_CHILDREN)
       void sync.session.sync(childID)
     }
   })
@@ -809,12 +869,13 @@ export function MessageTurn(props: {
                       <div class="space-y-2 mt-2">
                         <For each={subtasks()}>
                           {(part) => {
-                            const child = childForSubtask(part)
+                            const child = createMemo(() => childForSubtask(part))
+                            const running = createMemo(() => isChildRunning(child()?.id))
                             return (
                               <SubtaskCard
                                 part={part}
-                                child={child}
-                                running={isChildRunning(child?.id)}
+                                child={child()}
+                                running={running()}
                                 onOpen={openChild}
                               />
                             )
