@@ -67,6 +67,15 @@ type BridgeHealthReport = {
   }
 }
 
+type TelegramPendingItem = {
+  id: string
+  kind: "question" | "permission" | "task-finished"
+  sessionId: string
+  text: string
+  stampedAt: number
+  resolved: boolean
+}
+
 type CachedSession = {
   id: string
   expiresAt: number
@@ -110,10 +119,18 @@ const chatQueues = new Map<string, Promise<void>>()
 const eventNotifications = new Map<string, number>()
 const statusBySession = new Map<string, string>()
 const fallbackNotifications = new Map<string, boolean>()
+const fallbackPending = new Map<string, TelegramPendingItem[]>()
 const pendingQuestions = new Map<string, TelegramPendingQuestion[]>()
+const sessionHistory = new Map<string, string[]>()
+
+let pendingEntrySeq = 0
 
 const pendingQuestionTtlMs = 30 * 60 * 1000
 const startedAt = Date.now()
+const pendingRetentionMs = 3 * 24 * 60 * 60 * 1000
+const pendingMaxItems = 60
+const pendingDigestMax = 8
+const sessionHistoryMax = 12
 
 const telegramCommands = Object.freeze([
   Object.freeze({
@@ -123,6 +140,15 @@ const telegramCommands = Object.freeze([
   Object.freeze({
     name: "status",
     text: "Show current session mapping",
+  }),
+  Object.freeze({
+    name: "sessions",
+    text: "List known sessions for this chat/user mapping",
+  }),
+  Object.freeze({
+    name: "switch",
+    text: "Switch this chat/user mapping to an existing session",
+    args: "<session-id|index>",
   }),
   Object.freeze({
     name: "notify",
@@ -288,12 +314,20 @@ function pendingAdapter(runtime: Runtime) {
   }
 }
 
+function pendingFallbackEnabled(runtime: Runtime): boolean {
+  if (runtime.store.pendingGet) return false
+  if (runtime.store.pendingSet) return false
+  return true
+}
+
 async function pendingGet(runtime: Runtime, key: string): Promise<TelegramPendingItem[]> {
   const now = Date.now()
   const adapter = pendingAdapter(runtime)
   const source = adapter
     ? await adapter.get(key)
-    : fallbackPending.get(key) || []
+    : pendingFallbackEnabled(runtime)
+      ? fallbackPending.get(key) || []
+      : []
   const next = prunePending(source, now)
   if (adapter) {
     const changed = next.length !== source.length || next.some((item, i) => item.id !== source[i]?.id)
@@ -317,6 +351,7 @@ async function pendingSet(runtime: Runtime, key: string, items: TelegramPendingI
     await adapter.set(key, next)
     return
   }
+  if (!pendingFallbackEnabled(runtime)) return
   if (!next.length) {
     fallbackPending.delete(key)
     return
@@ -842,6 +877,131 @@ async function createSession(config: BridgeConfig): Promise<string> {
   return data.id
 }
 
+function normalizeSessionHistory(input: string[]): string[] {
+  const deduped = [...new Set(input.map((value) => value.trim()).filter(Boolean))]
+  return deduped.slice(0, sessionHistoryMax)
+}
+
+function touchSessionHistory(runtime: Runtime, chatKey: string, list: string[]) {
+  sessionHistory.delete(chatKey)
+  if (!list.length) return
+  sessionHistory.set(chatKey, list)
+  const max = Math.max(1, runtime.config.sessionCacheMax)
+  for (const key of sessionHistory.keys()) {
+    if (sessionHistory.size <= max) return
+    sessionHistory.delete(key)
+  }
+}
+
+function logSessionHistoryError(chatKey: string, op: "load" | "store", error: unknown) {
+  console.error(`[TelegramBridge] session history ${op} failed`, { chatKey, error })
+}
+
+async function loadSessionHistory(runtime: Runtime, chatKey: string): Promise<string[]> {
+  const cached = sessionHistory.get(chatKey)
+  if (cached) {
+    touchSessionHistory(runtime, chatKey, cached)
+    return cached
+  }
+  if (!runtime.store.historyGet) return []
+  const stored = await runtime.store.historyGet(chatKey)
+    .then((list) => normalizeSessionHistory(list))
+    .catch((error) => {
+      logSessionHistoryError(chatKey, "load", error)
+      return []
+    })
+  if (!stored.length) return []
+  touchSessionHistory(runtime, chatKey, stored)
+  return stored
+}
+
+async function setSessionHistory(runtime: Runtime, chatKey: string, input: string[]): Promise<string[]> {
+  const next = normalizeSessionHistory(input)
+  if (!next.length) {
+    sessionHistory.delete(chatKey)
+    if (!runtime.store.historySet) return []
+    await runtime.store.historySet(chatKey, []).catch((error) => {
+      logSessionHistoryError(chatKey, "store", error)
+    })
+    return []
+  }
+  touchSessionHistory(runtime, chatKey, next)
+  if (!runtime.store.historySet) return next
+  await runtime.store.historySet(chatKey, next).catch((error) => {
+    logSessionHistoryError(chatKey, "store", error)
+  })
+  return next
+}
+
+async function switchCandidates(runtime: Runtime, chatKey: string, current?: string): Promise<string[]> {
+  const history = await loadSessionHistory(runtime, chatKey)
+  if (!current) return history
+  return normalizeSessionHistory([current, ...history])
+}
+
+async function rememberSession(runtime: Runtime, chatKey: string, sessionId: string): Promise<string[]> {
+  const prior = await loadSessionHistory(runtime, chatKey)
+  if (prior[0] === sessionId) return prior
+  const next = normalizeSessionHistory([sessionId, ...prior])
+  return setSessionHistory(runtime, chatKey, next)
+}
+
+function rememberSessionWithoutBlocking(runtime: Runtime, chatKey: string, sessionId: string) {
+  void rememberSession(runtime, chatKey, sessionId).catch((error) => {
+    console.error("[TelegramBridge] session history update failed", { chatKey, sessionId, error })
+  })
+}
+
+async function sessionsText(runtime: Runtime, chatKey: string, current?: string): Promise<string> {
+  const history = await loadSessionHistory(runtime, chatKey)
+  const list = current ? normalizeSessionHistory([current, ...history]) : history
+  if (!list.length) {
+    return "No known sessions for this chat/user mapping yet. Use /new to create one, then /sessions to view options."
+  }
+  const lines = list.map((sessionId, index) => {
+    const suffix = current === sessionId ? " (current)" : ""
+    return `${index + 1}. ${sessionId}${suffix}`
+  })
+  return `Known sessions for this chat/user mapping:\n${lines.join("\n")}\n\nUse /switch <index|session-id> to switch.`
+}
+
+async function sessionExists(config: BridgeConfig, sessionId: string): Promise<boolean> {
+  const id = sessionId.trim()
+  if (!id) return false
+  const url = opencodeUrl(config, `/session/${encodeURIComponent(id)}`)
+  if (config.directory) {
+    url.searchParams.set("directory", config.directory)
+  }
+  const res = await fetch(url, {
+    method: "GET",
+    signal: AbortSignal.timeout(12_000),
+  })
+  if (res.ok) return true
+  if (res.status === 404) return false
+  const body = await res.text().catch(() => "")
+  throw new Error(`OpenCode session lookup failed (${res.status}): ${body.slice(0, 300)}`)
+}
+
+function resolveSwitchTarget(target: string, list: string[]): { sessionId?: string; error?: string; fromKnownList: boolean } {
+  const value = target.trim()
+  if (!value) {
+    return { error: "Usage: /switch <session-id|index>", fromKnownList: false }
+  }
+  if (/^\d+$/.test(value)) {
+    const index = Number.parseInt(value, 10)
+    if (index < 1 || index > list.length) {
+      const range = list.length ? `1-${list.length}` : "none"
+      return { error: `Invalid session index: ${value}. Available indices: ${range}.`, fromKnownList: false }
+    }
+    const sessionId = list[index - 1]
+    if (!sessionId) {
+      return { error: `Invalid session index: ${value}.`, fromKnownList: false }
+    }
+    return { sessionId, fromKnownList: true }
+  }
+  return { sessionId: value, fromKnownList: false }
+}
+
 export function cacheSession(config: BridgeConfig, chatId: string, sessionId: string) {
   const expiresAt = Date.now() + config.sessionCacheTtlMs
   sessions.delete(chatId)
@@ -875,6 +1035,7 @@ async function sessionForChat(runtime: Runtime, chatKey: string): Promise<string
   const mapped = await runtime.store.get(chatKey)
   if (mapped) {
     cacheSession(config, chatKey, mapped)
+    rememberSessionWithoutBlocking(runtime, chatKey, mapped)
   }
 
   const cached = sessionFromCache(config, chatKey)
@@ -887,6 +1048,7 @@ async function sessionForChat(runtime: Runtime, chatKey: string): Promise<string
     .then((id) => {
       return runtime.store.set(chatKey, id).then(() => {
         cacheSession(config, chatKey, id)
+        rememberSessionWithoutBlocking(runtime, chatKey, id)
         creatingSessions.delete(chatKey)
         return id
       })
@@ -1095,7 +1257,41 @@ export async function handleTextUpdate(runtime: Runtime, update: TelegramUpdate)
       const next = await createSession(config)
       await runtime.store.set(key, next)
       cacheSession(config, key, next)
+      await rememberSession(runtime, key, next)
       await sendTelegramMessage(config, chatId, `Started a new session: ${next}`)
+      return true
+    }
+    if (known?.name === "sessions") {
+      const current = await runtime.store.get(key) || sessionFromCache(config, key)
+      await sendTelegramMessage(config, chatId, await sessionsText(runtime, key, current))
+      return true
+    }
+    if (known?.name === "switch") {
+      const target = command.args.join(" ").trim()
+      if (!target) {
+        await sendTelegramMessage(config, chatId, "Usage: /switch <session-id|index>")
+        return true
+      }
+      const current = await runtime.store.get(key) || sessionFromCache(config, key)
+      const list = await switchCandidates(runtime, key, current)
+      const resolved = resolveSwitchTarget(target, list)
+      if (resolved.error) {
+        await sendTelegramMessage(config, chatId, resolved.error)
+        return true
+      }
+      const next = resolved.sessionId
+      if (!next) {
+        await sendTelegramMessage(config, chatId, "Usage: /switch <session-id|index>")
+        return true
+      }
+      if (!resolved.fromKnownList && !(await sessionExists(config, next))) {
+        await sendTelegramMessage(config, chatId, `Session not found: ${next}. Use /sessions to select a known session or /new to create one.`)
+        return true
+      }
+      await runtime.store.set(key, next)
+      cacheSession(config, key, next)
+      await rememberSession(runtime, key, next)
+      await sendTelegramMessage(config, chatId, `Switched to session: ${next}`)
       return true
     }
     if (known?.name === "notify") {
@@ -1496,11 +1692,14 @@ export async function startTelegramBridge() {
 
 export function resetSessionCacheForTest() {
   setRetryDelayForTest()
+  pendingEntrySeq = 0
   sessions.clear()
   creatingSessions.clear()
   chatQueues.clear()
   eventNotifications.clear()
   statusBySession.clear()
   fallbackNotifications.clear()
+  fallbackPending.clear()
   pendingQuestions.clear()
+  sessionHistory.clear()
 }
