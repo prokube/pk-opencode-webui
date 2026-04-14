@@ -5,8 +5,10 @@ import { Button } from "./ui/button";
 export function FollowupDock(props: {
   items: { id: string; text: string }[];
   sending?: string;
+  autoSend: boolean;
   processing?: boolean;
   loading?: boolean;
+  onToggleAutoSend: () => void;
   onSend: (id: string) => void;
   onEdit: (id: string) => void;
 }) {
@@ -53,6 +55,21 @@ export function FollowupDock(props: {
           }}
         />
       </button>
+
+      <div class="px-3 pb-2 flex items-center justify-end">
+        <label
+          class="text-xs flex items-center gap-2 cursor-pointer select-none"
+          style={{ color: "var(--text-weak)" }}
+        >
+          <input
+            type="checkbox"
+            checked={props.autoSend}
+            onChange={() => props.onToggleAutoSend()}
+            class="h-3.5 w-3.5"
+          />
+          <span>Auto send queued followups</span>
+        </label>
+      </div>
 
       <Show when={!collapsed()}>
         <div
