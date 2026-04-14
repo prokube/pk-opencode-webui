@@ -690,11 +690,14 @@ function parseCallbackData(input: string):
     }
   }
 
-  const prompt = input.match(/^p:([A-Za-z0-9._:-]{1,62})$/)
-  if (prompt) {
+  if (input.startsWith("p:")) {
+    const promptId = input.slice(2)
+    if (!promptId) return
+    if (promptId.length > callbackDataMax - 2) return
+    if (!/^[A-Za-z0-9._:-]+$/.test(promptId)) return
     return {
       kind: "prompt",
-      promptId: prompt[1] || "",
+      promptId,
     }
   }
 
