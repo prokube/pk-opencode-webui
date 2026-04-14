@@ -410,7 +410,14 @@ export function Session() {
   function toggleFollowupAutoSend() {
     const id = sessionId();
     if (!id) return;
-    setSessionFollowupAutoSend(id, !followupAutoSend());
+    const enabled = !followupAutoSend();
+    setSessionFollowupAutoSend(id, enabled);
+    if (!enabled) return;
+    const status = events.status[id]?.type;
+    if (status !== "idle") return;
+    const next = followups()[0];
+    if (!next) return;
+    void sendFollowupNow(next.id, "auto");
   }
 
   function queueFollowup(text: string) {
@@ -1453,7 +1460,7 @@ export function Session() {
     };
     if (!sid || followupSending() || loading()) return;
     if (busy === "busy" || busy === "retry") return;
-    if (source === "auto" && inputBlocked()) return;
+    if (inputBlocked()) return;
     const model = sessionModel();
     if (!model) {
       fail("Please select a model before sending messages. Click the model button in the header.");
