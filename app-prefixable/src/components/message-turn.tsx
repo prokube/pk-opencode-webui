@@ -43,23 +43,30 @@ function isPatchPart(p: Part): p is Extract<Part, { type: "patch" }> {
 
 function renderMetaPart(part: Part) {
   if (isAgentPart(part)) {
+    const source = part.source?.value?.trim()
     return (
       <div
-        class="inline-flex items-center rounded-full px-2 py-1 text-xs"
+        class="inline-flex items-center gap-2 rounded-full px-2 py-1 text-xs max-w-full"
         style={{
           background: "var(--surface-inset)",
           color: "var(--text-base)",
           border: "1px solid var(--border-base)",
         }}
-        title={part.source?.value}
+        title={source ? `Source: ${source}` : undefined}
+        aria-label={source ? `Agent ${part.name} from ${source}` : `Agent ${part.name}`}
       >
-        Agent: {part.name}
+        <span>Agent: {part.name || "unknown"}</span>
+        <Show when={source}>
+          <span class="font-mono truncate" style={{ color: "var(--text-weak)", "max-width": "22ch" }}>
+            {source}
+          </span>
+        </Show>
       </div>
     )
   }
   if (isSnapshotPart(part)) {
     return (
-      <div class="flex items-center gap-2">
+      <div class="flex items-center gap-2" aria-label={`Snapshot ${part.snapshot.slice(0, 8)}`}>
         <div class="h-px flex-1" style={{ background: "var(--border-base)" }} />
         <span class="text-[11px] uppercase tracking-wide" style={{ color: "var(--text-weak)" }}>
           Snapshot {part.snapshot.slice(0, 8)}
@@ -87,19 +94,26 @@ function renderMetaPart(part: Part) {
     )
   }
   if (isPatchPart(part)) {
+    const count = part.files.length
     return (
       <details
         class="rounded"
         style={{ border: "1px solid var(--border-base)", background: "var(--surface-inset)" }}
+        aria-label={`Patch ${part.hash.slice(0, 8)} with ${count} affected file${count === 1 ? "" : "s"}`}
       >
         <summary class="px-3 py-2 text-sm cursor-pointer" style={{ color: "var(--text-base)" }}>
-          Patch {part.hash.slice(0, 8)} · {part.files.length} file{part.files.length === 1 ? "" : "s"}
+          Patch {part.hash.slice(0, 8)} · {count} file{count === 1 ? "" : "s"}
         </summary>
-        <div class="px-3 pb-2 text-xs space-y-1" style={{ color: "var(--text-weak)" }}>
-          <For each={part.files}>
-            {(file) => <div class="font-mono">{file}</div>}
-          </For>
-        </div>
+        <Show
+          when={count > 0}
+          fallback={<div class="px-3 pb-2 text-xs" style={{ color: "var(--text-weak)" }}>No files reported</div>}
+        >
+          <ul class="px-3 pb-2 text-xs space-y-1" style={{ color: "var(--text-weak)" }}>
+            <For each={part.files}>
+              {(file) => <li class="font-mono">{file}</li>}
+            </For>
+          </ul>
+        </Show>
       </details>
     )
   }
