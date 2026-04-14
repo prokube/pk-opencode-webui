@@ -11,6 +11,7 @@ export function FollowupDock(props: {
   onToggleAutoSend: () => void;
   onSend: (id: string) => void;
   onEdit: (id: string) => void;
+  onDelete: (id: string) => void;
 }) {
   const [collapsed, setCollapsed] = createSignal(true);
   const contentId = `followup-dock-${createUniqueId()}`;
@@ -115,6 +116,15 @@ export function FollowupDock(props: {
                     onClick={() => props.onEdit(item.id)}
                   >
                     Edit
+                  </Button>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="ghost"
+                    disabled={sending()}
+                    onClick={() => props.onDelete(item.id)}
+                  >
+                    Delete
                   </Button>
                 </div>
               );
