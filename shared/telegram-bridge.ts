@@ -162,12 +162,16 @@ const pendingMaxItems = 60
 const pendingDigestMax = 8
 const pendingTextMax = 240
 const sessionHistoryMax = 12
+const recentDefaultCount = 5
+const recentMaxCount = 12
+const recentPartTextMax = 500
 const callbackIdLength = 24
 const callbackAckText = "Sending answer..."
 const inlineButtonMaxOptions = 20
 const inlineButtonTextMax = 48
 const callbackDataMax = 64
 const telegramMessageSoftLimit = 3900
+const recentPayloadMax = telegramMessageSoftLimit * 3
 
 const telegramCommands = Object.freeze([
   Object.freeze({
@@ -181,6 +185,11 @@ const telegramCommands = Object.freeze([
   Object.freeze({
     name: "sessions",
     text: "List known sessions for this chat/user mapping",
+  }),
+  Object.freeze({
+    name: "recent",
+    text: "Show latest user/assistant exchanges",
+    args: "[count]",
   }),
   Object.freeze({
     name: "switch",
@@ -801,6 +810,13 @@ function truncateTelegramText(input: string, size: number): string {
   return `${input.slice(0, size - suffix.length)}${suffix}`
 }
 
+function truncateTelegramInlineText(input: string, size: number): string {
+  if (input.length <= size) return input
+  const suffix = "..."
+  if (size <= suffix.length) return input.slice(0, size)
+  return `${input.slice(0, size - suffix.length)}${suffix}`
+}
+
 function questionAnswerGuidance(question: TelegramPendingQuestion): string {
   const row = activeQuestion(question)
   if (!row) return "No pending question was found."
@@ -1188,6 +1204,93 @@ async function sessionsText(runtime: Runtime, chatKey: string, current?: string)
   return `Known sessions for this chat/user mapping:\n${lines.join("\n")}\n\nUse /switch <index|session-id> to switch.`
 }
 
+function normalizeRecentCount(args: string[]): { count?: number; error?: string } {
+  const usage = `Usage: /recent [count] (count must be >= 1; values above ${recentMaxCount} are clamped to ${recentMaxCount})`
+  const raw = args[0]?.trim()
+  if (!raw) return { count: recentDefaultCount }
+  if (!/^\d+$/.test(raw)) {
+    return { error: usage }
+  }
+  const parsed = Number.parseInt(raw, 10)
+  if (!Number.isFinite(parsed) || parsed < 1) {
+    return { error: usage }
+  }
+  return { count: Math.min(parsed, recentMaxCount) }
+}
+
+function parseRecentText(parts: unknown): string {
+  if (!Array.isArray(parts)) return ""
+  const text = parts
+    .map((part) => {
+      if (!part || typeof part !== "object") return ""
+      const row = part as { type?: unknown; text?: unknown; ignored?: unknown; synthetic?: unknown }
+      if (row.type !== "text") return ""
+      if (row.ignored === true) return ""
+      if (row.synthetic === true) return ""
+      if (typeof row.text !== "string") return ""
+      return row.text
+    })
+    .join("\n")
+    .replace(/\s+/g, " ")
+    .trim()
+  if (!text) return ""
+  return truncateTelegramInlineText(text, recentPartTextMax)
+}
+
+async function recentText(config: BridgeConfig, sessionId: string, count: number): Promise<string> {
+  const safeCount = Math.max(1, Math.min(count, recentMaxCount))
+  const url = opencodeUrl(config, `/session/${encodeURIComponent(sessionId)}/message`)
+  url.searchParams.set("limit", String(Math.max(20, safeCount * 6)))
+  if (config.directory) {
+    url.searchParams.set("directory", config.directory)
+  }
+  const res = await fetch(url, {
+    method: "GET",
+    signal: AbortSignal.timeout(20_000),
+  })
+  if (!res.ok) {
+    const body = await res.text().catch(() => "")
+    throw new Error(`OpenCode session messages failed (${res.status}): ${body.slice(0, 300)}`)
+  }
+  const data = await res.json().catch(() => [])
+  const rows = Array.isArray(data) ? data : []
+  const assistants = new Map<string, string>()
+  const users: Array<{ id: string; text: string }> = []
+  for (const entry of rows) {
+    if (!entry || typeof entry !== "object") continue
+    const row = entry as { info?: unknown; parts?: unknown }
+    const info = row.info && typeof row.info === "object"
+      ? row.info as { id?: unknown; role?: unknown; parentID?: unknown }
+      : undefined
+    if (!info) continue
+    const id = typeof info.id === "string" ? info.id : ""
+    const parentID = typeof info.parentID === "string" ? info.parentID : ""
+    const role = info.role === "assistant" || info.role === "user" ? info.role : ""
+    const text = parseRecentText(row.parts)
+    if (!id || !role || !text) continue
+    if (role === "assistant" && parentID && !assistants.has(parentID)) {
+      assistants.set(parentID, text)
+      continue
+    }
+    if (role !== "user") continue
+    users.push({ id, text })
+  }
+  if (!users.length) {
+    return `No recent chat messages found for session ${sessionId}. Send a new message first.`
+  }
+  const list = users.slice(-safeCount)
+  const lines = [`Recent activity for session ${sessionId} (showing ${list.length} of ${users.length}):`]
+  for (let i = 0; i < list.length; i++) {
+    const item = list[i]
+    if (!item) continue
+    const reply = assistants.get(item.id) || "(no assistant response yet)"
+    lines.push("")
+    lines.push(`${i + 1}. You: ${item.text}`)
+    lines.push(`   Assistant: ${reply}`)
+  }
+  return truncateTelegramText(lines.join("\n"), recentPayloadMax)
+}
+
 async function sessionExists(config: BridgeConfig, sessionId: string): Promise<boolean> {
   const id = sessionId.trim()
   if (!id) return false
@@ -1497,7 +1600,7 @@ function chunks(input: string, size: number): string[] {
 
 async function sendTelegramMessage(config: BridgeConfig, chatId: number, text: string) {
   const safe = text || "I could not produce a response."
-  for (const part of chunks(safe, 3900)) {
+  for (const part of chunks(safe, telegramMessageSoftLimit)) {
     await telegramRequest(config, "sendMessage", {
       chat_id: chatId,
       text: part,
@@ -1748,6 +1851,21 @@ export async function handleTextUpdate(runtime: Runtime, update: TelegramUpdate)
     if (known?.name === "sessions") {
       const current = await runtime.store.get(key) || sessionFromCache(config, key)
       await sendTelegramMessage(config, chatId, await sessionsText(runtime, key, current))
+      return true
+    }
+    if (known?.name === "recent") {
+      const parsed = normalizeRecentCount(command.args)
+      if (parsed.error) {
+        await sendTelegramMessage(config, chatId, parsed.error)
+        return true
+      }
+      const current = await runtime.store.get(key) || sessionFromCache(config, key)
+      if (!current) {
+        await sendTelegramMessage(config, chatId, "No active session mapping for this chat/user yet. Use /status or /new first.")
+        return true
+      }
+      const text = await recentText(config, current, parsed.count || recentDefaultCount)
+      await sendTelegramMessage(config, chatId, text)
       return true
     }
     if (known?.name === "switch") {
