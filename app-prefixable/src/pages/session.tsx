@@ -2620,7 +2620,7 @@ export function Session() {
               </div>
             </form>
 
-            <Show when={!!sessionId()}>
+            <Show when={!!sessionId() && followups().length > 0}>
               <FollowupDock
                 items={followups()}
                 sending={followupSending()}
@@ -2630,6 +2630,7 @@ export function Session() {
                 onToggleAutoSend={toggleFollowupAutoSend}
                 onSend={sendFollowupNow}
                 onEdit={editFollowup}
+                onDelete={removeFollowup}
               />
             </Show>
           </div>
