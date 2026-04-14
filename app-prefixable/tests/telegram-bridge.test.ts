@@ -2015,6 +2015,61 @@ describe("telegram bridge config and cache", () => {
     expect(calls.filter((x) => x.url.includes("/session/session-old")).length).toBe(1);
   });
 
+  test("/sessions limits concurrent session title lookups", async () => {
+    const calls: Array<{ url: string; body: Record<string, unknown> }> = [];
+    const originalFetch = globalThis.fetch;
+    let activeLookups = 0;
+    let maxConcurrentLookups = 0;
+    try {
+      globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        const body = init?.body ? (JSON.parse(String(init.body)) as Record<string, unknown>) : {};
+        calls.push({ url, body });
+        if (url.includes("/session/") && !url.includes("/message")) {
+          activeLookups += 1;
+          maxConcurrentLookups = Math.max(maxConcurrentLookups, activeLookups);
+          await new Promise((resolve) => setTimeout(resolve, 5));
+          activeLookups -= 1;
+          return new Response(JSON.stringify({ id: "session-id", title: "Session title" }), { status: 200 });
+        }
+        if (url.includes("/sendMessage")) {
+          return new Response(JSON.stringify({ ok: true, result: { message_id: 1 } }), { status: 200 });
+        }
+        throw new Error(`Unexpected fetch ${url}`);
+      };
+
+      const runtime = {
+        config: {
+          mode: "polling" as const,
+          token: "token",
+          openCodeUrl: "http://127.0.0.1:4096",
+          sessionCacheMax: 10,
+          sessionCacheTtlMs: 10_000,
+          notificationDebounceMs: 20_000,
+          port: 4097,
+          webhookPath: "/webhook",
+          sessionStorePath: "/tmp/test-store.json",
+        },
+        store: {
+          get: async () => "session-01",
+          set: async () => undefined,
+          delete: async () => undefined,
+          historyGet: async () => Array.from({ length: 19 }, (_, idx) => `session-${String(idx + 2).padStart(2, "0")}`),
+        },
+      };
+
+      await handleTextUpdate(runtime, {
+        update_id: 1,
+        message: { message_id: 1, text: "/sessions", chat: { id: 68 }, from: { id: 8 } },
+      });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+
+    expect(maxConcurrentLookups).toBeLessThanOrEqual(6);
+    expect(calls.filter((x) => x.url.includes("/session/") && !x.url.includes("/message")).length).toBe(20);
+  });
+
   test("session metadata cache normalizes whitespace in session ids", async () => {
     const calls: Array<{ url: string; body: Record<string, unknown> }> = [];
     const originalFetch = globalThis.fetch;
@@ -2784,7 +2839,7 @@ describe("telegram bridge config and cache", () => {
     expect(String(picker?.inline_keyboard?.[1]?.[0]?.callback_data || "")).toMatch(/^s:s:2:[a-z0-9]{6,24}$/);
   });
 
-  test("/switch empty-state copy advertises optional argument usage", async () => {
+  test("/switch empty-state copy advertises /new and picker usage", async () => {
     const calls: Array<{ url: string; body: Record<string, unknown> }> = [];
     const originalFetch = globalThis.fetch;
     try {

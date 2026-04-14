@@ -170,6 +170,7 @@ const pendingMaxItems = 60
 const pendingDigestMax = 8
 const pendingTextMax = 240
 const sessionHistoryMax = 60
+const sessionTitleLookupBatchSize = 6
 const switchPageSize = 10
 const recentDefaultCount = 5
 const recentMaxCount = 12
@@ -1295,14 +1296,22 @@ function formatSessionDisplay(sessionId: string, title?: string): string {
 
 async function formatSessionList(config: BridgeConfig, list: string[], current?: string): Promise<string[]> {
   const active = current?.trim()
-  const details = await Promise.all(list.map(async (sessionId) => {
-    const title = await safeSessionTitle(config, sessionId)
-    return formatSessionDisplay(sessionId, title)
-  }))
+  const details = await formatSessionRows(config, list)
   return list.map((sessionId, index) => {
     const suffix = active === sessionId.trim() ? " (current)" : ""
     return `${index + 1}. ${details[index]}${suffix}`
   })
+}
+
+async function formatSessionRows(config: BridgeConfig, list: string[]): Promise<string[]> {
+  const rows = await Promise.all(
+    list
+      .slice(0, sessionTitleLookupBatchSize)
+      .map(async (sessionId) => formatSessionDisplay(sessionId, await safeSessionTitle(config, sessionId))),
+  )
+  if (list.length <= sessionTitleLookupBatchSize) return rows
+  const tail = await formatSessionRows(config, list.slice(sessionTitleLookupBatchSize))
+  return [...rows, ...tail]
 }
 
 function normalizeSessionLookupId(sessionId: string): string | undefined {
@@ -1491,7 +1500,7 @@ async function switchPicker(runtime: Runtime, chatKey: string, current?: string,
   const start = safePage * switchPageSize
   const end = Math.min(start + switchPageSize, list.length)
   const rows = list.slice(start, end)
-  const titles = await Promise.all(rows.map((sessionId) => safeSessionTitle(runtime.config, sessionId)))
+  const titles = await sessionTitles(runtime.config, rows)
   const buttons = rows.map((sessionId, itemIndex) => {
     const index = start + itemIndex
     return [{
@@ -1513,6 +1522,13 @@ async function switchPicker(runtime: Runtime, chatKey: string, current?: string,
     text: `Recent sessions for this chat/user mapping (${start + 1}-${end} of ${list.length}). Tap a session button to switch instantly, or use /switch [session-id|index].`,
     replyMarkup,
   }
+}
+
+async function sessionTitles(config: BridgeConfig, list: string[]): Promise<Array<string | undefined>> {
+  const titles = await Promise.all(list.slice(0, sessionTitleLookupBatchSize).map((sessionId) => safeSessionTitle(config, sessionId)))
+  if (list.length <= sessionTitleLookupBatchSize) return titles
+  const tail = await sessionTitles(config, list.slice(sessionTitleLookupBatchSize))
+  return [...titles, ...tail]
 }
 
 function resolveSwitchTarget(target: string, list: string[]): { sessionId?: string; error?: string; fromKnownList: boolean } {
