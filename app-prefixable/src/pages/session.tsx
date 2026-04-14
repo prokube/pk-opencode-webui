@@ -653,19 +653,6 @@ export function Session() {
       setFollowupAutoPending(false);
       return;
     }
-    const model = sessionModel();
-    if (!model) {
-      setFollowupAutoPending(false);
-      setFollowupAutoPaused(next.id);
-      setError("Auto send paused: select a model to send queued followups.");
-      return;
-    }
-    if (!providers.connected.includes(model.providerID)) {
-      setFollowupAutoPending(false);
-      setFollowupAutoPaused(next.id);
-      setError(`Auto send paused: provider "${model.providerID}" is not connected.`);
-      return;
-    }
     setFollowupAutoPending(false);
     void sendFollowupNow(next.id, "auto");
   });
@@ -1508,7 +1495,7 @@ export function Session() {
     const dir = params.dir;
     const sid = sessionId();
     const busy = events.status[sid ?? ""]?.type;
-    const pauseAuto = source === "auto" || (source === "manual" && followupAutoSend());
+    const pauseAuto = source === "auto";
     const fail = (message: string) => {
       setError(message);
     };
@@ -1531,10 +1518,20 @@ export function Session() {
     }
     const model = sessionModel();
     if (!model) {
+      if (pauseAuto) {
+        setFollowupAutoPaused(id);
+        fail("Auto send paused: select a model to send queued followups.");
+        return false;
+      }
       fail("Please select a model before sending messages. Click the model button in the header.");
       return false;
     }
     if (!providers.connected.includes(model.providerID)) {
+      if (pauseAuto) {
+        setFollowupAutoPaused(id);
+        fail(`Auto send paused: provider "${model.providerID}" is not connected.`);
+        return false;
+      }
       fail(`Provider "${model.providerID}" is not connected. Please configure it in Settings.`);
       return false;
     }
