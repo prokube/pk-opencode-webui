@@ -909,6 +909,9 @@ type SwitchCallbackData =
   | { action: "page"; page: number }
   | { action: "select"; index: number; token: string }
 
+type UtilityCallbackData =
+  | { action: "recent" }
+
 function switchToken(sessionId: string): string {
   return shortId(sessionId).slice(0, 8).padStart(6, "0")
 }
@@ -933,6 +936,23 @@ function parseSwitchCallbackData(input: string): SwitchCallbackData | undefined 
   const index = Number.parseInt(selected[1] || "", 10)
   if (!Number.isFinite(index) || index < 1) return
   return { action: "select", index: index - 1, token: selected[2] || "" }
+}
+
+function utilityRecentCallbackData(): string {
+  return "u:recent"
+}
+
+function parseUtilityCallbackData(input: string): UtilityCallbackData | undefined {
+  if (input === "u:recent") return { action: "recent" }
+}
+
+function proactiveActionsMarkup(): { inline_keyboard: Array<Array<{ text: string; callback_data: string }>> } {
+  return {
+    inline_keyboard: [[
+      { text: "Switch session", callback_data: switchPageCallback(0) },
+      { text: "Latest message", callback_data: utilityRecentCallbackData() },
+    ]],
+  }
 }
 
 function questionMarkup(question: TelegramPendingQuestion): { inline_keyboard: Array<Array<{ text: string; callback_data: string }>> } | undefined {
@@ -2489,6 +2509,33 @@ export async function handleCallbackUpdate(runtime: Runtime, update: TelegramUpd
       state.acknowledged = true
       return
     }
+    const utility = parseUtilityCallbackData(data)
+    if (utility?.action === "recent") {
+      const key = telegramSessionKey(chatId, userId)
+      const current = await runtime.store.get(key) || sessionFromCache(runtime.config, key)
+      if (!current) {
+        await answerCallback(runtime.config, callbackId, "No active session mapping.")
+        state.acknowledged = true
+        return
+      }
+      const ref = parsedSessionRef(current)
+      if (!ref) {
+        await answerCallback(runtime.config, callbackId, "Session mapping is invalid.")
+        state.acknowledged = true
+        return
+      }
+      const scoped = sourceForSessionRef(runtime, ref)
+      if (!scoped) {
+        await answerCallback(runtime.config, callbackId, sourceUnavailableText(ref.sourceId))
+        state.acknowledged = true
+        return
+      }
+      await answerCallback(runtime.config, callbackId, "Loading latest message...")
+      state.acknowledged = true
+      const text = await recentText(scoped, ref.sessionId, 1)
+      await sendTelegramMessage(runtime.config, chatId, text)
+      return
+    }
     const parsed = parseCallbackData(data)
     if (!parsed) {
       await answerCallback(runtime.config, callbackId, "Unsupported button payload.")
@@ -2981,7 +3028,7 @@ async function notifySessionKeys(
       if (!shouldNotify(runtime.config, chatId, dedupeKey, sessionId, sourceId)) continue
       const message = `${text}\n\nOpen ${sessionLabel(runtime.config, sessionId, sourceId)}`
       await queueChatUpdate(String(chatId), async () => {
-        await sendTelegramMessage(runtime.config, chatId, message)
+        await sendTelegramMessageWithMarkup(runtime.config, chatId, message, proactiveActionsMarkup())
       })
       stampNotification(chatId, dedupeKey, sessionId, sourceId)
     } catch (error) {
@@ -3043,7 +3090,12 @@ async function notifyQuestion(runtime: Runtime, sessionId: string, sourceId: str
       if (!shouldNotify(runtime.config, chatId, kind, sessionId, sourceId)) continue
       await queueChatUpdate(String(chatId), async () => {
         await sendTelegramQuestionPrompt(runtime.config, chatId, question)
-        await sendTelegramMessage(runtime.config, chatId, `Open ${sessionLabel(runtime.config, sessionId, sourceId)}`)
+        await sendTelegramMessageWithMarkup(
+          runtime.config,
+          chatId,
+          `Open ${sessionLabel(runtime.config, sessionId, sourceId)}`,
+          proactiveActionsMarkup(),
+        )
       })
       stampNotification(chatId, kind, sessionId, sourceId)
     } catch (error) {
