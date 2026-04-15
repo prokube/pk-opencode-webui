@@ -510,6 +510,39 @@ function notificationKey(chatId: number): string {
   return telegramSessionKey(chatId)
 }
 
+async function notificationTargets(runtime: Runtime): Promise<string[]> {
+  if (!runtime.store.notificationKeys) return []
+  const keys = await runtime.store.notificationKeys()
+  const targets = new Set<string>()
+  for (const key of keys) {
+    const parsed = parseTelegramKey(key)
+    if (!parsed) continue
+    targets.add(key)
+  }
+  return [...targets]
+}
+
+async function eventTargets(runtime: Runtime, sessionId: string): Promise<string[]> {
+  const alarmEnabled = runtime.store.sessionAlarmGet
+    ? await runtime.store.sessionAlarmGet(sessionId)
+    : true
+  if (!alarmEnabled) return []
+
+  const optedIn = await notificationTargets(runtime)
+  if (optedIn.length) return optedIn
+  if (!runtime.store.sessionKeys) return []
+
+  const targets = new Set<string>()
+  const keys = await runtime.store.sessionKeys(sessionId)
+  for (const key of keys) {
+    const parsed = parseTelegramKey(key)
+    if (!parsed) continue
+    if (!(await notificationEnabled(runtime, notificationKey(parsed.chatId)))) continue
+    targets.add(key)
+  }
+  return [...targets]
+}
+
 function proactiveTelegramEnabled(config: BridgeConfig): boolean {
   return config.telegramAlarmChannelEnabled !== false
 }
@@ -2597,57 +2630,58 @@ async function notifySessionKeys(
   requestId?: string,
   notifyKind?: string,
 ) {
-  if (!runtime.store.sessionKeys) return
+  const targets = await eventTargets(runtime, sessionId)
+  if (!targets.length) return
   const dedupeKey = notifyKind || kind
-  const keys = await runtime.store.sessionKeys(sessionId)
   const chats = new Set<number>()
-  for (const mapKey of keys) {
+  for (const key of targets) {
     try {
-      const parsed = parseTelegramKey(mapKey)
+      const parsed = parseTelegramKey(key)
       if (!parsed) continue
-      if (!chats.has(parsed.chatId)) {
-        chats.add(parsed.chatId)
-        const entry: TelegramPendingItem = {
-          id: pendingEntryId(sessionId, kind, parsed.chatId, requestId),
-          kind,
-          sessionId,
-          text,
-          stampedAt: Date.now(),
-          resolved: kind === "task-finished",
-        }
-        await appendPending(runtime, parsed.chatId, entry)
+      const chatId = parsed.chatId
+      const entry: TelegramPendingItem = {
+        id: pendingEntryId(sessionId, kind, chatId, requestId),
+        kind,
+        sessionId,
+        text,
+        stampedAt: Date.now(),
+        resolved: kind === "task-finished",
+      }
+      if (!chats.has(chatId)) {
+        chats.add(chatId)
+        await appendPending(runtime, chatId, entry)
         if (kind === "task-finished") {
-          await resolvePendingForSession(runtime, parsed.chatId, sessionId)
+          await resolvePendingForSession(runtime, chatId, sessionId)
         }
       }
-      if (!(await notificationEnabled(runtime, notificationKey(parsed.chatId)))) continue
       if (!proactiveTelegramEnabled(runtime.config)) continue
-      if (!shouldNotify(runtime.config, parsed.chatId, dedupeKey, sessionId)) continue
+      if (!shouldNotify(runtime.config, chatId, dedupeKey, sessionId)) continue
       const message = `${text}\n\nOpen ${sessionLabel(runtime.config, sessionId)}`
-      await queueChatUpdate(String(parsed.chatId), async () => {
-        await sendTelegramMessage(runtime.config, parsed.chatId, message)
+      await queueChatUpdate(String(chatId), async () => {
+        await sendTelegramMessage(runtime.config, chatId, message)
       })
-      stampNotification(parsed.chatId, dedupeKey, sessionId)
+      stampNotification(chatId, dedupeKey, sessionId)
     } catch (error) {
-      console.error("[TelegramBridge] outbound notify failed", { sessionId, key: mapKey, kind, error })
+      console.error("[TelegramBridge] outbound notify failed", { sessionId, key, kind, error })
     }
   }
 }
 
 async function notifyQuestion(runtime: Runtime, sessionId: string, question: TelegramPendingQuestion) {
-  if (!runtime.store.sessionKeys) return
-  const keys = await runtime.store.sessionKeys(sessionId)
+  const targets = await eventTargets(runtime, sessionId)
+  if (!targets.length) return
   const kind = `question:${question.requestId}`
   const chats = new Set<number>()
-  for (const key of keys) {
+  for (const key of targets) {
     try {
       const parsed = parseTelegramKey(key)
       if (!parsed) continue
+      const chatId = parsed.chatId
       await upsertPendingQuestion(runtime, key, question)
-      if (!chats.has(parsed.chatId)) {
-        chats.add(parsed.chatId)
-        await appendPending(runtime, parsed.chatId, {
-          id: pendingEntryId(sessionId, "question", parsed.chatId, question.requestId),
+      if (!chats.has(chatId)) {
+        chats.add(chatId)
+        await appendPending(runtime, chatId, {
+          id: pendingEntryId(sessionId, "question", chatId, question.requestId),
           kind: "question",
           sessionId,
           text: pendingQuestionText(question),
@@ -2655,14 +2689,13 @@ async function notifyQuestion(runtime: Runtime, sessionId: string, question: Tel
           resolved: false,
         })
       }
-      if (!(await notificationEnabled(runtime, notificationKey(parsed.chatId)))) continue
       if (!proactiveTelegramEnabled(runtime.config)) continue
-      if (!shouldNotify(runtime.config, parsed.chatId, kind, sessionId)) continue
-      await queueChatUpdate(String(parsed.chatId), async () => {
-        await sendTelegramQuestionPrompt(runtime.config, parsed.chatId, question)
-        await sendTelegramMessage(runtime.config, parsed.chatId, `Open ${sessionLabel(runtime.config, sessionId)}`)
+      if (!shouldNotify(runtime.config, chatId, kind, sessionId)) continue
+      await queueChatUpdate(String(chatId), async () => {
+        await sendTelegramQuestionPrompt(runtime.config, chatId, question)
+        await sendTelegramMessage(runtime.config, chatId, `Open ${sessionLabel(runtime.config, sessionId)}`)
       })
-      stampNotification(parsed.chatId, kind, sessionId)
+      stampNotification(chatId, kind, sessionId)
     } catch (error) {
       console.error("[TelegramBridge] outbound question notify failed", { sessionId, key, error })
     }
@@ -2714,16 +2747,17 @@ export async function handleBridgeEvent(runtime: Runtime, event: { type: string;
     const deletedSessionId = typeof info?.id === "string" ? info.id : sessionId
     if (!deletedSessionId) return
     statusBySession.delete(deletedSessionId)
-    if (runtime.store.sessionKeys) {
-      const keys = await runtime.store.sessionKeys(deletedSessionId)
-      const chats = new Set<number>()
-      for (const key of keys) {
-        const parsed = parseTelegramKey(key)
-        if (!parsed) continue
-        if (chats.has(parsed.chatId)) continue
-        chats.add(parsed.chatId)
-        await resolvePendingForSession(runtime, parsed.chatId, deletedSessionId)
-      }
+    const targets = await notificationTargets(runtime)
+    const keys = targets.length || !runtime.store.sessionKeys
+      ? targets
+      : await runtime.store.sessionKeys(deletedSessionId)
+    const chats = new Set<number>()
+    for (const key of keys) {
+      const parsed = parseTelegramKey(key)
+      if (!parsed) continue
+      if (chats.has(parsed.chatId)) continue
+      chats.add(parsed.chatId)
+      await resolvePendingForSession(runtime, parsed.chatId, deletedSessionId)
     }
     return
   }

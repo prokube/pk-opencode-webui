@@ -219,6 +219,8 @@ This repository includes a Telegram bridge service (`docker/telegram-bridge.ts`)
 
 The bridge keeps a default OpenCode session per Telegram chat (and sender in shared chats), persisted to `TELEGRAM_SESSION_STORE_PATH` so mappings survive restarts.
 
+Proactive outbound alerts are routed independently from chat-to-session command mappings: `/status` and `/switch` control which session interactive commands target, while alert fanout is controlled by `/notify on` opt-in and per-session bell/alarm state.
+
 In container/Kubernetes deployments, the default OS temp directory is often ephemeral, so set `TELEGRAM_SESSION_STORE_PATH` to a mounted persistent volume location if you need mappings to survive pod/container recreation.
 
 The file-backed session store is single-writer/single-replica only (no cross-process locking). For horizontally scaled or multi-replica deployments, use an external coordinated session store instead of sharing one file.
@@ -234,6 +236,7 @@ Messages from the same chat are handled through a per-chat queue to avoid cross-
 
 Outbound alert behavior:
 - Safe by default: outbound alerts are disabled until a chat opts in via `/notify on`.
+- Bell-gated: only sessions with Telegram bell/alarm enabled emit proactive alerts.
 - Debounced: repeated burst events are suppressed for `TELEGRAM_NOTIFY_DEBOUNCE_MS`.
 - Context-rich: alerts include the session id and, when `TELEGRAM_SESSION_LINK_BASE` is set, a direct session URL.
 

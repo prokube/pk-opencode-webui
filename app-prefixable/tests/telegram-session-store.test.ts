@@ -189,6 +189,21 @@ describe("telegram session store", () => {
     expect(await second.notificationGet?.(key)).toBe(false)
   })
 
+  test("notificationKeys lists only enabled chat notification entries", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "telegram-session-store-"))
+    const path = join(dir, "sessions.json")
+    files.push(path)
+    files.push(dir)
+
+    const store = createTelegramSessionStore(path)
+    await store.notificationSet?.(telegramSessionKey(901), true)
+    await store.notificationSet?.(telegramSessionKey(902), true)
+    await store.notificationSet?.(telegramSessionKey(903), false)
+
+    const keys = await store.notificationKeys?.()
+    expect(keys?.sort()).toEqual([telegramSessionKey(901), telegramSessionKey(902)])
+  })
+
   test("persists session alarm flags", async () => {
     const dir = await mkdtemp(join(tmpdir(), "telegram-session-store-"))
     const path = join(dir, "sessions.json")

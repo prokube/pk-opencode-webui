@@ -12,6 +12,7 @@ const checklist = Object.freeze([
   Object.freeze({ id: "path", label: "sessionStorePath points to a persistent writable location." }),
   Object.freeze({ id: "webhook", label: "For webhook mode: TELEGRAM_WEBHOOK_URL, TELEGRAM_WEBHOOK_PATH, and HTTPS ingress are configured." }),
   Object.freeze({ id: "notify", label: "Notifications are enabled per chat with /notify on after a test message." }),
+  Object.freeze({ id: "alarm", label: "Session bell/alarm is enabled for each OpenCode session that should emit proactive alerts." }),
 ]) as readonly Readonly<ChecklistItem>[]
 
 const commands = ["/pending", "/inbox", "/notify on", "/notify off", "/notify status", "/new", "/status", "/sessions", "/switch <session-id|index>", "/help"] as const
@@ -102,6 +103,9 @@ export function TelegramSetupGuide() {
           </p>
           <p>
             <strong>Mode:</strong> set <code>mode=polling</code> for local/simple setups, or <code>mode=webhook</code> for production ingress. Polling clears webhook registration automatically.
+          </p>
+          <p>
+            <strong>Alert routing model:</strong> proactive Telegram alerts fan out to chats that enabled <code>/notify on</code> and only for sessions with bell/alarm enabled. Chat-to-session mappings from <code>/status</code> and <code>/switch</code> are used for interactive commands and do not limit proactive routing.
           </p>
           <p>
             Persisted UI fields map to runtime settings: <code>mode</code>, <code>token</code>, <code>openCodeUrl</code>, <code>directory</code>, <code>sessionCacheMax</code>,
