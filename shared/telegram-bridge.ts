@@ -1,5 +1,7 @@
 import { createTelegramSessionStore, telegramSessionKey, type TelegramPendingQuestion } from "./telegram-session-store"
-import { loadTelegramBridgeSettings, writeTelegramRuntimeState } from "./telegram-settings"
+import { loadTelegramBridgeSettings, updateTelegramSettings, writeTelegramRuntimeState } from "./telegram-settings"
+import { appendFile, mkdir } from "node:fs/promises"
+import { dirname } from "node:path"
 
 type TelegramUpdate = {
   update_id: number
@@ -43,6 +45,78 @@ type BridgeConfig = {
   webhookSecret?: string
   webhookUrl?: string
   sessionStorePath: string
+}
+
+const rawConsole = {
+  log: console.log.bind(console),
+  warn: console.warn.bind(console),
+  error: console.error.bind(console),
+}
+
+let fileLoggerInstalled = false
+let fileLoggerPath = ""
+let fileLoggerWrites = Promise.resolve()
+
+function bridgeLogFilePath() {
+  return (process.env.TELEGRAM_LOG_FILE || "").trim()
+}
+
+function formatLogArg(value: unknown): string {
+  if (value instanceof Error) {
+    const parts = [value.name, value.message].filter(Boolean)
+    const head = parts.join(": ")
+    if (!value.stack) return head
+    return `${head}\n${value.stack}`
+  }
+  if (typeof value === "string") return value
+  if (typeof value === "number") return String(value)
+  if (typeof value === "boolean") return value ? "true" : "false"
+  if (value === null) return "null"
+  if (value === undefined) return "undefined"
+  return JSON.stringify(value, (_key, item) => {
+    if (item instanceof Error) {
+      return {
+        name: item.name,
+        message: item.message,
+        stack: item.stack,
+      }
+    }
+    return item
+  })
+}
+
+function writeBridgeLogLine(level: "INFO" | "WARN" | "ERROR", args: unknown[]) {
+  if (!fileLoggerPath) return
+  const line = `${new Date().toISOString()} [${level}] ${args.map((item) => formatLogArg(item)).join(" ")}\n`
+  fileLoggerWrites = fileLoggerWrites
+    .then(() => appendFile(fileLoggerPath, line))
+    .catch((error) => {
+      rawConsole.warn("[TelegramBridge] failed to write log file", { path: fileLoggerPath, error })
+    })
+}
+
+async function enableBridgeFileLogging() {
+  const path = bridgeLogFilePath()
+  if (!path) return
+  fileLoggerPath = path
+  await mkdir(dirname(path), { recursive: true }).catch((error) => {
+    rawConsole.warn("[TelegramBridge] failed to prepare log directory", { path, error })
+  })
+  if (fileLoggerInstalled) return
+  fileLoggerInstalled = true
+  console.log = (...args: unknown[]) => {
+    rawConsole.log(...args)
+    writeBridgeLogLine("INFO", args)
+  }
+  console.warn = (...args: unknown[]) => {
+    rawConsole.warn(...args)
+    writeBridgeLogLine("WARN", args)
+  }
+  console.error = (...args: unknown[]) => {
+    rawConsole.error(...args)
+    writeBridgeLogLine("ERROR", args)
+  }
+  writeBridgeLogLine("INFO", ["[TelegramBridge] file logging enabled", { path }])
 }
 
 type Runtime = {
@@ -98,6 +172,7 @@ type CachedSession = {
 type CachedSessionInfo = {
   exists: boolean
   title: string | null
+  parentID: string | null
   expiresAt: number
 }
 
@@ -208,6 +283,11 @@ const telegramCommands = Object.freeze([
     name: "switch",
     text: "Switch this chat/user mapping to an existing session",
     args: "[session-id|index]",
+  }),
+  Object.freeze({
+    name: "project",
+    text: "Show or set OpenCode project directory",
+    args: "[path|clear|status]",
   }),
   Object.freeze({
     name: "notify",
@@ -356,6 +436,24 @@ function notifyDebug(message: string, data?: Record<string, unknown>) {
     return
   }
   console.log(`[TelegramBridge][notify] ${message}`, data)
+}
+
+function bridgeDebugEnabled() {
+  const raw = (process.env.TELEGRAM_BRIDGE_DEBUG || "").trim().toLowerCase()
+  if (raw === "1") return true
+  if (raw === "true") return true
+  if (raw === "yes") return true
+  if (notificationDebugEnabled()) return true
+  return false
+}
+
+function bridgeDebug(message: string, data?: Record<string, unknown>) {
+  if (!bridgeDebugEnabled()) return
+  if (!data) {
+    console.log(`[TelegramBridge][debug] ${message}`)
+    return
+  }
+  console.log(`[TelegramBridge][debug] ${message}`, data)
 }
 
 async function notificationEnabled(runtime: Runtime, key: string): Promise<boolean> {
@@ -562,9 +660,7 @@ async function sessionTargets(runtime: Runtime, sessionId: string): Promise<stri
 }
 
 async function pendingTargets(runtime: Runtime, sessionId: string): Promise<string[]> {
-  const alarmEnabled = runtime.store.sessionAlarmGet
-    ? await runtime.store.sessionAlarmGet(sessionId)
-    : true
+  const alarmEnabled = await sessionAlarmEnabled(runtime, sessionId)
   if (!alarmEnabled) {
     notifyDebug("pending targets skipped: session alarm disabled", { sessionId })
     return []
@@ -583,9 +679,7 @@ async function pendingTargets(runtime: Runtime, sessionId: string): Promise<stri
 }
 
 async function eventTargets(runtime: Runtime, sessionId: string): Promise<string[]> {
-  const alarmEnabled = runtime.store.sessionAlarmGet
-    ? await runtime.store.sessionAlarmGet(sessionId)
-    : true
+  const alarmEnabled = await sessionAlarmEnabled(runtime, sessionId)
   if (!alarmEnabled) {
     notifyDebug("event targets skipped: session alarm disabled", { sessionId })
     return []
@@ -839,6 +933,10 @@ type SessionActionCallbackData =
   | { action: "switch"; sessionId: string }
   | { action: "recent"; sessionId: string }
 
+type ProjectActionCallbackData =
+  | { action: "session"; sessionId: string }
+  | { action: "clear" }
+
 function switchToken(sessionId: string): string {
   return shortId(sessionId).slice(0, 8).padStart(6, "0")
 }
@@ -882,6 +980,93 @@ function parseSessionActionCallbackData(input: string): SessionActionCallbackDat
   if (!sessionId) return
   if (action === "s") return { action: "switch", sessionId }
   if (action === "r") return { action: "recent", sessionId }
+}
+
+function projectSessionCallback(sessionId: string): string | undefined {
+  const id = sessionId.trim()
+  if (!id) return
+  if (/[\s:]/.test(id)) return
+  const value = `d:s:${id}`
+  if (value.length > callbackDataMax) return
+  return value
+}
+
+function projectClearCallback(): string {
+  return "d:c"
+}
+
+function parseProjectActionCallbackData(input: string): ProjectActionCallbackData | undefined {
+  if (input === "d:c") return { action: "clear" }
+  const parsed = input.match(/^d:s:([^\s:]{1,58})$/)
+  if (!parsed) return
+  const sessionId = parsed[1]?.trim() || ""
+  if (!sessionId) return
+  return { action: "session", sessionId }
+}
+
+function compactDirectoryLabel(directory: string): string {
+  const normalized = directory.replace(/\\+/g, "/").replace(/\/+$/, "")
+  if (!normalized) return directory
+  const parts = normalized.split("/").filter(Boolean)
+  if (!parts.length) return normalized
+  const tail = parts[parts.length - 1] || normalized
+  if (tail.length <= 28) return tail
+  return truncateTelegramInlineText(tail, 28)
+}
+
+async function projectChoices(runtime: Runtime, chatKey: string, current?: string): Promise<Array<{ sessionId: string; directory: string; title?: string }>> {
+  const list = await switchCandidates(runtime, chatKey, current)
+  if (!list.length) return []
+  const unique: Array<{ sessionId: string; directory: string; title?: string }> = []
+  const seen = new Set<string>()
+  for (const sessionId of list) {
+    if (unique.length >= 8) break
+    const directory = await sessionDirectory(runtime.config, sessionId)
+    if (!directory || seen.has(directory)) continue
+    seen.add(directory)
+    const title = await safeSessionTitle(runtime.config, sessionId)
+    unique.push({ sessionId, directory, title })
+  }
+  return unique
+}
+
+function projectPickerText(current?: string): string {
+  if (!current) {
+    return "Project directory override is not set. Using session-derived context."
+  }
+  return `Current project directory override: ${current}`
+}
+
+async function projectPicker(runtime: Runtime, chatKey: string, current?: string): Promise<{
+  text: string
+  replyMarkup?: { inline_keyboard: Array<Array<{ text: string; callback_data: string }>> }
+}> {
+  const active = runtime.config.directory?.trim() || ""
+  const choices = await projectChoices(runtime, chatKey, current)
+  const rows = choices
+    .map((choice, index) => {
+      const callback = projectSessionCallback(choice.sessionId)
+      if (!callback) return
+      const marker = active === choice.directory ? " [current]" : ""
+      const title = choice.title ? ` - ${truncateTelegramInlineText(choice.title, 18)}` : ""
+      return [{
+        text: truncateTelegramInlineText(`${index + 1}. ${compactDirectoryLabel(choice.directory)}${title}${marker}`, inlineButtonTextMax),
+        callback_data: callback,
+      }]
+    })
+    .filter((item) => item !== undefined) as Array<Array<{ text: string; callback_data: string }>>
+  if (active) {
+    rows.push([{ text: "Clear project override", callback_data: projectClearCallback() }])
+  }
+  if (!rows.length) {
+    return {
+      text: `${projectPickerText(active || undefined)}\n\nNo recent project directories found from session history. Use /project <path> to set one directly.`,
+    }
+  }
+  return {
+    text: `${projectPickerText(active || undefined)}\n\nChoose a project directory from recent sessions, or use /project <path>.`,
+    replyMarkup: { inline_keyboard: rows },
+  }
 }
 
 function sessionTitleText(sessionId: string, title?: string): string {
@@ -931,15 +1116,26 @@ function parsePendingQuestion(properties: Record<string, unknown>): TelegramPend
       const value = row as Record<string, unknown>
       const header = typeof value.header === "string" ? value.header.trim() : ""
       const question = typeof value.question === "string" ? value.question.trim() : ""
-      const options = Array.isArray(value.options)
+      const parsedOptions = Array.isArray(value.options)
         ? value.options
           .map((item) => {
-            if (!item || typeof item !== "object") return ""
-            const option = item as { label?: unknown }
-            return typeof option.label === "string" ? option.label.trim() : ""
+            if (typeof item === "string") {
+              const label = item.trim()
+              if (!label) return
+              return { label, description: "" }
+            }
+            if (!item || typeof item !== "object") return
+            const option = item as { label?: unknown; description?: unknown }
+            const label = typeof option.label === "string" ? option.label.trim() : ""
+            if (!label) return
+            const description = typeof option.description === "string" ? option.description.trim() : ""
+            return { label, description }
           })
-          .filter(Boolean)
+          .filter((item) => item !== undefined)
         : []
+      const options = parsedOptions.map((item) => item.label)
+      const optionDescriptions = parsedOptions.map((item) => item.description)
+      const hasDescriptions = optionDescriptions.some(Boolean)
       const multiple = value.multiple === true
       const custom = value.custom !== false
       if (!header && !question && !options.length) return
@@ -947,6 +1143,7 @@ function parsePendingQuestion(properties: Record<string, unknown>): TelegramPend
         header,
         question,
         options,
+        optionDescriptions: hasDescriptions ? optionDescriptions : undefined,
         multiple,
         custom,
       }
@@ -975,6 +1172,13 @@ function permissionText(properties: Record<string, unknown>): string {
   return `Permission request: ${permission} (${patterns.join(", ")})`
 }
 
+function optionLine(row: TelegramPendingQuestion["questions"][number], index: number): string {
+  const label = row.options[index] || ""
+  const description = row.optionDescriptions?.[index] || ""
+  if (!description) return `${index + 1}) ${label}`
+  return `${index + 1}) ${label} - ${description}`
+}
+
 function questionPromptText(question: TelegramPendingQuestion): string {
   const lines = ["Question pending:"]
   for (let i = 0; i < question.questions.length; i++) {
@@ -991,7 +1195,7 @@ function questionPromptText(question: TelegramPendingQuestion): string {
     const detail = row.question && row.question !== row.header ? row.question : ""
     if (detail) lines.push(detail)
     for (let index = 0; index < row.options.length; index++) {
-      lines.push(`${index + 1}) ${row.options[index]}`)
+      lines.push(optionLine(row, index))
     }
     if (!row.options.length && row.custom) {
       lines.push("Reply with your answer as text.")
@@ -1029,7 +1233,7 @@ function questionStepText(question: TelegramPendingQuestion, hasButtons = false)
   const detail = row.question && row.question !== row.header ? row.question : ""
   if (detail) lines.push(detail)
   for (let optionIndex = 0; optionIndex < row.options.length; optionIndex++) {
-    lines.push(`${optionIndex + 1}) ${row.options[optionIndex]}`)
+    lines.push(optionLine(row, optionIndex))
   }
   if (!row.options.length && row.custom) {
     lines.push("Reply with your answer as text.")
@@ -1477,7 +1681,7 @@ function cacheSessionInfo(config: BridgeConfig, sessionId: string, info: Session
   const now = Date.now()
   const expiresAt = now + config.sessionCacheTtlMs
   sessionInfo.delete(sessionId)
-  sessionInfo.set(sessionId, { exists: info.exists, title: info.title || null, expiresAt })
+  sessionInfo.set(sessionId, { exists: info.exists, title: info.title || null, parentID: info.parentID || null, expiresAt })
   pruneExpiredSessionInfo(now)
   for (const key of sessionInfo.keys()) {
     if (sessionInfo.size <= config.sessionCacheMax * 2) return
@@ -1495,7 +1699,25 @@ function cachedSessionLookup(sessionId: string): SessionLookup | undefined {
   return {
     exists: cached.exists,
     title: cached.title || undefined,
+    parentID: cached.parentID || undefined,
   }
+}
+
+function trimSessionId(value: unknown): string | undefined {
+  if (typeof value !== "string") return
+  const text = value.trim()
+  if (!text) return
+  return text
+}
+
+function sessionParentFromPayload(raw: unknown): string | undefined {
+  if (!raw || typeof raw !== "object") return
+  const row = raw as { parentID?: unknown; info?: unknown }
+  const direct = trimSessionId(row.parentID)
+  if (direct) return direct
+  if (!row.info || typeof row.info !== "object") return
+  const info = row.info as { parentID?: unknown }
+  return trimSessionId(info.parentID)
 }
 
 function formatSessionDisplay(sessionId: string, title?: string): string {
@@ -1536,6 +1758,7 @@ function normalizeSessionLookupId(sessionId: string): string | undefined {
 type SessionLookup = {
   exists: boolean
   title?: string
+  parentID?: string
 }
 
 async function readSessionInfo(config: BridgeConfig, sessionId: string): Promise<SessionLookup> {
@@ -1554,11 +1777,70 @@ async function readSessionInfo(config: BridgeConfig, sessionId: string): Promise
     const body = await res.text().catch(() => "")
     throw new Error(`OpenCode session lookup failed (${res.status}): ${body.slice(0, 300)}`)
   }
-  const payload = await res.json().catch(() => ({})) as { title?: unknown }
+  const payload = await res.json().catch(() => ({})) as { title?: unknown; parentID?: unknown; info?: unknown }
   return {
     exists: true,
     title: trimSessionTitle(payload.title),
+    parentID: sessionParentFromPayload(payload),
   }
+}
+
+async function readSessionInfoCached(config: BridgeConfig, sessionId: string): Promise<SessionLookup> {
+  const id = normalizeSessionLookupId(sessionId)
+  if (!id) return { exists: false }
+  const cached = cachedSessionLookup(id)
+  if (cached) return cached
+  const loaded = await readSessionInfo(config, id)
+  cacheSessionInfo(config, id, loaded)
+  return loaded
+}
+
+async function rootAncestorSessionId(config: BridgeConfig, sessionId: string): Promise<string> {
+  const start = normalizeSessionLookupId(sessionId)
+  if (!start) return sessionId
+  const seen = new Set<string>([start])
+  let root = start
+  let walk = start
+  for (let i = 0; i < 12; i++) {
+    const info = await readSessionInfoCached(config, walk).catch(() => undefined)
+    const parent = normalizeSessionLookupId(info?.parentID || "")
+    if (!parent) return root
+    if (seen.has(parent)) return root
+    seen.add(parent)
+    root = parent
+    walk = parent
+  }
+  return root
+}
+
+async function sessionAlarmEnabled(runtime: Runtime, sessionId: string): Promise<boolean> {
+  const fromDisk = async (id: string) => {
+    const path = runtime.config.sessionStorePath
+    if (!path) return false
+    const data = await Bun.file(path).json().catch(() => undefined) as { sessionAlarms?: Record<string, unknown> } | undefined
+    if (!data?.sessionAlarms) return false
+    return data.sessionAlarms[id] === true
+  }
+
+  if (!runtime.store.sessionAlarmGet) return true
+  const direct = await runtime.store.sessionAlarmGet(sessionId)
+  if (direct) return true
+  if (await fromDisk(sessionId)) {
+    notifyDebug("session alarm loaded from disk", { sessionId })
+    return true
+  }
+  const root = await rootAncestorSessionId(runtime.config, sessionId).catch(() => sessionId)
+  if (root === sessionId) return false
+  const inherited = await runtime.store.sessionAlarmGet(root)
+  if (inherited) {
+    notifyDebug("session alarm inherited from root", { sessionId, rootSessionId: root })
+    return true
+  }
+  if (await fromDisk(root)) {
+    notifyDebug("session alarm inherited from root via disk", { sessionId, rootSessionId: root })
+    return true
+  }
+  return false
 }
 
 async function sessionTitle(config: BridgeConfig, sessionId: string): Promise<string | undefined> {
@@ -1591,6 +1873,25 @@ function normalizeRecentCount(args: string[]): { count?: number; error?: string 
     return { error: usage }
   }
   return { count: Math.min(parsed, recentMaxCount) }
+}
+
+function projectCommandMode(args: string[]): { mode: "status" | "clear" | "set"; directory?: string } {
+  const raw = args.join(" ").trim()
+  if (!raw) return { mode: "status" }
+  const lower = raw.toLowerCase()
+  if (lower === "status") return { mode: "status" }
+  if (lower === "clear") return { mode: "clear" }
+  if (lower === "off") return { mode: "clear" }
+  if (lower === "none") return { mode: "clear" }
+  if (lower === "null") return { mode: "clear" }
+  return { mode: "set", directory: raw }
+}
+
+async function persistDirectoryOverride(directory?: string): Promise<boolean> {
+  const payload = directory ? { directory } : { directory: null }
+  const updated = await updateTelegramSettings(payload).catch(() => undefined)
+  if (!updated) return false
+  return updated.ok === true
 }
 
 function parseRecentText(parts: unknown, max = recentPartTextMax): string {
@@ -1886,6 +2187,40 @@ async function handleSessionActionCallback(runtime: Runtime, chatId: number, use
   const title = await safeSessionTitle(runtime.config, parsed.sessionId)
   await answerCallback(runtime.config, callbackId, "Switched.")
   await sendTelegramMessage(runtime.config, chatId, `Switched to session: ${sessionTitleText(parsed.sessionId, title)}`)
+}
+
+async function handleProjectActionCallback(runtime: Runtime, chatId: number, userId: number, callbackId: string, parsed: ProjectActionCallbackData) {
+  const key = telegramSessionKey(chatId, userId)
+  if (parsed.action === "clear") {
+    await answerCallback(runtime.config, callbackId, "Clearing project override...")
+    runtime.config.directory = undefined
+    const persisted = await persistDirectoryOverride()
+    if (!persisted) {
+      await sendTelegramMessage(runtime.config, chatId, "Cleared project directory override for this running bridge, but failed to persist settings. It may return after restart.")
+      return
+    }
+    await sendTelegramMessage(runtime.config, chatId, "Cleared project directory override. Bridge now uses session-derived context.")
+    return
+  }
+
+  await answerCallback(runtime.config, callbackId, "Switching project...")
+  const directory = await sessionDirectory(runtime.config, parsed.sessionId)
+  if (!directory) {
+    await sendTelegramMessage(runtime.config, chatId, `Could not resolve project directory from session ${parsed.sessionId}. Try /project <path> manually.`)
+    return
+  }
+  runtime.config.directory = directory
+  const persisted = await persistDirectoryOverride(directory)
+  if (!persisted) {
+    await sendTelegramMessage(runtime.config, chatId, `Project directory override set to ${directory} for this running bridge, but failed to persist settings.`)
+    return
+  }
+  const picker = await projectPicker(runtime, key, await runtime.store.get(key) || sessionFromCache(runtime.config, key))
+  if (!picker.replyMarkup) {
+    await sendTelegramMessage(runtime.config, chatId, `Project directory override set to: ${directory}`)
+    return
+  }
+  await sendTelegramMessageWithMarkup(runtime.config, chatId, `Project directory override set to: ${directory}\n\n${picker.text}`, picker.replyMarkup)
 }
 
 export function cacheSession(config: BridgeConfig, chatId: string, sessionId: string) {
@@ -2457,6 +2792,7 @@ export async function handleCallbackUpdate(runtime: Runtime, update: TelegramUpd
   const callbackId = callback?.id
   const data = callback?.data?.trim() || ""
   if (!callbackId) return
+  bridgeDebug("callback received", { chatId, userId, callbackId, data: data || undefined })
   const state = { acknowledged: false }
   try {
     if (!chatId || !userId || !data) {
@@ -2473,6 +2809,12 @@ export async function handleCallbackUpdate(runtime: Runtime, update: TelegramUpd
     const sessionAction = parseSessionActionCallbackData(data)
     if (sessionAction) {
       await handleSessionActionCallback(runtime, chatId, userId, callbackId, sessionAction)
+      state.acknowledged = true
+      return
+    }
+    const projectAction = parseProjectActionCallbackData(data)
+    if (projectAction) {
+      await handleProjectActionCallback(runtime, chatId, userId, callbackId, projectAction)
       state.acknowledged = true
       return
     }
@@ -2628,12 +2970,14 @@ export async function handleTextUpdate(runtime: Runtime, update: TelegramUpdate)
   const text = message?.text?.trim()
 
   if (!chatId || !text) return
+  bridgeDebug("text message received", { chatId, userId, text })
 
   const key = telegramSessionKey(chatId, userId)
 
   const runCommand = async () => {
     const command = parseCommand(text)
     if (!command) return false
+    bridgeDebug("command parsed", { chatId, userId, command: command.name, args: command.args })
     const known = commandEntry(command.name)
     if (known?.name === "help") {
       await sendTelegramMessage(config, chatId, helpText())
@@ -2650,6 +2994,15 @@ export async function handleTextUpdate(runtime: Runtime, update: TelegramUpdate)
       await runtime.store.set(key, next)
       cacheSession(config, key, next)
       await rememberSession(runtime, key, next)
+      if (runtime.store.sessionAlarmSet) {
+        const notifyKey = notificationKey(chatId)
+        const enabled = await notificationEnabled(runtime, notifyKey)
+        if (enabled) {
+          await runtime.store.sessionAlarmSet(next, true).catch((error) => {
+            console.error("[TelegramBridge] failed to auto-enable alarm for /new session", { chatId, sessionId: next, error })
+          })
+        }
+      }
       await sendTelegramMessage(config, chatId, `Started a new session: ${formatSessionDisplay(next)}`)
       return true
     }
@@ -2706,6 +3059,42 @@ export async function handleTextUpdate(runtime: Runtime, update: TelegramUpdate)
       await rememberSession(runtime, key, next)
       const title = await safeSessionTitle(config, next)
       await sendTelegramMessage(config, chatId, `Switched to session: ${formatSessionDisplay(next, title)}`)
+      return true
+    }
+    if (known?.name === "project") {
+      const parsed = projectCommandMode(command.args)
+      if (parsed.mode === "status") {
+        const current = await runtime.store.get(key) || sessionFromCache(config, key)
+        const picker = await projectPicker(runtime, key, current)
+        if (!picker.replyMarkup) {
+          await sendTelegramMessage(config, chatId, picker.text)
+          return true
+        }
+        await sendTelegramMessageWithMarkup(config, chatId, picker.text, picker.replyMarkup)
+        return true
+      }
+      if (parsed.mode === "clear") {
+        runtime.config.directory = undefined
+        const persisted = await persistDirectoryOverride()
+        if (!persisted) {
+          await sendTelegramMessage(config, chatId, "Cleared project directory override for this running bridge, but failed to persist settings. It may return after restart.")
+          return true
+        }
+        await sendTelegramMessage(config, chatId, "Cleared project directory override. Bridge now uses session-derived context.")
+        return true
+      }
+      const directory = parsed.directory
+      if (!directory) {
+        await sendTelegramMessage(config, chatId, "Usage: /project [path], /project clear, or /project status")
+        return true
+      }
+      runtime.config.directory = directory
+      const persisted = await persistDirectoryOverride(directory)
+      if (!persisted) {
+        await sendTelegramMessage(config, chatId, `Set project directory override for this running bridge to ${directory}, but failed to persist settings.`)
+        return true
+      }
+      await sendTelegramMessage(config, chatId, `Project directory override set to: ${directory}`)
       return true
     }
     if (known?.name === "notify") {
@@ -2783,6 +3172,7 @@ export async function handleTextUpdate(runtime: Runtime, update: TelegramUpdate)
   try {
     const handled = await runCommand()
     if (handled) return
+    bridgeDebug("routing text as prompt", { chatId, userId })
 
     const match = await readPendingQuestionMatch(runtime, chatId, userId)
     if (match) {
@@ -2831,6 +3221,7 @@ export async function handleTextUpdate(runtime: Runtime, update: TelegramUpdate)
     }
 
     const sessionId = await sessionForChat(runtime, key)
+    bridgeDebug("resolved chat session for prompt", { chatId, userId, sessionId })
     await resolvePendingForSession(runtime, chatId, sessionId)
     const reply = await sendPrompt(config, sessionId, text).catch(async (error) => {
       if (!isMissingSession(error)) {
@@ -2840,7 +3231,15 @@ export async function handleTextUpdate(runtime: Runtime, update: TelegramUpdate)
       await runtime.store.delete(key)
       const next = await sessionForChat(runtime, key)
       return sendPrompt(config, next, text)
+    }).catch(async (error) => {
+      if (!isTimeoutError(error)) {
+        throw error
+      }
+      bridgeDebug("prompt request timed out", { chatId, userId, sessionId })
+      await sendTelegramMessage(config, chatId, `Prompt started in session ${sessionId}, but the reply is taking longer than expected. Check the web UI for progress.`)
+      return
     })
+    if (!reply) return
     await sendTelegramMessage(config, chatId, reply)
   } catch (error) {
     console.error("[TelegramBridge] request handling failed", { chatId, error })
@@ -3058,6 +3457,7 @@ export async function consumeOutboundEventStream(runtime: Runtime, body: Readabl
 
 export async function handleBridgeEvent(runtime: Runtime, event: { type: string; properties: Record<string, unknown> }) {
   const sessionId = typeof event.properties.sessionID === "string" ? event.properties.sessionID : ""
+  bridgeDebug("bridge event received", { type: event.type, sessionId: sessionId || undefined })
   if (event.type === "session.deleted") {
     const info = event.properties.info && typeof event.properties.info === "object"
       ? event.properties.info as { id?: unknown }
@@ -3273,6 +3673,7 @@ async function runWebhook(runtime: Runtime) {
 }
 
 export async function startTelegramBridge() {
+  await enableBridgeFileLogging()
   const config = parseConfig()
   await writeTelegramRuntimeState(config).catch((error) => {
     console.warn("[TelegramBridge] failed to write runtime state", error)
@@ -3284,6 +3685,9 @@ export async function startTelegramBridge() {
   console.log(`[TelegramBridge] Telegram alarm channel: ${config.telegramAlarmChannelEnabled !== false ? "enabled" : "disabled"}`)
   if (notificationDebugEnabled()) {
     console.log("[TelegramBridge] Notification debug logging enabled (TELEGRAM_NOTIFY_DEBUG=1)")
+  }
+  if (bridgeDebugEnabled()) {
+    console.log("[TelegramBridge] Bridge debug logging enabled (TELEGRAM_BRIDGE_DEBUG=1)")
   }
   if (config.directory) {
     console.log(`[TelegramBridge] OpenCode directory: ${config.directory}`)
