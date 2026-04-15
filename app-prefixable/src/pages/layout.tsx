@@ -81,7 +81,7 @@ import {
   readAlarmChannels,
   ALARM_CHANNELS_STORAGE_KEY,
 } from "../utils/notify";
-import { readSoundSettings, playSound, primeAudioContext, SOUND_STORAGE_KEY } from "../utils/sound";
+import { readNotificationSettings, playSound, primeAudioContext, NOTIFICATION_STORAGE_KEY } from "../utils/notifications";
 import { dispatchStorageEvent } from "../utils/storage";
 import { sessionHasQuestion, buildChildMap, rootAncestorId } from "../utils/session-tree-request";
 import { createRootSession } from "../utils/root-session";
@@ -1627,12 +1627,12 @@ export function Layout(props: ParentProps) {
   // Cached notify map — avoids repeated localStorage reads + JSON.parse on every SSE event.
   // Updated via storage events (including synthetic same-tab events dispatched by writeNotifyMap).
   const [notifyCache, setNotifyCache] = createSignal(readNotifyMap());
-  const [soundCache, setSoundCache] = createSignal(readSoundSettings());
+  const [notificationCache, setNotificationCache] = createSignal(readNotificationSettings());
   const [alarmChannels, setAlarmChannels] = createSignal(readAlarmChannels());
   onMount(() => {
     function handleStorage(e: StorageEvent) {
       if (e.key === NOTIFY_STORAGE_KEY) setNotifyCache(readNotifyMap());
-      if (e.key === SOUND_STORAGE_KEY) setSoundCache(readSoundSettings());
+      if (e.key === NOTIFICATION_STORAGE_KEY) setNotificationCache(readNotificationSettings());
       if (e.key === ALARM_CHANNELS_STORAGE_KEY) setAlarmChannels(readAlarmChannels());
     }
     window.addEventListener("storage", handleStorage);
@@ -1642,7 +1642,7 @@ export function Layout(props: ParentProps) {
     // so notification sounds work reliably after page reload. Listeners stay
     // attached until priming succeeds so that enabling sound later still works.
     function primeOnGesture() {
-      if (!soundCache().enabled) return;
+      if (!notificationCache().enabled) return;
       primeAudioContext();
       window.removeEventListener("pointerdown", primeOnGesture);
       window.removeEventListener("keydown", primeOnGesture);
@@ -1692,8 +1692,8 @@ export function Layout(props: ParentProps) {
     if (typeof document !== "undefined" && document.hidden) flashTitle();
 
     // Play sound if enabled in settings
-    const sound = soundCache();
-    if (sound.enabled) playSound(sound.sound);
+    const settings = notificationCache();
+    if (settings.enabled) playSound(settings.sound);
 
     if (typeof window === "undefined" || !("Notification" in window)) return;
     if (Notification.permission !== "granted") return;
