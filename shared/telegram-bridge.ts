@@ -1704,6 +1704,21 @@ function parseRecentText(parts: unknown): string {
   return truncateTelegramInlineText(text, recentPartTextMax)
 }
 
+function parseRecentCreated(value: unknown): number {
+  if (typeof value === "number" && Number.isFinite(value)) return value
+  if (typeof value === "string") {
+    const raw = value.trim()
+    if (!raw) return 0
+    if (/^\d+$/.test(raw)) {
+      const parsed = Number.parseInt(raw, 10)
+      if (Number.isFinite(parsed)) return parsed
+    }
+    const parsedDate = Date.parse(raw)
+    if (Number.isFinite(parsedDate)) return parsedDate
+  }
+  return 0
+}
+
 async function recentText(config: BridgeConfig, sessionId: string, count: number): Promise<string> {
   const safeCount = Math.max(1, Math.min(count, recentMaxCount))
   const url = opencodeUrl(config, `/session/${encodeURIComponent(sessionId)}/message`)
@@ -1725,6 +1740,8 @@ async function recentText(config: BridgeConfig, sessionId: string, count: number
   const users: Array<{ id: string; text: string; created: number }> = []
   const rowIndex = new Map<string, number>()
   const assistantParents: Array<{ index: number; parentID: string }> = []
+  let firstCreated = 0
+  let lastCreated = 0
   for (let index = 0; index < rows.length; index++) {
     const entry = rows[index]
     if (!entry || typeof entry !== "object") continue
@@ -1739,12 +1756,11 @@ async function recentText(config: BridgeConfig, sessionId: string, count: number
     const time = "time" in info && info.time && typeof info.time === "object"
       ? info.time as { created?: unknown }
       : undefined
-    const createdRaw = time?.created
-    const created = typeof createdRaw === "number" && Number.isFinite(createdRaw)
-      ? createdRaw
-      : typeof createdRaw === "string" && createdRaw.trim().length
-        ? Number.parseInt(createdRaw, 10)
-        : 0
+    const created = parseRecentCreated(time?.created)
+      || parseRecentCreated((info as { created?: unknown }).created)
+      || parseRecentCreated((row as { time?: { created?: unknown } }).time?.created)
+    if (!firstCreated && created > 0) firstCreated = created
+    if (created > 0) lastCreated = created
     if (id) {
       rowIndex.set(id, index)
     }
@@ -1776,7 +1792,10 @@ async function recentText(config: BridgeConfig, sessionId: string, count: number
     if (item.index > parentIndex) return acc + 1
     return acc
   }, 0)
-  const newestFirst = assistantBeforeParent > assistantAfterParent
+  const newestFirstByTime = firstCreated > 0 && lastCreated > 0 && firstCreated !== lastCreated
+    ? firstCreated > lastCreated
+    : undefined
+  const newestFirst = newestFirstByTime ?? (assistantBeforeParent > assistantAfterParent)
   const ordered = hasCreated
     ? users.slice().sort((a, b) => {
       if (a.created !== b.created) return a.created - b.created
