@@ -8,6 +8,7 @@ interface PickerItem {
   title: string
   description?: string
   group?: string
+  groupKey?: string
 }
 
 interface Props {
@@ -42,15 +43,17 @@ export function PickerDialog(props: Props) {
     const items = filtered()
     const rows = items.map((item, index) => ({ item, index }))
     const keys = rows.reduce((acc, row) => {
-      const key = row.item.group?.trim() || ""
+      const key = (row.item.groupKey ?? row.item.group)?.trim() || ""
       if (acc.includes(key)) return acc
       return [...acc, key]
     }, [] as string[])
 
     return keys.map((key) => ({
       key,
-      label: key || undefined,
-      rows: rows.filter((row) => (row.item.group?.trim() || "") === key),
+      label:
+        rows.find((row) => ((row.item.groupKey ?? row.item.group)?.trim() || "") === key)?.item.group?.trim() ||
+        undefined,
+      rows: rows.filter((row) => ((row.item.groupKey ?? row.item.group)?.trim() || "") === key),
     }))
   })
 

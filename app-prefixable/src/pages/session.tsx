@@ -2774,7 +2774,8 @@ export function Session() {
                   id: `${p.id}:${m.id}`,
                   title: m.name || m.id,
                   description: `${p.id}/${m.id}`,
-                  group: p.name,
+                  group: p.name || p.id,
+                  groupKey: p.id,
                 })),
               )}
             onSelect={(item) => {
