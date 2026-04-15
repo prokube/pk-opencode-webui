@@ -78,16 +78,33 @@ export function ReviewPanel(props: ReviewPanelProps) {
   // Track the latest request to prevent race conditions
   let version = 0;
 
-  async function checkGitRepo(current: number) {
-    try {
-      // If VCS info request succeeds, the directory is a git repository
-      await client.vcs.get({ directory });
-      if (current !== version) return;
-      setIsGitRepo(true);
-    } catch {
-      if (current !== version) return;
-      setIsGitRepo(false);
+  function isNotGitRepoError(error: unknown) {
+    if (!error) return false;
+    if (typeof error === "string") {
+      return /not a git repository|not a repository|outside repository/i.test(error);
     }
+    if (typeof error !== "object") return false;
+
+    const obj = error as Record<string, unknown>;
+    const message = [obj.message, obj.error, obj.detail]
+      .filter((item) => typeof item === "string")
+      .join(" ");
+    if (!message) return false;
+    return /not a git repository|not a repository|outside repository/i.test(message);
+  }
+
+  async function checkGitRepo(current: number) {
+    const res = await client.vcs.get({ directory }, { throwOnError: false });
+    if (current !== version) return;
+    if (res.data) {
+      setIsGitRepo(true);
+      return;
+    }
+    if (isNotGitRepoError(res.error)) {
+      setIsGitRepo(false);
+      return;
+    }
+    setIsGitRepo(null);
   }
 
   function setFiles(files: FileDiff[]) {
