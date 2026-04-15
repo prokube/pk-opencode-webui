@@ -4251,7 +4251,7 @@ describe("telegram bridge config and cache", () => {
 
       const notify = new Map<string, boolean>();
       const map = new Map<string, string>();
-      map.set("chat:81", "session-81");
+      map.set("chat:81:user:5", "session-81");
       const runtime = {
         config: {
           mode: "polling" as const,

@@ -973,7 +973,9 @@ function sessionActionCallback(action: "switch" | "recent", sessionId: string): 
 }
 
 function parseSessionActionCallbackData(input: string): SessionActionCallbackData | undefined {
-  const parsed = input.match(/^a:([sr]):([^\s:]{1,58})$/)
+  const maxSessionIdLength = callbackDataMax - "a:s:".length
+  if (maxSessionIdLength < 1) return
+  const parsed = input.match(new RegExp(`^a:([sr]):([^\\s:]{1,${maxSessionIdLength}})$`))
   if (!parsed) return
   const action = parsed[1]
   const sessionId = parsed[2]?.trim() || ""
@@ -997,7 +999,9 @@ function projectClearCallback(): string {
 
 function parseProjectActionCallbackData(input: string): ProjectActionCallbackData | undefined {
   if (input === "d:c") return { action: "clear" }
-  const parsed = input.match(/^d:s:([^\s:]{1,58})$/)
+  const maxSessionIdLength = callbackDataMax - "d:s:".length
+  if (maxSessionIdLength < 1) return
+  const parsed = input.match(new RegExp(`^d:s:([^\\s:]{1,${maxSessionIdLength}})$`))
   if (!parsed) return
   const sessionId = parsed[1]?.trim() || ""
   if (!sessionId) return
@@ -2577,6 +2581,7 @@ function lookupSavedPrompt(input: string, prompts: SavedPrompt[]): { prompt?: Sa
 
 async function runSavedPrompt(runtime: Runtime, chatId: number, key: string, prompt: SavedPrompt) {
   const config = runtime.config
+  let activeSessionId = ""
   const enableAlarm = async (sessionId: string) => {
     if (!runtime.store.sessionAlarmSet) return
     await runtime.store.sessionAlarmSet(sessionId, true).catch((error) => {
@@ -2584,6 +2589,7 @@ async function runSavedPrompt(runtime: Runtime, chatId: number, key: string, pro
     })
   }
   const run = async (sessionId: string) => {
+    activeSessionId = sessionId
     await enableAlarm(sessionId)
     await resolvePendingForSession(runtime, chatId, sessionId)
     return sendPrompt(config, sessionId, prompt.text)
@@ -2601,7 +2607,8 @@ async function runSavedPrompt(runtime: Runtime, chatId: number, key: string, pro
     if (!isTimeoutError(error)) {
       throw error
     }
-    await sendTelegramMessage(config, chatId, `Prompt started in session ${sessionId}, but the reply is taking longer than expected. Check the web UI for progress.`)
+    const timedOutSession = activeSessionId || sessionId
+    await sendTelegramMessage(config, chatId, `Prompt started in session ${timedOutSession}, but the reply is taking longer than expected. Check the web UI for progress.`)
     return
   })
   if (!reply) return
@@ -2827,11 +2834,12 @@ export async function handleCallbackUpdate(runtime: Runtime, update: TelegramUpd
 
     if (parsed.kind === "notify") {
       const key = notificationKey(chatId)
+      const mappedKey = telegramSessionKey(chatId, userId)
       await answerCallback(runtime.config, callbackId, notifyCallbackAckText)
       state.acknowledged = true
       if (parsed.mode === "on") {
         await setNotificationEnabled(runtime, key, true)
-        await enableMappedSessionAlarm(runtime, key)
+        await enableMappedSessionAlarm(runtime, mappedKey)
       }
       if (parsed.mode === "off") {
         await setNotificationEnabled(runtime, key, false)
