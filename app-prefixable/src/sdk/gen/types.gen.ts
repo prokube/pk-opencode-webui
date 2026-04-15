@@ -4905,6 +4905,16 @@ export type VcsGetResponses = {
 
 export type VcsGetResponse = VcsGetResponses[keyof VcsGetResponses]
 
+export type VcsDiffData = {
+  body?: never
+  path?: never
+  query?: {
+    directory?: string
+    mode?: "git" | "branch"
+  }
+  url: "/vcs/diff"
+}
+
 export type VcsDiffResponses = {
   /**
    * Diff
