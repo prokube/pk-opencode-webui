@@ -65,9 +65,14 @@ export function TelegramSettings(props: Props) {
       setLoading(false)
       return
     }
-    const next = await Promise.resolve()
-      .then(() => createTelegramForm(data.settings))
-      .catch(() => null)
+    const next = (() => {
+      try {
+        return createTelegramForm(data.settings)
+      } catch (err) {
+        console.error("[TelegramSettings] Failed to normalize settings", err)
+        return null
+      }
+    })()
     if (!next) {
       setError("Failed to load Telegram settings")
       setLoading(false)
