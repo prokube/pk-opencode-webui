@@ -1,4 +1,4 @@
-import { createSignal, createMemo, For, Show, onMount, onCleanup } from "solid-js"
+import { createSignal, createMemo, createEffect, For, Show, onMount, onCleanup, on } from "solid-js"
 import { Button } from "./ui/button"
 import { Markdown } from "./markdown"
 import type { QuestionRequest } from "../sdk/client"
@@ -23,12 +23,13 @@ export function QuestionPrompt(props: Props) {
   const [selected, setSelected] = createSignal(0)
   const [editing, setEditing] = createSignal(false)
 
-  let inputRef: HTMLInputElement | undefined
+  const [inputRef, setInputRef] = createSignal<HTMLInputElement>()
+  const [contentRef, setContentRef] = createSignal<HTMLDivElement>()
 
   const question = createMemo(() => questions()[tab()])
   const confirm = createMemo(() => !single() && tab() === questions().length)
   const options = createMemo(() => question()?.options ?? [])
-  const allowCustom = createMemo(() => question()?.custom !== false)
+  const allowCustom = createMemo(() => !confirm() && question()?.custom !== false)
   const other = createMemo(() => allowCustom() && selected() === options().length)
   const input = createMemo(() => custom()[tab()] ?? "")
   const multi = createMemo(() => question()?.multiple === true)
@@ -37,6 +38,23 @@ export function QuestionPrompt(props: Props) {
     if (!value) return false
     return answers()[tab()]?.includes(value) ?? false
   })
+
+  createEffect(
+    on([selected, tab, question, options], () => {
+      if (confirm()) return
+      const index = selected()
+      const node = contentRef()?.querySelector(`[data-option-index="${index}"]`) as HTMLElement | undefined
+      node?.scrollIntoView({ block: "nearest" })
+    }),
+  )
+
+  function focusInput() {
+    setTimeout(() => {
+      const node = inputRef()
+      node?.scrollIntoView({ block: "nearest" })
+      node?.focus()
+    }, 50)
+  }
 
   function submit() {
     const result = questions().map((_, i) => answers()[i] ?? [])
@@ -79,7 +97,7 @@ export function QuestionPrompt(props: Props) {
     if (other()) {
       if (!multi()) {
         setEditing(true)
-        setTimeout(() => inputRef?.focus(), 50)
+        focusInput()
         return
       }
       const value = input()
@@ -88,7 +106,7 @@ export function QuestionPrompt(props: Props) {
         return
       }
       setEditing(true)
-      setTimeout(() => inputRef?.focus(), 50)
+      focusInput()
       return
     }
 
@@ -150,10 +168,10 @@ export function QuestionPrompt(props: Props) {
     const opts = options()
     const total = opts.length + (allowCustom() ? 1 : 0)
 
-    if (e.key === "ArrowUp" || e.key === "k") {
+    if ((e.key === "ArrowUp" || e.key === "k") && total > 0) {
       e.preventDefault()
       setSelected((s) => (s - 1 + total) % total)
-    } else if (e.key === "ArrowDown" || e.key === "j") {
+    } else if ((e.key === "ArrowDown" || e.key === "j") && total > 0) {
       e.preventDefault()
       setSelected((s) => (s + 1) % total)
     } else if (e.key === "Enter") {
@@ -188,11 +206,12 @@ export function QuestionPrompt(props: Props) {
 
   return (
     <div
-      class="rounded-lg overflow-hidden"
+      class="rounded-lg overflow-hidden flex flex-col min-h-0"
       style={{
         background: "var(--background-base)",
         border: "2px solid var(--interactive-base)",
         "box-shadow": "0 4px 20px rgba(0, 0, 0, 0.15)",
+        "max-height": "min(65vh, calc(100dvh - 11rem))",
       }}
     >
       {/* Header */}
@@ -269,7 +288,7 @@ export function QuestionPrompt(props: Props) {
       </Show>
 
       {/* Question content */}
-      <div class="p-4">
+      <div ref={setContentRef} class="p-4 overflow-y-auto min-h-0 flex-1">
         <Show when={!confirm()}>
           {/* Question text */}
           <div class="mb-4">
@@ -288,6 +307,7 @@ export function QuestionPrompt(props: Props) {
                 const picked = () => answers()[tab()]?.includes(opt.label) ?? false
                 return (
                   <button
+                    data-option-index={i()}
                     onClick={() => {
                       setSelected(i())
                       selectOption()
@@ -341,6 +361,7 @@ export function QuestionPrompt(props: Props) {
                 }}
               >
                 <button
+                  data-option-index={options().length}
                   onClick={() => {
                     setSelected(options().length)
                     selectOption()
@@ -375,7 +396,7 @@ export function QuestionPrompt(props: Props) {
                 <Show when={editing()}>
                   <div class="mt-2 ml-7 flex gap-2">
                     <input
-                      ref={inputRef}
+                      ref={setInputRef}
                       type="text"
                       value={input()}
                       onInput={(e) => {
