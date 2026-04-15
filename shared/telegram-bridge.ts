@@ -1620,6 +1620,16 @@ function formatSessionDisplay(sessionId: string, title?: string, sourceId = "def
   return `${safe} (${scoped})`
 }
 
+function formatSessionTitleOnly(sessionId: string, title?: string, sourceId = "default"): string {
+  const single = typeof title === "string" ? title.replace(/\s+/g, " ").trim() : ""
+  if (single) {
+    const safe = truncateTelegramInlineText(single, sessionTitleInlineMax)
+    if (sourceId === "default") return safe
+    return `[${sourceLabel(sourceId)}] ${safe}`
+  }
+  return sourceId === "default" ? `session ${sessionId}` : `[${sourceLabel(sourceId)}] session ${sessionId}`
+}
+
 async function formatSessionList(runtime: Runtime, list: string[], current?: string): Promise<string[]> {
   const active = current?.trim()
   const details = await formatSessionRows(runtime, list)
@@ -1732,7 +1742,7 @@ function parseRecentText(parts: unknown): string {
   return truncateTelegramInlineText(text, recentPartTextMax)
 }
 
-async function recentText(config: BridgeConfig, sessionId: string, count: number): Promise<string> {
+async function recentText(config: BridgeConfig, sessionId: string, count: number, sourceId = "default"): Promise<string> {
   const safeCount = Math.max(1, Math.min(count, recentMaxCount))
   const url = opencodeUrl(config, `/session/${encodeURIComponent(sessionId)}/message`)
   url.searchParams.set("limit", String(Math.max(20, safeCount * 6)))
@@ -1781,8 +1791,10 @@ async function recentText(config: BridgeConfig, sessionId: string, count: number
   if (!users.length) {
     return `No recent chat messages found for session ${sessionId}. Send a new message first.`
   }
+  const title = await safeSessionTitle(config, sessionId, sourceId)
+  const name = formatSessionTitleOnly(sessionId, title, sourceId)
   const list = users.slice(-safeCount)
-  const lines = [`Recent activity for session ${sessionId} (showing ${list.length} of ${users.length}):`]
+  const lines = [`Recent activity for ${name} (showing ${list.length} of ${users.length}):`]
   for (let i = 0; i < list.length; i++) {
     const item = list[i]
     if (!item) continue
@@ -2632,7 +2644,7 @@ export async function handleCallbackUpdate(runtime: Runtime, update: TelegramUpd
       }
       await answerCallback(runtime.config, callbackId, "Loading latest message...")
       state.acknowledged = true
-      const text = await recentText(scoped, ref.sessionId, 1)
+      const text = await recentText(scoped, ref.sessionId, 1, ref.sourceId)
       await sendTelegramMessage(runtime.config, chatId, text)
       return
     }
@@ -2859,7 +2871,7 @@ export async function handleTextUpdate(runtime: Runtime, update: TelegramUpdate)
         await sendTelegramMessage(config, chatId, sourceUnavailableText(ref.sourceId))
         return true
       }
-      const text = await recentText(scoped, ref.sessionId, parsed.count || recentDefaultCount)
+      const text = await recentText(scoped, ref.sessionId, parsed.count || recentDefaultCount, ref.sourceId)
       await sendTelegramMessage(config, chatId, text)
       return true
     }
