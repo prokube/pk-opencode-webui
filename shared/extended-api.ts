@@ -32,6 +32,29 @@ function sessionAlarmSessionIdError(sessionId: string) {
   }
 }
 
+function notifyChatKeyFromSessionKey(value: string) {
+  const match = value.match(/^chat:(-?\d+)(?::user:-?\d+)?$/)
+  if (!match) return
+  const chatId = Number.parseInt(match[1] || "", 10)
+  if (!Number.isFinite(chatId)) return
+  return `chat:${chatId}`
+}
+
+async function enableTelegramNotifyForSession(store: TelegramSessionStore, sessionId: string) {
+  if (!store.sessionKeys || !store.notificationSet) return
+  const keys = await store.sessionKeys(sessionId)
+  if (!keys.length) return
+  const chats = new Set<string>()
+  for (const key of keys) {
+    const chatKey = notifyChatKeyFromSessionKey(key)
+    if (!chatKey) continue
+    chats.add(chatKey)
+  }
+  for (const chatKey of chats) {
+    await store.notificationSet(chatKey, true)
+  }
+}
+
 function evictTelegramSessionStoresIfNeeded() {
   while (telegramSessionStores.size > MAX_TELEGRAM_SESSION_STORES) {
     const oldest = telegramSessionStores.keys().next().value
@@ -678,6 +701,11 @@ export async function handleExtendedEndpoint(
     )
     if (ok === false) {
       return Response.json({ error: "failed to update telegram session alarm" }, { status: 500 })
+    }
+    if (enabled) {
+      await enableTelegramNotifyForSession(store, sessionId).catch((error) => {
+        console.error("[ExtAPI] telegram notify sync on session alarm enable failed", { sessionId, error })
+      })
     }
     return Response.json({ sessionId, enabled })
   }
