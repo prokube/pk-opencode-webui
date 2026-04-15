@@ -49,6 +49,10 @@ function isSubtaskPart(p: Part): p is Extract<Part, { type: "subtask" }> {
   return p.type === "subtask"
 }
 
+function isCompactionPart(p: Part): p is Extract<Part, { type: "compaction" }> {
+  return p.type === "compaction"
+}
+
 const MAX_SHARED_CHILDREN = 400
 const MAX_SHARED_CHILDREN_INFLIGHT = 200
 const MAX_SHARED_SYNCED_CHILDREN = 600
@@ -100,6 +104,18 @@ const sharedChildrenEmptyBackoff = new Map<string, number>()
 const sharedChildrenRetryAt = new Map<string, number>()
 const sharedSyncedChildren = new Set<string>()
 
+function renderCenteredDivider(label: string) {
+  return (
+    <div class="flex items-center gap-2" role="separator" aria-label={label}>
+      <div class="h-px flex-1" style={{ background: "var(--border-base)" }} />
+      <span class="text-[11px] uppercase tracking-wide" style={{ color: "var(--text-weak)" }}>
+        {label}
+      </span>
+      <div class="h-px flex-1" style={{ background: "var(--border-base)" }} />
+    </div>
+  )
+}
+
 function renderMetaPart(part: Part) {
   if (isAgentPart(part)) {
     const source = part.source?.value?.trim()
@@ -124,15 +140,7 @@ function renderMetaPart(part: Part) {
     )
   }
   if (isSnapshotPart(part)) {
-    return (
-      <div class="flex items-center gap-2" aria-label={`Snapshot ${part.snapshot.slice(0, 8)}`}>
-        <div class="h-px flex-1" style={{ background: "var(--border-base)" }} />
-        <span class="text-[11px] uppercase tracking-wide" style={{ color: "var(--text-weak)" }}>
-          Snapshot {part.snapshot.slice(0, 8)}
-        </span>
-        <div class="h-px flex-1" style={{ background: "var(--border-base)" }} />
-      </div>
-    )
+    return renderCenteredDivider(`Snapshot ${part.snapshot.slice(0, 8)}`)
   }
   if (isRetryPart(part)) {
     return (
@@ -175,6 +183,10 @@ function renderMetaPart(part: Part) {
         </Show>
       </details>
     )
+  }
+  if (isCompactionPart(part)) {
+    const label = part.auto ? "Context auto-compacted" : "Context compacted"
+    return renderCenteredDivider(label)
   }
   return null
 }
@@ -898,7 +910,7 @@ export function MessageTurn(props: {
             {(message) => {
               const text = extractTextContent(message.parts).trim()
               const tools = hasTools(message)
-              const meta = () => message.parts.filter((part) => isAgentPart(part) || isSnapshotPart(part) || isRetryPart(part) || isPatchPart(part))
+              const meta = () => message.parts.filter((part) => isAgentPart(part) || isSnapshotPart(part) || isRetryPart(part) || isPatchPart(part) || isCompactionPart(part))
               const subtasks = () => message.parts.filter(isSubtaskPart)
 
               return (
@@ -928,7 +940,7 @@ export function MessageTurn(props: {
                     <Show when={text}>
                       <Markdown content={text} class="text-sm" />
                     </Show>
-                    {/* Agent, snapshot, retry, and patch parts */}
+                    {/* Agent, snapshot, retry, patch, and compaction parts */}
                     <Show when={meta().length > 0}>
                       <div class="space-y-2 mt-2">
                         <For each={meta()}>{(part) => renderMetaPart(part)}</For>
