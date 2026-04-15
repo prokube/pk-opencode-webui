@@ -347,6 +347,7 @@ export type TelegramSessionStore = {
   historySet?: (key: string, ids: string[]) => Promise<void>
   notificationGet?: (key: string) => Promise<boolean>
   notificationSet?: (key: string, enabled: boolean) => Promise<void>
+  notificationKeys?: () => Promise<string[]>
   sessionAlarmGet?: (sessionId: string) => Promise<boolean>
   sessionAlarmSet?: (sessionId: string, enabled: boolean) => Promise<void>
   inboxGet?: (key: string) => Promise<TelegramPendingItem[]>
@@ -564,6 +565,10 @@ export function createTelegramSessionStore(path: string): TelegramSessionStore {
           throw error
         })
       })
+    },
+    async notificationKeys() {
+      await ready
+      return Array.from(notifications.keys())
     },
     async sessionAlarmGet(sessionId: string) {
       await ready

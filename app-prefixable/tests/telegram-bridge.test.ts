@@ -4019,7 +4019,7 @@ describe("telegram bridge config and cache", () => {
           set: async () => undefined,
           delete: async () => undefined,
           sessionKeys: async () => ["chat:77:user:5"],
-          notificationGet: async () => false,
+          notificationGet: async () => true,
           pendingGet: async (chatKey: string) => pending.get(chatKey) || [],
           pendingSet: async (chatKey: string, items: Array<{
             id: string;
@@ -4244,6 +4244,7 @@ describe("telegram bridge config and cache", () => {
         sessionCacheMax: 10,
         sessionCacheTtlMs: 10_000,
         notificationDebounceMs: 20_000,
+        telegramAlarmChannelEnabled: false,
         port: 4097,
         webhookPath: "/webhook",
         sessionStorePath: "/tmp/test-store.json",
@@ -4364,6 +4365,7 @@ describe("telegram bridge config and cache", () => {
         sessionCacheMax: 10,
         sessionCacheTtlMs: 10_000,
         notificationDebounceMs: 20_000,
+        telegramAlarmChannelEnabled: false,
         port: 4097,
         webhookPath: "/webhook",
         sessionStorePath: "/tmp/test-store.json",
@@ -4373,7 +4375,7 @@ describe("telegram bridge config and cache", () => {
         set: async () => undefined,
         delete: async () => undefined,
         sessionKeys: async () => ["chat:77:user:5"],
-        notificationGet: async () => false,
+        notificationGet: async () => true,
         pendingGet: async (chatKey: string) => {
           await new Promise((resolve) => setTimeout(resolve, 5));
           return pending.get(chatKey) || [];
@@ -4425,6 +4427,7 @@ describe("telegram bridge config and cache", () => {
         sessionCacheMax: 10,
         sessionCacheTtlMs: 10_000,
         notificationDebounceMs: 20_000,
+        telegramAlarmChannelEnabled: false,
         port: 4097,
         webhookPath: "/webhook",
         sessionStorePath: "/tmp/test-store.json",
@@ -4434,7 +4437,7 @@ describe("telegram bridge config and cache", () => {
         set: async () => undefined,
         delete: async () => undefined,
         sessionKeys: async () => ["chat:77:user:5"],
-        notificationGet: async () => false,
+        notificationGet: async () => true,
         pendingGet: async (chatKey: string) => pending.get(chatKey) || [],
         pendingSet: async (chatKey: string, items: Array<{
           id: string;
@@ -4565,6 +4568,7 @@ describe("telegram bridge config and cache", () => {
         sessionCacheMax: 10,
         sessionCacheTtlMs: 10_000,
         notificationDebounceMs: 20_000,
+        telegramAlarmChannelEnabled: false,
         port: 4097,
         webhookPath: "/webhook",
         sessionStorePath: "/tmp/test-store.json",
@@ -4574,7 +4578,7 @@ describe("telegram bridge config and cache", () => {
         set: async () => undefined,
         delete: async () => undefined,
         sessionKeys: async () => ["chat:77:user:5"],
-        notificationGet: async () => false,
+        notificationGet: async () => true,
         pendingGet: async (chatKey: string) => pending.get(chatKey) || [],
         pendingSet: async (chatKey: string, items: Array<{
           id: string;
@@ -4604,7 +4608,7 @@ describe("telegram bridge config and cache", () => {
     expect(text.endsWith("...")).toBe(true);
   });
 
-  test("question and permission events only queue pending when notifications are disabled", async () => {
+  test("question and permission events still queue pending when notifications are disabled", async () => {
     const calls: Array<{ url: string; body: Record<string, unknown> }> = [];
     const originalFetch = globalThis.fetch;
     const inbox = new Map<string, Array<{
@@ -4778,6 +4782,321 @@ describe("telegram bridge config and cache", () => {
     const items = inbox.get("chat:88") || [];
     expect(items).toHaveLength(2);
     expect(items.map((item) => item.kind).sort()).toEqual(["permission", "question"]);
+  });
+
+  test("question alerts route to notify-on chats even without session mapping", async () => {
+    const calls: Array<{ url: string; body: Record<string, unknown> }> = [];
+    const originalFetch = globalThis.fetch;
+    const inbox = new Map<string, Array<{
+      id: string;
+      kind: "question" | "permission" | "task-finished";
+      sessionId: string;
+      text: string;
+      stampedAt: number;
+      resolved: boolean;
+    }>>();
+    const pending = new Map<string, unknown[]>();
+    try {
+      globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        const body = init?.body ? (JSON.parse(String(init.body)) as Record<string, unknown>) : {};
+        calls.push({ url, body });
+        if (url.includes("/sendMessage")) {
+          return new Response(JSON.stringify({ ok: true, result: { message_id: 1 } }), { status: 200 });
+        }
+        throw new Error(`Unexpected fetch ${url}`);
+      };
+
+      const runtime = {
+        config: {
+          mode: "polling" as const,
+          token: "token",
+          openCodeUrl: "http://127.0.0.1:4096",
+          sessionCacheMax: 10,
+          sessionCacheTtlMs: 10_000,
+          notificationDebounceMs: 0,
+          port: 4097,
+          webhookPath: "/webhook",
+          sessionStorePath: "/tmp/test-store.json",
+        },
+        store: {
+          get: async () => undefined,
+          set: async () => undefined,
+          delete: async () => undefined,
+          sessionKeys: async () => [],
+          notificationKeys: async () => ["chat:188"],
+          sessionAlarmGet: async () => true,
+          pendingGet: async (chatKey: string) => inbox.get(chatKey) || [],
+          pendingSet: async (chatKey: string, items: Array<{
+            id: string;
+            kind: "question" | "permission" | "task-finished";
+            sessionId: string;
+            text: string;
+            stampedAt: number;
+            resolved: boolean;
+          }>) => {
+            inbox.set(chatKey, [...items]);
+          },
+          questionList: async (name: string) => (pending.get(name) || []) as unknown[],
+          questionUpsert: async (name: string, row: unknown) => {
+            pending.set(name, [row]);
+          },
+          questionDelete: async () => undefined,
+        },
+      };
+
+      await handleBridgeEvent(runtime, {
+        type: "question.asked",
+        properties: {
+          id: "req-notify-fanout",
+          sessionID: "session-bell",
+          questions: [{ header: "Need approval", options: [{ label: "Yes" }, { label: "No" }] }],
+        },
+      });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+
+    const sent = calls.filter((x) => x.url.includes("/sendMessage"));
+    expect(sent.some((x) => x.body.chat_id === 188)).toBe(true);
+    expect((inbox.get("chat:188") || []).map((item) => item.kind)).toEqual(["question"]);
+    const stored = (pending.get("chat:188") || []) as Array<{ requestId?: string }>;
+    expect(stored[0]?.requestId).toBe("req-notify-fanout");
+  });
+
+  test("question pending storage prefers chat-scoped key when notify and mapped keys both exist", async () => {
+    const calls: Array<{ url: string; body: Record<string, unknown> }> = [];
+    const originalFetch = globalThis.fetch;
+    const upsertKeys: string[] = [];
+    try {
+      globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        const body = init?.body ? (JSON.parse(String(init.body)) as Record<string, unknown>) : {};
+        calls.push({ url, body });
+        if (url.includes("/sendMessage")) {
+          return new Response(JSON.stringify({ ok: true, result: { message_id: 1 } }), { status: 200 });
+        }
+        throw new Error(`Unexpected fetch ${url}`);
+      };
+
+      const runtime = {
+        config: {
+          mode: "polling" as const,
+          token: "token",
+          openCodeUrl: "http://127.0.0.1:4096",
+          sessionCacheMax: 10,
+          sessionCacheTtlMs: 10_000,
+          notificationDebounceMs: 0,
+          port: 4097,
+          webhookPath: "/webhook",
+          sessionStorePath: "/tmp/test-store.json",
+        },
+        store: {
+          get: async () => undefined,
+          set: async () => undefined,
+          delete: async () => undefined,
+          sessionKeys: async () => ["chat:188:user:9"],
+          notificationKeys: async () => ["chat:188"],
+          notificationGet: async () => true,
+          sessionAlarmGet: async () => true,
+          questionList: async () => [],
+          questionUpsert: async (name: string) => {
+            upsertKeys.push(name);
+          },
+          questionDelete: async () => undefined,
+        },
+      };
+
+      await handleBridgeEvent(runtime, {
+        type: "question.asked",
+        properties: {
+          id: "req-prefer-chat-key",
+          sessionID: "session-bell",
+          questions: [{ header: "Need approval", options: [{ label: "Yes" }, { label: "No" }] }],
+        },
+      });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+
+    expect(upsertKeys).toEqual(["chat:188"]);
+    expect(calls.some((x) => x.url.includes("/sendMessage") && x.body.chat_id === 188)).toBe(true);
+  });
+
+  test("legacy user-scoped notification keys do not bypass /notify chat status", async () => {
+    const calls: Array<{ url: string; body: Record<string, unknown> }> = [];
+    const originalFetch = globalThis.fetch;
+    try {
+      globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        const body = init?.body ? (JSON.parse(String(init.body)) as Record<string, unknown>) : {};
+        calls.push({ url, body });
+        if (url.includes("/sendMessage")) {
+          return new Response(JSON.stringify({ ok: true, result: { message_id: 1 } }), { status: 200 });
+        }
+        throw new Error(`Unexpected fetch ${url}`);
+      };
+
+      const runtime = {
+        config: {
+          mode: "polling" as const,
+          token: "token",
+          openCodeUrl: "http://127.0.0.1:4096",
+          sessionCacheMax: 10,
+          sessionCacheTtlMs: 10_000,
+          notificationDebounceMs: 0,
+          port: 4097,
+          webhookPath: "/webhook",
+          sessionStorePath: "/tmp/test-store.json",
+        },
+        store: {
+          get: async () => undefined,
+          set: async () => undefined,
+          delete: async () => undefined,
+          sessionKeys: async () => [],
+          notificationKeys: async () => ["chat:188:user:9"],
+          notificationGet: async (key: string) => key === "chat:188" ? false : true,
+          sessionAlarmGet: async () => true,
+        },
+      };
+
+      await handleBridgeEvent(runtime, {
+        type: "permission.asked",
+        properties: {
+          id: "perm-legacy-notify-key",
+          sessionID: "session-bell",
+          permission: "shell",
+          patterns: ["docker *"],
+        },
+      });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+
+    expect(calls.some((x) => x.url.includes("/sendMessage"))).toBe(false);
+  });
+
+  test("notify-off chats do not receive proactive alerts", async () => {
+    const calls: Array<{ url: string; body: Record<string, unknown> }> = [];
+    const originalFetch = globalThis.fetch;
+    try {
+      globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        const body = init?.body ? (JSON.parse(String(init.body)) as Record<string, unknown>) : {};
+        calls.push({ url, body });
+        if (url.includes("/sendMessage")) {
+          return new Response(JSON.stringify({ ok: true, result: { message_id: 1 } }), { status: 200 });
+        }
+        throw new Error(`Unexpected fetch ${url}`);
+      };
+
+      const runtime = {
+        config: {
+          mode: "polling" as const,
+          token: "token",
+          openCodeUrl: "http://127.0.0.1:4096",
+          sessionCacheMax: 10,
+          sessionCacheTtlMs: 10_000,
+          notificationDebounceMs: 0,
+          port: 4097,
+          webhookPath: "/webhook",
+          sessionStorePath: "/tmp/test-store.json",
+        },
+        store: {
+          get: async () => undefined,
+          set: async () => undefined,
+          delete: async () => undefined,
+          sessionKeys: async () => [],
+          notificationKeys: async () => [],
+          sessionAlarmGet: async () => true,
+        },
+      };
+
+      await handleBridgeEvent(runtime, {
+        type: "permission.asked",
+        properties: {
+          id: "perm-notify-off",
+          sessionID: "session-bell",
+          permission: "shell",
+          patterns: ["docker *"],
+        },
+      });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+
+    expect(calls.some((x) => x.url.includes("/sendMessage"))).toBe(false);
+  });
+
+  test("session alarms gate proactive Telegram alerts", async () => {
+    const calls: Array<{ url: string; body: Record<string, unknown> }> = [];
+    const originalFetch = globalThis.fetch;
+    const inbox = new Map<string, Array<{
+      id: string;
+      kind: "question" | "permission" | "task-finished";
+      sessionId: string;
+      text: string;
+      stampedAt: number;
+      resolved: boolean;
+    }>>();
+    try {
+      globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        const body = init?.body ? (JSON.parse(String(init.body)) as Record<string, unknown>) : {};
+        calls.push({ url, body });
+        if (url.includes("/sendMessage")) {
+          return new Response(JSON.stringify({ ok: true, result: { message_id: 1 } }), { status: 200 });
+        }
+        throw new Error(`Unexpected fetch ${url}`);
+      };
+
+      const runtime = {
+        config: {
+          mode: "polling" as const,
+          token: "token",
+          openCodeUrl: "http://127.0.0.1:4096",
+          sessionCacheMax: 10,
+          sessionCacheTtlMs: 10_000,
+          notificationDebounceMs: 0,
+          port: 4097,
+          webhookPath: "/webhook",
+          sessionStorePath: "/tmp/test-store.json",
+        },
+        store: {
+          get: async () => undefined,
+          set: async () => undefined,
+          delete: async () => undefined,
+          sessionKeys: async () => [],
+          notificationKeys: async () => ["chat:188"],
+          sessionAlarmGet: async () => false,
+          pendingGet: async (chatKey: string) => inbox.get(chatKey) || [],
+          pendingSet: async (chatKey: string, items: Array<{
+            id: string;
+            kind: "question" | "permission" | "task-finished";
+            sessionId: string;
+            text: string;
+            stampedAt: number;
+            resolved: boolean;
+          }>) => {
+            inbox.set(chatKey, [...items]);
+          },
+        },
+      };
+
+      await handleBridgeEvent(runtime, {
+        type: "question.asked",
+        properties: {
+          id: "req-alarm-off",
+          sessionID: "session-muted",
+          questions: [{ header: "Need approval" }],
+        },
+      });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+
+    expect(calls.some((x) => x.url.includes("/sendMessage"))).toBe(false);
+    expect((inbox.get("chat:188") || []).length).toBe(0);
   });
 
   test("question, permission, and task-finished skip proactive send when telegram channel is disabled", async () => {
@@ -4970,7 +5289,7 @@ describe("telegram bridge config and cache", () => {
         set: async () => undefined,
         delete: async () => undefined,
         sessionKeys: async () => ["chat:77:user:5"],
-        notificationGet: async () => false,
+        notificationGet: async () => true,
         pendingGet: async (chatKey: string) => pending.get(chatKey) || [],
         pendingSet: async (chatKey: string, items: Array<{
           id: string;
@@ -5042,20 +5361,15 @@ describe("telegram bridge config and cache", () => {
     expect(pendingSetCalled).toBe(false);
   });
 
-  test("handleBridgeEvent does not debounce failed key and still notifies another key in same chat", async () => {
+  test("handleBridgeEvent dedupes proactive session-key notifications per chat when debounce is disabled", async () => {
     const calls: Array<{ url: string; body: Record<string, unknown> }> = [];
     const originalFetch = globalThis.fetch;
-    let failed = false;
     try {
       globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
         const url = String(input);
         const body = init?.body ? (JSON.parse(String(init.body)) as Record<string, unknown>) : {};
         calls.push({ url, body });
         if (url.includes("/sendMessage")) {
-          if (!failed) {
-            failed = true;
-            throw new Error("temporary telegram error");
-          }
           return new Response(JSON.stringify({ ok: true, result: { message_id: 1 } }), { status: 200 });
         }
         throw new Error(`Unexpected fetch ${url}`);
@@ -5068,7 +5382,7 @@ describe("telegram bridge config and cache", () => {
           openCodeUrl: "http://127.0.0.1:4096",
           sessionCacheMax: 10,
           sessionCacheTtlMs: 10_000,
-          notificationDebounceMs: 20_000,
+          notificationDebounceMs: 0,
           port: 4097,
           webhookPath: "/webhook",
           sessionStorePath: "/tmp/test-store.json",
@@ -5094,7 +5408,7 @@ describe("telegram bridge config and cache", () => {
     }
 
     const messages = calls.filter((x) => x.url.includes("/sendMessage") && x.body.chat_id === 77);
-    expect(messages.length).toBe(2);
+    expect(messages.length).toBe(1);
   });
 
   test("handleBridgeEvent continues notifying other chats after one failure", async () => {
@@ -5668,6 +5982,80 @@ describe("telegram bridge config and cache", () => {
     expect(sentTexts.some((text) => text.includes("1) Alpha"))).toBe(true);
     expect(sentTexts.some((text) => text.includes("Open session session-1"))).toBe(true);
     expect(sentTexts.some((text) => text.includes("Thanks, your answer was sent."))).toBe(true);
+  });
+
+  test("text replies resolve pending question from chat-scoped notify key", async () => {
+    const calls: Array<{ url: string; body: Record<string, unknown> }> = [];
+    const originalFetch = globalThis.fetch;
+    const pending = new Map<string, unknown[]>();
+    pending.set("chat:77", [{
+      requestId: "req-chat-key",
+      callbackId: "cbchatkey",
+      sessionId: "session-1",
+      createdAt: Date.now() - 1000,
+      expiresAt: Date.now() + 60_000,
+      questions: [{
+        header: "Pick one",
+        question: "Pick one",
+        options: ["Alpha", "Beta"],
+        multiple: false,
+        custom: true,
+      }],
+      answers: [],
+    }]);
+    try {
+      globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        const body = init?.body ? (JSON.parse(String(init.body)) as Record<string, unknown>) : {};
+        calls.push({ url, body });
+        if (url.includes("/sendMessage")) {
+          return new Response(JSON.stringify({ ok: true, result: { message_id: 1 } }), { status: 200 });
+        }
+        if (url.includes("/question/req-chat-key/reply")) {
+          return new Response(JSON.stringify(true), { status: 200 });
+        }
+        throw new Error(`Unexpected fetch ${url}`);
+      };
+
+      const runtime = {
+        config: {
+          mode: "polling" as const,
+          token: "token",
+          openCodeUrl: "http://127.0.0.1:4096",
+          sessionCacheMax: 10,
+          sessionCacheTtlMs: 10_000,
+          notificationDebounceMs: 0,
+          port: 4097,
+          webhookPath: "/webhook",
+          sessionStorePath: "/tmp/test-store.json",
+        },
+        store: {
+          get: async () => undefined,
+          set: async () => undefined,
+          delete: async () => undefined,
+          questionList: async (name: string) => (pending.get(name) || []) as unknown[],
+          questionUpsert: async (name: string, row: unknown) => {
+            pending.set(name, [row]);
+          },
+          questionDelete: async (name: string, requestId: string) => {
+            const rows = (pending.get(name) || []) as Array<{ requestId?: string }>;
+            pending.set(name, rows.filter((row) => row.requestId !== requestId));
+          },
+        },
+      };
+
+      await handleTextUpdate(runtime, {
+        update_id: 2,
+        message: { message_id: 2, text: "1", chat: { id: 77 }, from: { id: 5 } },
+      });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+
+    const replyCall = calls.find((x) => x.url.includes("/question/req-chat-key/reply"));
+    expect(replyCall?.body.answers).toEqual([["Alpha"]]);
+    expect(pending.get("chat:77")).toEqual([]);
+    expect(pending.get("chat:77:user:5")).toBeUndefined();
   });
 
   test("question notifications include inline buttons with compact callback payloads", async () => {
@@ -6793,6 +7181,67 @@ describe("telegram bridge config and cache", () => {
       .map((x) => String(x.body.text || ""));
     expect(sentTexts.filter((text) => text.includes("Question pending:")).length).toBe(2);
     expect((pending.get("chat:77:user:5") || []).map((row) => row.requestId)).toEqual(["req-a", "req-b"]);
+  });
+
+  test("question notifications dedupe proactive sends per chat when debounce is disabled", async () => {
+    const calls: Array<{ url: string; body: Record<string, unknown> }> = [];
+    const originalFetch = globalThis.fetch;
+    const pending = new Map<string, Array<{ requestId: string }>>();
+    try {
+      globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        const body = init?.body ? (JSON.parse(String(init.body)) as Record<string, unknown>) : {};
+        calls.push({ url, body });
+        if (url.includes("/sendMessage")) {
+          return new Response(JSON.stringify({ ok: true, result: { message_id: 1 } }), { status: 200 });
+        }
+        throw new Error(`Unexpected fetch ${url}`);
+      };
+
+      const runtime = {
+        config: {
+          mode: "polling" as const,
+          token: "token",
+          openCodeUrl: "http://127.0.0.1:4096",
+          sessionCacheMax: 10,
+          sessionCacheTtlMs: 10_000,
+          notificationDebounceMs: 0,
+          port: 4097,
+          webhookPath: "/webhook",
+          sessionStorePath: "/tmp/test-store.json",
+        },
+        store: {
+          get: async () => undefined,
+          set: async () => undefined,
+          delete: async () => undefined,
+          questionList: async (name: string) => pending.get(name) || [],
+          questionUpsert: async (name: string, row: unknown) => {
+            const next = [...(pending.get(name) || []), row as { requestId: string }];
+            pending.set(name, next);
+          },
+          questionDelete: async () => undefined,
+          sessionKeys: async () => ["chat:77:user:5", "chat:77:user:6"],
+          notificationGet: async () => true,
+        },
+      };
+
+      await handleBridgeEvent(runtime, {
+        type: "question.asked",
+        properties: {
+          id: "req-dedupe",
+          sessionID: "session-dedupe",
+          questions: [{ header: "Need one answer" }],
+        },
+      });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+
+    const sentTexts = calls
+      .filter((x) => x.url.includes("/sendMessage") && x.body.chat_id === 77)
+      .map((x) => String(x.body.text || ""));
+    expect(sentTexts.filter((text) => text.includes("Question pending:")).length).toBe(1);
+    expect(sentTexts.filter((text) => text.includes("Open session session-dedupe")).length).toBe(1);
   });
 
   test("question fallback notifications debounce per request id and refresh pending entries", async () => {
