@@ -1794,7 +1794,7 @@ async function recentText(config: BridgeConfig, sessionId: string, count: number
     if (!entry || typeof entry !== "object") continue
     const row = entry as { info?: unknown; parts?: unknown }
     const info = row.info && typeof row.info === "object"
-      ? row.info as { id?: unknown; role?: unknown; parentID?: unknown }
+      ? row.info as { id?: unknown; role?: unknown; parentID?: unknown; time?: unknown; created?: unknown }
       : undefined
     if (!info) continue
     const id = typeof info.id === "string" ? info.id : ""
