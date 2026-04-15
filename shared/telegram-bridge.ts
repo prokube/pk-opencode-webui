@@ -643,10 +643,7 @@ async function sessionTargets(runtime: Runtime, ref: SessionRef): Promise<string
 }
 
 async function pendingTargets(runtime: Runtime, ref: SessionRef): Promise<string[]> {
-  const scoped = sourceScopedId(ref.sourceId, ref.sessionId)
-  const alarmEnabled = runtime.store.sessionAlarmGet
-    ? await runtime.store.sessionAlarmGet(scoped)
-    : true
+  const alarmEnabled = await sessionAlarmEnabled(runtime, ref)
   if (!alarmEnabled) return []
 
   const targets = new Set<string>()
@@ -661,11 +658,17 @@ async function pendingTargets(runtime: Runtime, ref: SessionRef): Promise<string
   return [...targets]
 }
 
-async function eventTargets(runtime: Runtime, ref: SessionRef): Promise<string[]> {
+async function sessionAlarmEnabled(runtime: Runtime, ref: SessionRef): Promise<boolean> {
+  if (!runtime.store.sessionAlarmGet) return true
   const scoped = sourceScopedId(ref.sourceId, ref.sessionId)
-  const alarmEnabled = runtime.store.sessionAlarmGet
-    ? await runtime.store.sessionAlarmGet(scoped)
-    : true
+  if (await runtime.store.sessionAlarmGet(scoped)) return true
+  if (ref.sourceId === "default") return false
+  if (await runtime.store.sessionAlarmGet(ref.sessionId)) return true
+  return false
+}
+
+async function eventTargets(runtime: Runtime, ref: SessionRef): Promise<string[]> {
+  const alarmEnabled = await sessionAlarmEnabled(runtime, ref)
   if (!alarmEnabled) return []
 
   const optedIn = await notificationTargets(runtime)
