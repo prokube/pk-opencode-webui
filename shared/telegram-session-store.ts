@@ -15,6 +15,7 @@ type TelegramPendingItem = {
   id: string
   kind: "question" | "permission" | "task-finished"
   sessionId: string
+  sourceId?: string
   text: string
   stampedAt: number
   resolved: boolean
@@ -33,6 +34,7 @@ export type TelegramPendingQuestion = {
   requestId: string
   callbackId: string
   sessionId: string
+  sourceId?: string
   createdAt: number
   expiresAt: number
   questions: TelegramPendingQuestionEntry[]
@@ -137,6 +139,7 @@ function parsePendingQuestion(value: unknown): TelegramPendingQuestion | undefin
     requestId,
     callbackId: pendingId,
     sessionId,
+    sourceId: typeof row.sourceId === "string" && row.sourceId.trim() ? row.sourceId.trim() : undefined,
     createdAt,
     expiresAt,
     questions,
@@ -160,6 +163,7 @@ function parsePendingList(value: unknown): TelegramPendingItem[] {
       id: data.id,
       kind: data.kind,
       sessionId: data.sessionId,
+      sourceId: typeof data.sourceId === "string" && data.sourceId.trim() ? data.sourceId.trim() : undefined,
       text: data.text,
       stampedAt: data.stampedAt,
       resolved: data.resolved,

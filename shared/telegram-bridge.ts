@@ -1,7 +1,5 @@
 import { createTelegramSessionStore, telegramSessionKey, type TelegramPendingQuestion } from "./telegram-session-store"
-import { loadTelegramBridgeSettings, updateTelegramSettings, writeTelegramRuntimeState } from "./telegram-settings"
-import { appendFile, mkdir } from "node:fs/promises"
-import { dirname } from "node:path"
+import { loadTelegramBridgeSettings, writeTelegramRuntimeState } from "./telegram-settings"
 
 type TelegramUpdate = {
   update_id: number
@@ -34,6 +32,13 @@ type BridgeConfig = {
   mode: "polling" | "webhook"
   token: string
   openCodeUrl: string
+  multiSourceEnabled?: boolean
+  sources?: Array<{
+    id: string
+    openCodeUrl: string
+    enabled: boolean
+    directory?: string
+  }>
   sessionLinkBase?: string
   directory?: string
   sessionCacheMax: number
@@ -47,81 +52,19 @@ type BridgeConfig = {
   sessionStorePath: string
 }
 
-const rawConsole = {
-  log: console.log.bind(console),
-  warn: console.warn.bind(console),
-  error: console.error.bind(console),
-}
-
-let fileLoggerInstalled = false
-let fileLoggerPath = ""
-let fileLoggerWrites = Promise.resolve()
-
-function bridgeLogFilePath() {
-  return (process.env.TELEGRAM_LOG_FILE || "").trim()
-}
-
-function formatLogArg(value: unknown): string {
-  if (value instanceof Error) {
-    const parts = [value.name, value.message].filter(Boolean)
-    const head = parts.join(": ")
-    if (!value.stack) return head
-    return `${head}\n${value.stack}`
-  }
-  if (typeof value === "string") return value
-  if (typeof value === "number") return String(value)
-  if (typeof value === "boolean") return value ? "true" : "false"
-  if (value === null) return "null"
-  if (value === undefined) return "undefined"
-  return JSON.stringify(value, (_key, item) => {
-    if (item instanceof Error) {
-      return {
-        name: item.name,
-        message: item.message,
-        stack: item.stack,
-      }
-    }
-    return item
-  })
-}
-
-function writeBridgeLogLine(level: "INFO" | "WARN" | "ERROR", args: unknown[]) {
-  if (!fileLoggerPath) return
-  const line = `${new Date().toISOString()} [${level}] ${args.map((item) => formatLogArg(item)).join(" ")}\n`
-  fileLoggerWrites = fileLoggerWrites
-    .then(() => appendFile(fileLoggerPath, line))
-    .catch((error) => {
-      rawConsole.warn("[TelegramBridge] failed to write log file", { path: fileLoggerPath, error })
-    })
-}
-
-async function enableBridgeFileLogging() {
-  const path = bridgeLogFilePath()
-  if (!path) return
-  fileLoggerPath = path
-  await mkdir(dirname(path), { recursive: true }).catch((error) => {
-    rawConsole.warn("[TelegramBridge] failed to prepare log directory", { path, error })
-  })
-  if (fileLoggerInstalled) return
-  fileLoggerInstalled = true
-  console.log = (...args: unknown[]) => {
-    rawConsole.log(...args)
-    writeBridgeLogLine("INFO", args)
-  }
-  console.warn = (...args: unknown[]) => {
-    rawConsole.warn(...args)
-    writeBridgeLogLine("WARN", args)
-  }
-  console.error = (...args: unknown[]) => {
-    rawConsole.error(...args)
-    writeBridgeLogLine("ERROR", args)
-  }
-  writeBridgeLogLine("INFO", ["[TelegramBridge] file logging enabled", { path }])
-}
-
 type Runtime = {
   config: BridgeConfig
+  sources?: SourceConfig[]
+  sourceById?: Map<string, SourceConfig>
+  defaultSourceId?: string
   store: ReturnType<typeof createTelegramSessionStore>
+}
+
+type SourceConfig = {
+  id: string
+  openCodeUrl: string
+  directory?: string
+  enabled: boolean
 }
 
 type BridgeHealthState = "healthy" | "degraded"
@@ -152,6 +95,7 @@ type BridgeHealthReport = {
   dependencies: {
     telegramApi: BridgeHealthCheck
     openCodeApi: BridgeHealthCheck
+    openCodeSources?: Array<{ sourceId: string } & BridgeHealthCheck>
   }
 }
 
@@ -159,6 +103,7 @@ type TelegramPendingItem = {
   id: string
   kind: "question" | "permission" | "task-finished"
   sessionId: string
+  sourceId?: string
   text: string
   stampedAt: number
   resolved: boolean
@@ -172,7 +117,6 @@ type CachedSession = {
 type CachedSessionInfo = {
   exists: boolean
   title: string | null
-  parentID: string | null
   expiresAt: number
 }
 
@@ -220,9 +164,93 @@ type TelegramPendingItem = {
   id: string
   kind: "question" | "permission" | "task-finished"
   sessionId: string
+  sourceId?: string
   text: string
   stampedAt: number
   resolved: boolean
+}
+
+type SessionRef = {
+  sourceId: string
+  sessionId: string
+}
+
+function defaultSource(config: BridgeConfig): SourceConfig {
+  return {
+    id: "default",
+    openCodeUrl: config.openCodeUrl,
+    directory: config.directory,
+    enabled: true,
+  }
+}
+
+function configuredSources(config: BridgeConfig): SourceConfig[] {
+  if (!config.multiSourceEnabled) {
+    return [defaultSource(config)]
+  }
+  const raw = Array.isArray(config.sources) ? config.sources : []
+  const out: SourceConfig[] = []
+  const ids = new Set<string>()
+  for (const source of raw) {
+    const id = source?.id?.trim()
+    if (!id || ids.has(id)) continue
+    const openCodeUrl = source?.openCodeUrl?.trim()
+    if (!openCodeUrl) continue
+    if (source.enabled === false) continue
+    out.push({
+      id,
+      openCodeUrl,
+      directory: source.directory,
+      enabled: true,
+    })
+    ids.add(id)
+  }
+  if (!out.length) return [defaultSource(config)]
+  return out
+}
+
+function encodeSessionRef(ref: SessionRef): string {
+  if (ref.sourceId === "default") return ref.sessionId
+  return `${ref.sourceId}::${ref.sessionId}`
+}
+
+function decodeSessionRef(value: string): SessionRef | undefined {
+  const trimmed = value.trim()
+  if (!trimmed) return
+  const parts = trimmed.split("::")
+  if (parts.length === 1) {
+    return { sourceId: "default", sessionId: trimmed }
+  }
+  const sourceId = parts[0]?.trim()
+  const sessionId = parts.slice(1).join("::").trim()
+  if (!sourceId || !sessionId) return
+  return { sourceId, sessionId }
+}
+
+function sourceScopedId(sourceId: string, sessionId: string): string {
+  if (sourceId === "default") return sessionId
+  return `${sourceId}::${sessionId}`
+}
+
+function sourceLabel(sourceId: string): string {
+  if (sourceId === "default") return "default"
+  return sourceId
+}
+
+function sourceConfig(runtime: Runtime, sourceId: string): BridgeConfig {
+  const source = runtime.sourceById?.get(sourceId)
+    || (runtime.defaultSourceId ? runtime.sourceById?.get(runtime.defaultSourceId) : undefined)
+    || runtime.sources?.[0]
+    || defaultSource(runtime.config)
+  return {
+    ...runtime.config,
+    openCodeUrl: source.openCodeUrl,
+    directory: source.directory,
+  }
+}
+
+function sourceForSessionRef(runtime: Runtime, ref: SessionRef): BridgeConfig {
+  return sourceConfig(runtime, ref.sourceId)
 }
 
 const sessions = new Map<string, CachedSession>()
@@ -283,11 +311,6 @@ const telegramCommands = Object.freeze([
     name: "switch",
     text: "Switch this chat/user mapping to an existing session",
     args: "[session-id|index]",
-  }),
-  Object.freeze({
-    name: "project",
-    text: "Show or set OpenCode project directory",
-    args: "[path|clear|status]",
   }),
   Object.freeze({
     name: "notify",
@@ -421,41 +444,6 @@ function parseTelegramKey(key: string): { chatId: number; userId?: number } | un
   return { chatId, userId }
 }
 
-function notificationDebugEnabled() {
-  const raw = (process.env.TELEGRAM_NOTIFY_DEBUG || "").trim().toLowerCase()
-  if (raw === "1") return true
-  if (raw === "true") return true
-  if (raw === "yes") return true
-  return false
-}
-
-function notifyDebug(message: string, data?: Record<string, unknown>) {
-  if (!notificationDebugEnabled()) return
-  if (!data) {
-    console.log(`[TelegramBridge][notify] ${message}`)
-    return
-  }
-  console.log(`[TelegramBridge][notify] ${message}`, data)
-}
-
-function bridgeDebugEnabled() {
-  const raw = (process.env.TELEGRAM_BRIDGE_DEBUG || "").trim().toLowerCase()
-  if (raw === "1") return true
-  if (raw === "true") return true
-  if (raw === "yes") return true
-  if (notificationDebugEnabled()) return true
-  return false
-}
-
-function bridgeDebug(message: string, data?: Record<string, unknown>) {
-  if (!bridgeDebugEnabled()) return
-  if (!data) {
-    console.log(`[TelegramBridge][debug] ${message}`)
-    return
-  }
-  console.log(`[TelegramBridge][debug] ${message}`, data)
-}
-
 async function notificationEnabled(runtime: Runtime, key: string): Promise<boolean> {
   if (runtime.store.notificationGet) {
     return runtime.store.notificationGet(key)
@@ -567,7 +555,8 @@ function pendingMessage(items: TelegramPendingItem[]): string {
   const lines = combined.map((item, index) => {
     const mins = Math.max(1, Math.round((Date.now() - item.stampedAt) / 60_000))
     const label = item.kind === "task-finished" ? "finished" : item.kind
-    return `${index + 1}. [${label}] ${item.text} (${mins}m ago, session ${item.sessionId})`
+    const sourceText = item.sourceId && item.sourceId !== "default" ? ` source ${item.sourceId},` : ""
+    return `${index + 1}. [${label}] ${item.text} (${mins}m ago,${sourceText} session ${item.sessionId})`
   })
   const first = combined[0]
   const hint = first ? pendingHint(first) : "use /status"
@@ -585,12 +574,12 @@ async function appendPending(runtime: Runtime, chatId: number, entry: TelegramPe
   })
 }
 
-function pendingEntryId(sessionId: string, kind: string, chatId: number, requestId?: string): string {
+function pendingEntryId(sessionId: string, kind: string, chatId: number, requestId?: string, sourceId = "default"): string {
   const base = requestId?.trim()
-  if (base) return `${sessionId}:${kind}:${base}:${chatId}`
+  if (base) return `${sourceId}:${sessionId}:${kind}:${base}:${chatId}`
   const seq = String(pendingEntrySeq).padStart(8, "0")
   pendingEntrySeq += 1
-  return `${sessionId}:${kind}:${Date.now()}:${seq}:${chatId}`
+  return `${sourceId}:${sessionId}:${kind}:${Date.now()}:${seq}:${chatId}`
 }
 
 function pendingQuestionText(question: TelegramPendingQuestion): string {
@@ -602,12 +591,13 @@ function pendingQuestionText(question: TelegramPendingQuestion): string {
   return `${text.slice(0, pendingTextMax - 3)}...`
 }
 
-async function resolvePendingForSession(runtime: Runtime, chatId: number, sessionId: string) {
+async function resolvePendingForSession(runtime: Runtime, chatId: number, sessionId: string, sourceId = "default") {
   await queueChatUpdate(`pending:${chatId}`, async () => {
     const key = pendingChatKey(chatId)
     const items = await pendingGet(runtime, key)
     const next = items.map((item) => {
-      if (item.sessionId !== sessionId) return item
+      const itemSourceId = item.sourceId || "default"
+      if (item.sessionId !== sessionId || itemSourceId !== sourceId) return item
       if (item.resolved) return item
       if (item.kind === "task-finished") return item
       return { ...item, resolved: true }
@@ -616,21 +606,14 @@ async function resolvePendingForSession(runtime: Runtime, chatId: number, sessio
   })
 }
 
-function sessionLabel(config: BridgeConfig, sessionId: string): string {
-  if (!config.sessionLinkBase) return `session ${sessionId}`
+function sessionLabel(config: BridgeConfig, sessionId: string, sourceId = "default"): string {
+  const prefixed = sourceId === "default" ? `session ${sessionId}` : `[${sourceLabel(sourceId)}] session ${sessionId}`
+  if (!config.sessionLinkBase) return prefixed
   return `${config.sessionLinkBase}/session/${encodeURIComponent(sessionId)}`
 }
 
 function notificationKey(chatId: number): string {
   return telegramSessionKey(chatId)
-}
-
-async function enableMappedSessionAlarm(runtime: Runtime, chatKey: string) {
-  if (!runtime.store.sessionAlarmSet) return
-  const mapped = await runtime.store.get(chatKey)
-  const sessionId = mapped || sessionFromCache(runtime.config, chatKey)
-  if (!sessionId) return
-  await runtime.store.sessionAlarmSet(sessionId, true)
 }
 
 async function notificationTargets(runtime: Runtime): Promise<string[]> {
@@ -647,9 +630,9 @@ async function notificationTargets(runtime: Runtime): Promise<string[]> {
   return [...targets]
 }
 
-async function sessionTargets(runtime: Runtime, sessionId: string): Promise<string[]> {
+async function sessionTargets(runtime: Runtime, ref: SessionRef): Promise<string[]> {
   if (!runtime.store.sessionKeys) return []
-  const keys = await runtime.store.sessionKeys(sessionId)
+  const keys = await runtime.store.sessionKeys(encodeSessionRef(ref))
   const targets = new Set<string>()
   for (const key of keys) {
     const parsed = parseTelegramKey(key)
@@ -659,15 +642,15 @@ async function sessionTargets(runtime: Runtime, sessionId: string): Promise<stri
   return [...targets]
 }
 
-async function pendingTargets(runtime: Runtime, sessionId: string): Promise<string[]> {
-  const alarmEnabled = await sessionAlarmEnabled(runtime, sessionId)
-  if (!alarmEnabled) {
-    notifyDebug("pending targets skipped: session alarm disabled", { sessionId })
-    return []
-  }
+async function pendingTargets(runtime: Runtime, ref: SessionRef): Promise<string[]> {
+  const scoped = sourceScopedId(ref.sourceId, ref.sessionId)
+  const alarmEnabled = runtime.store.sessionAlarmGet
+    ? await runtime.store.sessionAlarmGet(scoped)
+    : true
+  if (!alarmEnabled) return []
 
   const targets = new Set<string>()
-  const mapped = await sessionTargets(runtime, sessionId)
+  const mapped = await sessionTargets(runtime, ref)
   for (const key of mapped) {
     targets.add(key)
   }
@@ -678,20 +661,17 @@ async function pendingTargets(runtime: Runtime, sessionId: string): Promise<stri
   return [...targets]
 }
 
-async function eventTargets(runtime: Runtime, sessionId: string): Promise<string[]> {
-  const alarmEnabled = await sessionAlarmEnabled(runtime, sessionId)
-  if (!alarmEnabled) {
-    notifyDebug("event targets skipped: session alarm disabled", { sessionId })
-    return []
-  }
+async function eventTargets(runtime: Runtime, ref: SessionRef): Promise<string[]> {
+  const scoped = sourceScopedId(ref.sourceId, ref.sessionId)
+  const alarmEnabled = runtime.store.sessionAlarmGet
+    ? await runtime.store.sessionAlarmGet(scoped)
+    : true
+  if (!alarmEnabled) return []
 
   const optedIn = await notificationTargets(runtime)
   if (optedIn.length) return optedIn
-  const keys = await sessionTargets(runtime, sessionId)
-  if (!keys.length) {
-    notifyDebug("event targets empty: no mapped session keys", { sessionId })
-    return []
-  }
+  const keys = await sessionTargets(runtime, ref)
+  if (!keys.length) return []
 
   const targets = new Set<string>()
   for (const key of keys) {
@@ -707,21 +687,21 @@ function proactiveTelegramEnabled(config: BridgeConfig): boolean {
   return config.telegramAlarmChannelEnabled !== false
 }
 
-function shouldNotify(config: BridgeConfig, chatId: number, kind: string, sessionId: string): boolean {
+function shouldNotify(config: BridgeConfig, chatId: number, kind: string, sessionId: string, sourceId = "default"): boolean {
   const now = Date.now()
   const cutoff = now - Math.max(config.notificationDebounceMs * 3, 60_000)
   for (const [entryKey, stampedAt] of eventNotifications) {
     if (stampedAt >= cutoff) continue
     eventNotifications.delete(entryKey)
   }
-  const key = `${chatId}:${kind}:${sessionId}`
+  const key = `${chatId}:${kind}:${sourceId}:${sessionId}`
   const previous = eventNotifications.get(key)
   if (previous && now - previous < config.notificationDebounceMs) return false
   return true
 }
 
-function stampNotification(chatId: number, kind: string, sessionId: string) {
-  eventNotifications.set(`${chatId}:${kind}:${sessionId}`, Date.now())
+function stampNotification(chatId: number, kind: string, sessionId: string, sourceId = "default") {
+  eventNotifications.set(`${chatId}:${kind}:${sourceId}:${sessionId}`, Date.now())
 }
 
 function questionText(properties: Record<string, unknown>): string {
@@ -929,14 +909,6 @@ type SwitchCallbackData =
   | { action: "page"; page: number }
   | { action: "select"; index: number; token: string }
 
-type SessionActionCallbackData =
-  | { action: "switch"; sessionId: string }
-  | { action: "recent"; sessionId: string }
-
-type ProjectActionCallbackData =
-  | { action: "session"; sessionId: string }
-  | { action: "clear" }
-
 function switchToken(sessionId: string): string {
   return shortId(sessionId).slice(0, 8).padStart(6, "0")
 }
@@ -963,132 +935,6 @@ function parseSwitchCallbackData(input: string): SwitchCallbackData | undefined 
   return { action: "select", index: index - 1, token: selected[2] || "" }
 }
 
-function sessionActionCallback(action: "switch" | "recent", sessionId: string): string | undefined {
-  const id = sessionId.trim()
-  if (!id) return
-  if (/[\s:]/.test(id)) return
-  const value = action === "switch" ? `a:s:${id}` : `a:r:${id}`
-  if (value.length > callbackDataMax) return
-  return value
-}
-
-function parseSessionActionCallbackData(input: string): SessionActionCallbackData | undefined {
-  const maxSessionIdLength = callbackDataMax - "a:s:".length
-  if (maxSessionIdLength < 1) return
-  const parsed = input.match(new RegExp(`^a:([sr]):([^\\s:]{1,${maxSessionIdLength}})$`))
-  if (!parsed) return
-  const action = parsed[1]
-  const sessionId = parsed[2]?.trim() || ""
-  if (!sessionId) return
-  if (action === "s") return { action: "switch", sessionId }
-  if (action === "r") return { action: "recent", sessionId }
-}
-
-function projectSessionCallback(sessionId: string): string | undefined {
-  const id = sessionId.trim()
-  if (!id) return
-  if (/[\s:]/.test(id)) return
-  const value = `d:s:${id}`
-  if (value.length > callbackDataMax) return
-  return value
-}
-
-function projectClearCallback(): string {
-  return "d:c"
-}
-
-function parseProjectActionCallbackData(input: string): ProjectActionCallbackData | undefined {
-  if (input === "d:c") return { action: "clear" }
-  const maxSessionIdLength = callbackDataMax - "d:s:".length
-  if (maxSessionIdLength < 1) return
-  const parsed = input.match(new RegExp(`^d:s:([^\\s:]{1,${maxSessionIdLength}})$`))
-  if (!parsed) return
-  const sessionId = parsed[1]?.trim() || ""
-  if (!sessionId) return
-  return { action: "session", sessionId }
-}
-
-function compactDirectoryLabel(directory: string): string {
-  const normalized = directory.replace(/\\+/g, "/").replace(/\/+$/, "")
-  if (!normalized) return directory
-  const parts = normalized.split("/").filter(Boolean)
-  if (!parts.length) return normalized
-  const tail = parts[parts.length - 1] || normalized
-  if (tail.length <= 28) return tail
-  return truncateTelegramInlineText(tail, 28)
-}
-
-async function projectChoices(runtime: Runtime, chatKey: string, current?: string): Promise<Array<{ sessionId: string; directory: string; title?: string }>> {
-  const list = await switchCandidates(runtime, chatKey, current)
-  if (!list.length) return []
-  const unique: Array<{ sessionId: string; directory: string; title?: string }> = []
-  const seen = new Set<string>()
-  for (const sessionId of list) {
-    if (unique.length >= 8) break
-    const directory = await sessionDirectory(runtime.config, sessionId)
-    if (!directory || seen.has(directory)) continue
-    seen.add(directory)
-    const title = await safeSessionTitle(runtime.config, sessionId)
-    unique.push({ sessionId, directory, title })
-  }
-  return unique
-}
-
-function projectPickerText(current?: string): string {
-  if (!current) {
-    return "Project directory override is not set. Using session-derived context."
-  }
-  return `Current project directory override: ${current}`
-}
-
-async function projectPicker(runtime: Runtime, chatKey: string, current?: string): Promise<{
-  text: string
-  replyMarkup?: { inline_keyboard: Array<Array<{ text: string; callback_data: string }>> }
-}> {
-  const active = runtime.config.directory?.trim() || ""
-  const choices = await projectChoices(runtime, chatKey, current)
-  const rows = choices
-    .map((choice, index) => {
-      const callback = projectSessionCallback(choice.sessionId)
-      if (!callback) return
-      const marker = active === choice.directory ? " [current]" : ""
-      const title = choice.title ? ` - ${truncateTelegramInlineText(choice.title, 18)}` : ""
-      return [{
-        text: truncateTelegramInlineText(`${index + 1}. ${compactDirectoryLabel(choice.directory)}${title}${marker}`, inlineButtonTextMax),
-        callback_data: callback,
-      }]
-    })
-    .filter((item) => item !== undefined) as Array<Array<{ text: string; callback_data: string }>>
-  if (active) {
-    rows.push([{ text: "Clear project override", callback_data: projectClearCallback() }])
-  }
-  if (!rows.length) {
-    return {
-      text: `${projectPickerText(active || undefined)}\n\nNo recent project directories found from session history. Use /project <path> to set one directly.`,
-    }
-  }
-  return {
-    text: `${projectPickerText(active || undefined)}\n\nChoose a project directory from recent sessions, or use /project <path>.`,
-    replyMarkup: { inline_keyboard: rows },
-  }
-}
-
-function sessionTitleText(sessionId: string, title?: string): string {
-  const single = (title || "").replace(/\s+/g, " ").trim()
-  if (!single) return sessionId
-  return truncateTelegramInlineText(single, sessionTitleInlineMax)
-}
-
-function taskFinishedMarkup(sessionId: string): { inline_keyboard: Array<Array<{ text: string; callback_data: string }>> } | undefined {
-  const switchData = sessionActionCallback("switch", sessionId)
-  const recentData = sessionActionCallback("recent", sessionId)
-  const row: Array<{ text: string; callback_data: string }> = []
-  if (switchData) row.push({ text: "Switch session", callback_data: switchData })
-  if (recentData) row.push({ text: "Latest message", callback_data: recentData })
-  if (!row.length) return
-  return { inline_keyboard: [row] }
-}
-
 function questionMarkup(question: TelegramPendingQuestion): { inline_keyboard: Array<Array<{ text: string; callback_data: string }>> } | undefined {
   if (!question.callbackId) return
   const index = pendingQuestionIndex(question)
@@ -1110,7 +956,7 @@ function questionMarkup(question: TelegramPendingQuestion): { inline_keyboard: A
   }
 }
 
-function parsePendingQuestion(properties: Record<string, unknown>): TelegramPendingQuestion | undefined {
+function parsePendingQuestion(properties: Record<string, unknown>, sourceId = "default"): TelegramPendingQuestion | undefined {
   const requestId = typeof properties.id === "string" ? properties.id.trim() : ""
   const sessionId = typeof properties.sessionID === "string" ? properties.sessionID.trim() : ""
   const rows = Array.isArray(properties.questions) ? properties.questions : []
@@ -1120,26 +966,15 @@ function parsePendingQuestion(properties: Record<string, unknown>): TelegramPend
       const value = row as Record<string, unknown>
       const header = typeof value.header === "string" ? value.header.trim() : ""
       const question = typeof value.question === "string" ? value.question.trim() : ""
-      const parsedOptions = Array.isArray(value.options)
+      const options = Array.isArray(value.options)
         ? value.options
           .map((item) => {
-            if (typeof item === "string") {
-              const label = item.trim()
-              if (!label) return
-              return { label, description: "" }
-            }
-            if (!item || typeof item !== "object") return
-            const option = item as { label?: unknown; description?: unknown }
-            const label = typeof option.label === "string" ? option.label.trim() : ""
-            if (!label) return
-            const description = typeof option.description === "string" ? option.description.trim() : ""
-            return { label, description }
+            if (!item || typeof item !== "object") return ""
+            const option = item as { label?: unknown }
+            return typeof option.label === "string" ? option.label.trim() : ""
           })
-          .filter((item) => item !== undefined)
+          .filter(Boolean)
         : []
-      const options = parsedOptions.map((item) => item.label)
-      const optionDescriptions = parsedOptions.map((item) => item.description)
-      const hasDescriptions = optionDescriptions.some(Boolean)
       const multiple = value.multiple === true
       const custom = value.custom !== false
       if (!header && !question && !options.length) return
@@ -1147,7 +982,6 @@ function parsePendingQuestion(properties: Record<string, unknown>): TelegramPend
         header,
         question,
         options,
-        optionDescriptions: hasDescriptions ? optionDescriptions : undefined,
         multiple,
         custom,
       }
@@ -1160,6 +994,7 @@ function parsePendingQuestion(properties: Record<string, unknown>): TelegramPend
     requestId,
     callbackId: callbackQuestionId(requestId),
     sessionId,
+    sourceId,
     createdAt: now,
     expiresAt: now + pendingQuestionTtlMs,
     questions: parsed,
@@ -1174,13 +1009,6 @@ function permissionText(properties: Record<string, unknown>): string {
     : []
   if (!patterns.length) return `Permission request: ${permission}`
   return `Permission request: ${permission} (${patterns.join(", ")})`
-}
-
-function optionLine(row: TelegramPendingQuestion["questions"][number], index: number): string {
-  const label = row.options[index] || ""
-  const description = row.optionDescriptions?.[index] || ""
-  if (!description) return `${index + 1}) ${label}`
-  return `${index + 1}) ${label} - ${description}`
 }
 
 function questionPromptText(question: TelegramPendingQuestion): string {
@@ -1199,7 +1027,7 @@ function questionPromptText(question: TelegramPendingQuestion): string {
     const detail = row.question && row.question !== row.header ? row.question : ""
     if (detail) lines.push(detail)
     for (let index = 0; index < row.options.length; index++) {
-      lines.push(optionLine(row, index))
+      lines.push(`${index + 1}) ${row.options[index]}`)
     }
     if (!row.options.length && row.custom) {
       lines.push("Reply with your answer as text.")
@@ -1237,7 +1065,7 @@ function questionStepText(question: TelegramPendingQuestion, hasButtons = false)
   const detail = row.question && row.question !== row.header ? row.question : ""
   if (detail) lines.push(detail)
   for (let optionIndex = 0; optionIndex < row.options.length; optionIndex++) {
-    lines.push(optionLine(row, optionIndex))
+    lines.push(`${optionIndex + 1}) ${row.options[optionIndex]}`)
   }
   if (!row.options.length && row.custom) {
     lines.push("Reply with your answer as text.")
@@ -1464,15 +1292,6 @@ export function isTimeoutError(error: unknown): boolean {
   return false
 }
 
-function isExpiredCallbackQueryError(error: unknown): boolean {
-  if (!(error instanceof Error)) return false
-  const message = error.message.toLowerCase()
-  if (!message.includes("answercallbackquery")) return false
-  if (message.includes("query is too old")) return true
-  if (message.includes("query id is invalid")) return true
-  return false
-}
-
 async function retry<T>(
   name: string,
   fn: () => Promise<T>,
@@ -1518,11 +1337,7 @@ async function telegramRequest(config: BridgeConfig, method: string, body: Recor
     return data.result
   }
 
-  return retry(`telegram:${method}`, run, 2, 400, (error) => {
-    if (method !== "answerCallbackQuery") return true
-    if (isExpiredCallbackQueryError(error)) return false
-    return true
-  })
+  return retry(`telegram:${method}`, run)
 }
 
 export function joinOpenCodeUrl(openCodeUrl: string, path: string): URL {
@@ -1663,7 +1478,7 @@ async function sessionsText(runtime: Runtime, chatKey: string, current?: string)
   if (!list.length) {
     return "No known sessions for this chat/user mapping yet. Use /new to create one, then /sessions to view options."
   }
-  const lines = await formatSessionList(runtime.config, list, current)
+  const lines = await formatSessionList(runtime, list, current)
   return `Known sessions for this chat/user mapping:\n${lines.join("\n")}\n\nUse /switch [session-id|index] to switch. Tip: run /switch to pick from recent sessions quickly.`
 }
 
@@ -1681,11 +1496,12 @@ function pruneExpiredSessionInfo(now: number) {
   }
 }
 
-function cacheSessionInfo(config: BridgeConfig, sessionId: string, info: SessionLookup) {
+function cacheSessionInfo(config: BridgeConfig, sessionId: string, info: SessionLookup, sourceId = "default") {
   const now = Date.now()
   const expiresAt = now + config.sessionCacheTtlMs
-  sessionInfo.delete(sessionId)
-  sessionInfo.set(sessionId, { exists: info.exists, title: info.title || null, parentID: info.parentID || null, expiresAt })
+  const key = sourceScopedId(sourceId, sessionId)
+  sessionInfo.delete(key)
+  sessionInfo.set(key, { exists: info.exists, title: info.title || null, expiresAt })
   pruneExpiredSessionInfo(now)
   for (const key of sessionInfo.keys()) {
     if (sessionInfo.size <= config.sessionCacheMax * 2) return
@@ -1693,63 +1509,52 @@ function cacheSessionInfo(config: BridgeConfig, sessionId: string, info: Session
   }
 }
 
-function cachedSessionLookup(sessionId: string): SessionLookup | undefined {
-  const cached = sessionInfo.get(sessionId)
+function cachedSessionLookup(sessionId: string, sourceId = "default"): SessionLookup | undefined {
+  const key = sourceScopedId(sourceId, sessionId)
+  const cached = sessionInfo.get(key)
   if (!cached) return
   if (cached.expiresAt <= Date.now()) {
-    sessionInfo.delete(sessionId)
+    sessionInfo.delete(key)
     return
   }
   return {
     exists: cached.exists,
     title: cached.title || undefined,
-    parentID: cached.parentID || undefined,
   }
 }
 
-function trimSessionId(value: unknown): string | undefined {
-  if (typeof value !== "string") return
-  const text = value.trim()
-  if (!text) return
-  return text
-}
-
-function sessionParentFromPayload(raw: unknown): string | undefined {
-  if (!raw || typeof raw !== "object") return
-  const row = raw as { parentID?: unknown; info?: unknown }
-  const direct = trimSessionId(row.parentID)
-  if (direct) return direct
-  if (!row.info || typeof row.info !== "object") return
-  const info = row.info as { parentID?: unknown }
-  return trimSessionId(info.parentID)
-}
-
-function formatSessionDisplay(sessionId: string, title?: string): string {
+function formatSessionDisplay(sessionId: string, title?: string, sourceId = "default"): string {
   const id = sessionId.trim()
-  if (!title) return id
+  const scoped = sourceId === "default" ? id : `[${sourceLabel(sourceId)}] ${id}`
+  if (!title) return scoped
   const single = title.replace(/\s+/g, " ").trim()
-  if (!single) return id
+  if (!single) return scoped
   const safe = truncateTelegramInlineText(single, sessionTitleInlineMax)
-  return `${safe} (${id})`
+  return `${safe} (${scoped})`
 }
 
-async function formatSessionList(config: BridgeConfig, list: string[], current?: string): Promise<string[]> {
+async function formatSessionList(runtime: Runtime, list: string[], current?: string): Promise<string[]> {
   const active = current?.trim()
-  const details = await formatSessionRows(config, list)
-  return list.map((sessionId, index) => {
-    const suffix = active === sessionId.trim() ? " (current)" : ""
+  const details = await formatSessionRows(runtime, list)
+  return list.map((sessionRef, index) => {
+    const suffix = active === sessionRef.trim() ? " (current)" : ""
     return `${index + 1}. ${details[index]}${suffix}`
   })
 }
 
-async function formatSessionRows(config: BridgeConfig, list: string[]): Promise<string[]> {
+async function formatSessionRows(runtime: Runtime, list: string[]): Promise<string[]> {
   const rows = await Promise.all(
     list
       .slice(0, sessionTitleLookupBatchSize)
-      .map(async (sessionId) => formatSessionDisplay(sessionId, await safeSessionTitle(config, sessionId))),
+      .map(async (storedRef) => {
+        const ref = decodeSessionRef(storedRef)
+        if (!ref) return storedRef
+        const title = await safeSessionTitle(sourceForSessionRef(runtime, ref), ref.sessionId, ref.sourceId)
+        return formatSessionDisplay(ref.sessionId, title, ref.sourceId)
+      }),
   )
   if (list.length <= sessionTitleLookupBatchSize) return rows
-  const tail = await formatSessionRows(config, list.slice(sessionTitleLookupBatchSize))
+  const tail = await formatSessionRows(runtime, list.slice(sessionTitleLookupBatchSize))
   return [...rows, ...tail]
 }
 
@@ -1762,7 +1567,6 @@ function normalizeSessionLookupId(sessionId: string): string | undefined {
 type SessionLookup = {
   exists: boolean
   title?: string
-  parentID?: string
 }
 
 async function readSessionInfo(config: BridgeConfig, sessionId: string): Promise<SessionLookup> {
@@ -1781,88 +1585,29 @@ async function readSessionInfo(config: BridgeConfig, sessionId: string): Promise
     const body = await res.text().catch(() => "")
     throw new Error(`OpenCode session lookup failed (${res.status}): ${body.slice(0, 300)}`)
   }
-  const payload = await res.json().catch(() => ({})) as { title?: unknown; parentID?: unknown; info?: unknown }
+  const payload = await res.json().catch(() => ({})) as { title?: unknown }
   return {
     exists: true,
     title: trimSessionTitle(payload.title),
-    parentID: sessionParentFromPayload(payload),
   }
 }
 
-async function readSessionInfoCached(config: BridgeConfig, sessionId: string): Promise<SessionLookup> {
-  const id = normalizeSessionLookupId(sessionId)
-  if (!id) return { exists: false }
-  const cached = cachedSessionLookup(id)
-  if (cached) return cached
-  const loaded = await readSessionInfo(config, id)
-  cacheSessionInfo(config, id, loaded)
-  return loaded
-}
-
-async function rootAncestorSessionId(config: BridgeConfig, sessionId: string): Promise<string> {
-  const start = normalizeSessionLookupId(sessionId)
-  if (!start) return sessionId
-  const seen = new Set<string>([start])
-  let root = start
-  let walk = start
-  for (let i = 0; i < 12; i++) {
-    const info = await readSessionInfoCached(config, walk).catch(() => undefined)
-    const parent = normalizeSessionLookupId(info?.parentID || "")
-    if (!parent) return root
-    if (seen.has(parent)) return root
-    seen.add(parent)
-    root = parent
-    walk = parent
-  }
-  return root
-}
-
-async function sessionAlarmEnabled(runtime: Runtime, sessionId: string): Promise<boolean> {
-  const fromDisk = async (id: string) => {
-    const path = runtime.config.sessionStorePath
-    if (!path) return false
-    const data = await Bun.file(path).json().catch(() => undefined) as { sessionAlarms?: Record<string, unknown> } | undefined
-    if (!data?.sessionAlarms) return false
-    return data.sessionAlarms[id] === true
-  }
-
-  if (!runtime.store.sessionAlarmGet) return true
-  const direct = await runtime.store.sessionAlarmGet(sessionId)
-  if (direct) return true
-  if (await fromDisk(sessionId)) {
-    notifyDebug("session alarm loaded from disk", { sessionId })
-    return true
-  }
-  const root = await rootAncestorSessionId(runtime.config, sessionId).catch(() => sessionId)
-  if (root === sessionId) return false
-  const inherited = await runtime.store.sessionAlarmGet(root)
-  if (inherited) {
-    notifyDebug("session alarm inherited from root", { sessionId, rootSessionId: root })
-    return true
-  }
-  if (await fromDisk(root)) {
-    notifyDebug("session alarm inherited from root via disk", { sessionId, rootSessionId: root })
-    return true
-  }
-  return false
-}
-
-async function sessionTitle(config: BridgeConfig, sessionId: string): Promise<string | undefined> {
+async function sessionTitle(config: BridgeConfig, sessionId: string, sourceId = "default"): Promise<string | undefined> {
   const id = normalizeSessionLookupId(sessionId)
   if (!id) return
-  const cached = cachedSessionLookup(id)
+  const cached = cachedSessionLookup(id, sourceId)
   if (cached) {
     if (!cached.exists) return
     return cached.title
   }
   const loaded = await readSessionInfo(config, id)
-  cacheSessionInfo(config, id, loaded)
+  cacheSessionInfo(config, id, loaded, sourceId)
   if (!loaded.exists) return
   return loaded.title
 }
 
-async function safeSessionTitle(config: BridgeConfig, sessionId: string): Promise<string | undefined> {
-  return sessionTitle(config, sessionId).catch(() => undefined)
+async function safeSessionTitle(config: BridgeConfig, sessionId: string, sourceId = "default"): Promise<string | undefined> {
+  return sessionTitle(config, sessionId, sourceId).catch(() => undefined)
 }
 
 function normalizeRecentCount(args: string[]): { count?: number; error?: string } {
@@ -1879,26 +1624,7 @@ function normalizeRecentCount(args: string[]): { count?: number; error?: string 
   return { count: Math.min(parsed, recentMaxCount) }
 }
 
-function projectCommandMode(args: string[]): { mode: "status" | "clear" | "set"; directory?: string } {
-  const raw = args.join(" ").trim()
-  if (!raw) return { mode: "status" }
-  const lower = raw.toLowerCase()
-  if (lower === "status") return { mode: "status" }
-  if (lower === "clear") return { mode: "clear" }
-  if (lower === "off") return { mode: "clear" }
-  if (lower === "none") return { mode: "clear" }
-  if (lower === "null") return { mode: "clear" }
-  return { mode: "set", directory: raw }
-}
-
-async function persistDirectoryOverride(directory?: string): Promise<boolean> {
-  const payload = directory ? { directory } : { directory: null }
-  const updated = await updateTelegramSettings(payload).catch(() => undefined)
-  if (!updated) return false
-  return updated.ok === true
-}
-
-function parseRecentText(parts: unknown, max = recentPartTextMax): string {
+function parseRecentText(parts: unknown): string {
   if (!Array.isArray(parts)) return ""
   const text = parts
     .map((part) => {
@@ -1914,8 +1640,7 @@ function parseRecentText(parts: unknown, max = recentPartTextMax): string {
     .replace(/\s+/g, " ")
     .trim()
   if (!text) return ""
-  if (!Number.isFinite(max) || max <= 0) return text
-  return truncateTelegramInlineText(text, max)
+  return truncateTelegramInlineText(text, recentPartTextMax)
 }
 
 async function recentText(config: BridgeConfig, sessionId: string, count: number): Promise<string> {
@@ -1936,7 +1661,6 @@ async function recentText(config: BridgeConfig, sessionId: string, count: number
   const data = await res.json().catch(() => [])
   const rows = Array.isArray(data) ? data : []
   const assistants = new Map<string, string>()
-  const assistantRows: string[] = []
   const users: Array<{ id: string; text: string }> = []
   for (const entry of rows) {
     if (!entry || typeof entry !== "object") continue
@@ -1950,26 +1674,12 @@ async function recentText(config: BridgeConfig, sessionId: string, count: number
     const role = info.role === "assistant" || info.role === "user" ? info.role : ""
     const text = parseRecentText(row.parts)
     if (!id || !role || !text) continue
-    if (role === "assistant") {
-      if (parentID && !assistants.has(parentID)) {
-        assistants.set(parentID, text)
-      }
-      assistantRows.push(text)
+    if (role === "assistant" && parentID && !assistants.has(parentID)) {
+      assistants.set(parentID, text)
       continue
     }
     if (role !== "user") continue
     users.push({ id, text })
-  }
-  if (!users.length && assistantRows.length) {
-    const list = assistantRows.slice(-safeCount)
-    const lines = [`Recent assistant messages for session ${sessionId} (showing ${list.length} of ${assistantRows.length}):`]
-    for (let i = 0; i < list.length; i++) {
-      const item = list[i]
-      if (!item) continue
-      lines.push("")
-      lines.push(`${i + 1}. Assistant: ${item}`)
-    }
-    return truncateTelegramText(lines.join("\n"), recentPayloadMax)
   }
   if (!users.length) {
     return `No recent chat messages found for session ${sessionId}. Send a new message first.`
@@ -1987,53 +1697,13 @@ async function recentText(config: BridgeConfig, sessionId: string, count: number
   return truncateTelegramText(lines.join("\n"), recentPayloadMax)
 }
 
-async function latestMessageText(config: BridgeConfig, sessionId: string): Promise<string> {
-  const url = opencodeUrl(config, `/session/${encodeURIComponent(sessionId)}/message`)
-  url.searchParams.set("limit", "40")
-  if (config.directory) {
-    url.searchParams.set("directory", config.directory)
-  }
-  const res = await fetch(url, {
-    method: "GET",
-    signal: AbortSignal.timeout(20_000),
-  })
-  if (!res.ok) {
-    const body = await res.text().catch(() => "")
-    throw new Error(`OpenCode session messages failed (${res.status}): ${body.slice(0, 300)}`)
-  }
-  const data = await res.json().catch(() => [])
-  const rows = Array.isArray(data) ? data : []
-  const messages: Array<{ role: "assistant" | "user"; text: string }> = []
-  for (const entry of rows) {
-    if (!entry || typeof entry !== "object") continue
-    const row = entry as { info?: unknown; parts?: unknown }
-    const info = row.info && typeof row.info === "object"
-      ? row.info as { role?: unknown }
-      : undefined
-    if (!info) continue
-    const role = info.role === "assistant" || info.role === "user" ? info.role : ""
-    const text = parseRecentText(row.parts, Number.POSITIVE_INFINITY)
-    if (!role || !text) continue
-    messages.push({ role, text })
-  }
-  const latest = [...messages].reverse().find((item) => item.role === "assistant")
-    || [...messages].reverse().find((item) => item.role === "user")
-  if (!latest) {
-    return `No recent chat messages found for session ${sessionId}. Send a new message first.`
-  }
-  const title = await safeSessionTitle(config, sessionId)
-  const label = sessionTitleText(sessionId, title)
-  const role = latest.role === "assistant" ? "Assistant" : "You"
-  return `Latest message in ${label}:\n\n${role}: ${latest.text}`
-}
-
-async function sessionExists(config: BridgeConfig, sessionId: string): Promise<boolean> {
+async function sessionExists(config: BridgeConfig, sessionId: string, sourceId = "default"): Promise<boolean> {
   const id = normalizeSessionLookupId(sessionId)
   if (!id) return false
-  const cached = cachedSessionLookup(id)
+  const cached = cachedSessionLookup(id, sourceId)
   if (cached) return cached.exists
   const loaded = await readSessionInfo(config, id)
-  cacheSessionInfo(config, id, loaded)
+  cacheSessionInfo(config, id, loaded, sourceId)
   return loaded.exists
 }
 
@@ -2050,12 +1720,15 @@ function compactSessionId(sessionId: string): string {
   return `${value.slice(0, 10)}...${value.slice(-5)}`
 }
 
-function switchButtonText(index: number, sessionId: string, title: string | undefined, current?: string): string {
+function switchButtonText(index: number, sessionRef: string, title: string | undefined, current?: string): string {
+  const ref = decodeSessionRef(sessionRef)
+  const source = ref?.sourceId || "default"
+  const sessionId = ref?.sessionId || sessionRef
   const single = (title || "").replace(/\s+/g, " ").trim()
-  const detail = single
-    ? `${single} (${compactSessionId(sessionId)})`
-    : compactSessionId(sessionId)
-  const marker = current?.trim() === sessionId.trim() ? " [current]" : ""
+  const base = compactSessionId(sessionId)
+  const tagged = source === "default" ? base : `[${sourceLabel(source)}] ${base}`
+  const detail = single ? `${single} (${tagged})` : tagged
+  const marker = current?.trim() === sessionRef.trim() ? " [current]" : ""
   return truncateTelegramInlineText(`${index + 1}. ${detail}${marker}`, inlineButtonTextMax)
 }
 
@@ -2074,12 +1747,12 @@ async function switchPicker(runtime: Runtime, chatKey: string, current?: string,
   const start = safePage * switchPageSize
   const end = Math.min(start + switchPageSize, list.length)
   const rows = list.slice(start, end)
-  const titles = await sessionTitles(runtime.config, rows)
-  const buttons = rows.map((sessionId, itemIndex) => {
+  const titles = await sessionTitles(runtime, rows)
+  const buttons = rows.map((sessionRef, itemIndex) => {
     const index = start + itemIndex
     return [{
-      text: switchButtonText(index, sessionId, titles[itemIndex], current),
-      callback_data: switchSelectCallback(index, sessionId),
+      text: switchButtonText(index, sessionRef, titles[itemIndex], current),
+      callback_data: switchSelectCallback(index, sessionRef),
     }]
   })
   const nav: Array<{ text: string; callback_data: string }> = []
@@ -2098,10 +1771,14 @@ async function switchPicker(runtime: Runtime, chatKey: string, current?: string,
   }
 }
 
-async function sessionTitles(config: BridgeConfig, list: string[]): Promise<Array<string | undefined>> {
-  const titles = await Promise.all(list.slice(0, sessionTitleLookupBatchSize).map((sessionId) => safeSessionTitle(config, sessionId)))
+async function sessionTitles(runtime: Runtime, list: string[]): Promise<Array<string | undefined>> {
+  const titles = await Promise.all(list.slice(0, sessionTitleLookupBatchSize).map((storedRef) => {
+    const ref = decodeSessionRef(storedRef)
+    if (!ref) return Promise.resolve(undefined)
+    return safeSessionTitle(sourceForSessionRef(runtime, ref), ref.sessionId, ref.sourceId)
+  }))
   if (list.length <= sessionTitleLookupBatchSize) return titles
-  const tail = await sessionTitles(config, list.slice(sessionTitleLookupBatchSize))
+  const tail = await sessionTitles(runtime, list.slice(sessionTitleLookupBatchSize))
   return [...titles, ...tail]
 }
 
@@ -2162,69 +1839,17 @@ async function handleSwitchCallback(runtime: Runtime, chatId: number, userId: nu
     await sendTelegramInlineMessage(runtime.config, chatId, picker.text, picker.replyMarkup)
     return
   }
+  const ref = decodeSessionRef(next)
+  if (!ref) {
+    await answerCallback(runtime.config, callbackId, "That session entry is invalid.")
+    return
+  }
   await runtime.store.set(key, next)
   cacheSession(runtime.config, key, next)
   await rememberSession(runtime, key, next)
-  const title = await safeSessionTitle(runtime.config, next)
+  const title = await safeSessionTitle(sourceForSessionRef(runtime, ref), ref.sessionId, ref.sourceId)
   await answerCallback(runtime.config, callbackId, "Switched.")
-  await sendTelegramMessage(runtime.config, chatId, `Switched to session: ${formatSessionDisplay(next, title)}`)
-}
-
-async function handleSessionActionCallback(runtime: Runtime, chatId: number, userId: number, callbackId: string, parsed: SessionActionCallbackData) {
-  if (parsed.action === "recent") {
-    await answerCallback(runtime.config, callbackId, "Fetching latest message...")
-    const text = await latestMessageText(runtime.config, parsed.sessionId)
-    await sendTelegramMessage(runtime.config, chatId, text)
-    return
-  }
-
-  const exists = await sessionExists(runtime.config, parsed.sessionId)
-  if (!exists) {
-    await answerCallback(runtime.config, callbackId, "Session no longer exists.")
-    await sendTelegramMessage(runtime.config, chatId, "That session was not found. Use /switch to choose an active session.")
-    return
-  }
-  const key = telegramSessionKey(chatId, userId)
-  await runtime.store.set(key, parsed.sessionId)
-  cacheSession(runtime.config, key, parsed.sessionId)
-  await rememberSession(runtime, key, parsed.sessionId)
-  const title = await safeSessionTitle(runtime.config, parsed.sessionId)
-  await answerCallback(runtime.config, callbackId, "Switched.")
-  await sendTelegramMessage(runtime.config, chatId, `Switched to session: ${sessionTitleText(parsed.sessionId, title)}`)
-}
-
-async function handleProjectActionCallback(runtime: Runtime, chatId: number, userId: number, callbackId: string, parsed: ProjectActionCallbackData) {
-  const key = telegramSessionKey(chatId, userId)
-  if (parsed.action === "clear") {
-    await answerCallback(runtime.config, callbackId, "Clearing project override...")
-    runtime.config.directory = undefined
-    const persisted = await persistDirectoryOverride()
-    if (!persisted) {
-      await sendTelegramMessage(runtime.config, chatId, "Cleared project directory override for this running bridge, but failed to persist settings. It may return after restart.")
-      return
-    }
-    await sendTelegramMessage(runtime.config, chatId, "Cleared project directory override. Bridge now uses session-derived context.")
-    return
-  }
-
-  await answerCallback(runtime.config, callbackId, "Switching project...")
-  const directory = await sessionDirectory(runtime.config, parsed.sessionId)
-  if (!directory) {
-    await sendTelegramMessage(runtime.config, chatId, `Could not resolve project directory from session ${parsed.sessionId}. Try /project <path> manually.`)
-    return
-  }
-  runtime.config.directory = directory
-  const persisted = await persistDirectoryOverride(directory)
-  if (!persisted) {
-    await sendTelegramMessage(runtime.config, chatId, `Project directory override set to ${directory} for this running bridge, but failed to persist settings.`)
-    return
-  }
-  const picker = await projectPicker(runtime, key, await runtime.store.get(key) || sessionFromCache(runtime.config, key))
-  if (!picker.replyMarkup) {
-    await sendTelegramMessage(runtime.config, chatId, `Project directory override set to: ${directory}`)
-    return
-  }
-  await sendTelegramMessageWithMarkup(runtime.config, chatId, `Project directory override set to: ${directory}\n\n${picker.text}`, picker.replyMarkup)
+  await sendTelegramMessage(runtime.config, chatId, `Switched to session: ${formatSessionDisplay(ref.sessionId, title, ref.sourceId)}`)
 }
 
 export function cacheSession(config: BridgeConfig, chatId: string, sessionId: string) {
@@ -2268,13 +1893,18 @@ async function sessionForChat(runtime: Runtime, chatKey: string): Promise<string
   const creating = creatingSessions.get(chatKey)
   if (creating) return creating
 
-  const created = createSession(config)
+  const source = (runtime.defaultSourceId ? runtime.sourceById?.get(runtime.defaultSourceId) : undefined)
+    || runtime.sources?.[0]
+    || defaultSource(runtime.config)
+  const sourceConfigValue = sourceConfig(runtime, source.id)
+  const created = createSession(sourceConfigValue)
     .then((id) => {
-      return runtime.store.set(chatKey, id).then(() => {
-        cacheSession(config, chatKey, id)
-        rememberSessionWithoutBlocking(runtime, chatKey, id)
+      const storedRef = encodeSessionRef({ sourceId: source.id, sessionId: id })
+      return runtime.store.set(chatKey, storedRef).then(() => {
+        cacheSession(config, chatKey, storedRef)
+        rememberSessionWithoutBlocking(runtime, chatKey, storedRef)
         creatingSessions.delete(chatKey)
-        return id
+        return storedRef
       })
     })
     .catch((error) => {
@@ -2284,6 +1914,11 @@ async function sessionForChat(runtime: Runtime, chatKey: string): Promise<string
 
   creatingSessions.set(chatKey, created)
   return created
+}
+
+function parsedSessionRef(stored: string | undefined): SessionRef | undefined {
+  if (!stored) return
+  return decodeSessionRef(stored)
 }
 
 export function extractReply(payload: unknown): string {
@@ -2476,8 +2111,10 @@ async function savedPrompts(runtime: Runtime, key: string): Promise<{ prompts: S
   const config = runtime.config
   const noPromptsGuidance = "No saved prompts found. If your prompts are project-scoped, run /status in the target project first or configure Telegram directory in bridge settings."
   const current = await runtime.store.get(key) || sessionFromCache(config, key)
-  const bySession = current ? await sessionDirectory(config, current) : undefined
-  const candidates = [bySession, config.directory]
+  const parsed = parsedSessionRef(current)
+  const scoped = parsed ? sourceForSessionRef(runtime, parsed) : config
+  const bySession = parsed ? await sessionDirectory(scoped, parsed.sessionId) : undefined
+  const candidates = [bySession, scoped.directory]
     .filter((value): value is string => Boolean(value))
     .filter((value, index, list) => list.indexOf(value) === index)
   const contexts = [...candidates, undefined]
@@ -2485,13 +2122,13 @@ async function savedPrompts(runtime: Runtime, key: string): Promise<{ prompts: S
   let hasSuccess = false
 
   for (const directory of contexts) {
-    const scoped = await savedPromptsForDirectory(config, directory).catch((error) => {
+    const scopedPrompts = await savedPromptsForDirectory(scoped, directory).catch((error) => {
       fallbackGuidance = savedPromptsFailureGuidance(error, directory)
       return
     })
-    if (!scoped) continue
+    if (!scopedPrompts) continue
     hasSuccess = true
-    const merged = mergeSavedPrompts(scoped.global, scoped.project)
+    const merged = mergeSavedPrompts(scopedPrompts.global, scopedPrompts.project)
     if (merged.length) {
       return { prompts: merged }
     }
@@ -2580,38 +2217,27 @@ function lookupSavedPrompt(input: string, prompts: SavedPrompt[]): { prompt?: Sa
 }
 
 async function runSavedPrompt(runtime: Runtime, chatId: number, key: string, prompt: SavedPrompt) {
-  const config = runtime.config
-  let activeSessionId = ""
-  const enableAlarm = async (sessionId: string) => {
-    if (!runtime.store.sessionAlarmSet) return
-    await runtime.store.sessionAlarmSet(sessionId, true).catch((error) => {
-      console.error("[TelegramBridge] failed to auto-enable session alarm for saved prompt", { sessionId, error })
-    })
+  const storedRef = await sessionForChat(runtime, key)
+  const ref = parsedSessionRef(storedRef)
+  if (!ref) {
+    await sendTelegramMessage(runtime.config, chatId, "Could not resolve the active source for this chat. Use /new and try again.")
+    return
   }
-  const run = async (sessionId: string) => {
-    activeSessionId = sessionId
-    await enableAlarm(sessionId)
-    await resolvePendingForSession(runtime, chatId, sessionId)
-    return sendPrompt(config, sessionId, prompt.text)
-  }
-  const sessionId = await sessionForChat(runtime, key)
-  const reply = await run(sessionId).catch(async (error) => {
+  const config = sourceForSessionRef(runtime, ref)
+  await resolvePendingForSession(runtime, chatId, ref.sessionId, ref.sourceId)
+  const reply = await sendPrompt(config, ref.sessionId, prompt.text).catch(async (error) => {
     if (!isMissingSession(error)) {
       throw error
     }
     sessions.delete(key)
     await runtime.store.delete(key)
-    const next = await sessionForChat(runtime, key)
-    return run(next)
-  }).catch(async (error) => {
-    if (!isTimeoutError(error)) {
-      throw error
+    const nextStored = await sessionForChat(runtime, key)
+    const next = parsedSessionRef(nextStored)
+    if (!next) {
+      throw new Error("OpenCode prompt failed: active source is unavailable")
     }
-    const timedOutSession = activeSessionId || sessionId
-    await sendTelegramMessage(config, chatId, `Prompt started in session ${timedOutSession}, but the reply is taking longer than expected. Check the web UI for progress.`)
-    return
+    return sendPrompt(sourceForSessionRef(runtime, next), next.sessionId, prompt.text)
   })
-  if (!reply) return
   await sendTelegramMessage(config, chatId, reply)
 }
 
@@ -2741,8 +2367,21 @@ async function checkOpenCodeApi(config: BridgeConfig): Promise<BridgeHealthCheck
 }
 
 export async function readTelegramBridgeHealth(runtime: Runtime): Promise<BridgeHealthReport> {
-  const [telegramApi, openCodeApi] = await Promise.all([checkTelegramApi(runtime.config), checkOpenCodeApi(runtime.config)])
-  const healthy = telegramApi.status === "ok" && openCodeApi.status === "ok"
+  const sources = runtime.sources || configuredSources(runtime.config)
+  const [telegramApi, sourceChecks] = await Promise.all([
+    checkTelegramApi(runtime.config),
+    Promise.all(sources.map(async (source) => {
+      const status = await checkOpenCodeApi(sourceConfig(runtime, source.id))
+      return {
+        sourceId: source.id,
+        ...status,
+      }
+    })),
+  ])
+  const openCodeApi = sourceChecks.every((item) => item.status === "ok")
+    ? { status: "ok" as const, message: `OpenCode API is reachable for ${sourceChecks.length} source(s)` }
+    : { status: "error" as const, message: `OpenCode API check failed for ${sourceChecks.filter((item) => item.status !== "ok").length} source(s)` }
+  const healthy = telegramApi.status === "ok" && sourceChecks.every((item) => item.status === "ok")
   return {
     status: healthy ? "healthy" : "degraded",
     checkedAt: new Date().toISOString(),
@@ -2764,6 +2403,7 @@ export async function readTelegramBridgeHealth(runtime: Runtime): Promise<Bridge
     dependencies: {
       telegramApi,
       openCodeApi,
+      openCodeSources: sourceChecks,
     },
   }
 }
@@ -2787,8 +2427,6 @@ async function answerCallback(config: BridgeConfig, callbackId: string, text: st
     callback_query_id: callbackId,
     text,
     show_alert: false,
-  }).catch((error) => {
-    if (!isExpiredCallbackQueryError(error)) throw error
   })
 }
 
@@ -2799,7 +2437,6 @@ export async function handleCallbackUpdate(runtime: Runtime, update: TelegramUpd
   const callbackId = callback?.id
   const data = callback?.data?.trim() || ""
   if (!callbackId) return
-  bridgeDebug("callback received", { chatId, userId, callbackId, data: data || undefined })
   const state = { acknowledged: false }
   try {
     if (!chatId || !userId || !data) {
@@ -2813,18 +2450,6 @@ export async function handleCallbackUpdate(runtime: Runtime, update: TelegramUpd
       state.acknowledged = true
       return
     }
-    const sessionAction = parseSessionActionCallbackData(data)
-    if (sessionAction) {
-      await handleSessionActionCallback(runtime, chatId, userId, callbackId, sessionAction)
-      state.acknowledged = true
-      return
-    }
-    const projectAction = parseProjectActionCallbackData(data)
-    if (projectAction) {
-      await handleProjectActionCallback(runtime, chatId, userId, callbackId, projectAction)
-      state.acknowledged = true
-      return
-    }
     const parsed = parseCallbackData(data)
     if (!parsed) {
       await answerCallback(runtime.config, callbackId, "Unsupported button payload.")
@@ -2834,12 +2459,10 @@ export async function handleCallbackUpdate(runtime: Runtime, update: TelegramUpd
 
     if (parsed.kind === "notify") {
       const key = notificationKey(chatId)
-      const mappedKey = telegramSessionKey(chatId, userId)
       await answerCallback(runtime.config, callbackId, notifyCallbackAckText)
       state.acknowledged = true
       if (parsed.mode === "on") {
         await setNotificationEnabled(runtime, key, true)
-        await enableMappedSessionAlarm(runtime, mappedKey)
       }
       if (parsed.mode === "off") {
         await setNotificationEnabled(runtime, key, false)
@@ -2928,7 +2551,8 @@ export async function handleCallbackUpdate(runtime: Runtime, update: TelegramUpd
       await sendTelegramQuestionPrompt(runtime.config, chatId, next)
       return
     }
-    await sendQuestionReply(runtime.config, pending.requestId, answers)
+    const pendingSource = pending.sourceId || "default"
+    await sendQuestionReply(sourceConfig(runtime, pendingSource), pending.requestId, answers)
       .then(async () => {
         await deletePendingQuestionByKey(runtime, match.itemKey, pending.requestId)
         const remaining = await readPendingQuestionsByKey(runtime, match.itemKey)
@@ -2947,10 +2571,6 @@ export async function handleCallbackUpdate(runtime: Runtime, update: TelegramUpd
         await sendTelegramMessage(runtime.config, chatId, "That question is no longer pending. Wait for the next prompt or use /status.")
       })
   } catch (error) {
-    if (isExpiredCallbackQueryError(error)) {
-      notifyDebug("callback query expired before acknowledgement", { chatId, userId, callbackId })
-      return
-    }
     console.error("[TelegramBridge] callback handling failed", { chatId, userId, callbackId, error })
     const recovery = [
       ...(state.acknowledged ? [] : [answerCallback(runtime.config, callbackId, "Sorry, this button could not be processed right now.")]),
@@ -2978,40 +2598,39 @@ export async function handleTextUpdate(runtime: Runtime, update: TelegramUpdate)
   const text = message?.text?.trim()
 
   if (!chatId || !text) return
-  bridgeDebug("text message received", { chatId, userId, text })
 
   const key = telegramSessionKey(chatId, userId)
 
   const runCommand = async () => {
     const command = parseCommand(text)
     if (!command) return false
-    bridgeDebug("command parsed", { chatId, userId, command: command.name, args: command.args })
     const known = commandEntry(command.name)
     if (known?.name === "help") {
       await sendTelegramMessage(config, chatId, helpText())
       return true
     }
     if (known?.name === "status") {
-      const sessionId = await sessionForChat(runtime, key)
-      const title = await safeSessionTitle(config, sessionId)
-      await sendTelegramMessage(config, chatId, `Current session: ${formatSessionDisplay(sessionId, title)}`)
+      const storedRef = await sessionForChat(runtime, key)
+      const ref = parsedSessionRef(storedRef)
+      if (!ref) {
+        await sendTelegramMessage(config, chatId, "Current session mapping is invalid. Use /new to create a fresh session.")
+        return true
+      }
+      const title = await safeSessionTitle(sourceForSessionRef(runtime, ref), ref.sessionId, ref.sourceId)
+      await sendTelegramMessage(config, chatId, `Current session: ${formatSessionDisplay(ref.sessionId, title, ref.sourceId)}`)
       return true
     }
     if (known?.name === "new") {
-      const next = await createSession(config)
+      const source = (runtime.defaultSourceId ? runtime.sourceById?.get(runtime.defaultSourceId) : undefined)
+        || runtime.sources?.[0]
+        || defaultSource(runtime.config)
+      const scoped = sourceConfig(runtime, source.id)
+      const sessionId = await createSession(scoped)
+      const next = encodeSessionRef({ sourceId: source.id, sessionId })
       await runtime.store.set(key, next)
       cacheSession(config, key, next)
       await rememberSession(runtime, key, next)
-      if (runtime.store.sessionAlarmSet) {
-        const notifyKey = notificationKey(chatId)
-        const enabled = await notificationEnabled(runtime, notifyKey)
-        if (enabled) {
-          await runtime.store.sessionAlarmSet(next, true).catch((error) => {
-            console.error("[TelegramBridge] failed to auto-enable alarm for /new session", { chatId, sessionId: next, error })
-          })
-        }
-      }
-      await sendTelegramMessage(config, chatId, `Started a new session: ${formatSessionDisplay(next)}`)
+      await sendTelegramMessage(config, chatId, `Started a new session: ${formatSessionDisplay(sessionId, undefined, source.id)}`)
       return true
     }
     if (known?.name === "sessions") {
@@ -3030,7 +2649,12 @@ export async function handleTextUpdate(runtime: Runtime, update: TelegramUpdate)
         await sendTelegramMessage(config, chatId, "No active session mapping for this chat/user yet. Use /status or /new first.")
         return true
       }
-      const text = await recentText(config, current, parsed.count || recentDefaultCount)
+      const ref = parsedSessionRef(current)
+      if (!ref) {
+        await sendTelegramMessage(config, chatId, "Current session mapping is invalid. Use /new to create a fresh session.")
+        return true
+      }
+      const text = await recentText(sourceForSessionRef(runtime, ref), ref.sessionId, parsed.count || recentDefaultCount)
       await sendTelegramMessage(config, chatId, text)
       return true
     }
@@ -3058,51 +2682,23 @@ export async function handleTextUpdate(runtime: Runtime, update: TelegramUpdate)
         await sendTelegramMessage(config, chatId, "Usage: /switch [session-id|index]. Run /switch with no args to pick from recent sessions.")
         return true
       }
-      if (!resolved.fromKnownList && !(await sessionExists(config, next))) {
+      const nextRef = (() => {
+        const parsed = parsedSessionRef(next)
+        if (parsed) return parsed
+        const currentRef = parsedSessionRef(current)
+        const sourceId = currentRef?.sourceId || runtime.defaultSourceId
+        return { sourceId, sessionId: next }
+      })()
+      if (!resolved.fromKnownList && !(await sessionExists(sourceForSessionRef(runtime, nextRef), nextRef.sessionId, nextRef.sourceId))) {
         await sendTelegramMessage(config, chatId, `Session not found: ${next}. Use /sessions to select a known session or /new to create one.`)
         return true
       }
-      await runtime.store.set(key, next)
-      cacheSession(config, key, next)
-      await rememberSession(runtime, key, next)
-      const title = await safeSessionTitle(config, next)
-      await sendTelegramMessage(config, chatId, `Switched to session: ${formatSessionDisplay(next, title)}`)
-      return true
-    }
-    if (known?.name === "project") {
-      const parsed = projectCommandMode(command.args)
-      if (parsed.mode === "status") {
-        const current = await runtime.store.get(key) || sessionFromCache(config, key)
-        const picker = await projectPicker(runtime, key, current)
-        if (!picker.replyMarkup) {
-          await sendTelegramMessage(config, chatId, picker.text)
-          return true
-        }
-        await sendTelegramMessageWithMarkup(config, chatId, picker.text, picker.replyMarkup)
-        return true
-      }
-      if (parsed.mode === "clear") {
-        runtime.config.directory = undefined
-        const persisted = await persistDirectoryOverride()
-        if (!persisted) {
-          await sendTelegramMessage(config, chatId, "Cleared project directory override for this running bridge, but failed to persist settings. It may return after restart.")
-          return true
-        }
-        await sendTelegramMessage(config, chatId, "Cleared project directory override. Bridge now uses session-derived context.")
-        return true
-      }
-      const directory = parsed.directory
-      if (!directory) {
-        await sendTelegramMessage(config, chatId, "Usage: /project [path], /project clear, or /project status")
-        return true
-      }
-      runtime.config.directory = directory
-      const persisted = await persistDirectoryOverride(directory)
-      if (!persisted) {
-        await sendTelegramMessage(config, chatId, `Set project directory override for this running bridge to ${directory}, but failed to persist settings.`)
-        return true
-      }
-      await sendTelegramMessage(config, chatId, `Project directory override set to: ${directory}`)
+      const storedRef = resolved.fromKnownList ? next : encodeSessionRef(nextRef)
+      await runtime.store.set(key, storedRef)
+      cacheSession(config, key, storedRef)
+      await rememberSession(runtime, key, storedRef)
+      const title = await safeSessionTitle(sourceForSessionRef(runtime, nextRef), nextRef.sessionId, nextRef.sourceId)
+      await sendTelegramMessage(config, chatId, `Switched to session: ${formatSessionDisplay(nextRef.sessionId, title, nextRef.sourceId)}`)
       return true
     }
     if (known?.name === "notify") {
@@ -3110,7 +2706,6 @@ export async function handleTextUpdate(runtime: Runtime, update: TelegramUpdate)
       const notifyKey = notificationKey(chatId)
       if (mode === "on") {
         await setNotificationEnabled(runtime, notifyKey, true)
-        await enableMappedSessionAlarm(runtime, key)
         const enabled = await notificationEnabled(runtime, notifyKey)
         await sendTelegramMessageWithMarkup(config, chatId, notifyText(enabled, "on"), notifyMarkup(enabled))
         return true
@@ -3180,7 +2775,6 @@ export async function handleTextUpdate(runtime: Runtime, update: TelegramUpdate)
   try {
     const handled = await runCommand()
     if (handled) return
-    bridgeDebug("routing text as prompt", { chatId, userId })
 
     const match = await readPendingQuestionMatch(runtime, chatId, userId)
     if (match) {
@@ -3206,7 +2800,8 @@ export async function handleTextUpdate(runtime: Runtime, update: TelegramUpdate)
         await sendTelegramQuestionPrompt(config, chatId, next)
         return
       }
-      await sendQuestionReply(config, pending.requestId, answers)
+      const pendingSource = pending.sourceId || "default"
+      await sendQuestionReply(sourceConfig(runtime, pendingSource), pending.requestId, answers)
         .then(async () => {
           await deletePendingQuestionByKey(runtime, match.itemKey, pending.requestId)
           const remaining = await readPendingQuestionsByKey(runtime, match.itemKey)
@@ -3228,26 +2823,27 @@ export async function handleTextUpdate(runtime: Runtime, update: TelegramUpdate)
       return
     }
 
-    const sessionId = await sessionForChat(runtime, key)
-    bridgeDebug("resolved chat session for prompt", { chatId, userId, sessionId })
-    await resolvePendingForSession(runtime, chatId, sessionId)
-    const reply = await sendPrompt(config, sessionId, text).catch(async (error) => {
+    const storedRef = await sessionForChat(runtime, key)
+    const ref = parsedSessionRef(storedRef)
+    if (!ref) {
+      await sendTelegramMessage(config, chatId, "Current session mapping is invalid. Use /new to create a fresh session.")
+      return
+    }
+    const scoped = sourceForSessionRef(runtime, ref)
+    await resolvePendingForSession(runtime, chatId, ref.sessionId, ref.sourceId)
+    const reply = await sendPrompt(scoped, ref.sessionId, text).catch(async (error) => {
       if (!isMissingSession(error)) {
         throw error
       }
       sessions.delete(key)
       await runtime.store.delete(key)
-      const next = await sessionForChat(runtime, key)
-      return sendPrompt(config, next, text)
-    }).catch(async (error) => {
-      if (!isTimeoutError(error)) {
-        throw error
+      const nextStored = await sessionForChat(runtime, key)
+      const next = parsedSessionRef(nextStored)
+      if (!next) {
+        throw new Error("OpenCode prompt failed: active source is unavailable")
       }
-      bridgeDebug("prompt request timed out", { chatId, userId, sessionId })
-      await sendTelegramMessage(config, chatId, `Prompt started in session ${sessionId}, but the reply is taking longer than expected. Check the web UI for progress.`)
-      return
+      return sendPrompt(sourceForSessionRef(runtime, next), next.sessionId, text)
     })
-    if (!reply) return
     await sendTelegramMessage(config, chatId, reply)
   } catch (error) {
     console.error("[TelegramBridge] request handling failed", { chatId, error })
@@ -3262,20 +2858,16 @@ export async function handleTextUpdate(runtime: Runtime, update: TelegramUpdate)
 async function notifySessionKeys(
   runtime: Runtime,
   sessionId: string,
+  sourceId: string,
   kind: "question" | "permission" | "task-finished",
   text: string,
   requestId?: string,
   notifyKind?: string,
 ) {
-  const pending = await pendingTargets(runtime, sessionId)
-  if (!pending.length) {
-    notifyDebug("session event skipped: no pending targets", { sessionId, kind })
-    return
-  }
-  const notify = await eventTargets(runtime, sessionId)
-  if (!notify.length) {
-    notifyDebug("session event has no proactive targets", { sessionId, kind, pendingTargets: pending.length })
-  }
+  const ref = { sourceId, sessionId }
+  const pending = await pendingTargets(runtime, ref)
+  if (!pending.length) return
+  const notify = await eventTargets(runtime, ref)
   const notifyChats = new Set<number>()
   for (const key of notify) {
     const parsed = parseTelegramKey(key)
@@ -3291,9 +2883,10 @@ async function notifySessionKeys(
       if (!parsed) continue
       const chatId = parsed.chatId
       const entry: TelegramPendingItem = {
-        id: pendingEntryId(sessionId, kind, chatId, requestId),
+        id: pendingEntryId(sessionId, kind, chatId, requestId, sourceId),
         kind,
         sessionId,
+        sourceId,
         text,
         stampedAt: Date.now(),
         resolved: kind === "task-finished",
@@ -3302,61 +2895,37 @@ async function notifySessionKeys(
         chats.add(chatId)
         await appendPending(runtime, chatId, entry)
         if (kind === "task-finished") {
-          await resolvePendingForSession(runtime, chatId, sessionId)
+          await resolvePendingForSession(runtime, chatId, sessionId, sourceId)
         }
       }
       if (!notifyChats.has(chatId)) continue
       if (proactiveChats.has(chatId)) continue
       proactiveChats.add(chatId)
-      if (!proactiveTelegramEnabled(runtime.config)) {
-        notifyDebug("proactive send skipped: telegram alarm channel disabled", { sessionId, kind, chatId })
-        continue
-      }
-      if (!shouldNotify(runtime.config, chatId, dedupeKey, sessionId)) {
-        notifyDebug("proactive send skipped: debounced", { sessionId, kind, chatId, dedupeKey })
-        continue
-      }
-      const title = kind === "task-finished" ? await safeSessionTitle(runtime.config, sessionId) : undefined
-      const message = kind === "task-finished"
-        ? `${text}\n\nSession: ${sessionTitleText(sessionId, title)}`
-        : `${text}\n\nOpen ${sessionLabel(runtime.config, sessionId)}`
-      const markup = kind === "task-finished" ? taskFinishedMarkup(sessionId) : undefined
+      if (!proactiveTelegramEnabled(runtime.config)) continue
+      if (!shouldNotify(runtime.config, chatId, dedupeKey, sessionId, sourceId)) continue
+      const message = `${text}\n\nOpen ${sessionLabel(runtime.config, sessionId, sourceId)}`
       await queueChatUpdate(String(chatId), async () => {
-        if (markup) {
-          await sendTelegramMessageWithMarkup(runtime.config, chatId, message, markup)
-          return
-        }
         await sendTelegramMessage(runtime.config, chatId, message)
       })
-      stampNotification(chatId, dedupeKey, sessionId)
-      notifyDebug("proactive send delivered", { sessionId, kind, chatId, dedupeKey })
+      stampNotification(chatId, dedupeKey, sessionId, sourceId)
     } catch (error) {
       console.error("[TelegramBridge] outbound notify failed", { sessionId, key, kind, error })
     }
   }
 }
 
-async function notifyQuestion(runtime: Runtime, sessionId: string, question: TelegramPendingQuestion) {
-  const pending = await pendingTargets(runtime, sessionId)
-  if (!pending.length) {
-    notifyDebug("question event skipped: no pending targets", { sessionId, requestId: question.requestId })
-    return
-  }
-  const notify = await eventTargets(runtime, sessionId)
-  if (!notify.length) {
-    notifyDebug("question event has no proactive targets", {
-      sessionId,
-      requestId: question.requestId,
-      pendingTargets: pending.length,
-    })
-  }
+async function notifyQuestion(runtime: Runtime, sessionId: string, sourceId: string, question: TelegramPendingQuestion) {
+  const ref = { sourceId, sessionId }
+  const pending = await pendingTargets(runtime, ref)
+  if (!pending.length) return
+  const notify = await eventTargets(runtime, ref)
   const notifyChats = new Set<number>()
   for (const key of notify) {
     const parsed = parseTelegramKey(key)
     if (!parsed) continue
     notifyChats.add(parsed.chatId)
   }
-  const kind = `question:${question.requestId}`
+  const kind = `question:${sourceId}:${question.requestId}`
   const pendingByChat = new Map<number, { key: string; userId?: number }>()
   for (const key of pending) {
     const parsed = parseTelegramKey(key)
@@ -3382,9 +2951,10 @@ async function notifyQuestion(runtime: Runtime, sessionId: string, question: Tel
         const pendingKey = pendingByChat.get(chatId)?.key || key
         await upsertPendingQuestion(runtime, pendingKey, question)
         await appendPending(runtime, chatId, {
-          id: pendingEntryId(sessionId, "question", chatId, question.requestId),
+          id: pendingEntryId(sessionId, "question", chatId, question.requestId, sourceId),
           kind: "question",
           sessionId,
+          sourceId,
           text: pendingQuestionText(question),
           stampedAt: Date.now(),
           resolved: false,
@@ -3393,41 +2963,20 @@ async function notifyQuestion(runtime: Runtime, sessionId: string, question: Tel
       if (!notifyChats.has(chatId)) continue
       if (proactiveChats.has(chatId)) continue
       proactiveChats.add(chatId)
-      if (!proactiveTelegramEnabled(runtime.config)) {
-        notifyDebug("question proactive send skipped: telegram alarm channel disabled", {
-          sessionId,
-          requestId: question.requestId,
-          chatId,
-        })
-        continue
-      }
-      if (!shouldNotify(runtime.config, chatId, kind, sessionId)) {
-        notifyDebug("question proactive send skipped: debounced", {
-          sessionId,
-          requestId: question.requestId,
-          chatId,
-          dedupeKey: kind,
-        })
-        continue
-      }
+      if (!proactiveTelegramEnabled(runtime.config)) continue
+      if (!shouldNotify(runtime.config, chatId, kind, sessionId, sourceId)) continue
       await queueChatUpdate(String(chatId), async () => {
         await sendTelegramQuestionPrompt(runtime.config, chatId, question)
-        await sendTelegramMessage(runtime.config, chatId, `Open ${sessionLabel(runtime.config, sessionId)}`)
+        await sendTelegramMessage(runtime.config, chatId, `Open ${sessionLabel(runtime.config, sessionId, sourceId)}`)
       })
-      stampNotification(chatId, kind, sessionId)
-      notifyDebug("question proactive send delivered", {
-        sessionId,
-        requestId: question.requestId,
-        chatId,
-        dedupeKey: kind,
-      })
+      stampNotification(chatId, kind, sessionId, sourceId)
     } catch (error) {
       console.error("[TelegramBridge] outbound question notify failed", { sessionId, key, error })
     }
   }
 }
 
-async function handleOutboundBlocks(runtime: Runtime, blocks: string[]) {
+async function handleOutboundBlocks(runtime: Runtime, blocks: string[], sourceId: string) {
   for (const block of blocks) {
     const lines = block.split("\n")
     const dataLines = lines
@@ -3439,11 +2988,11 @@ async function handleOutboundBlocks(runtime: Runtime, blocks: string[]) {
       .then(() => parseEvent(raw))
       .catch(() => undefined)
     if (!event) continue
-    await handleBridgeEvent(runtime, event)
+    await handleBridgeEvent(runtime, event, sourceId)
   }
 }
 
-export async function consumeOutboundEventStream(runtime: Runtime, body: ReadableStream<Uint8Array>) {
+export async function consumeOutboundEventStream(runtime: Runtime, body: ReadableStream<Uint8Array>, sourceId = "default") {
   const reader = body.getReader()
   const decoder = new TextDecoder()
   const parser = createOutboundSSEParser()
@@ -3451,21 +3000,20 @@ export async function consumeOutboundEventStream(runtime: Runtime, body: Readabl
     const step = await reader.read()
     if (step.done) break
     const blocks = parser.push(decoder.decode(step.value, { stream: true }))
-    await handleOutboundBlocks(runtime, blocks)
+    await handleOutboundBlocks(runtime, blocks, sourceId)
   }
 
   const finalText = decoder.decode()
   if (finalText) {
-    await handleOutboundBlocks(runtime, parser.push(finalText))
+    await handleOutboundBlocks(runtime, parser.push(finalText), sourceId)
   }
 
   const tailBlocks = parser.flush()
-  await handleOutboundBlocks(runtime, tailBlocks)
+  await handleOutboundBlocks(runtime, tailBlocks, sourceId)
 }
 
-export async function handleBridgeEvent(runtime: Runtime, event: { type: string; properties: Record<string, unknown> }) {
+export async function handleBridgeEvent(runtime: Runtime, event: { type: string; properties: Record<string, unknown> }, sourceId = "default") {
   const sessionId = typeof event.properties.sessionID === "string" ? event.properties.sessionID : ""
-  bridgeDebug("bridge event received", { type: event.type, sessionId: sessionId || undefined })
   if (event.type === "session.deleted") {
     const info = event.properties.info && typeof event.properties.info === "object"
       ? event.properties.info as { id?: unknown }
@@ -3474,7 +3022,7 @@ export async function handleBridgeEvent(runtime: Runtime, event: { type: string;
     if (!deletedSessionId) return
     statusBySession.delete(deletedSessionId)
     const targets = new Set<string>()
-    const mapped = await sessionTargets(runtime, deletedSessionId)
+    const mapped = await sessionTargets(runtime, { sourceId, sessionId: deletedSessionId })
     for (const key of mapped) {
       targets.add(key)
     }
@@ -3488,19 +3036,20 @@ export async function handleBridgeEvent(runtime: Runtime, event: { type: string;
       if (!parsed) continue
       if (chats.has(parsed.chatId)) continue
       chats.add(parsed.chatId)
-      await resolvePendingForSession(runtime, parsed.chatId, deletedSessionId)
+      await resolvePendingForSession(runtime, parsed.chatId, deletedSessionId, sourceId)
     }
     return
   }
   if (!sessionId) return
   if (event.type === "question.asked") {
-    const pending = parsePendingQuestion(event.properties)
+    const pending = parsePendingQuestion(event.properties, sourceId)
     if (!pending) {
       const requestId = typeof event.properties.id === "string" ? event.properties.id.trim() : ""
-      const notifyKind = requestId ? `question:${requestId}` : undefined
+      const notifyKind = requestId ? `question:${sourceId}:${requestId}` : undefined
       await notifySessionKeys(
         runtime,
         sessionId,
+        sourceId,
         "question",
         `Question pending: ${questionText(event.properties)}`,
         requestId || undefined,
@@ -3508,13 +3057,13 @@ export async function handleBridgeEvent(runtime: Runtime, event: { type: string;
       )
       return
     }
-    await notifyQuestion(runtime, sessionId, pending)
+    await notifyQuestion(runtime, sessionId, sourceId, pending)
     return
   }
   if (event.type === "permission.asked") {
     const requestId = typeof event.properties.id === "string" ? event.properties.id.trim() : ""
-    const notifyKind = requestId ? `permission:${requestId}` : undefined
-    await notifySessionKeys(runtime, sessionId, "permission", permissionText(event.properties), requestId || undefined, notifyKind)
+    const notifyKind = requestId ? `permission:${sourceId}:${requestId}` : undefined
+    await notifySessionKeys(runtime, sessionId, sourceId, "permission", permissionText(event.properties), requestId || undefined, notifyKind)
     return
   }
   if (event.type !== "session.status") return
@@ -3522,18 +3071,19 @@ export async function handleBridgeEvent(runtime: Runtime, event: { type: string;
     ? event.properties.status as { type?: unknown }
     : undefined
   const next = typeof status?.type === "string" ? status.type : ""
-  const prev = statusBySession.get(sessionId)
+  const scopedSessionId = sourceScopedId(sourceId, sessionId)
+  const prev = statusBySession.get(scopedSessionId)
   if (next !== "idle") {
-    statusBySession.set(sessionId, next)
+    statusBySession.set(scopedSessionId, next)
     return
   }
-  statusBySession.delete(sessionId)
+  statusBySession.delete(scopedSessionId)
   if (!prev || prev === "idle") return
-  await notifySessionKeys(runtime, sessionId, "task-finished", "Task finished: the session is now idle.")
+  await notifySessionKeys(runtime, sessionId, sourceId, "task-finished", "Task finished: the session is now idle.")
 }
 
-async function runOutboundNotifications(runtime: Runtime) {
-  const config = runtime.config
+async function runOutboundNotifications(runtime: Runtime, source: SourceConfig) {
+  const config = sourceConfig(runtime, source.id)
   while (true) {
     const url = opencodeUrl(config, "/event")
     if (config.directory) {
@@ -3549,14 +3099,14 @@ async function runOutboundNotifications(runtime: Runtime) {
         throw new Error(`OpenCode event stream failed (${response.status})`)
       }
 
-      await consumeOutboundEventStream(runtime, response.body)
+      await consumeOutboundEventStream(runtime, response.body, source.id)
     } catch (error) {
       if (isTimeoutError(error)) {
-        console.log("[TelegramBridge] outbound event stream timed out, reconnecting")
+        console.log(`[TelegramBridge] outbound event stream timed out for source=${source.id}, reconnecting`)
         await sleep(1500)
         continue
       }
-      console.error("[TelegramBridge] outbound event stream error", error)
+      console.error(`[TelegramBridge] outbound event stream error for source=${source.id}`, error)
       await sleep(1500)
     }
   }
@@ -3681,33 +3231,31 @@ async function runWebhook(runtime: Runtime) {
 }
 
 export async function startTelegramBridge() {
-  await enableBridgeFileLogging()
   const config = parseConfig()
   await writeTelegramRuntimeState(config).catch((error) => {
     console.warn("[TelegramBridge] failed to write runtime state", error)
   })
   const store = createTelegramSessionStore(config.sessionStorePath)
-  const runtime = { config, store }
+  const sources = configuredSources(config)
+  const sourceById = new Map(sources.map((source) => [source.id, source]))
+  const defaultSourceId = sources[0]?.id || "default"
+  const runtime = { config, sources, sourceById, defaultSourceId, store }
   console.log(`[TelegramBridge] OpenCode API: ${config.openCodeUrl}`)
+  if (config.multiSourceEnabled) {
+    console.log(`[TelegramBridge] Multi-source enabled: ${sources.map((source) => `${source.id}=${source.openCodeUrl}`).join(", ")}`)
+  }
   console.log(`[TelegramBridge] Session store: ${config.sessionStorePath}`)
-  console.log(`[TelegramBridge] Telegram alarm channel: ${config.telegramAlarmChannelEnabled !== false ? "enabled" : "disabled"}`)
-  if (notificationDebugEnabled()) {
-    console.log("[TelegramBridge] Notification debug logging enabled (TELEGRAM_NOTIFY_DEBUG=1)")
-  }
-  if (bridgeDebugEnabled()) {
-    console.log("[TelegramBridge] Bridge debug logging enabled (TELEGRAM_BRIDGE_DEBUG=1)")
-  }
   if (config.directory) {
     console.log(`[TelegramBridge] OpenCode directory: ${config.directory}`)
   }
   registerTelegramCommandsWithoutBlocking(config)
   if (config.mode === "polling") {
     runPollingHealthServer(runtime)
-    await Promise.all([runPolling(runtime), runOutboundNotifications(runtime)])
+    await Promise.all([runPolling(runtime), ...runtime.sources.map((source) => runOutboundNotifications(runtime, source))])
     return
   }
 
-  await Promise.all([runWebhook(runtime), runOutboundNotifications(runtime)])
+  await Promise.all([runWebhook(runtime), ...runtime.sources.map((source) => runOutboundNotifications(runtime, source))])
 }
 
 export function resetSessionCacheForTest() {

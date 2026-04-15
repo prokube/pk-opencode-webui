@@ -1,11 +1,20 @@
 export type TelegramMode = "polling" | "webhook"
 
+export type TelegramSourceSetting = {
+  id: string
+  openCodeUrl: string
+  enabled: boolean
+  directory?: string
+}
+
 export type TelegramPublicSettings = {
   mode: TelegramMode
   tokenConfigured: boolean
   tokenSource: "persisted" | "env" | "none"
   openCodeUrl: string
   directory: string | null
+  multiSourceEnabled: boolean
+  sources: TelegramSourceSetting[]
   sessionCacheMax: number
   sessionCacheTtlMs: number
   notificationDebounceMs: number
@@ -69,6 +78,11 @@ export type TelegramHealthResponse = {
       status: "ok" | "error" | "unknown"
       message: string
     }
+    openCodeSources?: Array<{
+      sourceId: string
+      status: "ok" | "error" | "unknown"
+      message: string
+    }>
   }
   messages: Array<{
     type: "config" | "runtime" | "dependency"
@@ -108,6 +122,8 @@ export type TelegramForm = {
   mode: TelegramMode
   openCodeUrl: string
   directory: string
+  multiSourceEnabled: boolean
+  sourcesJson: string
   sessionCacheMax: string
   sessionCacheTtlMs: string
   notificationDebounceMs: string
@@ -150,25 +166,73 @@ function normalizeWebhookPath(value: string): string | null {
   return `/${path}`
 }
 
+function parseSourcesJson(value: string): { sources?: TelegramSourceSetting[]; error?: string } {
+  const text = value.trim()
+  if (!text) return { sources: [] }
+  const raw = (() => {
+    try {
+      return JSON.parse(text)
+    } catch {
+      return
+    }
+  })()
+  if (!raw) {
+    return { error: "Must be valid JSON" }
+  }
+  if (!Array.isArray(raw)) {
+    return { error: "Must be a JSON array" }
+  }
+  const ids = new Set<string>()
+  const sources: TelegramSourceSetting[] = []
+  for (let i = 0; i < raw.length; i++) {
+    const item = raw[i]
+    if (!item || typeof item !== "object" || Array.isArray(item)) {
+      return { error: `Entry ${i + 1} must be an object` }
+    }
+    const entry = item as Record<string, unknown>
+    const id = typeof entry.id === "string" ? entry.id.trim() : ""
+    if (!id || !/^[A-Za-z0-9._:-]+$/.test(id)) {
+      return { error: `Entry ${i + 1} id must match [A-Za-z0-9._:-]+` }
+    }
+    if (ids.has(id)) {
+      return { error: `Entry ${i + 1} id must be unique` }
+    }
+    const openCodeUrl = typeof entry.openCodeUrl === "string" ? entry.openCodeUrl.trim() : ""
+    if (!openCodeUrl || !isUrl(openCodeUrl)) {
+      return { error: `Entry ${i + 1} openCodeUrl must be a valid URL` }
+    }
+    const enabled = entry.enabled === false ? false : true
+    if (entry.enabled !== undefined && typeof entry.enabled !== "boolean") {
+      return { error: `Entry ${i + 1} enabled must be a boolean` }
+    }
+    const directory = typeof entry.directory === "string" && entry.directory.trim() ? entry.directory.trim() : undefined
+    sources.push({ id, openCodeUrl, enabled, directory })
+    ids.add(id)
+  }
+  return { sources }
+}
+
 export function normalizeWebhookPathInput(value: string): string {
   return normalizeWebhookPath(value) || ""
 }
 
-function addStringPatch(patch: Record<string, string | number | null>, key: string, next: string, prev: string) {
+type TelegramSettingsPatchValue = string | number | boolean | null | TelegramSourceSetting[]
+
+function addStringPatch(patch: Record<string, TelegramSettingsPatchValue>, key: string, next: string, prev: string) {
   const nextValue = asNullable(next)
   const prevValue = asNullable(prev)
   if (nextValue === prevValue) return
   patch[key] = nextValue
 }
 
-function addNumberPatch(patch: Record<string, string | number | null>, key: string, next: string, prev: string) {
+function addNumberPatch(patch: Record<string, TelegramSettingsPatchValue>, key: string, next: string, prev: string) {
   const nextValue = toNumber(next)
   const prevValue = toNumber(prev)
   if (nextValue === prevValue) return
   patch[key] = nextValue ?? null
 }
 
-function addWebhookPathPatch(patch: Record<string, string | number | null>, next: string, prev: string) {
+function addWebhookPathPatch(patch: Record<string, TelegramSettingsPatchValue>, next: string, prev: string) {
   const nextValue = normalizeWebhookPath(next)
   const prevValue = normalizeWebhookPath(prev)
   if (nextValue === prevValue) return
@@ -176,10 +240,15 @@ function addWebhookPathPatch(patch: Record<string, string | number | null>, next
 }
 
 export function createTelegramForm(settings: TelegramPublicSettings): TelegramForm {
+  const sourcesJson = settings.sources.length
+    ? JSON.stringify(settings.sources, null, 2)
+    : ""
   return {
     mode: settings.mode,
     openCodeUrl: settings.openCodeUrl,
     directory: settings.directory || "",
+    multiSourceEnabled: settings.multiSourceEnabled,
+    sourcesJson,
     sessionCacheMax: String(settings.sessionCacheMax),
     sessionCacheTtlMs: String(settings.sessionCacheTtlMs),
     notificationDebounceMs: String(settings.notificationDebounceMs),
@@ -231,17 +300,35 @@ export function validateTelegramForm(form: TelegramForm): Record<string, string>
   if (form.webhookSecretMode === "set" && !form.webhookSecret.trim()) {
     errors.webhookSecret = "Webhook secret is required when setting a new value"
   }
+  if (form.multiSourceEnabled) {
+    const parsed = parseSourcesJson(form.sourcesJson)
+    if (parsed.error) {
+      errors.sourcesJson = parsed.error
+    }
+    if (!parsed.error && (parsed.sources || []).length === 0) {
+      errors.sourcesJson = "Add at least one source when multi-source mode is enabled"
+    }
+  }
 
   return errors
 }
 
-export function createTelegramPatch(current: TelegramForm, initial: TelegramForm): Record<string, string | number | null> {
-  const patch: Record<string, string | number | null> = {}
+export function createTelegramPatch(current: TelegramForm, initial: TelegramForm): Record<string, TelegramSettingsPatchValue> {
+  const patch: Record<string, TelegramSettingsPatchValue> = {}
 
   if (current.mode !== initial.mode) patch.mode = current.mode
 
   addStringPatch(patch, "openCodeUrl", current.openCodeUrl, initial.openCodeUrl)
   addStringPatch(patch, "directory", current.directory, initial.directory)
+  if (current.multiSourceEnabled !== initial.multiSourceEnabled) {
+    patch.multiSourceEnabled = current.multiSourceEnabled
+  }
+  if (current.sourcesJson.trim() !== initial.sourcesJson.trim()) {
+    const parsed = parseSourcesJson(current.sourcesJson)
+    if (parsed.sources) {
+      patch.sources = parsed.sources
+    }
+  }
   addNumberPatch(patch, "sessionCacheMax", current.sessionCacheMax, initial.sessionCacheMax)
   addNumberPatch(patch, "sessionCacheTtlMs", current.sessionCacheTtlMs, initial.sessionCacheTtlMs)
   addNumberPatch(patch, "notificationDebounceMs", current.notificationDebounceMs, initial.notificationDebounceMs)

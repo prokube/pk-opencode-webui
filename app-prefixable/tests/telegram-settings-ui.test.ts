@@ -16,6 +16,8 @@ const seed: TelegramPublicSettings = {
   tokenSource: "persisted",
   openCodeUrl: "http://127.0.0.1:4096/",
   directory: null,
+  multiSourceEnabled: false,
+  sources: [],
   sessionCacheMax: 500,
   sessionCacheTtlMs: 60000,
   notificationDebounceMs: 20000,

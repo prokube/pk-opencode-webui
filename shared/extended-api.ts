@@ -111,6 +111,7 @@ type TelegramBridgeHealthResponse = {
   dependencies?: {
     telegramApi?: { status?: "ok" | "error" | "unknown"; message?: string }
     openCodeApi?: { status?: "ok" | "error" | "unknown"; message?: string }
+    openCodeSources?: Array<{ sourceId?: string; status?: "ok" | "error" | "unknown"; message?: string }>
   }
 }
 
@@ -155,6 +156,7 @@ function bridgeDependency(raw: { status?: "ok" | "error" | "unknown"; message?: 
 function bridgeMessages(dependencies: {
   telegramApi: { status: "ok" | "error" | "unknown"; message: string }
   openCodeApi: { status: "ok" | "error" | "unknown"; message: string }
+  openCodeSources?: Array<{ sourceId: string; status: "ok" | "error" | "unknown"; message: string }>
 }): TelegramHealthMessage[] {
   const messages: TelegramHealthMessage[] = []
   if (dependencies.telegramApi.status === "error") {
@@ -162,6 +164,10 @@ function bridgeMessages(dependencies: {
   }
   if (dependencies.openCodeApi.status === "error") {
     messages.push({ type: "dependency", text: dependencies.openCodeApi.message || "OpenCode API check failed" })
+  }
+  for (const source of dependencies.openCodeSources || []) {
+    if (source.status !== "error") continue
+    messages.push({ type: "dependency", text: `Source ${source.sourceId}: ${source.message}` })
   }
   return messages
 }
@@ -835,6 +841,10 @@ export async function handleExtendedEndpoint(
       const dependencies = {
         telegramApi: bridgeDependency(bridge.dependencies?.telegramApi, "Telegram API check unavailable"),
         openCodeApi: bridgeDependency(bridge.dependencies?.openCodeApi, "OpenCode API check unavailable"),
+        openCodeSources: (bridge.dependencies?.openCodeSources || []).map((source) => ({
+          sourceId: typeof source?.sourceId === "string" && source.sourceId.trim() ? source.sourceId : "default",
+          ...bridgeDependency(source, "OpenCode API check unavailable"),
+        })),
       }
       return Response.json({
         status: bridgeHealthStatus(bridge.status),
