@@ -374,6 +374,56 @@ describe("telegram bridge config and cache", () => {
     }
   });
 
+  test("readTelegramBridgeHealth checks both default and configured sources in multi-source mode", async () => {
+    const calls: string[] = [];
+    const originalFetch = globalThis.fetch;
+    try {
+      globalThis.fetch = async (input: RequestInfo | URL) => {
+        const url = String(input);
+        calls.push(url);
+        if (url.includes("/getMe")) {
+          return new Response(JSON.stringify({ ok: true, result: { id: 1 } }), { status: 200 });
+        }
+        if (url.includes("/session/status")) {
+          return new Response(JSON.stringify({}), { status: 200 });
+        }
+        throw new Error(`Unexpected fetch ${url}`);
+      };
+
+      const report = await readTelegramBridgeHealth({
+        config: {
+          mode: "polling",
+          token: "token",
+          openCodeUrl: "http://127.0.0.1:4096",
+          multiSourceEnabled: true,
+          sources: [{ id: "source-a", openCodeUrl: "http://127.0.0.1:5000", enabled: true }],
+          sessionCacheMax: 10,
+          sessionCacheTtlMs: 10_000,
+          notificationDebounceMs: 20_000,
+          port: 4097,
+          webhookPath: "/webhook",
+          sessionStorePath: "/tmp/test-store.json",
+        },
+        sourceById: new Map([
+          ["source-a", { id: "source-a", openCodeUrl: "http://127.0.0.1:5000", enabled: true }],
+        ]),
+        store: {
+          get: async () => undefined,
+          set: async () => undefined,
+          delete: async () => undefined,
+        },
+      });
+
+      const statusChecks = calls.filter((url) => url.includes("/session/status"));
+      expect(statusChecks).toContain("http://127.0.0.1:4096/session/status");
+      expect(statusChecks).toContain("http://127.0.0.1:5000/session/status");
+      expect(report.dependencies.openCodeSources?.length).toBe(2);
+      expect(report.status).toBe("healthy");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   test("readTelegramBridgeHealth reports degraded when dependency fails", async () => {
     const originalFetch = globalThis.fetch;
     try {

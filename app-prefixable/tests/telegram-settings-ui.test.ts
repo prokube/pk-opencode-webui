@@ -69,6 +69,26 @@ describe("telegram settings form helpers", () => {
     expect(errors.token).toBe("Token is required when setting a new value")
   })
 
+  test("validates source ids to disallow ':' and reserved default", () => {
+    const form = {
+      ...createTelegramForm({ ...seed, multiSourceEnabled: true }),
+      sourcesJson: JSON.stringify([
+        { id: "alpha:beta", openCodeUrl: "https://api.example.com", enabled: true },
+      ]),
+    }
+
+    const colon = validateTelegramForm(form)
+    expect(colon.sourcesJson).toBe("Entry 1 id must match [A-Za-z0-9._-]+ and must not be default")
+
+    const reserved = validateTelegramForm({
+      ...form,
+      sourcesJson: JSON.stringify([
+        { id: "default", openCodeUrl: "https://api.example.com", enabled: true },
+      ]),
+    })
+    expect(reserved.sourcesJson).toBe("Entry 1 id must match [A-Za-z0-9._-]+ and must not be default")
+  })
+
   test("normalizes webhook path patch values to include leading slash", () => {
     const initial = createTelegramForm(seed)
     const next = {

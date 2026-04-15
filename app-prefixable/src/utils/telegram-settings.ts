@@ -191,8 +191,8 @@ function parseSourcesJson(value: string): { sources?: TelegramSourceSetting[]; e
     }
     const entry = item as Record<string, unknown>
     const id = typeof entry.id === "string" ? entry.id.trim() : ""
-    if (!id || !/^[A-Za-z0-9._:-]+$/.test(id)) {
-      return { error: `Entry ${i + 1} id must match [A-Za-z0-9._:-]+` }
+    if (!id || !/^[A-Za-z0-9._-]+$/.test(id) || id.toLowerCase() === "default") {
+      return { error: `Entry ${i + 1} id must match [A-Za-z0-9._-]+ and must not be default` }
     }
     if (ids.has(id)) {
       return { error: `Entry ${i + 1} id must be unique` }

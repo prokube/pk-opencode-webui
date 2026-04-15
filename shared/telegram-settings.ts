@@ -136,7 +136,8 @@ function parseSourceId(value: unknown): string | undefined {
   if (typeof value !== "string") return
   const id = value.trim()
   if (!id) return
-  if (!/^[A-Za-z0-9._:-]+$/.test(id)) return
+  if (!/^[A-Za-z0-9._-]+$/.test(id)) return
+  if (id.toLowerCase() === "default") return
   return id
 }
 
@@ -755,7 +756,7 @@ function normalizePayload(input: unknown): {
         const source = entry as Record<string, unknown>
         const id = parseSourceId(source.id)
         if (!id) {
-          errors.push({ field: `sources.${i}.id`, message: "id must match [A-Za-z0-9._:-]+" })
+          errors.push({ field: `sources.${i}.id`, message: "id must match [A-Za-z0-9._-]+ and must not be default" })
           continue
         }
         if (ids.has(id)) {

@@ -160,16 +160,6 @@ type SavedPrompt = {
   scope: "global" | "project"
 }
 
-type TelegramPendingItem = {
-  id: string
-  kind: "question" | "permission" | "task-finished"
-  sessionId: string
-  sourceId?: string
-  text: string
-  stampedAt: number
-  resolved: boolean
-}
-
 type SessionRef = {
   sourceId: string
   sessionId: string
@@ -189,6 +179,7 @@ function configuredSources(config: BridgeConfig): SourceConfig[] {
     return [defaultSource(config)]
   }
   const raw = Array.isArray(config.sources) ? config.sources : []
+  const base = defaultSource(config)
   const out: SourceConfig[] = []
   const ids = new Set<string>()
   for (const source of raw) {
@@ -205,8 +196,8 @@ function configuredSources(config: BridgeConfig): SourceConfig[] {
     })
     ids.add(id)
   }
-  if (!out.length) return [defaultSource(config)]
-  return out
+  if (!out.length) return [base]
+  return [base, ...out]
 }
 
 function encodeSessionRef(ref: SessionRef): string {
@@ -3298,7 +3289,9 @@ export async function startTelegramBridge() {
   const store = createTelegramSessionStore(config.sessionStorePath)
   const sources = configuredSources(config)
   const sourceById = new Map(sources.map((source) => [source.id, source]))
-  const defaultSourceId = sources[0]?.id || "default"
+  const defaultSourceId = config.multiSourceEnabled
+    ? sources.find((source) => source.id !== "default")?.id || "default"
+    : "default"
   const runtime = { config, sources, sourceById, defaultSourceId, store }
   console.log(`[TelegramBridge] OpenCode API: ${config.openCodeUrl}`)
   if (config.multiSourceEnabled) {
