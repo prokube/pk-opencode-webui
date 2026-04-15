@@ -68,7 +68,7 @@ function copyCode(button: HTMLButtonElement) {
   const block = button.closest(".markdown-code-block")
   const code = block?.querySelector("code")?.textContent
 
-  if (!code) {
+  if (code == null) {
     setCopyState(button, "failed")
     return
   }
