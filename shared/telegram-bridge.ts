@@ -2589,8 +2589,8 @@ export async function handleTextUpdate(runtime: Runtime, update: TelegramUpdate)
     if (handled) return
 
     const match = await readPendingQuestionMatch(runtime, chatId, userId)
-    const pending = match?.pending
-    if (pending) {
+    if (match) {
+      const pending = match.pending
       const index = pendingQuestionIndex(pending)
       const row = pending.questions[index]
       const current = row ? answerFromInput(row, text) : undefined
