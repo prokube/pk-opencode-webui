@@ -29,7 +29,7 @@ export function QuestionPrompt(props: Props) {
   const question = createMemo(() => questions()[tab()])
   const confirm = createMemo(() => !single() && tab() === questions().length)
   const options = createMemo(() => question()?.options ?? [])
-  const allowCustom = createMemo(() => question()?.custom !== false)
+  const allowCustom = createMemo(() => !confirm() && question()?.custom !== false)
   const other = createMemo(() => allowCustom() && selected() === options().length)
   const input = createMemo(() => custom()[tab()] ?? "")
   const multi = createMemo(() => question()?.multiple === true)
