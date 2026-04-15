@@ -290,7 +290,7 @@ const inlineButtonTextMax = 48
 const callbackDataMax = 64
 const telegramMessageSoftLimit = 3900
 const recentPayloadMax = telegramMessageSoftLimit * 3
-const switchTargetTtlMs = 30 * 60 * 1000
+const utilityTargetTtlMs = 30 * 60 * 1000
 const switchTargetMax = 2048
 const recentTargetMax = 2048
 
@@ -969,7 +969,7 @@ function utilitySwitchSessionCallbackData(sourceId: string, sessionId: string, c
   const seq = Math.abs(pendingEntrySeq++)
   const tokenSeed = `${sessionRef}:${now}:${seq}`
   const token = `${shortId(tokenSeed)}${seq.toString(36)}`.slice(0, 12).padStart(6, "0")
-  switchTargets.set(token, { sessionRef, chatId, expiresAt: now + switchTargetTtlMs })
+  switchTargets.set(token, { sessionRef, chatId, expiresAt: now + utilityTargetTtlMs })
   return `u:s:${token}`
 }
 
@@ -995,7 +995,7 @@ function utilityRecentSessionCallbackData(sourceId: string, sessionId: string, c
   const seq = Math.abs(pendingEntrySeq++)
   const tokenSeed = `${sessionRef}:recent:${now}:${seq}`
   const token = `${shortId(tokenSeed)}${seq.toString(36)}`.slice(0, 12).padStart(6, "0")
-  recentTargets.set(token, { sessionRef, chatId, expiresAt: now + switchTargetTtlMs })
+  recentTargets.set(token, { sessionRef, chatId, expiresAt: now + utilityTargetTtlMs })
   return `u:r:${token}`
 }
 
