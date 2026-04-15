@@ -3613,6 +3613,8 @@ describe("telegram bridge config and cache", () => {
 
       const map = new Map<string, string>();
       const notify = new Map<string, boolean>();
+      const alarms = new Map<string, boolean>();
+      map.set("chat:77:user:5", "session-77");
       const runtime = {
         config: {
           mode: "polling" as const,
@@ -3640,6 +3642,13 @@ describe("telegram bridge config and cache", () => {
               return;
             }
             notify.delete(key);
+          },
+          sessionAlarmSet: async (sessionId: string, enabled: boolean) => {
+            if (enabled) {
+              alarms.set(sessionId, true);
+              return;
+            }
+            alarms.delete(sessionId);
           },
         },
       };
@@ -3669,6 +3678,7 @@ describe("telegram bridge config and cache", () => {
       expect(sentTexts[2]).toBe("Notifications are enabled.");
       expect(sentTexts[3]).toBe("Notifications disabled for this chat.");
       expect(notify.get("chat:77")).toBeUndefined();
+      expect(alarms.get("session-77")).toBe(true);
     } finally {
       globalThis.fetch = originalFetch;
     }
@@ -3797,6 +3807,7 @@ describe("telegram bridge config and cache", () => {
   test("notify callback toggles state and returns updated button state", async () => {
     const calls: Array<{ url: string; body: Record<string, unknown> }> = [];
     const originalFetch = globalThis.fetch;
+    const alarms = new Map<string, boolean>();
     try {
       globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
         const url = String(input);
@@ -3812,6 +3823,8 @@ describe("telegram bridge config and cache", () => {
       };
 
       const notify = new Map<string, boolean>();
+      const map = new Map<string, string>();
+      map.set("chat:81", "session-81");
       const runtime = {
         config: {
           mode: "polling" as const,
@@ -3825,7 +3838,7 @@ describe("telegram bridge config and cache", () => {
           sessionStorePath: "/tmp/test-store.json",
         },
         store: {
-          get: async () => undefined,
+          get: async (key: string) => map.get(key),
           set: async () => undefined,
           delete: async () => undefined,
           notificationGet: async (key: string) => notify.get(key) === true,
@@ -3835,6 +3848,13 @@ describe("telegram bridge config and cache", () => {
               return;
             }
             notify.delete(key);
+          },
+          sessionAlarmSet: async (sessionId: string, enabled: boolean) => {
+            if (enabled) {
+              alarms.set(sessionId, true);
+              return;
+            }
+            alarms.delete(sessionId);
           },
         },
       };
@@ -3859,6 +3879,7 @@ describe("telegram bridge config and cache", () => {
     const top = markup?.inline_keyboard?.[0] || [];
     expect(top.map((item) => item.callback_data)).toEqual(["n:on", "n:off"]);
     expect((top[0]?.text || "").includes("✅")).toBe(true);
+    expect(alarms.get("session-81")).toBe(true);
   });
 
   test("/pending returns aggregated actionable items for the chat", async () => {

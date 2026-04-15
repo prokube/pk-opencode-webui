@@ -510,6 +510,14 @@ function notificationKey(chatId: number): string {
   return telegramSessionKey(chatId)
 }
 
+async function enableMappedSessionAlarm(runtime: Runtime, chatKey: string) {
+  if (!runtime.store.sessionAlarmSet) return
+  const mapped = await runtime.store.get(chatKey)
+  const sessionId = mapped || sessionFromCache(runtime.config, chatKey)
+  if (!sessionId) return
+  await runtime.store.sessionAlarmSet(sessionId, true)
+}
+
 async function notificationTargets(runtime: Runtime): Promise<string[]> {
   if (!runtime.store.notificationKeys) return []
   const keys = await runtime.store.notificationKeys()
@@ -2299,6 +2307,7 @@ export async function handleCallbackUpdate(runtime: Runtime, update: TelegramUpd
       state.acknowledged = true
       if (parsed.mode === "on") {
         await setNotificationEnabled(runtime, key, true)
+        await enableMappedSessionAlarm(runtime, key)
       }
       if (parsed.mode === "off") {
         await setNotificationEnabled(runtime, key, false)
@@ -2518,6 +2527,7 @@ export async function handleTextUpdate(runtime: Runtime, update: TelegramUpdate)
       const notifyKey = notificationKey(chatId)
       if (mode === "on") {
         await setNotificationEnabled(runtime, notifyKey, true)
+        await enableMappedSessionAlarm(runtime, key)
         const enabled = await notificationEnabled(runtime, notifyKey)
         await sendTelegramMessageWithMarkup(config, chatId, notifyText(enabled, "on"), notifyMarkup(enabled))
         return true
