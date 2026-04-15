@@ -517,7 +517,9 @@ async function notificationTargets(runtime: Runtime): Promise<string[]> {
   for (const key of keys) {
     const parsed = parseTelegramKey(key)
     if (!parsed) continue
-    targets.add(key)
+    const chatKey = notificationKey(parsed.chatId)
+    if (runtime.store.notificationGet && !(await notificationEnabled(runtime, chatKey))) continue
+    targets.add(chatKey)
   }
   return [...targets]
 }
@@ -644,9 +646,17 @@ async function readPendingQuestionsByKey(runtime: Runtime, key: string): Promise
   return []
 }
 
-async function readPendingQuestions(runtime: Runtime, chatId: number, userId?: number): Promise<TelegramPendingQuestion[]> {
-  const key = pendingKey(chatId, userId)
-  return readPendingQuestionsByKey(runtime, key)
+async function readPendingQuestionMatch(
+  runtime: Runtime,
+  chatId: number,
+  userId?: number,
+): Promise<{ itemKey: string; pending: TelegramPendingQuestion } | undefined> {
+  for (const itemKey of pendingLookupKeys(chatId, userId)) {
+    const queue = await readPendingQuestionsByKey(runtime, itemKey)
+    const pending = queue[0]
+    if (!pending) continue
+    return { itemKey, pending }
+  }
 }
 
 async function upsertPendingQuestion(runtime: Runtime, key: string, question: TelegramPendingQuestion) {
@@ -662,11 +672,6 @@ async function upsertPendingQuestion(runtime: Runtime, key: string, question: Te
     return
   }
   pendingQuestions.delete(key)
-}
-
-async function deletePendingQuestion(runtime: Runtime, chatId: number, requestId: string, userId?: number) {
-  const key = pendingKey(chatId, userId)
-  await deletePendingQuestionByKey(runtime, key, requestId)
 }
 
 async function deletePendingQuestionByKey(runtime: Runtime, key: string, requestId: string) {
@@ -2583,8 +2588,8 @@ export async function handleTextUpdate(runtime: Runtime, update: TelegramUpdate)
     const handled = await runCommand()
     if (handled) return
 
-    const queuedQuestions = await readPendingQuestions(runtime, chatId, userId)
-    const pending = queuedQuestions[0]
+    const match = await readPendingQuestionMatch(runtime, chatId, userId)
+    const pending = match?.pending
     if (pending) {
       const index = pendingQuestionIndex(pending)
       const row = pending.questions[index]
@@ -2596,9 +2601,8 @@ export async function handleTextUpdate(runtime: Runtime, update: TelegramUpdate)
         return
       }
       if (answers.length < pending.questions.length) {
-        const keyForPending = pendingKey(chatId, userId)
-        await upsertPendingQuestion(runtime, keyForPending, withAnswers(pending, answers))
-        const queue = await readPendingQuestions(runtime, chatId, userId)
+        await upsertPendingQuestion(runtime, match.itemKey, withAnswers(pending, answers))
+        const queue = await readPendingQuestionsByKey(runtime, match.itemKey)
         const next = queue.find((item) => item.requestId === pending.requestId)
         if (!next) {
           await sendTelegramMessage(config, chatId, "That question is no longer pending. Wait for the next prompt or use /status.")
@@ -2610,8 +2614,8 @@ export async function handleTextUpdate(runtime: Runtime, update: TelegramUpdate)
       }
       await sendQuestionReply(config, pending.requestId, answers)
         .then(async () => {
-          await deletePendingQuestion(runtime, chatId, pending.requestId, userId)
-          const remaining = await readPendingQuestions(runtime, chatId, userId)
+          await deletePendingQuestionByKey(runtime, match.itemKey, pending.requestId)
+          const remaining = await readPendingQuestionsByKey(runtime, match.itemKey)
           if (remaining.length) {
             const next = remaining[0]
             if (next) {
@@ -2624,7 +2628,7 @@ export async function handleTextUpdate(runtime: Runtime, update: TelegramUpdate)
         })
         .catch(async (error) => {
           if (!isMissingQuestion(error)) throw error
-          await deletePendingQuestion(runtime, chatId, pending.requestId, userId)
+          await deletePendingQuestionByKey(runtime, match.itemKey, pending.requestId)
           await sendTelegramMessage(config, chatId, "That question is no longer pending. Wait for the next prompt or use /status.")
         })
       return
@@ -2719,6 +2723,19 @@ async function notifyQuestion(runtime: Runtime, sessionId: string, question: Tel
     notifyChats.add(parsed.chatId)
   }
   const kind = `question:${question.requestId}`
+  const pendingByChat = new Map<number, { key: string; userId?: number }>()
+  for (const key of pending) {
+    const parsed = parseTelegramKey(key)
+    if (!parsed) continue
+    const current = pendingByChat.get(parsed.chatId)
+    if (!current) {
+      pendingByChat.set(parsed.chatId, { key, userId: parsed.userId })
+      continue
+    }
+    if (current.userId !== undefined && parsed.userId === undefined) {
+      pendingByChat.set(parsed.chatId, { key, userId: parsed.userId })
+    }
+  }
   const chats = new Set<number>()
   const proactiveChats = new Set<number>()
   for (const key of pending) {
@@ -2726,9 +2743,10 @@ async function notifyQuestion(runtime: Runtime, sessionId: string, question: Tel
       const parsed = parseTelegramKey(key)
       if (!parsed) continue
       const chatId = parsed.chatId
-      await upsertPendingQuestion(runtime, key, question)
       if (!chats.has(chatId)) {
         chats.add(chatId)
+        const pendingKey = pendingByChat.get(chatId)?.key || key
+        await upsertPendingQuestion(runtime, pendingKey, question)
         await appendPending(runtime, chatId, {
           id: pendingEntryId(sessionId, "question", chatId, question.requestId),
           kind: "question",

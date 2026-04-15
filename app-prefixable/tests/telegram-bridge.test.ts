@@ -4864,6 +4864,118 @@ describe("telegram bridge config and cache", () => {
     expect(stored[0]?.requestId).toBe("req-notify-fanout");
   });
 
+  test("question pending storage prefers chat-scoped key when notify and mapped keys both exist", async () => {
+    const calls: Array<{ url: string; body: Record<string, unknown> }> = [];
+    const originalFetch = globalThis.fetch;
+    const upsertKeys: string[] = [];
+    try {
+      globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        const body = init?.body ? (JSON.parse(String(init.body)) as Record<string, unknown>) : {};
+        calls.push({ url, body });
+        if (url.includes("/sendMessage")) {
+          return new Response(JSON.stringify({ ok: true, result: { message_id: 1 } }), { status: 200 });
+        }
+        throw new Error(`Unexpected fetch ${url}`);
+      };
+
+      const runtime = {
+        config: {
+          mode: "polling" as const,
+          token: "token",
+          openCodeUrl: "http://127.0.0.1:4096",
+          sessionCacheMax: 10,
+          sessionCacheTtlMs: 10_000,
+          notificationDebounceMs: 0,
+          port: 4097,
+          webhookPath: "/webhook",
+          sessionStorePath: "/tmp/test-store.json",
+        },
+        store: {
+          get: async () => undefined,
+          set: async () => undefined,
+          delete: async () => undefined,
+          sessionKeys: async () => ["chat:188:user:9"],
+          notificationKeys: async () => ["chat:188"],
+          notificationGet: async () => true,
+          sessionAlarmGet: async () => true,
+          questionList: async () => [],
+          questionUpsert: async (name: string) => {
+            upsertKeys.push(name);
+          },
+          questionDelete: async () => undefined,
+        },
+      };
+
+      await handleBridgeEvent(runtime, {
+        type: "question.asked",
+        properties: {
+          id: "req-prefer-chat-key",
+          sessionID: "session-bell",
+          questions: [{ header: "Need approval", options: [{ label: "Yes" }, { label: "No" }] }],
+        },
+      });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+
+    expect(upsertKeys).toEqual(["chat:188"]);
+    expect(calls.some((x) => x.url.includes("/sendMessage") && x.body.chat_id === 188)).toBe(true);
+  });
+
+  test("legacy user-scoped notification keys do not bypass /notify chat status", async () => {
+    const calls: Array<{ url: string; body: Record<string, unknown> }> = [];
+    const originalFetch = globalThis.fetch;
+    try {
+      globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        const body = init?.body ? (JSON.parse(String(init.body)) as Record<string, unknown>) : {};
+        calls.push({ url, body });
+        if (url.includes("/sendMessage")) {
+          return new Response(JSON.stringify({ ok: true, result: { message_id: 1 } }), { status: 200 });
+        }
+        throw new Error(`Unexpected fetch ${url}`);
+      };
+
+      const runtime = {
+        config: {
+          mode: "polling" as const,
+          token: "token",
+          openCodeUrl: "http://127.0.0.1:4096",
+          sessionCacheMax: 10,
+          sessionCacheTtlMs: 10_000,
+          notificationDebounceMs: 0,
+          port: 4097,
+          webhookPath: "/webhook",
+          sessionStorePath: "/tmp/test-store.json",
+        },
+        store: {
+          get: async () => undefined,
+          set: async () => undefined,
+          delete: async () => undefined,
+          sessionKeys: async () => [],
+          notificationKeys: async () => ["chat:188:user:9"],
+          notificationGet: async (key: string) => key === "chat:188" ? false : true,
+          sessionAlarmGet: async () => true,
+        },
+      };
+
+      await handleBridgeEvent(runtime, {
+        type: "permission.asked",
+        properties: {
+          id: "perm-legacy-notify-key",
+          sessionID: "session-bell",
+          permission: "shell",
+          patterns: ["docker *"],
+        },
+      });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+
+    expect(calls.some((x) => x.url.includes("/sendMessage"))).toBe(false);
+  });
+
   test("notify-off chats do not receive proactive alerts", async () => {
     const calls: Array<{ url: string; body: Record<string, unknown> }> = [];
     const originalFetch = globalThis.fetch;
@@ -5870,6 +5982,80 @@ describe("telegram bridge config and cache", () => {
     expect(sentTexts.some((text) => text.includes("1) Alpha"))).toBe(true);
     expect(sentTexts.some((text) => text.includes("Open session session-1"))).toBe(true);
     expect(sentTexts.some((text) => text.includes("Thanks, your answer was sent."))).toBe(true);
+  });
+
+  test("text replies resolve pending question from chat-scoped notify key", async () => {
+    const calls: Array<{ url: string; body: Record<string, unknown> }> = [];
+    const originalFetch = globalThis.fetch;
+    const pending = new Map<string, unknown[]>();
+    pending.set("chat:77", [{
+      requestId: "req-chat-key",
+      callbackId: "cbchatkey",
+      sessionId: "session-1",
+      createdAt: Date.now() - 1000,
+      expiresAt: Date.now() + 60_000,
+      questions: [{
+        header: "Pick one",
+        question: "Pick one",
+        options: ["Alpha", "Beta"],
+        multiple: false,
+        custom: true,
+      }],
+      answers: [],
+    }]);
+    try {
+      globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        const body = init?.body ? (JSON.parse(String(init.body)) as Record<string, unknown>) : {};
+        calls.push({ url, body });
+        if (url.includes("/sendMessage")) {
+          return new Response(JSON.stringify({ ok: true, result: { message_id: 1 } }), { status: 200 });
+        }
+        if (url.includes("/question/req-chat-key/reply")) {
+          return new Response(JSON.stringify(true), { status: 200 });
+        }
+        throw new Error(`Unexpected fetch ${url}`);
+      };
+
+      const runtime = {
+        config: {
+          mode: "polling" as const,
+          token: "token",
+          openCodeUrl: "http://127.0.0.1:4096",
+          sessionCacheMax: 10,
+          sessionCacheTtlMs: 10_000,
+          notificationDebounceMs: 0,
+          port: 4097,
+          webhookPath: "/webhook",
+          sessionStorePath: "/tmp/test-store.json",
+        },
+        store: {
+          get: async () => undefined,
+          set: async () => undefined,
+          delete: async () => undefined,
+          questionList: async (name: string) => (pending.get(name) || []) as unknown[],
+          questionUpsert: async (name: string, row: unknown) => {
+            pending.set(name, [row]);
+          },
+          questionDelete: async (name: string, requestId: string) => {
+            const rows = (pending.get(name) || []) as Array<{ requestId?: string }>;
+            pending.set(name, rows.filter((row) => row.requestId !== requestId));
+          },
+        },
+      };
+
+      await handleTextUpdate(runtime, {
+        update_id: 2,
+        message: { message_id: 2, text: "1", chat: { id: 77 }, from: { id: 5 } },
+      });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+
+    const replyCall = calls.find((x) => x.url.includes("/question/req-chat-key/reply"));
+    expect(replyCall?.body.answers).toEqual([["Alpha"]]);
+    expect(pending.get("chat:77")).toEqual([]);
+    expect(pending.get("chat:77:user:5")).toBeUndefined();
   });
 
   test("question notifications include inline buttons with compact callback payloads", async () => {
