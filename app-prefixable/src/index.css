@@ -446,6 +446,36 @@
     color: inherit;
   }
 
+  .markdown-code-block {
+    @apply relative mb-4;
+  }
+
+  .markdown-code-block pre {
+    @apply mb-0 pt-12;
+  }
+
+  .markdown-copy-button {
+    @apply absolute right-3 top-3 rounded-md border px-2.5 py-1 text-xs font-medium transition-colors;
+    border-color: var(--border-strong);
+    background: color-mix(in srgb, var(--surface-base) 88%, transparent);
+    color: var(--text-strong);
+    backdrop-filter: blur(2px);
+  }
+
+  .markdown-copy-button:hover {
+    background: var(--surface-base);
+  }
+
+  .markdown-copy-button[data-state="copied"] {
+    border-color: color-mix(in srgb, var(--icon-success-base) 40%, var(--border-strong));
+    color: var(--icon-success-base);
+  }
+
+  .markdown-copy-button[data-state="failed"] {
+    border-color: color-mix(in srgb, var(--interactive-critical) 40%, var(--border-strong));
+    color: var(--interactive-critical);
+  }
+
   .markdown-content blockquote {
     @apply border-l-4 pl-4 italic mb-4;
     border-color: var(--interactive-base);
