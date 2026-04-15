@@ -835,6 +835,10 @@ type SwitchCallbackData =
   | { action: "page"; page: number }
   | { action: "select"; index: number; token: string }
 
+type SessionActionCallbackData =
+  | { action: "switch"; sessionId: string }
+  | { action: "recent"; sessionId: string }
+
 function switchToken(sessionId: string): string {
   return shortId(sessionId).slice(0, 8).padStart(6, "0")
 }
@@ -859,6 +863,41 @@ function parseSwitchCallbackData(input: string): SwitchCallbackData | undefined 
   const index = Number.parseInt(selected[1] || "", 10)
   if (!Number.isFinite(index) || index < 1) return
   return { action: "select", index: index - 1, token: selected[2] || "" }
+}
+
+function sessionActionCallback(action: "switch" | "recent", sessionId: string): string | undefined {
+  const id = sessionId.trim()
+  if (!id) return
+  if (/[\s:]/.test(id)) return
+  const value = action === "switch" ? `a:s:${id}` : `a:r:${id}`
+  if (value.length > callbackDataMax) return
+  return value
+}
+
+function parseSessionActionCallbackData(input: string): SessionActionCallbackData | undefined {
+  const parsed = input.match(/^a:([sr]):([^\s:]{1,58})$/)
+  if (!parsed) return
+  const action = parsed[1]
+  const sessionId = parsed[2]?.trim() || ""
+  if (!sessionId) return
+  if (action === "s") return { action: "switch", sessionId }
+  if (action === "r") return { action: "recent", sessionId }
+}
+
+function sessionTitleText(sessionId: string, title?: string): string {
+  const single = (title || "").replace(/\s+/g, " ").trim()
+  if (!single) return sessionId
+  return truncateTelegramInlineText(single, sessionTitleInlineMax)
+}
+
+function taskFinishedMarkup(sessionId: string): { inline_keyboard: Array<Array<{ text: string; callback_data: string }>> } | undefined {
+  const switchData = sessionActionCallback("switch", sessionId)
+  const recentData = sessionActionCallback("recent", sessionId)
+  const row: Array<{ text: string; callback_data: string }> = []
+  if (switchData) row.push({ text: "Switch session", callback_data: switchData })
+  if (recentData) row.push({ text: "Latest message", callback_data: recentData })
+  if (!row.length) return
+  return { inline_keyboard: [row] }
 }
 
 function questionMarkup(question: TelegramPendingQuestion): { inline_keyboard: Array<Array<{ text: string; callback_data: string }>> } | undefined {
@@ -1541,7 +1580,7 @@ function normalizeRecentCount(args: string[]): { count?: number; error?: string 
   return { count: Math.min(parsed, recentMaxCount) }
 }
 
-function parseRecentText(parts: unknown): string {
+function parseRecentText(parts: unknown, max = recentPartTextMax): string {
   if (!Array.isArray(parts)) return ""
   const text = parts
     .map((part) => {
@@ -1557,7 +1596,8 @@ function parseRecentText(parts: unknown): string {
     .replace(/\s+/g, " ")
     .trim()
   if (!text) return ""
-  return truncateTelegramInlineText(text, recentPartTextMax)
+  if (!Number.isFinite(max) || max <= 0) return text
+  return truncateTelegramInlineText(text, max)
 }
 
 async function recentText(config: BridgeConfig, sessionId: string, count: number): Promise<string> {
@@ -1578,6 +1618,7 @@ async function recentText(config: BridgeConfig, sessionId: string, count: number
   const data = await res.json().catch(() => [])
   const rows = Array.isArray(data) ? data : []
   const assistants = new Map<string, string>()
+  const assistantRows: string[] = []
   const users: Array<{ id: string; text: string }> = []
   for (const entry of rows) {
     if (!entry || typeof entry !== "object") continue
@@ -1591,12 +1632,26 @@ async function recentText(config: BridgeConfig, sessionId: string, count: number
     const role = info.role === "assistant" || info.role === "user" ? info.role : ""
     const text = parseRecentText(row.parts)
     if (!id || !role || !text) continue
-    if (role === "assistant" && parentID && !assistants.has(parentID)) {
-      assistants.set(parentID, text)
+    if (role === "assistant") {
+      if (parentID && !assistants.has(parentID)) {
+        assistants.set(parentID, text)
+      }
+      assistantRows.push(text)
       continue
     }
     if (role !== "user") continue
     users.push({ id, text })
+  }
+  if (!users.length && assistantRows.length) {
+    const list = assistantRows.slice(-safeCount)
+    const lines = [`Recent assistant messages for session ${sessionId} (showing ${list.length} of ${assistantRows.length}):`]
+    for (let i = 0; i < list.length; i++) {
+      const item = list[i]
+      if (!item) continue
+      lines.push("")
+      lines.push(`${i + 1}. Assistant: ${item}`)
+    }
+    return truncateTelegramText(lines.join("\n"), recentPayloadMax)
   }
   if (!users.length) {
     return `No recent chat messages found for session ${sessionId}. Send a new message first.`
@@ -1612,6 +1667,46 @@ async function recentText(config: BridgeConfig, sessionId: string, count: number
     lines.push(`   Assistant: ${reply}`)
   }
   return truncateTelegramText(lines.join("\n"), recentPayloadMax)
+}
+
+async function latestMessageText(config: BridgeConfig, sessionId: string): Promise<string> {
+  const url = opencodeUrl(config, `/session/${encodeURIComponent(sessionId)}/message`)
+  url.searchParams.set("limit", "40")
+  if (config.directory) {
+    url.searchParams.set("directory", config.directory)
+  }
+  const res = await fetch(url, {
+    method: "GET",
+    signal: AbortSignal.timeout(20_000),
+  })
+  if (!res.ok) {
+    const body = await res.text().catch(() => "")
+    throw new Error(`OpenCode session messages failed (${res.status}): ${body.slice(0, 300)}`)
+  }
+  const data = await res.json().catch(() => [])
+  const rows = Array.isArray(data) ? data : []
+  const messages: Array<{ role: "assistant" | "user"; text: string }> = []
+  for (const entry of rows) {
+    if (!entry || typeof entry !== "object") continue
+    const row = entry as { info?: unknown; parts?: unknown }
+    const info = row.info && typeof row.info === "object"
+      ? row.info as { role?: unknown }
+      : undefined
+    if (!info) continue
+    const role = info.role === "assistant" || info.role === "user" ? info.role : ""
+    const text = parseRecentText(row.parts, Number.POSITIVE_INFINITY)
+    if (!role || !text) continue
+    messages.push({ role, text })
+  }
+  const latest = [...messages].reverse().find((item) => item.role === "assistant")
+    || [...messages].reverse().find((item) => item.role === "user")
+  if (!latest) {
+    return `No recent chat messages found for session ${sessionId}. Send a new message first.`
+  }
+  const title = await safeSessionTitle(config, sessionId)
+  const label = sessionTitleText(sessionId, title)
+  const role = latest.role === "assistant" ? "Assistant" : "You"
+  return `Latest message in ${label}:\n\n${role}: ${latest.text}`
 }
 
 async function sessionExists(config: BridgeConfig, sessionId: string): Promise<boolean> {
@@ -1755,6 +1850,29 @@ async function handleSwitchCallback(runtime: Runtime, chatId: number, userId: nu
   const title = await safeSessionTitle(runtime.config, next)
   await answerCallback(runtime.config, callbackId, "Switched.")
   await sendTelegramMessage(runtime.config, chatId, `Switched to session: ${formatSessionDisplay(next, title)}`)
+}
+
+async function handleSessionActionCallback(runtime: Runtime, chatId: number, userId: number, callbackId: string, parsed: SessionActionCallbackData) {
+  if (parsed.action === "recent") {
+    await answerCallback(runtime.config, callbackId, "Fetching latest message...")
+    const text = await latestMessageText(runtime.config, parsed.sessionId)
+    await sendTelegramMessage(runtime.config, chatId, text)
+    return
+  }
+
+  const exists = await sessionExists(runtime.config, parsed.sessionId)
+  if (!exists) {
+    await answerCallback(runtime.config, callbackId, "Session no longer exists.")
+    await sendTelegramMessage(runtime.config, chatId, "That session was not found. Use /switch to choose an active session.")
+    return
+  }
+  const key = telegramSessionKey(chatId, userId)
+  await runtime.store.set(key, parsed.sessionId)
+  cacheSession(runtime.config, key, parsed.sessionId)
+  await rememberSession(runtime, key, parsed.sessionId)
+  const title = await safeSessionTitle(runtime.config, parsed.sessionId)
+  await answerCallback(runtime.config, callbackId, "Switched.")
+  await sendTelegramMessage(runtime.config, chatId, `Switched to session: ${sessionTitleText(parsed.sessionId, title)}`)
 }
 
 export function cacheSession(config: BridgeConfig, chatId: string, sessionId: string) {
@@ -2320,6 +2438,12 @@ export async function handleCallbackUpdate(runtime: Runtime, update: TelegramUpd
       state.acknowledged = true
       return
     }
+    const sessionAction = parseSessionActionCallbackData(data)
+    if (sessionAction) {
+      await handleSessionActionCallback(runtime, chatId, userId, callbackId, sessionAction)
+      state.acknowledged = true
+      return
+    }
     const parsed = parseCallbackData(data)
     if (!parsed) {
       await answerCallback(runtime.config, callbackId, "Unsupported button payload.")
@@ -2749,8 +2873,16 @@ async function notifySessionKeys(
         notifyDebug("proactive send skipped: debounced", { sessionId, kind, chatId, dedupeKey })
         continue
       }
-      const message = `${text}\n\nOpen ${sessionLabel(runtime.config, sessionId)}`
+      const title = kind === "task-finished" ? await safeSessionTitle(runtime.config, sessionId) : undefined
+      const message = kind === "task-finished"
+        ? `${text}\n\nSession: ${sessionTitleText(sessionId, title)}`
+        : `${text}\n\nOpen ${sessionLabel(runtime.config, sessionId)}`
+      const markup = kind === "task-finished" ? taskFinishedMarkup(sessionId) : undefined
       await queueChatUpdate(String(chatId), async () => {
+        if (markup) {
+          await sendTelegramMessageWithMarkup(runtime.config, chatId, message, markup)
+          return
+        }
         await sendTelegramMessage(runtime.config, chatId, message)
       })
       stampNotification(chatId, dedupeKey, sessionId)

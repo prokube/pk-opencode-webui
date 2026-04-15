@@ -2108,6 +2108,9 @@ describe("telegram bridge config and cache", () => {
         const url = String(input);
         const body = init?.body ? (JSON.parse(String(init.body)) as Record<string, unknown>) : {};
         calls.push({ url, body });
+        if (url.includes("/session/session-1")) {
+          return new Response(JSON.stringify({ title: "Sprint Planning" }), { status: 200 });
+        }
         if (url.includes("/sendMessage")) {
           return new Response(JSON.stringify({ ok: true, result: { message_id: 1 } }), { status: 200 });
         }
@@ -3882,6 +3885,255 @@ describe("telegram bridge config and cache", () => {
     expect(alarms.get("session-81")).toBe(true);
   });
 
+  test("session action switch callback remaps to target session", async () => {
+    const calls: Array<{ url: string; body: Record<string, unknown> }> = [];
+    const originalFetch = globalThis.fetch;
+    try {
+      globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        const body = init?.body ? (JSON.parse(String(init.body)) as Record<string, unknown>) : {};
+        calls.push({ url, body });
+        if (url.includes("/answerCallbackQuery")) {
+          return new Response(JSON.stringify({ ok: true, result: true }), { status: 200 });
+        }
+        if (url.includes("/session/session-target")) {
+          return new Response(JSON.stringify({ title: "Launch Readiness" }), { status: 200 });
+        }
+        if (url.includes("/sendMessage")) {
+          return new Response(JSON.stringify({ ok: true, result: { message_id: 1 } }), { status: 200 });
+        }
+        throw new Error(`Unexpected fetch ${url}`);
+      };
+
+      const map = new Map<string, string>();
+      const runtime = {
+        config: {
+          mode: "polling" as const,
+          token: "token",
+          openCodeUrl: "http://127.0.0.1:4096",
+          sessionCacheMax: 10,
+          sessionCacheTtlMs: 10_000,
+          notificationDebounceMs: 20_000,
+          port: 4097,
+          webhookPath: "/webhook",
+          sessionStorePath: "/tmp/test-store.json",
+        },
+        store: {
+          get: async (key: string) => map.get(key),
+          set: async (key: string, value: string) => {
+            map.set(key, value);
+          },
+          delete: async () => undefined,
+          historyGet: async () => [],
+          historySet: async () => undefined,
+        },
+      };
+
+      await handleCallbackUpdate(runtime, {
+        update_id: 83,
+        callback_query: {
+          id: "cb-session-switch",
+          data: "a:s:session-target",
+          from: { id: 5 },
+          message: { message_id: 7, chat: { id: 81 } },
+        },
+      });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+
+    expect(calls.some((x) => x.url.includes("/answerCallbackQuery") && String(x.body.text || "").includes("Switched"))).toBe(true);
+    expect(calls.some((x) => x.url.includes("/sendMessage") && String(x.body.text || "").includes("Switched to session: Launch Readiness"))).toBe(true);
+  });
+
+  test("session action latest-message callback sends recent output", async () => {
+    const calls: Array<{ url: string; body: Record<string, unknown> }> = [];
+    const originalFetch = globalThis.fetch;
+    try {
+      globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        const body = init?.body ? (JSON.parse(String(init.body)) as Record<string, unknown>) : {};
+        calls.push({ url, body });
+        if (url.includes("/answerCallbackQuery")) {
+          return new Response(JSON.stringify({ ok: true, result: true }), { status: 200 });
+        }
+        if (url.includes("/session/session-target/message")) {
+          return new Response(JSON.stringify([
+            {
+              info: { id: "m1", role: "user" },
+              parts: [{ type: "text", text: "show me latest" }],
+            },
+            {
+              info: { id: "m2", role: "assistant", parentID: "m1" },
+              parts: [{ type: "text", text: "Here is the latest update." }],
+            },
+          ]), { status: 200 });
+        }
+        if (url.includes("/sendMessage")) {
+          return new Response(JSON.stringify({ ok: true, result: { message_id: 1 } }), { status: 200 });
+        }
+        throw new Error(`Unexpected fetch ${url}`);
+      };
+
+      const runtime = {
+        config: {
+          mode: "polling" as const,
+          token: "token",
+          openCodeUrl: "http://127.0.0.1:4096",
+          sessionCacheMax: 10,
+          sessionCacheTtlMs: 10_000,
+          notificationDebounceMs: 20_000,
+          port: 4097,
+          webhookPath: "/webhook",
+          sessionStorePath: "/tmp/test-store.json",
+        },
+        store: {
+          get: async () => undefined,
+          set: async () => undefined,
+          delete: async () => undefined,
+        },
+      };
+
+      await handleCallbackUpdate(runtime, {
+        update_id: 84,
+        callback_query: {
+          id: "cb-session-recent",
+          data: "a:r:session-target",
+          from: { id: 5 },
+          message: { message_id: 7, chat: { id: 81 } },
+        },
+      });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+
+    expect(calls.some((x) => x.url.includes("/answerCallbackQuery") && String(x.body.text || "").includes("Fetching latest message"))).toBe(true);
+    expect(calls.some((x) => x.url.includes("/sendMessage") && String(x.body.text || "").includes("Latest message in session-target"))).toBe(true);
+    expect(calls.some((x) => x.url.includes("/sendMessage") && String(x.body.text || "").includes("Assistant: Here is the latest update."))).toBe(true);
+  });
+
+  test("session action latest-message callback does not truncate long assistant output", async () => {
+    const calls: Array<{ url: string; body: Record<string, unknown> }> = [];
+    const originalFetch = globalThis.fetch;
+    const longText = `${"A".repeat(520)} END`;
+    try {
+      globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        const body = init?.body ? (JSON.parse(String(init.body)) as Record<string, unknown>) : {};
+        calls.push({ url, body });
+        if (url.includes("/answerCallbackQuery")) {
+          return new Response(JSON.stringify({ ok: true, result: true }), { status: 200 });
+        }
+        if (url.includes("/session/session-target/message")) {
+          return new Response(JSON.stringify([
+            {
+              info: { id: "m1", role: "assistant" },
+              parts: [{ type: "text", text: longText }],
+            },
+          ]), { status: 200 });
+        }
+        if (url.includes("/sendMessage")) {
+          return new Response(JSON.stringify({ ok: true, result: { message_id: 1 } }), { status: 200 });
+        }
+        throw new Error(`Unexpected fetch ${url}`);
+      };
+
+      const runtime = {
+        config: {
+          mode: "polling" as const,
+          token: "token",
+          openCodeUrl: "http://127.0.0.1:4096",
+          sessionCacheMax: 10,
+          sessionCacheTtlMs: 10_000,
+          notificationDebounceMs: 20_000,
+          port: 4097,
+          webhookPath: "/webhook",
+          sessionStorePath: "/tmp/test-store.json",
+        },
+        store: {
+          get: async () => undefined,
+          set: async () => undefined,
+          delete: async () => undefined,
+        },
+      };
+
+      await handleCallbackUpdate(runtime, {
+        update_id: 86,
+        callback_query: {
+          id: "cb-session-recent-long",
+          data: "a:r:session-target",
+          from: { id: 5 },
+          message: { message_id: 7, chat: { id: 81 } },
+        },
+      });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+
+    expect(calls.some((x) => x.url.includes("/sendMessage") && String(x.body.text || "").includes(longText))).toBe(true);
+  });
+
+  test("session action latest-message callback falls back to assistant-only history", async () => {
+    const calls: Array<{ url: string; body: Record<string, unknown> }> = [];
+    const originalFetch = globalThis.fetch;
+    try {
+      globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        const body = init?.body ? (JSON.parse(String(init.body)) as Record<string, unknown>) : {};
+        calls.push({ url, body });
+        if (url.includes("/answerCallbackQuery")) {
+          return new Response(JSON.stringify({ ok: true, result: true }), { status: 200 });
+        }
+        if (url.includes("/session/session-target/message")) {
+          return new Response(JSON.stringify([
+            {
+              info: { id: "m1", role: "assistant" },
+              parts: [{ type: "text", text: "Pipeline completed successfully." }],
+            },
+          ]), { status: 200 });
+        }
+        if (url.includes("/sendMessage")) {
+          return new Response(JSON.stringify({ ok: true, result: { message_id: 1 } }), { status: 200 });
+        }
+        throw new Error(`Unexpected fetch ${url}`);
+      };
+
+      const runtime = {
+        config: {
+          mode: "polling" as const,
+          token: "token",
+          openCodeUrl: "http://127.0.0.1:4096",
+          sessionCacheMax: 10,
+          sessionCacheTtlMs: 10_000,
+          notificationDebounceMs: 20_000,
+          port: 4097,
+          webhookPath: "/webhook",
+          sessionStorePath: "/tmp/test-store.json",
+        },
+        store: {
+          get: async () => undefined,
+          set: async () => undefined,
+          delete: async () => undefined,
+        },
+      };
+
+      await handleCallbackUpdate(runtime, {
+        update_id: 85,
+        callback_query: {
+          id: "cb-session-recent-assistant-only",
+          data: "a:r:session-target",
+          from: { id: 5 },
+          message: { message_id: 7, chat: { id: 81 } },
+        },
+      });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+
+    expect(calls.some((x) => x.url.includes("/sendMessage") && String(x.body.text || "").includes("Latest message in session-target"))).toBe(true);
+    expect(calls.some((x) => x.url.includes("/sendMessage") && String(x.body.text || "").includes("Assistant: Pipeline completed successfully."))).toBe(true);
+  });
+
   test("/pending returns aggregated actionable items for the chat", async () => {
     const calls: Array<{ url: string; body: Record<string, unknown> }> = [];
     const originalFetch = globalThis.fetch;
@@ -5570,7 +5822,10 @@ describe("telegram bridge config and cache", () => {
     const sentTexts = calls
       .filter((x) => x.url.includes("/sendMessage"))
       .map((x) => String(x.body.text || ""));
-    expect(sentTexts).toEqual(["Task finished: the session is now idle.\n\nOpen session session-1"]);
+    expect(sentTexts).toEqual(["Task finished: the session is now idle.\n\nSession: session-1"]);
+    const sent = calls.find((x) => x.url.includes("/sendMessage"));
+    const markup = sent?.body.reply_markup as { inline_keyboard?: Array<Array<{ callback_data?: string }>> } | undefined;
+    expect(markup?.inline_keyboard?.[0]?.map((item) => item.callback_data)).toEqual(["a:s:session-1", "a:r:session-1"]);
   });
 
   test("handleBridgeEvent clears tracked status on session.deleted without sessionID", async () => {
