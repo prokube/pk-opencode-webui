@@ -188,11 +188,12 @@ export function QuestionPrompt(props: Props) {
 
   return (
     <div
-      class="rounded-lg overflow-hidden"
+      class="rounded-lg overflow-hidden flex flex-col min-h-0"
       style={{
         background: "var(--background-base)",
         border: "2px solid var(--interactive-base)",
         "box-shadow": "0 4px 20px rgba(0, 0, 0, 0.15)",
+        "max-height": "min(65vh, calc(100dvh - 11rem))",
       }}
     >
       {/* Header */}
@@ -269,7 +270,7 @@ export function QuestionPrompt(props: Props) {
       </Show>
 
       {/* Question content */}
-      <div class="p-4">
+      <div class="p-4 overflow-y-auto min-h-0">
         <Show when={!confirm()}>
           {/* Question text */}
           <div class="mb-4">
