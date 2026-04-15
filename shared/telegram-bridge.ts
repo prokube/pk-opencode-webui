@@ -263,8 +263,8 @@ const fallbackPending = new Map<string, TelegramPendingItem[]>()
 const pendingQuestions = new Map<string, TelegramPendingQuestion[]>()
 const sessionHistory = new Map<string, string[]>()
 const sessionInfo = new Map<string, CachedSessionInfo>()
-const switchTargets = new Map<string, { sessionRef: string; expiresAt: number }>()
-const recentTargets = new Map<string, { sessionRef: string; expiresAt: number }>()
+const switchTargets = new Map<string, { sessionRef: string; chatId: number; expiresAt: number }>()
+const recentTargets = new Map<string, { sessionRef: string; chatId: number; expiresAt: number }>()
 
 let pendingEntrySeq = 0
 
@@ -953,22 +953,23 @@ function pruneUtilityTargets(now: number) {
   }
 }
 
-function utilitySwitchSessionCallbackData(sourceId: string, sessionId: string): string {
+function utilitySwitchSessionCallbackData(sourceId: string, sessionId: string, chatId: number): string {
   const now = Date.now()
   pruneUtilityTargets(now)
   const sessionRef = encodeSessionRef({ sourceId, sessionId })
   const seq = Math.abs(pendingEntrySeq++)
   const tokenSeed = `${sessionRef}:${now}:${seq}`
   const token = `${shortId(tokenSeed)}${seq.toString(36)}`.slice(0, 12).padStart(6, "0")
-  switchTargets.set(token, { sessionRef, expiresAt: now + switchTargetTtlMs })
+  switchTargets.set(token, { sessionRef, chatId, expiresAt: now + switchTargetTtlMs })
   return `u:s:${token}`
 }
 
-function resolveUtilitySwitchTarget(token: string): string | undefined {
+function resolveUtilitySwitchTarget(token: string, chatId: number): string | undefined {
   const now = Date.now()
   pruneUtilityTargets(now)
   const stored = switchTargets.get(token)
   if (!stored) return
+  if (stored.chatId !== chatId) return
   if (stored.expiresAt <= now) {
     switchTargets.delete(token)
     return
@@ -976,22 +977,23 @@ function resolveUtilitySwitchTarget(token: string): string | undefined {
   return stored.sessionRef
 }
 
-function utilityRecentSessionCallbackData(sourceId: string, sessionId: string): string {
+function utilityRecentSessionCallbackData(sourceId: string, sessionId: string, chatId: number): string {
   const now = Date.now()
   pruneUtilityTargets(now)
   const sessionRef = encodeSessionRef({ sourceId, sessionId })
   const seq = Math.abs(pendingEntrySeq++)
   const tokenSeed = `${sessionRef}:recent:${now}:${seq}`
   const token = `${shortId(tokenSeed)}${seq.toString(36)}`.slice(0, 12).padStart(6, "0")
-  recentTargets.set(token, { sessionRef, expiresAt: now + switchTargetTtlMs })
+  recentTargets.set(token, { sessionRef, chatId, expiresAt: now + switchTargetTtlMs })
   return `u:r:${token}`
 }
 
-function resolveRecentTarget(token: string): string | undefined {
+function resolveRecentTarget(token: string, chatId: number): string | undefined {
   const now = Date.now()
   pruneUtilityTargets(now)
   const stored = recentTargets.get(token)
   if (!stored) return
+  if (stored.chatId !== chatId) return
   if (stored.expiresAt <= now) {
     recentTargets.delete(token)
     return
@@ -1011,9 +1013,9 @@ function parseUtilityCallbackData(input: string): UtilityCallbackData | undefine
   }
 }
 
-function proactiveActionsMarkup(sourceId: string, sessionId: string): { inline_keyboard: Array<Array<{ text: string; callback_data: string }>> } {
-  const switchCallback = utilitySwitchSessionCallbackData(sourceId, sessionId)
-  const recentCallback = utilityRecentSessionCallbackData(sourceId, sessionId)
+function proactiveActionsMarkup(sourceId: string, sessionId: string, chatId: number): { inline_keyboard: Array<Array<{ text: string; callback_data: string }>> } {
+  const switchCallback = utilitySwitchSessionCallbackData(sourceId, sessionId, chatId)
+  const recentCallback = utilityRecentSessionCallbackData(sourceId, sessionId, chatId)
   return {
     inline_keyboard: [[
       { text: "Switch session", callback_data: switchCallback },
@@ -2615,9 +2617,9 @@ export async function handleCallbackUpdate(runtime: Runtime, update: TelegramUpd
     }
     const utility = parseUtilityCallbackData(data)
     if (utility?.action === "switch") {
-      const storedRef = resolveUtilitySwitchTarget(utility.token)
+      const storedRef = resolveUtilitySwitchTarget(utility.token, chatId)
       if (!storedRef) {
-        await answerCallback(runtime.config, callbackId, "This switch button expired. Use /switch.")
+        await answerCallback(runtime.config, callbackId, "This switch button is invalid or expired. Use /switch.")
         state.acknowledged = true
         return
       }
@@ -2633,20 +2635,20 @@ export async function handleCallbackUpdate(runtime: Runtime, update: TelegramUpd
         state.acknowledged = true
         return
       }
+      await answerCallback(runtime.config, callbackId, "Switching...")
+      state.acknowledged = true
       const key = telegramSessionKey(chatId, userId)
       await runtime.store.set(key, storedRef)
       cacheSession(runtime.config, key, storedRef)
       await rememberSession(runtime, key, storedRef)
       const title = await safeSessionTitle(scoped, ref.sessionId, ref.sourceId)
-      await answerCallback(runtime.config, callbackId, "Switched.")
-      state.acknowledged = true
       await sendTelegramMessage(runtime.config, chatId, `Switched to session: ${formatSessionDisplay(ref.sessionId, title, ref.sourceId)}`)
       return
     }
     if (utility?.action === "recent") {
-      const tokenRef = utility.token ? resolveRecentTarget(utility.token) : undefined
+      const tokenRef = utility.token ? resolveRecentTarget(utility.token, chatId) : undefined
       if (utility.token && !tokenRef) {
-        await answerCallback(runtime.config, callbackId, "This latest-message button expired.")
+        await answerCallback(runtime.config, callbackId, "This latest-message button is invalid or expired.")
         state.acknowledged = true
         return
       }
@@ -3166,7 +3168,7 @@ async function notifySessionKeys(
       if (!proactiveTelegramEnabled(runtime.config)) continue
       if (!shouldNotify(runtime.config, chatId, dedupeKey, sessionId, sourceId)) continue
       const message = `${text}\n\nOpen ${sessionLabel(runtime.config, sessionId, sourceId)}`
-      const markup = proactiveActionsMarkup(sourceId, sessionId)
+      const markup = proactiveActionsMarkup(sourceId, sessionId, chatId)
       await queueChatUpdate(String(chatId), async () => {
         await sendTelegramMessageWithMarkup(runtime.config, chatId, message, markup)
       })
@@ -3234,7 +3236,7 @@ async function notifyQuestion(runtime: Runtime, sessionId: string, sourceId: str
           runtime.config,
           chatId,
           `Open ${sessionLabel(runtime.config, sessionId, sourceId)}`,
-          proactiveActionsMarkup(sourceId, sessionId),
+          proactiveActionsMarkup(sourceId, sessionId, chatId),
         )
       })
       stampNotification(chatId, kind, sessionId, sourceId)
