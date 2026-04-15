@@ -240,8 +240,9 @@ function addWebhookPathPatch(patch: Record<string, TelegramSettingsPatchValue>, 
 }
 
 export function createTelegramForm(settings: TelegramPublicSettings): TelegramForm {
-  const sourcesJson = settings.sources.length
-    ? JSON.stringify(settings.sources, null, 2)
+  const sources = Array.isArray(settings.sources) ? settings.sources : []
+  const sourcesJson = sources.length
+    ? JSON.stringify(sources, null, 2)
     : ""
   return {
     mode: settings.mode,

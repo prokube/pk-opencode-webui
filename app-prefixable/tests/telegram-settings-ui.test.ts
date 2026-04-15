@@ -50,6 +50,11 @@ describe("telegram settings form helpers", () => {
     })
   })
 
+  test("handles missing sources in settings payload", () => {
+    const form = createTelegramForm({ ...seed, sources: undefined as unknown as TelegramPublicSettings["sources"] })
+    expect(form.sourcesJson).toBe("")
+  })
+
   test("returns validation errors for invalid values", () => {
     const form = {
       ...createTelegramForm(seed),

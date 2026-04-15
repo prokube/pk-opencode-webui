@@ -55,17 +55,24 @@ export function TelegramSettings(props: Props) {
     setFieldErrors({})
     const res = await fetch(`${props.serverUrl}/api/ext/telegram/settings`).catch(() => null)
     if (!res?.ok) {
-      setLoading(false)
       setError("Failed to load Telegram settings")
+      setLoading(false)
       return
     }
     const data = (await res.json().catch(() => null)) as TelegramSettingsResponse | null
     if (!data?.settings) {
-      setLoading(false)
       setError("Failed to load Telegram settings")
+      setLoading(false)
       return
     }
-    const next = createTelegramForm(data.settings)
+    const next = await Promise.resolve()
+      .then(() => createTelegramForm(data.settings))
+      .catch(() => null)
+    if (!next) {
+      setError("Failed to load Telegram settings")
+      setLoading(false)
+      return
+    }
     setInitial(next)
     setForm(next)
     setTokenConfigured(data.settings.tokenConfigured)
