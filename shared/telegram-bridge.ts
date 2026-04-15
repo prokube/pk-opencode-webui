@@ -1630,7 +1630,7 @@ async function readSessionStatusSnapshot(config: BridgeConfig): Promise<SessionS
   }
   const payload = await res.json().catch(() => undefined)
   if (!payload || typeof payload !== "object") {
-    return { bySession: new Map(), reachable: true }
+    return { bySession: new Map(), reachable: false }
   }
   const bySession = new Map<string, string>()
   for (const [key, value] of Object.entries(payload as Record<string, unknown>)) {
@@ -1661,7 +1661,8 @@ async function readSubsessionSummary(
   }).catch(() => undefined)
   if (!res?.ok) return { text: "unavailable" }
   const payload = await res.json().catch(() => undefined)
-  const sessions = Array.isArray(payload) ? payload : []
+  if (!Array.isArray(payload)) return { text: "unavailable" }
+  const sessions = payload
   const ids = sessions
     .map((raw) => {
       if (!raw || typeof raw !== "object") return
