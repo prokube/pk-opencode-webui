@@ -108,7 +108,7 @@ export function FollowupDock(props: {
                     type="button"
                     size="sm"
                     variant="ghost"
-                    disabled={busy() || first()}
+                    disabled={sending() || first()}
                     aria-label="Move followup up"
                     title="Move followup up"
                     onClick={() => props.onMoveUp(item.id)}
@@ -119,7 +119,7 @@ export function FollowupDock(props: {
                     type="button"
                     size="sm"
                     variant="ghost"
-                    disabled={busy() || last()}
+                    disabled={sending() || last()}
                     aria-label="Move followup down"
                     title="Move followup down"
                     onClick={() => props.onMoveDown(item.id)}
