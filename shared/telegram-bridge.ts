@@ -263,6 +263,8 @@ const fallbackPending = new Map<string, TelegramPendingItem[]>()
 const pendingQuestions = new Map<string, TelegramPendingQuestion[]>()
 const sessionHistory = new Map<string, string[]>()
 const sessionInfo = new Map<string, CachedSessionInfo>()
+const switchTargets = new Map<string, { sessionRef: string; chatId: number; expiresAt: number }>()
+const recentTargets = new Map<string, { sessionRef: string; chatId: number; expiresAt: number }>()
 
 let pendingEntrySeq = 0
 
@@ -288,6 +290,9 @@ const inlineButtonTextMax = 48
 const callbackDataMax = 64
 const telegramMessageSoftLimit = 3900
 const recentPayloadMax = telegramMessageSoftLimit * 3
+const utilityTargetTtlMs = 30 * 60 * 1000
+const switchTargetMax = 2048
+const recentTargetMax = 2048
 
 const telegramCommands = Object.freeze([
   Object.freeze({
@@ -910,7 +915,8 @@ type SwitchCallbackData =
   | { action: "select"; index: number; token: string }
 
 type UtilityCallbackData =
-  | { action: "recent" }
+  | { action: "recent"; token?: string }
+  | { action: "switch"; token: string }
 
 function switchToken(sessionId: string): string {
   return shortId(sessionId).slice(0, 8).padStart(6, "0")
@@ -938,19 +944,95 @@ function parseSwitchCallbackData(input: string): SwitchCallbackData | undefined 
   return { action: "select", index: index - 1, token: selected[2] || "" }
 }
 
-function utilityRecentCallbackData(): string {
-  return "u:recent"
+function pruneUtilityTargetMap<T extends { expiresAt: number }>(targets: Map<string, T>, now: number, max: number) {
+  while (targets.size) {
+    const oldest = targets.entries().next().value as [string, T] | undefined
+    if (!oldest || oldest[1].expiresAt > now) break
+    targets.delete(oldest[0])
+  }
+  while (targets.size > max) {
+    const oldest = targets.keys().next().value as string | undefined
+    if (!oldest) break
+    targets.delete(oldest)
+  }
+}
+
+function pruneUtilityTargets(now: number) {
+  pruneUtilityTargetMap(switchTargets, now, switchTargetMax)
+  pruneUtilityTargetMap(recentTargets, now, recentTargetMax)
+}
+
+function utilitySwitchSessionCallbackData(sourceId: string, sessionId: string, chatId: number): string {
+  const now = Date.now()
+  pruneUtilityTargets(now)
+  const sessionRef = encodeSessionRef({ sourceId, sessionId })
+  const seq = Math.abs(pendingEntrySeq++)
+  const tokenSeed = `${sessionRef}:${now}:${seq}`
+  const token = `${shortId(tokenSeed)}${seq.toString(36)}`.slice(0, 12).padStart(6, "0")
+  switchTargets.set(token, { sessionRef, chatId, expiresAt: now + utilityTargetTtlMs })
+  return `u:s:${token}`
+}
+
+function resolveUtilitySwitchTarget(token: string, chatId: number): string | undefined {
+  const now = Date.now()
+  pruneUtilityTargets(now)
+  const stored = switchTargets.get(token)
+  if (!stored) return
+  if (stored.chatId !== chatId) return
+  if (stored.expiresAt <= now) {
+    switchTargets.delete(token)
+    return
+  }
+  const sessionRef = stored.sessionRef
+  switchTargets.delete(token)
+  return sessionRef
+}
+
+function utilityRecentSessionCallbackData(sourceId: string, sessionId: string, chatId: number): string {
+  const now = Date.now()
+  pruneUtilityTargets(now)
+  const sessionRef = encodeSessionRef({ sourceId, sessionId })
+  const seq = Math.abs(pendingEntrySeq++)
+  const tokenSeed = `${sessionRef}:recent:${now}:${seq}`
+  const token = `${shortId(tokenSeed)}${seq.toString(36)}`.slice(0, 12).padStart(6, "0")
+  recentTargets.set(token, { sessionRef, chatId, expiresAt: now + utilityTargetTtlMs })
+  return `u:r:${token}`
+}
+
+function resolveRecentTarget(token: string, chatId: number): string | undefined {
+  const now = Date.now()
+  pruneUtilityTargets(now)
+  const stored = recentTargets.get(token)
+  if (!stored) return
+  if (stored.chatId !== chatId) return
+  if (stored.expiresAt <= now) {
+    recentTargets.delete(token)
+    return
+  }
+  const sessionRef = stored.sessionRef
+  recentTargets.delete(token)
+  return sessionRef
 }
 
 function parseUtilityCallbackData(input: string): UtilityCallbackData | undefined {
   if (input === "u:recent") return { action: "recent" }
+  const recentSession = input.match(/^u:r:([a-z0-9]{6,24})$/)
+  if (recentSession) {
+    return { action: "recent", token: recentSession[1] || "" }
+  }
+  const switchSession = input.match(/^u:s:([a-z0-9]{6,24})$/)
+  if (switchSession) {
+    return { action: "switch", token: switchSession[1] || "" }
+  }
 }
 
-function proactiveActionsMarkup(): { inline_keyboard: Array<Array<{ text: string; callback_data: string }>> } {
+function proactiveActionsMarkup(sourceId: string, sessionId: string, chatId: number): { inline_keyboard: Array<Array<{ text: string; callback_data: string }>> } {
+  const switchCallback = utilitySwitchSessionCallbackData(sourceId, sessionId, chatId)
+  const recentCallback = utilityRecentSessionCallbackData(sourceId, sessionId, chatId)
   return {
     inline_keyboard: [[
-      { text: "Switch session", callback_data: switchPageCallback(0) },
-      { text: "Latest message", callback_data: utilityRecentCallbackData() },
+      { text: "Switch session", callback_data: switchCallback },
+      { text: "Latest message", callback_data: recentCallback },
     ]],
   }
 }
@@ -1553,6 +1635,16 @@ function formatSessionDisplay(sessionId: string, title?: string, sourceId = "def
   return `${safe} (${scoped})`
 }
 
+function formatSessionTitleOnly(sessionId: string, title?: string, sourceId = "default"): string {
+  const single = typeof title === "string" ? title.replace(/\s+/g, " ").trim() : ""
+  if (single) {
+    const safe = truncateTelegramInlineText(single, sessionTitleInlineMax)
+    if (sourceId === "default") return safe
+    return `[${sourceLabel(sourceId)}] ${safe}`
+  }
+  return sourceId === "default" ? `session ${sessionId}` : `[${sourceLabel(sourceId)}] session ${sessionId}`
+}
+
 async function formatSessionList(runtime: Runtime, list: string[], current?: string): Promise<string[]> {
   const active = current?.trim()
   const details = await formatSessionRows(runtime, list)
@@ -1765,6 +1857,21 @@ function normalizeRecentCount(args: string[]): { count?: number; error?: string 
   return { count: Math.min(parsed, recentMaxCount) }
 }
 
+function parseRecentCreated(value: unknown): number {
+  if (typeof value === "number" && Number.isFinite(value)) return value
+  if (typeof value === "string") {
+    const raw = value.trim()
+    if (!raw) return 0
+    if (/^\d+$/.test(raw)) {
+      const parsed = Number.parseInt(raw, 10)
+      if (Number.isFinite(parsed)) return parsed
+    }
+    const parsedDate = Date.parse(raw)
+    if (Number.isFinite(parsedDate)) return parsedDate
+  }
+  return 0
+}
+
 function parseRecentText(parts: unknown): string {
   if (!Array.isArray(parts)) return ""
   const text = parts
@@ -1784,7 +1891,7 @@ function parseRecentText(parts: unknown): string {
   return truncateTelegramInlineText(text, recentPartTextMax)
 }
 
-async function recentText(config: BridgeConfig, sessionId: string, count: number): Promise<string> {
+async function recentText(config: BridgeConfig, sessionId: string, count: number, sourceId = "default"): Promise<string> {
   const safeCount = Math.max(1, Math.min(count, recentMaxCount))
   const url = opencodeUrl(config, `/session/${encodeURIComponent(sessionId)}/message`)
   url.searchParams.set("limit", String(Math.max(20, safeCount * 6)))
@@ -1801,42 +1908,54 @@ async function recentText(config: BridgeConfig, sessionId: string, count: number
   }
   const data = await res.json().catch(() => [])
   const rows = Array.isArray(data) ? data : []
-  const assistants = new Map<string, string>()
-  const users: Array<{ id: string; text: string; created: number }> = []
+  const items: Array<{ id: string; role: "user" | "assistant"; parentID?: string; text: string; created: number }> = []
   for (const entry of rows) {
     if (!entry || typeof entry !== "object") continue
     const row = entry as { info?: unknown; parts?: unknown }
     const info = row.info && typeof row.info === "object"
-      ? row.info as { id?: unknown; role?: unknown; parentID?: unknown }
+      ? row.info as { id?: unknown; role?: unknown; parentID?: unknown; time?: unknown; created?: unknown }
       : undefined
     if (!info) continue
     const id = typeof info.id === "string" ? info.id : ""
-    const parentID = typeof info.parentID === "string" ? info.parentID : ""
     const role = info.role === "assistant" || info.role === "user" ? info.role : ""
+    const parentID = typeof info.parentID === "string" ? info.parentID : ""
     const time = "time" in info && info.time && typeof info.time === "object"
       ? info.time as { created?: unknown }
       : undefined
-    const created = typeof time?.created === "number" && Number.isFinite(time.created) ? time.created : 0
+    const created = parseRecentCreated(time?.created)
+      || parseRecentCreated((info as { created?: unknown }).created)
+      || parseRecentCreated((row as { time?: { created?: unknown } }).time?.created)
     const text = parseRecentText(row.parts)
     if (!id || !role || !text) continue
-    if (role === "assistant" && parentID && !assistants.has(parentID)) {
-      assistants.set(parentID, text)
+    if (role === "assistant") {
+      items.push({ id, role: "assistant", parentID, text, created })
       continue
     }
-    if (role !== "user") continue
-    users.push({ id, text, created })
+    items.push({ id, role: "user", text, created })
+  }
+  const hasCreated = items.some((item) => item.created > 0)
+  items.sort((a, b) => {
+    if (hasCreated && a.created > 0 && b.created > 0 && a.created !== b.created) {
+      return a.created - b.created
+    }
+    return a.id.localeCompare(b.id, undefined, { numeric: true, sensitivity: "base" })
+  })
+  const assistants = new Map<string, string>()
+  const users: Array<{ id: string; text: string; created: number }> = []
+  for (const item of items) {
+    if (item.role === "assistant") {
+      if (item.parentID) assistants.set(item.parentID, item.text)
+      continue
+    }
+    users.push({ id: item.id, text: item.text, created: item.created })
   }
   if (!users.length) {
     return `No recent chat messages found for session ${sessionId}. Send a new message first.`
   }
-  const ordered = users.some((item) => item.created > 0)
-    ? users.slice().sort((a, b) => {
-      if (a.created !== b.created) return a.created - b.created
-      return a.id.localeCompare(b.id)
-    })
-    : users
-  const list = ordered.slice(-safeCount)
-  const lines = [`Recent activity for session ${sessionId} (showing ${list.length} of ${users.length}):`]
+  const title = await safeSessionTitle(config, sessionId, sourceId)
+  const name = formatSessionTitleOnly(sessionId, title, sourceId)
+  const list = users.slice(-safeCount)
+  const lines = [`Recent activity for ${name} (showing ${list.length} of ${users.length}):`]
   for (let i = 0; i < list.length; i++) {
     const item = list[i]
     if (!item) continue
@@ -2629,9 +2748,44 @@ export async function handleCallbackUpdate(runtime: Runtime, update: TelegramUpd
       return
     }
     const utility = parseUtilityCallbackData(data)
-    if (utility?.action === "recent") {
+    if (utility?.action === "switch") {
+      const storedRef = resolveUtilitySwitchTarget(utility.token, chatId)
+      if (!storedRef) {
+        await answerCallback(runtime.config, callbackId, "This switch button is invalid or expired. Use /switch.")
+        state.acknowledged = true
+        return
+      }
+      const ref = decodeSessionRef(storedRef)
+      if (!ref) {
+        await answerCallback(runtime.config, callbackId, "That session entry is invalid.")
+        state.acknowledged = true
+        return
+      }
+      const scoped = sourceForSessionRef(runtime, ref)
+      if (!scoped) {
+        await answerCallback(runtime.config, callbackId, sourceUnavailableText(ref.sourceId))
+        state.acknowledged = true
+        return
+      }
+      await answerCallback(runtime.config, callbackId, "Switching...")
+      state.acknowledged = true
       const key = telegramSessionKey(chatId, userId)
-      const current = await runtime.store.get(key) || sessionFromCache(runtime.config, key)
+      await runtime.store.set(key, storedRef)
+      cacheSession(runtime.config, key, storedRef)
+      await rememberSession(runtime, key, storedRef)
+      const title = await safeSessionTitle(scoped, ref.sessionId, ref.sourceId)
+      await sendTelegramMessage(runtime.config, chatId, `Switched to session: ${formatSessionDisplay(ref.sessionId, title, ref.sourceId)}`)
+      return
+    }
+    if (utility?.action === "recent") {
+      const tokenRef = utility.token ? resolveRecentTarget(utility.token, chatId) : undefined
+      if (utility.token && !tokenRef) {
+        await answerCallback(runtime.config, callbackId, "This latest-message button is invalid or expired.")
+        state.acknowledged = true
+        return
+      }
+      const key = telegramSessionKey(chatId, userId)
+      const current = tokenRef || await runtime.store.get(key) || sessionFromCache(runtime.config, key)
       if (!current) {
         await answerCallback(runtime.config, callbackId, "No active session mapping.")
         state.acknowledged = true
@@ -2651,7 +2805,7 @@ export async function handleCallbackUpdate(runtime: Runtime, update: TelegramUpd
       }
       await answerCallback(runtime.config, callbackId, "Loading latest message...")
       state.acknowledged = true
-      const text = await recentText(scoped, ref.sessionId, 1)
+      const text = await recentText(scoped, ref.sessionId, 1, ref.sourceId)
       await sendTelegramMessage(runtime.config, chatId, text)
       return
     }
@@ -2872,7 +3026,7 @@ export async function handleTextUpdate(runtime: Runtime, update: TelegramUpdate)
         await sendTelegramMessage(config, chatId, sourceUnavailableText(ref.sourceId))
         return true
       }
-      const text = await recentText(scoped, ref.sessionId, parsed.count || recentDefaultCount)
+      const text = await recentText(scoped, ref.sessionId, parsed.count || recentDefaultCount, ref.sourceId)
       await sendTelegramMessage(config, chatId, text)
       return true
     }
@@ -3140,8 +3294,9 @@ async function notifySessionKeys(
       if (!proactiveTelegramEnabled(runtime.config)) continue
       if (!shouldNotify(runtime.config, chatId, dedupeKey, sessionId, sourceId)) continue
       const message = `${text}\n\nOpen ${sessionLabel(runtime.config, sessionId, sourceId)}`
+      const markup = proactiveActionsMarkup(sourceId, sessionId, chatId)
       await queueChatUpdate(String(chatId), async () => {
-        await sendTelegramMessageWithMarkup(runtime.config, chatId, message, proactiveActionsMarkup())
+        await sendTelegramMessageWithMarkup(runtime.config, chatId, message, markup)
       })
       stampNotification(chatId, dedupeKey, sessionId, sourceId)
     } catch (error) {
@@ -3207,7 +3362,7 @@ async function notifyQuestion(runtime: Runtime, sessionId: string, sourceId: str
           runtime.config,
           chatId,
           `Open ${sessionLabel(runtime.config, sessionId, sourceId)}`,
-          proactiveActionsMarkup(),
+          proactiveActionsMarkup(sourceId, sessionId, chatId),
         )
       })
       stampNotification(chatId, kind, sessionId, sourceId)
@@ -3518,4 +3673,6 @@ export function resetSessionCacheForTest() {
   pendingQuestions.clear()
   sessionHistory.clear()
   sessionInfo.clear()
+  switchTargets.clear()
+  recentTargets.clear()
 }
