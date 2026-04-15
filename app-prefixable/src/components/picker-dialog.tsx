@@ -35,7 +35,8 @@ export function PickerDialog(props: Props) {
       (item) =>
         item.title.toLowerCase().includes(q) ||
         item.description?.toLowerCase().includes(q) ||
-        item.group?.toLowerCase().includes(q),
+        item.group?.toLowerCase().includes(q) ||
+        item.groupKey?.toLowerCase().includes(q),
     )
   })
 
