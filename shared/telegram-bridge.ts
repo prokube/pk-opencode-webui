@@ -947,6 +947,10 @@ function pruneSwitchTargets(now: number) {
     if (value.expiresAt > now) continue
     switchTargets.delete(token)
   }
+  for (const [token, value] of recentTargets) {
+    if (value.expiresAt > now) continue
+    recentTargets.delete(token)
+  }
 }
 
 function utilitySwitchSessionCallbackData(sourceId: string, sessionId: string): string {
@@ -969,10 +973,6 @@ function resolveUtilitySwitchTarget(token: string): string | undefined {
     return
   }
   return stored.sessionRef
-}
-
-function utilityRecentCallbackData(): string {
-  return "u:recent"
 }
 
 function utilityRecentSessionCallbackData(sourceId: string, sessionId: string): string {
@@ -1723,6 +1723,21 @@ function normalizeRecentCount(args: string[]): { count?: number; error?: string 
   return { count: Math.min(parsed, recentMaxCount) }
 }
 
+function parseRecentCreated(value: unknown): number {
+  if (typeof value === "number" && Number.isFinite(value)) return value
+  if (typeof value === "string") {
+    const raw = value.trim()
+    if (!raw) return 0
+    if (/^\d+$/.test(raw)) {
+      const parsed = Number.parseInt(raw, 10)
+      if (Number.isFinite(parsed)) return parsed
+    }
+    const parsedDate = Date.parse(raw)
+    if (Number.isFinite(parsedDate)) return parsedDate
+  }
+  return 0
+}
+
 function parseRecentText(parts: unknown): string {
   if (!Array.isArray(parts)) return ""
   const text = parts
@@ -1759,7 +1774,7 @@ async function recentText(config: BridgeConfig, sessionId: string, count: number
   }
   const data = await res.json().catch(() => [])
   const rows = Array.isArray(data) ? data : []
-  const items: Array<{ id: string; role: "user" | "assistant"; parentID?: string; text: string }> = []
+  const items: Array<{ id: string; role: "user" | "assistant"; parentID?: string; text: string; created: number }> = []
   for (const entry of rows) {
     if (!entry || typeof entry !== "object") continue
     const row = entry as { info?: unknown; parts?: unknown }
@@ -1770,23 +1785,35 @@ async function recentText(config: BridgeConfig, sessionId: string, count: number
     const id = typeof info.id === "string" ? info.id : ""
     const role = info.role === "assistant" || info.role === "user" ? info.role : ""
     const parentID = typeof info.parentID === "string" ? info.parentID : ""
+    const time = "time" in info && info.time && typeof info.time === "object"
+      ? info.time as { created?: unknown }
+      : undefined
+    const created = parseRecentCreated(time?.created)
+      || parseRecentCreated((info as { created?: unknown }).created)
+      || parseRecentCreated((row as { time?: { created?: unknown } }).time?.created)
     const text = parseRecentText(row.parts)
     if (!id || !role || !text) continue
     if (role === "assistant") {
-      items.push({ id, role: "assistant", parentID, text })
+      items.push({ id, role: "assistant", parentID, text, created })
       continue
     }
-    items.push({ id, role: "user", text })
+    items.push({ id, role: "user", text, created })
   }
-  items.sort((a, b) => a.id.localeCompare(b.id, undefined, { numeric: true, sensitivity: "base" }))
+  const hasCreated = items.some((item) => item.created > 0)
+  items.sort((a, b) => {
+    if (hasCreated && a.created > 0 && b.created > 0 && a.created !== b.created) {
+      return a.created - b.created
+    }
+    return a.id.localeCompare(b.id, undefined, { numeric: true, sensitivity: "base" })
+  })
   const assistants = new Map<string, string>()
-  const users: Array<{ id: string; text: string }> = []
+  const users: Array<{ id: string; text: string; created: number }> = []
   for (const item of items) {
     if (item.role === "assistant") {
       if (item.parentID) assistants.set(item.parentID, item.text)
       continue
     }
-    users.push({ id: item.id, text: item.text })
+    users.push({ id: item.id, text: item.text, created: item.created })
   }
   if (!users.length) {
     return `No recent chat messages found for session ${sessionId}. Send a new message first.`
