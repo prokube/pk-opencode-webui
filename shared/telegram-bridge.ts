@@ -1663,7 +1663,7 @@ async function recentText(config: BridgeConfig, sessionId: string, count: number
   const data = await res.json().catch(() => [])
   const rows = Array.isArray(data) ? data : []
   const assistants = new Map<string, string>()
-  const users: Array<{ id: string; text: string }> = []
+  const users: Array<{ id: string; text: string; created: number }> = []
   for (const entry of rows) {
     if (!entry || typeof entry !== "object") continue
     const row = entry as { info?: unknown; parts?: unknown }
@@ -1674,6 +1674,10 @@ async function recentText(config: BridgeConfig, sessionId: string, count: number
     const id = typeof info.id === "string" ? info.id : ""
     const parentID = typeof info.parentID === "string" ? info.parentID : ""
     const role = info.role === "assistant" || info.role === "user" ? info.role : ""
+    const time = "time" in info && info.time && typeof info.time === "object"
+      ? info.time as { created?: unknown }
+      : undefined
+    const created = typeof time?.created === "number" && Number.isFinite(time.created) ? time.created : 0
     const text = parseRecentText(row.parts)
     if (!id || !role || !text) continue
     if (role === "assistant" && parentID && !assistants.has(parentID)) {
@@ -1681,12 +1685,18 @@ async function recentText(config: BridgeConfig, sessionId: string, count: number
       continue
     }
     if (role !== "user") continue
-    users.push({ id, text })
+    users.push({ id, text, created })
   }
   if (!users.length) {
     return `No recent chat messages found for session ${sessionId}. Send a new message first.`
   }
-  const list = users.slice(-safeCount)
+  const ordered = users.some((item) => item.created > 0)
+    ? users.slice().sort((a, b) => {
+      if (a.created !== b.created) return a.created - b.created
+      return a.id.localeCompare(b.id)
+    })
+    : users
+  const list = ordered.slice(-safeCount)
   const lines = [`Recent activity for session ${sessionId} (showing ${list.length} of ${users.length}):`]
   for (let i = 0; i < list.length; i++) {
     const item = list[i]
