@@ -1,4 +1,4 @@
-import { createSignal, createMemo, For, Show, onMount, onCleanup } from "solid-js"
+import { createSignal, createMemo, createEffect, For, Show, onMount, onCleanup } from "solid-js"
 import { Button } from "./ui/button"
 import { Markdown } from "./markdown"
 import type { QuestionRequest } from "../sdk/client"
@@ -23,7 +23,8 @@ export function QuestionPrompt(props: Props) {
   const [selected, setSelected] = createSignal(0)
   const [editing, setEditing] = createSignal(false)
 
-  let inputRef: HTMLInputElement | undefined
+  const [inputRef, setInputRef] = createSignal<HTMLInputElement>()
+  const [contentRef, setContentRef] = createSignal<HTMLDivElement>()
 
   const question = createMemo(() => questions()[tab()])
   const confirm = createMemo(() => !single() && tab() === questions().length)
@@ -36,6 +37,13 @@ export function QuestionPrompt(props: Props) {
     const value = input()
     if (!value) return false
     return answers()[tab()]?.includes(value) ?? false
+  })
+
+  createEffect(() => {
+    if (confirm()) return
+    const index = selected()
+    const node = contentRef()?.querySelector(`[data-option-index="${index}"]`) as HTMLElement | undefined
+    node?.scrollIntoView({ block: "nearest" })
   })
 
   function submit() {
@@ -79,7 +87,7 @@ export function QuestionPrompt(props: Props) {
     if (other()) {
       if (!multi()) {
         setEditing(true)
-        setTimeout(() => inputRef?.focus(), 50)
+        setTimeout(() => inputRef()?.focus(), 50)
         return
       }
       const value = input()
@@ -88,7 +96,7 @@ export function QuestionPrompt(props: Props) {
         return
       }
       setEditing(true)
-      setTimeout(() => inputRef?.focus(), 50)
+      setTimeout(() => inputRef()?.focus(), 50)
       return
     }
 
@@ -150,10 +158,10 @@ export function QuestionPrompt(props: Props) {
     const opts = options()
     const total = opts.length + (allowCustom() ? 1 : 0)
 
-    if (e.key === "ArrowUp" || e.key === "k") {
+    if ((e.key === "ArrowUp" || e.key === "k") && total > 0) {
       e.preventDefault()
       setSelected((s) => (s - 1 + total) % total)
-    } else if (e.key === "ArrowDown" || e.key === "j") {
+    } else if ((e.key === "ArrowDown" || e.key === "j") && total > 0) {
       e.preventDefault()
       setSelected((s) => (s + 1) % total)
     } else if (e.key === "Enter") {
@@ -270,7 +278,7 @@ export function QuestionPrompt(props: Props) {
       </Show>
 
       {/* Question content */}
-      <div class="p-4 overflow-y-auto min-h-0">
+      <div ref={setContentRef} class="p-4 overflow-y-auto min-h-0 flex-1">
         <Show when={!confirm()}>
           {/* Question text */}
           <div class="mb-4">
@@ -289,6 +297,7 @@ export function QuestionPrompt(props: Props) {
                 const picked = () => answers()[tab()]?.includes(opt.label) ?? false
                 return (
                   <button
+                    data-option-index={i()}
                     onClick={() => {
                       setSelected(i())
                       selectOption()
@@ -342,6 +351,7 @@ export function QuestionPrompt(props: Props) {
                 }}
               >
                 <button
+                  data-option-index={options().length}
                   onClick={() => {
                     setSelected(options().length)
                     selectOption()
@@ -376,7 +386,7 @@ export function QuestionPrompt(props: Props) {
                 <Show when={editing()}>
                   <div class="mt-2 ml-7 flex gap-2">
                     <input
-                      ref={inputRef}
+                      ref={setInputRef}
                       type="text"
                       value={input()}
                       onInput={(e) => {
