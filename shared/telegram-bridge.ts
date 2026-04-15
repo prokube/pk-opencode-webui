@@ -673,13 +673,17 @@ async function eventTargets(runtime: Runtime, ref: SessionRef): Promise<string[]
     : true
   if (!alarmEnabled) return []
 
+  const mapped = await sessionTargets(runtime, ref)
+  if (proactiveTelegramEnabled(runtime.config) && mapped.length) {
+    return mapped
+  }
+
   const optedIn = await notificationTargets(runtime)
   if (optedIn.length) return optedIn
-  const keys = await sessionTargets(runtime, ref)
-  if (!keys.length) return []
+  if (!mapped.length) return []
 
   const targets = new Set<string>()
-  for (const key of keys) {
+  for (const key of mapped) {
     const parsed = parseTelegramKey(key)
     if (!parsed) continue
     if (!(await notificationEnabled(runtime, notificationKey(parsed.chatId)))) continue
@@ -3475,7 +3479,12 @@ export async function handleBridgeEvent(runtime: Runtime, event: { type: string;
   }
   statusBySession.delete(scopedSessionId)
   if (!prev || prev === "idle") return
-  await notifySessionKeys(runtime, sessionId, sourceId, "task-finished", "Task finished: the session is now idle.")
+  const scoped = sourceForSessionRef(runtime, { sourceId, sessionId })
+  const title = scoped ? await safeSessionTitle(scoped, sessionId, sourceId) : undefined
+  const message = title
+    ? `Task finished: ${formatSessionTitleOnly(sessionId, title, sourceId)} is now idle.`
+    : "Task finished: the session is now idle."
+  await notifySessionKeys(runtime, sessionId, sourceId, "task-finished", message)
 }
 
 async function runOutboundNotifications(runtime: Runtime, source: SourceConfig) {
