@@ -2671,6 +2671,7 @@ async function notifySessionKeys(
   }
   const dedupeKey = notifyKind || kind
   const chats = new Set<number>()
+  const proactiveChats = new Set<number>()
   for (const key of pending) {
     try {
       const parsed = parseTelegramKey(key)
@@ -2692,6 +2693,8 @@ async function notifySessionKeys(
         }
       }
       if (!notifyChats.has(chatId)) continue
+      if (proactiveChats.has(chatId)) continue
+      proactiveChats.add(chatId)
       if (!proactiveTelegramEnabled(runtime.config)) continue
       if (!shouldNotify(runtime.config, chatId, dedupeKey, sessionId)) continue
       const message = `${text}\n\nOpen ${sessionLabel(runtime.config, sessionId)}`
@@ -2717,6 +2720,7 @@ async function notifyQuestion(runtime: Runtime, sessionId: string, question: Tel
   }
   const kind = `question:${question.requestId}`
   const chats = new Set<number>()
+  const proactiveChats = new Set<number>()
   for (const key of pending) {
     try {
       const parsed = parseTelegramKey(key)
@@ -2735,6 +2739,8 @@ async function notifyQuestion(runtime: Runtime, sessionId: string, question: Tel
         })
       }
       if (!notifyChats.has(chatId)) continue
+      if (proactiveChats.has(chatId)) continue
+      proactiveChats.add(chatId)
       if (!proactiveTelegramEnabled(runtime.config)) continue
       if (!shouldNotify(runtime.config, chatId, kind, sessionId)) continue
       await queueChatUpdate(String(chatId), async () => {
