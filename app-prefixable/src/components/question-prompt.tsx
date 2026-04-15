@@ -1,4 +1,4 @@
-import { createSignal, createMemo, createEffect, For, Show, onMount, onCleanup } from "solid-js"
+import { createSignal, createMemo, createEffect, For, Show, onMount, onCleanup, on } from "solid-js"
 import { Button } from "./ui/button"
 import { Markdown } from "./markdown"
 import type { QuestionRequest } from "../sdk/client"
@@ -39,12 +39,14 @@ export function QuestionPrompt(props: Props) {
     return answers()[tab()]?.includes(value) ?? false
   })
 
-  createEffect(() => {
-    if (confirm()) return
-    const index = selected()
-    const node = contentRef()?.querySelector(`[data-option-index="${index}"]`) as HTMLElement | undefined
-    node?.scrollIntoView({ block: "nearest" })
-  })
+  createEffect(
+    on([selected, tab, question, options], () => {
+      if (confirm()) return
+      const index = selected()
+      const node = contentRef()?.querySelector(`[data-option-index="${index}"]`) as HTMLElement | undefined
+      node?.scrollIntoView({ block: "nearest" })
+    }),
+  )
 
   function focusInput() {
     setTimeout(() => {
