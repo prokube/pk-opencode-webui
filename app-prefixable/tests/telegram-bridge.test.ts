@@ -5731,6 +5731,12 @@ describe("telegram bridge config and cache", () => {
       .filter((x) => x.url.includes("/sendMessage"))
       .map((x) => String(x.body.text || ""));
     expect(sentTexts).toEqual(["Task finished: the session is now idle.\n\nOpen session session-1"]);
+    const markup = calls.find((x) => x.url.includes("/sendMessage"))?.body.reply_markup as {
+      inline_keyboard?: Array<Array<{ callback_data?: string }>>
+    } | undefined
+    const callbacks = (markup?.inline_keyboard?.[0] || []).map((item) => String(item.callback_data || ""))
+    expect(callbacks.some((item) => /^u:s:[a-z0-9]{6,24}$/.test(item))).toBe(true)
+    expect(callbacks.includes("u:recent")).toBe(true)
   });
 
   test("handleBridgeEvent clears tracked status on session.deleted without sessionID", async () => {
@@ -6640,6 +6646,88 @@ describe("telegram bridge config and cache", () => {
 
     const callbackAck = calls.find((x) => x.url.includes("/answerCallbackQuery"));
     expect(String(callbackAck?.body.text || "")).toContain("could not be processed");
+  });
+
+  test("task-finished switch button remaps directly to originating session", async () => {
+    const calls: Array<{ url: string; body: Record<string, unknown> }> = [];
+    const originalFetch = globalThis.fetch;
+    const storeMap = new Map<string, string>();
+    try {
+      globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        const body = init?.body ? (JSON.parse(String(init.body)) as Record<string, unknown>) : {};
+        calls.push({ url, body });
+        if (url.includes("/sendMessage")) {
+          return new Response(JSON.stringify({ ok: true, result: { message_id: 1 } }), { status: 200 });
+        }
+        if (url.includes("/answerCallbackQuery")) {
+          return new Response(JSON.stringify({ ok: true, result: true }), { status: 200 });
+        }
+        if (url.includes("/session/session-1")) {
+          return new Response(JSON.stringify({ id: "session-1", title: "Build deploy" }), { status: 200 });
+        }
+        throw new Error(`Unexpected fetch ${url}`);
+      };
+
+      const runtime = {
+        config: {
+          mode: "polling" as const,
+          token: "token",
+          openCodeUrl: "http://127.0.0.1:4096",
+          sessionCacheMax: 10,
+          sessionCacheTtlMs: 10_000,
+          notificationDebounceMs: 0,
+          port: 4097,
+          webhookPath: "/webhook",
+          sessionStorePath: "/tmp/test-store.json",
+        },
+        store: {
+          get: async (key: string) => storeMap.get(key),
+          set: async (key: string, value: string) => {
+            storeMap.set(key, value);
+          },
+          delete: async () => undefined,
+          sessionKeys: async () => ["chat:77:user:5"],
+          notificationGet: async () => true,
+        },
+      };
+
+      await handleBridgeEvent(runtime, {
+        type: "session.status",
+        properties: { sessionID: "session-1", status: { type: "busy" } },
+      });
+      await handleBridgeEvent(runtime, {
+        type: "session.status",
+        properties: { sessionID: "session-1", status: { type: "idle" } },
+      });
+
+      const taskFinished = calls.find((x) =>
+        x.url.includes("/sendMessage") && String(x.body.text || "").includes("Task finished:"),
+      );
+      const switchCallback = String(
+        ((taskFinished?.body.reply_markup as { inline_keyboard?: Array<Array<{ callback_data?: string }>> } | undefined)
+          ?.inline_keyboard?.[0]?.find((item) => String(item.callback_data || "").startsWith("u:s:"))?.callback_data) || "",
+      );
+
+      await handleCallbackUpdate(runtime, {
+        update_id: 88,
+        callback_query: {
+          id: "cb-task-switch",
+          data: switchCallback,
+          from: { id: 5 },
+          message: { message_id: 99, chat: { id: 77 } },
+        },
+      });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+
+    expect(storeMap.get("chat:77:user:5")).toBe("session-1");
+    const switchedText = calls
+      .filter((x) => x.url.includes("/sendMessage"))
+      .map((x) => String(x.body.text || ""))
+      .find((text) => text.includes("Switched to session:"));
+    expect(switchedText || "").toContain("session-1");
   });
 
   test("callback query submits selected option and confirms success", async () => {

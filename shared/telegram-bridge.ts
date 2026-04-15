@@ -263,6 +263,7 @@ const fallbackPending = new Map<string, TelegramPendingItem[]>()
 const pendingQuestions = new Map<string, TelegramPendingQuestion[]>()
 const sessionHistory = new Map<string, string[]>()
 const sessionInfo = new Map<string, CachedSessionInfo>()
+const switchTargets = new Map<string, { sessionRef: string; expiresAt: number }>()
 
 let pendingEntrySeq = 0
 
@@ -288,6 +289,7 @@ const inlineButtonTextMax = 48
 const callbackDataMax = 64
 const telegramMessageSoftLimit = 3900
 const recentPayloadMax = telegramMessageSoftLimit * 3
+const switchTargetTtlMs = 30 * 60 * 1000
 
 const telegramCommands = Object.freeze([
   Object.freeze({
@@ -911,6 +913,7 @@ type SwitchCallbackData =
 
 type UtilityCallbackData =
   | { action: "recent" }
+  | { action: "switch"; token: string }
 
 function switchToken(sessionId: string): string {
   return shortId(sessionId).slice(0, 8).padStart(6, "0")
@@ -938,18 +941,54 @@ function parseSwitchCallbackData(input: string): SwitchCallbackData | undefined 
   return { action: "select", index: index - 1, token: selected[2] || "" }
 }
 
+function pruneSwitchTargets(now: number) {
+  for (const [token, value] of switchTargets) {
+    if (value.expiresAt > now) continue
+    switchTargets.delete(token)
+  }
+}
+
+function utilitySwitchSessionCallbackData(sourceId: string, sessionId: string): string {
+  const now = Date.now()
+  pruneSwitchTargets(now)
+  const sessionRef = encodeSessionRef({ sourceId, sessionId })
+  const tokenSeed = `${sessionRef}:${now}:${pendingEntrySeq++}`
+  const token = `${shortId(tokenSeed)}${Math.abs(pendingEntrySeq).toString(36)}`.slice(0, 12)
+  switchTargets.set(token, { sessionRef, expiresAt: now + switchTargetTtlMs })
+  return `u:s:${token}`
+}
+
+function resolveUtilitySwitchTarget(token: string): string | undefined {
+  const now = Date.now()
+  pruneSwitchTargets(now)
+  const stored = switchTargets.get(token)
+  if (!stored) return
+  if (stored.expiresAt <= now) {
+    switchTargets.delete(token)
+    return
+  }
+  return stored.sessionRef
+}
+
 function utilityRecentCallbackData(): string {
   return "u:recent"
 }
 
 function parseUtilityCallbackData(input: string): UtilityCallbackData | undefined {
   if (input === "u:recent") return { action: "recent" }
+  const switchSession = input.match(/^u:s:([a-z0-9]{6,24})$/)
+  if (switchSession) {
+    return { action: "switch", token: switchSession[1] || "" }
+  }
 }
 
-function proactiveActionsMarkup(): { inline_keyboard: Array<Array<{ text: string; callback_data: string }>> } {
+function proactiveActionsMarkup(kind: "default" | "task-finished", sourceId: string, sessionId: string): { inline_keyboard: Array<Array<{ text: string; callback_data: string }>> } {
+  const switchCallback = kind === "task-finished"
+    ? utilitySwitchSessionCallbackData(sourceId, sessionId)
+    : switchPageCallback(0)
   return {
     inline_keyboard: [[
-      { text: "Switch session", callback_data: switchPageCallback(0) },
+      { text: "Switch session", callback_data: switchCallback },
       { text: "Latest message", callback_data: utilityRecentCallbackData() },
     ]],
   }
@@ -2510,6 +2549,35 @@ export async function handleCallbackUpdate(runtime: Runtime, update: TelegramUpd
       return
     }
     const utility = parseUtilityCallbackData(data)
+    if (utility?.action === "switch") {
+      const storedRef = resolveUtilitySwitchTarget(utility.token)
+      if (!storedRef) {
+        await answerCallback(runtime.config, callbackId, "This switch button expired. Use /switch.")
+        state.acknowledged = true
+        return
+      }
+      const ref = decodeSessionRef(storedRef)
+      if (!ref) {
+        await answerCallback(runtime.config, callbackId, "That session entry is invalid.")
+        state.acknowledged = true
+        return
+      }
+      const scoped = sourceForSessionRef(runtime, ref)
+      if (!scoped) {
+        await answerCallback(runtime.config, callbackId, sourceUnavailableText(ref.sourceId))
+        state.acknowledged = true
+        return
+      }
+      const key = telegramSessionKey(chatId, userId)
+      await runtime.store.set(key, storedRef)
+      cacheSession(runtime.config, key, storedRef)
+      await rememberSession(runtime, key, storedRef)
+      const title = await safeSessionTitle(scoped, ref.sessionId, ref.sourceId)
+      await answerCallback(runtime.config, callbackId, "Switched.")
+      state.acknowledged = true
+      await sendTelegramMessage(runtime.config, chatId, `Switched to session: ${formatSessionDisplay(ref.sessionId, title, ref.sourceId)}`)
+      return
+    }
     if (utility?.action === "recent") {
       const key = telegramSessionKey(chatId, userId)
       const current = await runtime.store.get(key) || sessionFromCache(runtime.config, key)
@@ -3027,8 +3095,9 @@ async function notifySessionKeys(
       if (!proactiveTelegramEnabled(runtime.config)) continue
       if (!shouldNotify(runtime.config, chatId, dedupeKey, sessionId, sourceId)) continue
       const message = `${text}\n\nOpen ${sessionLabel(runtime.config, sessionId, sourceId)}`
+      const markup = proactiveActionsMarkup(kind === "task-finished" ? "task-finished" : "default", sourceId, sessionId)
       await queueChatUpdate(String(chatId), async () => {
-        await sendTelegramMessageWithMarkup(runtime.config, chatId, message, proactiveActionsMarkup())
+        await sendTelegramMessageWithMarkup(runtime.config, chatId, message, markup)
       })
       stampNotification(chatId, dedupeKey, sessionId, sourceId)
     } catch (error) {
@@ -3094,7 +3163,7 @@ async function notifyQuestion(runtime: Runtime, sessionId: string, sourceId: str
           runtime.config,
           chatId,
           `Open ${sessionLabel(runtime.config, sessionId, sourceId)}`,
-          proactiveActionsMarkup(),
+          proactiveActionsMarkup("default", sourceId, sessionId),
         )
       })
       stampNotification(chatId, kind, sessionId, sourceId)
@@ -3405,4 +3474,5 @@ export function resetSessionCacheForTest() {
   pendingQuestions.clear()
   sessionHistory.clear()
   sessionInfo.clear()
+  switchTargets.clear()
 }
