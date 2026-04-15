@@ -80,10 +80,10 @@ export function ReviewPanel(props: ReviewPanelProps) {
 
   async function checkGitRepo(current: number) {
     try {
-      // Try to get VCS info - if it fails or returns no branch, it's not a git repo
-      const res = await client.vcs.get({ directory });
+      // If VCS info request succeeds, the directory is a git repository
+      await client.vcs.get({ directory });
       if (current !== version) return;
-      setIsGitRepo(res.data?.branch !== undefined);
+      setIsGitRepo(true);
     } catch {
       if (current !== version) return;
       setIsGitRepo(false);
