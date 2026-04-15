@@ -5099,7 +5099,7 @@ describe("telegram bridge config and cache", () => {
         const markup = x.body.reply_markup as { inline_keyboard?: Array<Array<{ callback_data?: string }>> } | undefined
         const row = markup?.inline_keyboard?.[0] || []
         const callbacks = row.map((item) => String(item.callback_data || ""))
-        return callbacks.includes("s:p:1") && callbacks.some((item) => /^u:r:[a-z0-9]{6,24}$/.test(item))
+        return callbacks.some((item) => /^u:s:[a-z0-9]{6,24}$/.test(item)) && callbacks.some((item) => /^u:r:[a-z0-9]{6,24}$/.test(item))
       })
     expect(hasUtilityButtons).toBe(true)
     const items = inbox.get("chat:88") || [];

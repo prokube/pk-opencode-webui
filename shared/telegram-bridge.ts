@@ -942,7 +942,7 @@ function parseSwitchCallbackData(input: string): SwitchCallbackData | undefined 
   return { action: "select", index: index - 1, token: selected[2] || "" }
 }
 
-function pruneSwitchTargets(now: number) {
+function pruneUtilityTargets(now: number) {
   for (const [token, value] of switchTargets) {
     if (value.expiresAt > now) continue
     switchTargets.delete(token)
@@ -955,17 +955,18 @@ function pruneSwitchTargets(now: number) {
 
 function utilitySwitchSessionCallbackData(sourceId: string, sessionId: string): string {
   const now = Date.now()
-  pruneSwitchTargets(now)
+  pruneUtilityTargets(now)
   const sessionRef = encodeSessionRef({ sourceId, sessionId })
-  const tokenSeed = `${sessionRef}:${now}:${pendingEntrySeq++}`
-  const token = `${shortId(tokenSeed)}${Math.abs(pendingEntrySeq).toString(36)}`.slice(0, 12)
+  const seq = Math.abs(pendingEntrySeq++)
+  const tokenSeed = `${sessionRef}:${now}:${seq}`
+  const token = `${shortId(tokenSeed)}${seq.toString(36)}`.slice(0, 12).padStart(6, "0")
   switchTargets.set(token, { sessionRef, expiresAt: now + switchTargetTtlMs })
   return `u:s:${token}`
 }
 
 function resolveUtilitySwitchTarget(token: string): string | undefined {
   const now = Date.now()
-  pruneSwitchTargets(now)
+  pruneUtilityTargets(now)
   const stored = switchTargets.get(token)
   if (!stored) return
   if (stored.expiresAt <= now) {
@@ -977,17 +978,18 @@ function resolveUtilitySwitchTarget(token: string): string | undefined {
 
 function utilityRecentSessionCallbackData(sourceId: string, sessionId: string): string {
   const now = Date.now()
-  pruneSwitchTargets(now)
+  pruneUtilityTargets(now)
   const sessionRef = encodeSessionRef({ sourceId, sessionId })
-  const tokenSeed = `${sessionRef}:recent:${now}:${pendingEntrySeq++}`
-  const token = `${shortId(tokenSeed)}${Math.abs(pendingEntrySeq).toString(36)}`.slice(0, 12)
+  const seq = Math.abs(pendingEntrySeq++)
+  const tokenSeed = `${sessionRef}:recent:${now}:${seq}`
+  const token = `${shortId(tokenSeed)}${seq.toString(36)}`.slice(0, 12).padStart(6, "0")
   recentTargets.set(token, { sessionRef, expiresAt: now + switchTargetTtlMs })
   return `u:r:${token}`
 }
 
 function resolveRecentTarget(token: string): string | undefined {
   const now = Date.now()
-  pruneSwitchTargets(now)
+  pruneUtilityTargets(now)
   const stored = recentTargets.get(token)
   if (!stored) return
   if (stored.expiresAt <= now) {
@@ -1009,10 +1011,8 @@ function parseUtilityCallbackData(input: string): UtilityCallbackData | undefine
   }
 }
 
-function proactiveActionsMarkup(kind: "default" | "task-finished", sourceId: string, sessionId: string): { inline_keyboard: Array<Array<{ text: string; callback_data: string }>> } {
-  const switchCallback = kind === "task-finished"
-    ? utilitySwitchSessionCallbackData(sourceId, sessionId)
-    : switchPageCallback(0)
+function proactiveActionsMarkup(sourceId: string, sessionId: string): { inline_keyboard: Array<Array<{ text: string; callback_data: string }>> } {
+  const switchCallback = utilitySwitchSessionCallbackData(sourceId, sessionId)
   const recentCallback = utilityRecentSessionCallbackData(sourceId, sessionId)
   return {
     inline_keyboard: [[
@@ -3166,7 +3166,7 @@ async function notifySessionKeys(
       if (!proactiveTelegramEnabled(runtime.config)) continue
       if (!shouldNotify(runtime.config, chatId, dedupeKey, sessionId, sourceId)) continue
       const message = `${text}\n\nOpen ${sessionLabel(runtime.config, sessionId, sourceId)}`
-      const markup = proactiveActionsMarkup(kind === "task-finished" ? "task-finished" : "default", sourceId, sessionId)
+      const markup = proactiveActionsMarkup(sourceId, sessionId)
       await queueChatUpdate(String(chatId), async () => {
         await sendTelegramMessageWithMarkup(runtime.config, chatId, message, markup)
       })
@@ -3234,7 +3234,7 @@ async function notifyQuestion(runtime: Runtime, sessionId: string, sourceId: str
           runtime.config,
           chatId,
           `Open ${sessionLabel(runtime.config, sessionId, sourceId)}`,
-          proactiveActionsMarkup("default", sourceId, sessionId),
+          proactiveActionsMarkup(sourceId, sessionId),
         )
       })
       stampNotification(chatId, kind, sessionId, sourceId)
