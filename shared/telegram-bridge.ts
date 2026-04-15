@@ -1256,6 +1256,15 @@ export function isTimeoutError(error: unknown): boolean {
   return false
 }
 
+function isExpiredCallbackQueryError(error: unknown): boolean {
+  if (!(error instanceof Error)) return false
+  const message = error.message.toLowerCase()
+  if (!message.includes("answercallbackquery")) return false
+  if (message.includes("query is too old")) return true
+  if (message.includes("query id is invalid")) return true
+  return false
+}
+
 async function retry<T>(
   name: string,
   fn: () => Promise<T>,
@@ -1301,7 +1310,11 @@ async function telegramRequest(config: BridgeConfig, method: string, body: Recor
     return data.result
   }
 
-  return retry(`telegram:${method}`, run)
+  return retry(`telegram:${method}`, run, 2, 400, (error) => {
+    if (method !== "answerCallbackQuery") return true
+    if (isExpiredCallbackQueryError(error)) return false
+    return true
+  })
 }
 
 export function joinOpenCodeUrl(openCodeUrl: string, path: string): URL {
@@ -2229,17 +2242,34 @@ function lookupSavedPrompt(input: string, prompts: SavedPrompt[]): { prompt?: Sa
 
 async function runSavedPrompt(runtime: Runtime, chatId: number, key: string, prompt: SavedPrompt) {
   const config = runtime.config
+  const enableAlarm = async (sessionId: string) => {
+    if (!runtime.store.sessionAlarmSet) return
+    await runtime.store.sessionAlarmSet(sessionId, true).catch((error) => {
+      console.error("[TelegramBridge] failed to auto-enable session alarm for saved prompt", { sessionId, error })
+    })
+  }
+  const run = async (sessionId: string) => {
+    await enableAlarm(sessionId)
+    await resolvePendingForSession(runtime, chatId, sessionId)
+    return sendPrompt(config, sessionId, prompt.text)
+  }
   const sessionId = await sessionForChat(runtime, key)
-  await resolvePendingForSession(runtime, chatId, sessionId)
-  const reply = await sendPrompt(config, sessionId, prompt.text).catch(async (error) => {
+  const reply = await run(sessionId).catch(async (error) => {
     if (!isMissingSession(error)) {
       throw error
     }
     sessions.delete(key)
     await runtime.store.delete(key)
     const next = await sessionForChat(runtime, key)
-    return sendPrompt(config, next, prompt.text)
+    return run(next)
+  }).catch(async (error) => {
+    if (!isTimeoutError(error)) {
+      throw error
+    }
+    await sendTelegramMessage(config, chatId, `Prompt started in session ${sessionId}, but the reply is taking longer than expected. Check the web UI for progress.`)
+    return
   })
+  if (!reply) return
   await sendTelegramMessage(config, chatId, reply)
 }
 
@@ -2415,6 +2445,8 @@ async function answerCallback(config: BridgeConfig, callbackId: string, text: st
     callback_query_id: callbackId,
     text,
     show_alert: false,
+  }).catch((error) => {
+    if (!isExpiredCallbackQueryError(error)) throw error
   })
 }
 
@@ -2565,6 +2597,10 @@ export async function handleCallbackUpdate(runtime: Runtime, update: TelegramUpd
         await sendTelegramMessage(runtime.config, chatId, "That question is no longer pending. Wait for the next prompt or use /status.")
       })
   } catch (error) {
+    if (isExpiredCallbackQueryError(error)) {
+      notifyDebug("callback query expired before acknowledgement", { chatId, userId, callbackId })
+      return
+    }
     console.error("[TelegramBridge] callback handling failed", { chatId, userId, callbackId, error })
     const recovery = [
       ...(state.acknowledged ? [] : [answerCallback(runtime.config, callbackId, "Sorry, this button could not be processed right now.")]),

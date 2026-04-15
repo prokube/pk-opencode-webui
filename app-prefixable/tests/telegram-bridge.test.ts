@@ -947,6 +947,7 @@ describe("telegram bridge config and cache", () => {
     const calls: Array<{ url: string; body: Record<string, unknown> }> = [];
     const originalFetch = globalThis.fetch;
     const map = new Map<string, string>([["chat:79:user:6", "session-current"]]);
+    const alarms = new Map<string, boolean>();
     try {
       globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
         const url = String(input);
@@ -993,6 +994,13 @@ describe("telegram bridge config and cache", () => {
           delete: async (key: string) => {
             map.delete(key);
           },
+          sessionAlarmSet: async (sessionId: string, enabled: boolean) => {
+            if (enabled) {
+              alarms.set(sessionId, true);
+              return;
+            }
+            alarms.delete(sessionId);
+          },
         },
       };
 
@@ -1015,6 +1023,154 @@ describe("telegram bridge config and cache", () => {
     expect(promptRun?.body.parts).toEqual([{ type: "text", text: "Deploy now" }]);
     const sentTexts = calls.filter((x) => x.url.includes("/sendMessage")).map((x) => String(x.body.text || ""));
     expect(sentTexts.some((text) => text.includes("Deploy complete."))).toBe(true);
+    expect(alarms.get("session-current")).toBe(true);
+  });
+
+  test("prompt callback continues when callback query is already expired", async () => {
+    const calls: Array<{ url: string; body: Record<string, unknown> }> = [];
+    const originalFetch = globalThis.fetch;
+    const map = new Map<string, string>([["chat:79:user:6", "session-current"]]);
+    try {
+      globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        const body = init?.body ? (JSON.parse(String(init.body)) as Record<string, unknown>) : {};
+        calls.push({ url, body });
+        if (url.includes("/api/ext/saved-prompts")) {
+          return new Response(
+            JSON.stringify({
+              global: [{ id: "g-1", title: "Quick summary", text: "Summarize now", createdAt: 10 }],
+              project: [{ id: "p-1", title: "Deploy release", text: "Deploy now", createdAt: 20 }],
+            }),
+            { status: 200 },
+          );
+        }
+        if (url.includes("/answerCallbackQuery")) {
+          return new Response(
+            JSON.stringify({ ok: false, description: "Bad Request: query is too old and response timeout expired or query ID is invalid" }),
+            { status: 400 },
+          );
+        }
+        if (url.includes("/session/session-current/message")) {
+          return new Response(JSON.stringify({ parts: [{ type: "text", text: "Deploy complete." }] }), { status: 200 });
+        }
+        if (url.includes("/sendMessage")) {
+          return new Response(JSON.stringify({ ok: true, result: { message_id: 1 } }), { status: 200 });
+        }
+        throw new Error(`Unexpected fetch ${url}`);
+      };
+
+      const runtime = {
+        config: {
+          mode: "polling" as const,
+          token: "token",
+          openCodeUrl: "http://127.0.0.1:4096",
+          sessionCacheMax: 10,
+          sessionCacheTtlMs: 10_000,
+          notificationDebounceMs: 20_000,
+          port: 4097,
+          webhookPath: "/webhook",
+          sessionStorePath: "/tmp/test-store.json",
+        },
+        store: {
+          get: async (key: string) => map.get(key),
+          set: async (key: string, value: string) => {
+            map.set(key, value);
+          },
+          delete: async (key: string) => {
+            map.delete(key);
+          },
+          sessionAlarmSet: async () => undefined,
+        },
+      };
+
+      await handleCallbackUpdate(runtime, {
+        update_id: 14,
+        callback_query: {
+          id: "cb-prompt-expired",
+          data: "p:p-1",
+          from: { id: 6 },
+          message: { message_id: 14, chat: { id: 79 } },
+        },
+      });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+
+    const sentTexts = calls.filter((x) => x.url.includes("/sendMessage")).map((x) => String(x.body.text || ""));
+    expect(sentTexts.some((text) => text.includes("Deploy complete."))).toBe(true);
+    expect(sentTexts.some((text) => text.includes("something went wrong while processing that button"))).toBe(false);
+  });
+
+  test("prompt callback reports long-running prompt instead of generic callback error", async () => {
+    const calls: Array<{ url: string; body: Record<string, unknown> }> = [];
+    const originalFetch = globalThis.fetch;
+    const map = new Map<string, string>([["chat:79:user:6", "session-current"]]);
+    try {
+      globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        const body = init?.body ? (JSON.parse(String(init.body)) as Record<string, unknown>) : {};
+        calls.push({ url, body });
+        if (url.includes("/api/ext/saved-prompts")) {
+          return new Response(
+            JSON.stringify({
+              global: [{ id: "g-1", title: "Quick summary", text: "Summarize now", createdAt: 10 }],
+              project: [{ id: "p-1", title: "Deploy release", text: "Deploy now", createdAt: 20 }],
+            }),
+            { status: 200 },
+          );
+        }
+        if (url.includes("/answerCallbackQuery")) {
+          return new Response(JSON.stringify({ ok: true, result: true }), { status: 200 });
+        }
+        if (url.includes("/session/session-current/message")) {
+          throw new DOMException("The operation timed out.", "TimeoutError");
+        }
+        if (url.includes("/sendMessage")) {
+          return new Response(JSON.stringify({ ok: true, result: { message_id: 1 } }), { status: 200 });
+        }
+        throw new Error(`Unexpected fetch ${url}`);
+      };
+
+      const runtime = {
+        config: {
+          mode: "polling" as const,
+          token: "token",
+          openCodeUrl: "http://127.0.0.1:4096",
+          sessionCacheMax: 10,
+          sessionCacheTtlMs: 10_000,
+          notificationDebounceMs: 20_000,
+          port: 4097,
+          webhookPath: "/webhook",
+          sessionStorePath: "/tmp/test-store.json",
+        },
+        store: {
+          get: async (key: string) => map.get(key),
+          set: async (key: string, value: string) => {
+            map.set(key, value);
+          },
+          delete: async (key: string) => {
+            map.delete(key);
+          },
+          sessionAlarmSet: async () => undefined,
+        },
+      };
+
+      await handleCallbackUpdate(runtime, {
+        update_id: 13,
+        callback_query: {
+          id: "cb-prompt-timeout",
+          data: "p:p-1",
+          from: { id: 6 },
+          message: { message_id: 13, chat: { id: 79 } },
+        },
+      });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+
+    const sentTexts = calls.filter((x) => x.url.includes("/sendMessage")).map((x) => String(x.body.text || ""));
+    expect(sentTexts.some((text) => text.includes("Prompt started in session session-current"))).toBe(true);
+    expect(sentTexts.some((text) => text.includes("something went wrong while processing that button"))).toBe(false);
   });
 
   test("/prompts uses deterministic ordering when createdAt is invalid", async () => {
