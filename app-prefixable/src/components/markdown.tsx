@@ -38,7 +38,13 @@ renderer.code = ({ text, lang }) => {
   const code = escapeHtml(text)
   const className = lang ? ` class="language-${escapeHtml(lang)}"` : ""
 
-  return `<div class="markdown-code-block"><button class="markdown-copy-button" type="button" data-state="idle" aria-label="Copy code block">Copy</button><pre><code${className}>${code}</code></pre></div>`
+  return `<div class="markdown-code-block"><button class="markdown-copy-button" type="button" data-state="idle" aria-label="Copy" aria-live="polite" aria-atomic="true">Copy</button><pre><code${className}>${code}</code></pre></div>`
+}
+
+function copyLabel(state: "idle" | "copied" | "failed") {
+  if (state === "copied") return "Copied"
+  if (state === "failed") return "Copy failed"
+  return "Copy"
 }
 
 function setCopyState(button: HTMLButtonElement, state: "idle" | "copied" | "failed") {
@@ -46,7 +52,9 @@ function setCopyState(button: HTMLButtonElement, state: "idle" | "copied" | "fai
   if (timer) window.clearTimeout(timer)
 
   button.dataset.state = state
-  button.textContent = state === "copied" ? "Copied" : state === "failed" ? "Copy failed" : "Copy"
+  const label = copyLabel(state)
+  button.textContent = label
+  button.setAttribute("aria-label", label)
   if (state === "idle") {
     delete button.dataset.copyReset
     return
@@ -70,10 +78,14 @@ function copyCode(button: HTMLButtonElement) {
     return
   }
 
-  navigator.clipboard.writeText(code).then(
-    () => setCopyState(button, "copied"),
-    () => setCopyState(button, "failed"),
-  )
+  try {
+    navigator.clipboard.writeText(code).then(
+      () => setCopyState(button, "copied"),
+      () => setCopyState(button, "failed"),
+    )
+  } catch {
+    setCopyState(button, "failed")
+  }
 }
 
 interface MarkdownProps {
