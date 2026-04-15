@@ -61,6 +61,10 @@ export function GlobalEventsProvider(props: ParentProps & {
   // events from spawning overlapping fetch requests that race each other
   const permReseedTimers = new Map<string, ReturnType<typeof setTimeout>>()
 
+  // Debounce timers for question reseeds — question.replied/question.rejected
+  // payloads can be missing sessionID, so reseeding keeps counts accurate.
+  const questionReseedTimers = new Map<string, ReturnType<typeof setTimeout>>()
+
   // Per-directory tracking sets for deduplication
   const perDir = new Map<string, {
     permissionSessions: Set<string>
@@ -219,6 +223,16 @@ export function GlobalEventsProvider(props: ParentProps & {
           tracking.questionSessions.delete(sid)
           recalcAlerts(dir)
         }
+        const existing = questionReseedTimers.get(dir)
+        if (existing) clearTimeout(existing)
+        questionReseedTimers.set(dir, setTimeout(() => {
+          questionReseedTimers.delete(dir)
+          fetchRootSessionIds(dir).then((roots) => {
+            const tracking = perDir.get(dir)
+            if (tracking && roots) tracking.rootSessions = roots
+            seedQuestions(dir, roots)
+          })
+        }, 300))
         return
       }
 
@@ -313,6 +327,11 @@ export function GlobalEventsProvider(props: ParentProps & {
     if (reseed) {
       clearTimeout(reseed)
       permReseedTimers.delete(dir)
+    }
+    const questionReseed = questionReseedTimers.get(dir)
+    if (questionReseed) {
+      clearTimeout(questionReseed)
+      questionReseedTimers.delete(dir)
     }
     perDir.delete(dir)
     setAlerts(produce((draft) => { delete draft[dir] }))
