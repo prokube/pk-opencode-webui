@@ -78,12 +78,14 @@ export function ReviewPanel(props: ReviewPanelProps) {
   // Track the latest request to prevent race conditions
   let version = 0;
 
-  async function checkGitRepo() {
+  async function checkGitRepo(current: number) {
     try {
       // Try to get VCS info - if it fails or returns no branch, it's not a git repo
       const res = await client.vcs.get({ directory });
+      if (current !== version) return;
       setIsGitRepo(res.data?.branch !== undefined);
     } catch {
+      if (current !== version) return;
       setIsGitRepo(false);
     }
   }
@@ -111,7 +113,7 @@ export function ReviewPanel(props: ReviewPanelProps) {
           return;
         }
         setFiles([]);
-        await checkGitRepo();
+        await checkGitRepo(current);
         return;
       }
 
@@ -135,7 +137,7 @@ export function ReviewPanel(props: ReviewPanelProps) {
           return;
         }
         setFiles([]);
-        await checkGitRepo();
+        await checkGitRepo(current);
         return;
       }
 
@@ -147,13 +149,13 @@ export function ReviewPanel(props: ReviewPanelProps) {
         return;
       }
       setFiles([]);
-      await checkGitRepo();
+      await checkGitRepo(current);
     } catch (e) {
       if (current !== version) return;
       console.error("[ReviewPanel] Failed to load diffs:", e);
       // Check if it's a git repo issue
       setFiles([]);
-      await checkGitRepo();
+      await checkGitRepo(current);
     } finally {
       if (current === version) setLoading(false);
     }
@@ -396,6 +398,8 @@ export function ReviewPanel(props: ReviewPanelProps) {
             >
               <div class="flex items-center gap-2">
                 <button
+                  type="button"
+                  aria-label="Refresh diff list"
                   onClick={() => loadDiffs()}
                   class="p-1 rounded hover:bg-black/5 dark:hover:bg-white/5 transition-colors"
                   style={{ color: "var(--icon-weak)" }}
@@ -408,6 +412,8 @@ export function ReviewPanel(props: ReviewPanelProps) {
                 </button>
               </div>
               <button
+                type="button"
+                aria-label="Close review panel"
                 onClick={() => layout.review.close()}
                 class="p-1 rounded hover:bg-black/5 dark:hover:bg-white/5"
                 style={{ color: "var(--icon-weak)" }}
@@ -436,12 +442,14 @@ export function ReviewPanel(props: ReviewPanelProps) {
                 class="px-2 py-2"
                 style={{ "border-bottom": "1px solid var(--border-base)" }}
               >
-                <div class="flex gap-1 mb-2">
+                <div class="flex gap-1 mb-2" role="group" aria-label="Diff mode">
                   <For each={REVIEW_MODES}>
                     {(item) => (
                       <button
                         type="button"
                         onClick={() => layout.review.setMode(item.value)}
+                        aria-pressed={mode() === item.value}
+                        aria-label={`Switch to ${item.label.toLowerCase()} diff mode`}
                         class="flex-1 px-2 py-1 text-xs rounded transition-colors"
                         style={{
                           background:

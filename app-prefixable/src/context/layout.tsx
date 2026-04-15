@@ -201,6 +201,7 @@ export function LayoutProvider(props: ParentProps) {
         persist();
       },
       setMode: (mode: ReviewMode) => {
+        if (reviewMode() === mode) return;
         setReviewMode(mode);
         persist();
       },

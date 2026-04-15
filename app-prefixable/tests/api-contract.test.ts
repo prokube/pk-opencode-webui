@@ -219,6 +219,27 @@ describe("OpenCode API Contract", () => {
     });
   });
 
+  // VCS Endpoints
+  describe("VCS API", () => {
+    test("GET /vcs endpoint exists", async () => {
+      if (skipIfNoServer()) return;
+      const res = await fetch(`${BASE_URL}/vcs`);
+      expect(res.status).not.toBe(404);
+    });
+
+    test("GET /vcs/diff?mode=git endpoint exists", async () => {
+      if (skipIfNoServer()) return;
+      const res = await fetch(`${BASE_URL}/vcs/diff?mode=git`);
+      expect(res.status).not.toBe(404);
+    });
+
+    test("GET /vcs/diff?mode=branch endpoint exists", async () => {
+      if (skipIfNoServer()) return;
+      const res = await fetch(`${BASE_URL}/vcs/diff?mode=branch`);
+      expect(res.status).not.toBe(404);
+    });
+  });
+
   // PTY Endpoints
   describe("PTY API", () => {
     test("GET /pty returns pty list", async () => {
