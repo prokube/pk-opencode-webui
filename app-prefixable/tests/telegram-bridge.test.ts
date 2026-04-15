@@ -4608,7 +4608,7 @@ describe("telegram bridge config and cache", () => {
     expect(text.endsWith("...")).toBe(true);
   });
 
-  test("question and permission events are skipped when notifications are disabled", async () => {
+  test("question and permission events still queue pending when notifications are disabled", async () => {
     const calls: Array<{ url: string; body: Record<string, unknown> }> = [];
     const originalFetch = globalThis.fetch;
     const inbox = new Map<string, Array<{
@@ -4690,9 +4690,10 @@ describe("telegram bridge config and cache", () => {
 
     expect(calls.some((x) => x.url.includes("/sendMessage"))).toBe(false);
     const items = inbox.get("chat:77") || [];
-    expect(items).toHaveLength(0);
+    expect(items).toHaveLength(2);
+    expect(items.map((item) => item.kind).sort()).toEqual(["permission", "question"]);
     const stored = (pending.get("chat:77:user:5") || []) as Array<{ requestId?: string }>;
-    expect(stored).toEqual([]);
+    expect(stored[0]?.requestId).toBe("req-disabled");
   });
 
   test("question and permission events notify immediately when enabled", async () => {

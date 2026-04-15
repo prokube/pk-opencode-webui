@@ -522,6 +522,36 @@ async function notificationTargets(runtime: Runtime): Promise<string[]> {
   return [...targets]
 }
 
+async function sessionTargets(runtime: Runtime, sessionId: string): Promise<string[]> {
+  if (!runtime.store.sessionKeys) return []
+  const keys = await runtime.store.sessionKeys(sessionId)
+  const targets = new Set<string>()
+  for (const key of keys) {
+    const parsed = parseTelegramKey(key)
+    if (!parsed) continue
+    targets.add(key)
+  }
+  return [...targets]
+}
+
+async function pendingTargets(runtime: Runtime, sessionId: string): Promise<string[]> {
+  const alarmEnabled = runtime.store.sessionAlarmGet
+    ? await runtime.store.sessionAlarmGet(sessionId)
+    : true
+  if (!alarmEnabled) return []
+
+  const targets = new Set<string>()
+  const mapped = await sessionTargets(runtime, sessionId)
+  for (const key of mapped) {
+    targets.add(key)
+  }
+  const optedIn = await notificationTargets(runtime)
+  for (const key of optedIn) {
+    targets.add(key)
+  }
+  return [...targets]
+}
+
 async function eventTargets(runtime: Runtime, sessionId: string): Promise<string[]> {
   const alarmEnabled = runtime.store.sessionAlarmGet
     ? await runtime.store.sessionAlarmGet(sessionId)
@@ -530,10 +560,10 @@ async function eventTargets(runtime: Runtime, sessionId: string): Promise<string
 
   const optedIn = await notificationTargets(runtime)
   if (optedIn.length) return optedIn
-  if (!runtime.store.sessionKeys) return []
+  const keys = await sessionTargets(runtime, sessionId)
+  if (!keys.length) return []
 
   const targets = new Set<string>()
-  const keys = await runtime.store.sessionKeys(sessionId)
   for (const key of keys) {
     const parsed = parseTelegramKey(key)
     if (!parsed) continue
@@ -2630,11 +2660,18 @@ async function notifySessionKeys(
   requestId?: string,
   notifyKind?: string,
 ) {
-  const targets = await eventTargets(runtime, sessionId)
-  if (!targets.length) return
+  const pending = await pendingTargets(runtime, sessionId)
+  if (!pending.length) return
+  const notify = await eventTargets(runtime, sessionId)
+  const notifyChats = new Set<number>()
+  for (const key of notify) {
+    const parsed = parseTelegramKey(key)
+    if (!parsed) continue
+    notifyChats.add(parsed.chatId)
+  }
   const dedupeKey = notifyKind || kind
   const chats = new Set<number>()
-  for (const key of targets) {
+  for (const key of pending) {
     try {
       const parsed = parseTelegramKey(key)
       if (!parsed) continue
@@ -2654,6 +2691,7 @@ async function notifySessionKeys(
           await resolvePendingForSession(runtime, chatId, sessionId)
         }
       }
+      if (!notifyChats.has(chatId)) continue
       if (!proactiveTelegramEnabled(runtime.config)) continue
       if (!shouldNotify(runtime.config, chatId, dedupeKey, sessionId)) continue
       const message = `${text}\n\nOpen ${sessionLabel(runtime.config, sessionId)}`
@@ -2668,11 +2706,18 @@ async function notifySessionKeys(
 }
 
 async function notifyQuestion(runtime: Runtime, sessionId: string, question: TelegramPendingQuestion) {
-  const targets = await eventTargets(runtime, sessionId)
-  if (!targets.length) return
+  const pending = await pendingTargets(runtime, sessionId)
+  if (!pending.length) return
+  const notify = await eventTargets(runtime, sessionId)
+  const notifyChats = new Set<number>()
+  for (const key of notify) {
+    const parsed = parseTelegramKey(key)
+    if (!parsed) continue
+    notifyChats.add(parsed.chatId)
+  }
   const kind = `question:${question.requestId}`
   const chats = new Set<number>()
-  for (const key of targets) {
+  for (const key of pending) {
     try {
       const parsed = parseTelegramKey(key)
       if (!parsed) continue
@@ -2689,6 +2734,7 @@ async function notifyQuestion(runtime: Runtime, sessionId: string, question: Tel
           resolved: false,
         })
       }
+      if (!notifyChats.has(chatId)) continue
       if (!proactiveTelegramEnabled(runtime.config)) continue
       if (!shouldNotify(runtime.config, chatId, kind, sessionId)) continue
       await queueChatUpdate(String(chatId), async () => {
@@ -2747,12 +2793,17 @@ export async function handleBridgeEvent(runtime: Runtime, event: { type: string;
     const deletedSessionId = typeof info?.id === "string" ? info.id : sessionId
     if (!deletedSessionId) return
     statusBySession.delete(deletedSessionId)
-    const targets = await notificationTargets(runtime)
-    const keys = targets.length || !runtime.store.sessionKeys
-      ? targets
-      : await runtime.store.sessionKeys(deletedSessionId)
+    const targets = new Set<string>()
+    const mapped = await sessionTargets(runtime, deletedSessionId)
+    for (const key of mapped) {
+      targets.add(key)
+    }
+    const optedIn = await notificationTargets(runtime)
+    for (const key of optedIn) {
+      targets.add(key)
+    }
     const chats = new Set<number>()
-    for (const key of keys) {
+    for (const key of targets) {
       const parsed = parseTelegramKey(key)
       if (!parsed) continue
       if (chats.has(parsed.chatId)) continue
