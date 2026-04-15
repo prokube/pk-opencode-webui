@@ -177,6 +177,52 @@ describe("telegram settings extended API", () => {
     expect(stored.sessionAlarms?.["session-alarm-a"]).toBe(true)
   })
 
+  test("enabling session alarm auto-enables Telegram notify for mapped chats", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "telegram-settings-"))
+    const path = join(dir, "telegram-settings.json")
+    const storePath = join(dir, "telegram-sessions.json")
+    cleanupPaths.push(dir)
+
+    process.env.TELEGRAM_SETTINGS_PATH = path
+    process.env.TELEGRAM_SESSION_STORE_PATH = storePath
+
+    await writeFile(
+      storePath,
+      `${JSON.stringify({
+        version: 2,
+        sessions: {
+          "chat:99:user:4": "session-sync",
+          "chat:99:user:7": "session-sync",
+          "chat:100": "session-sync",
+          "chat:101": "session-other",
+        },
+        notifications: {},
+        sessionAlarms: {},
+      }, null, 2)}\n`,
+    )
+
+    const set = await handleExtendedEndpoint(
+      "/api/ext/telegram/session-alarm",
+      "PUT",
+      new URL("http://127.0.0.1/api/ext/telegram/session-alarm"),
+      new Request("http://127.0.0.1/api/ext/telegram/session-alarm", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ sessionId: "session-sync", enabled: true }),
+      }),
+    )
+
+    expect(set?.status).toBe(200)
+    const stored = JSON.parse(await Bun.file(storePath).text()) as {
+      notifications?: Record<string, boolean>
+      sessionAlarms?: Record<string, boolean>
+    }
+    expect(stored.sessionAlarms?.["session-sync"]).toBe(true)
+    expect(stored.notifications?.["chat:99"]).toBe(true)
+    expect(stored.notifications?.["chat:100"]).toBe(true)
+    expect(stored.notifications?.["chat:101"]).toBeUndefined()
+  })
+
   test("session alarm endpoint validates session id and enabled payload", async () => {
     const dir = await mkdtemp(join(tmpdir(), "telegram-settings-"))
     cleanupPaths.push(dir)
