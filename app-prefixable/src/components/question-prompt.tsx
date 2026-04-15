@@ -46,6 +46,14 @@ export function QuestionPrompt(props: Props) {
     node?.scrollIntoView({ block: "nearest" })
   })
 
+  function focusInput() {
+    setTimeout(() => {
+      const node = inputRef()
+      node?.scrollIntoView({ block: "nearest" })
+      node?.focus()
+    }, 50)
+  }
+
   function submit() {
     const result = questions().map((_, i) => answers()[i] ?? [])
     props.onReply(result)
@@ -87,7 +95,7 @@ export function QuestionPrompt(props: Props) {
     if (other()) {
       if (!multi()) {
         setEditing(true)
-        setTimeout(() => inputRef()?.focus(), 50)
+        focusInput()
         return
       }
       const value = input()
@@ -96,7 +104,7 @@ export function QuestionPrompt(props: Props) {
         return
       }
       setEditing(true)
-      setTimeout(() => inputRef()?.focus(), 50)
+      focusInput()
       return
     }
 
