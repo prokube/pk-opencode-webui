@@ -40,21 +40,24 @@ export function PickerDialog(props: Props) {
   })
 
   const sections = createMemo(() => {
-    const items = filtered()
-    const rows = items.map((item, index) => ({ item, index }))
-    const keys = rows.reduce((acc, row) => {
-      const key = (row.item.groupKey ?? row.item.group)?.trim() || ""
-      if (acc.includes(key)) return acc
-      return [...acc, key]
-    }, [] as string[])
+    const map = new Map<string, { key: string; label?: string; rows: { item: PickerItem; index: number }[] }>()
 
-    return keys.map((key) => ({
-      key,
-      label:
-        rows.find((row) => ((row.item.groupKey ?? row.item.group)?.trim() || "") === key)?.item.group?.trim() ||
-        undefined,
-      rows: rows.filter((row) => ((row.item.groupKey ?? row.item.group)?.trim() || "") === key),
-    }))
+    filtered().forEach((item, index) => {
+      const key = (item.groupKey ?? item.group)?.trim() || ""
+      const section = map.get(key)
+      if (section) {
+        section.rows.push({ item, index })
+        return
+      }
+
+      map.set(key, {
+        key,
+        label: item.group?.trim() || undefined,
+        rows: [{ item, index }],
+      })
+    })
+
+    return Array.from(map.values())
   })
 
   createEffect(() => {
@@ -198,9 +201,11 @@ export function PickerDialog(props: Props) {
 
             <For each={sections()}>
               {(section) => (
-                <>
+                <div role={section.label ? "group" : "presentation"} aria-label={section.label || undefined}>
                   <Show when={section.label}>
                     <div
+                      role="presentation"
+                      aria-hidden="true"
                       class="px-4 pt-3 pb-1 text-[11px] font-semibold uppercase tracking-wide"
                       style={{ color: "var(--text-weak)", opacity: 0.9 }}
                     >
@@ -243,7 +248,7 @@ export function PickerDialog(props: Props) {
                       )
                     }}
                   </Index>
-                </>
+                </div>
               )}
             </For>
           </div>
