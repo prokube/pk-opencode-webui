@@ -114,10 +114,19 @@ const server = Bun.serve<{ target: string }>({
       }
 
       console.log("[Proxy] API:", req.method, strippedPath)
-      return fetch(target.toString(), {
+      const response = await fetch(target.toString(), {
         method: req.method,
         headers,
         body: req.body,
+      })
+
+      const responseHeaders = new Headers(response.headers)
+      responseHeaders.delete("content-encoding")
+      responseHeaders.delete("content-length")
+      return new Response(response.body, {
+        status: response.status,
+        statusText: response.statusText,
+        headers: responseHeaders,
       })
     }
 
