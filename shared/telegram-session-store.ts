@@ -24,6 +24,7 @@ type TelegramPendingQuestionEntry = {
   header: string
   question: string
   options: string[]
+  optionDescriptions?: string[]
   multiple: boolean
   custom: boolean
 }
@@ -63,16 +64,30 @@ function parsePendingQuestionEntry(value: unknown): TelegramPendingQuestionEntry
   const row = value as Record<string, unknown>
   const header = typeof row.header === "string" ? row.header : ""
   const question = typeof row.question === "string" ? row.question : ""
-  const options = Array.isArray(row.options)
-    ? row.options.filter((item) => typeof item === "string" && item).map((item) => item.trim()).filter(Boolean)
+  const rawDescriptions = Array.isArray(row.optionDescriptions)
+    ? row.optionDescriptions
+      .map((item) => (typeof item === "string" ? item.trim() : ""))
     : []
+  const options: string[] = []
+  const optionDescriptions: string[] = []
+  if (Array.isArray(row.options)) {
+    row.options.forEach((item, i) => {
+      if (typeof item !== "string") return
+      const option = item.trim()
+      if (!option) return
+      options.push(option)
+      optionDescriptions.push(rawDescriptions[i] || "")
+    })
+  }
   const multiple = row.multiple === true
   const custom = row.custom !== false
   if (!header.trim() && !question.trim() && !options.length) return
+  const hasDescriptions = optionDescriptions.some(Boolean)
   return {
     header: header.trim(),
     question: question.trim(),
     options,
+    optionDescriptions: hasDescriptions ? optionDescriptions : undefined,
     multiple,
     custom,
   }

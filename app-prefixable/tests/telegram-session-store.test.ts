@@ -336,6 +336,7 @@ describe("telegram session store", () => {
           header: "Pick",
           question: "Pick",
           options: ["Alpha", "Beta"],
+          optionDescriptions: ["Issue #101", "Issue #102"],
           multiple: false,
           custom: true,
         },
@@ -347,6 +348,7 @@ describe("telegram session store", () => {
     const pending = await second.questionList?.("chat:77")
     expect(pending?.[0]?.requestId).toBe("req-1")
     expect(pending?.[0]?.questions[0]?.options).toEqual(["Alpha", "Beta"])
+    expect(pending?.[0]?.questions[0]?.optionDescriptions).toEqual(["Issue #101", "Issue #102"])
 
     await second.questionDelete?.("chat:77", "req-1")
     const third = createTelegramSessionStore(path)
