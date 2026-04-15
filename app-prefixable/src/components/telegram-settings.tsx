@@ -354,7 +354,7 @@ export function TelegramSettings(props: Props) {
 
                 <Field
                   label="Sources (JSON array)"
-                  hint='Example: [{"id":"default","openCodeUrl":"http://127.0.0.1:4096","enabled":true,"directory":"/workspace"}]'
+                  hint='Example: [{"id":"prod","openCodeUrl":"http://127.0.0.1:5000","enabled":true,"directory":"/workspace"}] (do not use id "default"; it is created implicitly from OpenCode API URL above).'
                 >
                   <textarea
                     class="w-full px-3 py-2 rounded-md text-sm font-mono"

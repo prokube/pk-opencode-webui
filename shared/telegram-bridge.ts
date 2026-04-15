@@ -1906,6 +1906,9 @@ async function sessionForChat(runtime: Runtime, chatKey: string): Promise<string
     || runtime.sources?.[0]
     || defaultSource(runtime.config)
   const sourceConfigValue = sourceConfig(runtime, source.id)
+  if (!sourceConfigValue) {
+    throw new Error(`OpenCode session creation failed: source ${sourceLabel(source.id)} is unavailable`)
+  }
   const created = createSession(sourceConfigValue)
     .then((id) => {
       const storedRef = encodeSessionRef({ sourceId: source.id, sessionId: id })
@@ -2389,7 +2392,15 @@ export async function readTelegramBridgeHealth(runtime: Runtime): Promise<Bridge
   const [telegramApi, sourceChecks] = await Promise.all([
     checkTelegramApi(runtime.config),
     Promise.all(sources.map(async (source) => {
-      const status = await checkOpenCodeApi(sourceConfig(runtime, source.id))
+      const scoped = sourceConfig(runtime, source.id)
+      if (!scoped) {
+        return {
+          sourceId: source.id,
+          status: "error" as const,
+          message: `Source ${sourceLabel(source.id)} is no longer configured`,
+        }
+      }
+      const status = await checkOpenCodeApi(scoped)
       return {
         sourceId: source.id,
         ...status,
@@ -2653,6 +2664,10 @@ export async function handleTextUpdate(runtime: Runtime, update: TelegramUpdate)
         || runtime.sources?.[0]
         || defaultSource(runtime.config)
       const scoped = sourceConfig(runtime, source.id)
+      if (!scoped) {
+        await sendTelegramMessage(config, chatId, sourceUnavailableText(source.id))
+        return true
+      }
       const sessionId = await createSession(scoped)
       const next = encodeSessionRef({ sourceId: source.id, sessionId })
       await runtime.store.set(key, next)
@@ -3071,7 +3086,7 @@ export async function handleBridgeEvent(runtime: Runtime, event: { type: string;
       : undefined
     const deletedSessionId = typeof info?.id === "string" ? info.id : sessionId
     if (!deletedSessionId) return
-    statusBySession.delete(deletedSessionId)
+    statusBySession.delete(sourceScopedId(sourceId, deletedSessionId))
     const targets = new Set<string>()
     const mapped = await sessionTargets(runtime, { sourceId, sessionId: deletedSessionId })
     for (const key of mapped) {
@@ -3135,6 +3150,10 @@ export async function handleBridgeEvent(runtime: Runtime, event: { type: string;
 
 async function runOutboundNotifications(runtime: Runtime, source: SourceConfig) {
   const config = sourceConfig(runtime, source.id)
+  if (!config) {
+    console.warn(`[TelegramBridge] skipping outbound notifications for source=${source.id}: source config unavailable`)
+    return
+  }
   while (true) {
     const url = opencodeUrl(config, "/event")
     if (config.directory) {
