@@ -1704,21 +1704,6 @@ function parseRecentText(parts: unknown): string {
   return truncateTelegramInlineText(text, recentPartTextMax)
 }
 
-function parseRecentCreated(value: unknown): number {
-  if (typeof value === "number" && Number.isFinite(value)) return value
-  if (typeof value === "string") {
-    const raw = value.trim()
-    if (!raw) return 0
-    if (/^\d+$/.test(raw)) {
-      const parsed = Number.parseInt(raw, 10)
-      if (Number.isFinite(parsed)) return parsed
-    }
-    const parsedDate = Date.parse(raw)
-    if (Number.isFinite(parsedDate)) return parsedDate
-  }
-  return 0
-}
-
 async function recentText(config: BridgeConfig, sessionId: string, count: number): Promise<string> {
   const safeCount = Math.max(1, Math.min(count, recentMaxCount))
   const url = opencodeUrl(config, `/session/${encodeURIComponent(sessionId)}/message`)
@@ -1736,14 +1721,8 @@ async function recentText(config: BridgeConfig, sessionId: string, count: number
   }
   const data = await res.json().catch(() => [])
   const rows = Array.isArray(data) ? data : []
-  const assistants = new Map<string, string>()
-  const users: Array<{ id: string; text: string; created: number }> = []
-  const rowIndex = new Map<string, number>()
-  const assistantParents: Array<{ index: number; parentID: string }> = []
-  let firstCreated = 0
-  let lastCreated = 0
-  for (let index = 0; index < rows.length; index++) {
-    const entry = rows[index]
+  const items: Array<{ id: string; role: "user" | "assistant"; parentID?: string; text: string }> = []
+  for (const entry of rows) {
     if (!entry || typeof entry !== "object") continue
     const row = entry as { info?: unknown; parts?: unknown }
     const info = row.info && typeof row.info === "object"
@@ -1751,62 +1730,30 @@ async function recentText(config: BridgeConfig, sessionId: string, count: number
       : undefined
     if (!info) continue
     const id = typeof info.id === "string" ? info.id : ""
-    const parentID = typeof info.parentID === "string" ? info.parentID : ""
     const role = info.role === "assistant" || info.role === "user" ? info.role : ""
-    const time = "time" in info && info.time && typeof info.time === "object"
-      ? info.time as { created?: unknown }
-      : undefined
-    const created = parseRecentCreated(time?.created)
-      || parseRecentCreated((info as { created?: unknown }).created)
-      || parseRecentCreated((row as { time?: { created?: unknown } }).time?.created)
-    if (!firstCreated && created > 0) firstCreated = created
-    if (created > 0) lastCreated = created
-    if (id) {
-      rowIndex.set(id, index)
-    }
-    if (role === "assistant" && parentID) {
-      assistantParents.push({ index, parentID })
-    }
+    const parentID = typeof info.parentID === "string" ? info.parentID : ""
     const text = parseRecentText(row.parts)
     if (!id || !role || !text) continue
-    if (role === "assistant" && parentID && !assistants.has(parentID)) {
-      assistants.set(parentID, text)
+    if (role === "assistant") {
+      items.push({ id, role: "assistant", parentID, text })
       continue
     }
-    if (role !== "user") continue
-    users.push({ id, text, created })
+    items.push({ id, role: "user", text })
+  }
+  items.sort((a, b) => a.id.localeCompare(b.id, undefined, { numeric: true, sensitivity: "base" }))
+  const assistants = new Map<string, string>()
+  const users: Array<{ id: string; text: string }> = []
+  for (const item of items) {
+    if (item.role === "assistant") {
+      if (item.parentID) assistants.set(item.parentID, item.text)
+      continue
+    }
+    users.push({ id: item.id, text: item.text })
   }
   if (!users.length) {
     return `No recent chat messages found for session ${sessionId}. Send a new message first.`
   }
-  const hasCreated = users.some((item) => item.created > 0)
-  const assistantBeforeParent = assistantParents.reduce((acc, item) => {
-    const parentIndex = rowIndex.get(item.parentID)
-    if (parentIndex === undefined) return acc
-    if (item.index < parentIndex) return acc + 1
-    return acc
-  }, 0)
-  const assistantAfterParent = assistantParents.reduce((acc, item) => {
-    const parentIndex = rowIndex.get(item.parentID)
-    if (parentIndex === undefined) return acc
-    if (item.index > parentIndex) return acc + 1
-    return acc
-  }, 0)
-  const newestFirstByTime = firstCreated > 0 && lastCreated > 0 && firstCreated !== lastCreated
-    ? firstCreated > lastCreated
-    : undefined
-  const newestFirst = newestFirstByTime ?? (assistantBeforeParent > assistantAfterParent)
-  const ordered = hasCreated
-    ? users.slice().sort((a, b) => {
-      if (a.created !== b.created) return a.created - b.created
-      return a.id.localeCompare(b.id)
-    })
-    : users
-  const list = hasCreated
-    ? ordered.slice(-safeCount)
-    : newestFirst
-      ? ordered.slice(0, safeCount)
-      : ordered.slice(-safeCount)
+  const list = users.slice(-safeCount)
   const lines = [`Recent activity for session ${sessionId} (showing ${list.length} of ${users.length}):`]
   for (let i = 0; i < list.length; i++) {
     const item = list[i]
