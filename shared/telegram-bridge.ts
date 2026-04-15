@@ -1591,6 +1591,124 @@ type SessionLookup = {
   title?: string
 }
 
+type SessionStatusSnapshot = {
+  bySession: Map<string, string>
+  reachable: boolean
+}
+
+function normalizeStatusType(value: unknown): string | undefined {
+  if (typeof value !== "string") return
+  const type = value.trim()
+  if (!type) return
+  return type
+}
+
+function formatAgentStatus(type: string): string {
+  if (type === "busy") return "busy (working)"
+  if (type === "retry") return "retry (waiting to retry)"
+  if (type === "idle") return "idle"
+  return "unknown"
+}
+
+function readStatusTypeFromEntry(raw: unknown): string | undefined {
+  if (!raw || typeof raw !== "object") return
+  const status = raw as { type?: unknown }
+  return normalizeStatusType(status.type)
+}
+
+async function readSessionStatusSnapshot(config: BridgeConfig): Promise<SessionStatusSnapshot> {
+  const url = opencodeUrl(config, "/session/status")
+  if (config.directory) {
+    url.searchParams.set("directory", config.directory)
+  }
+  const res = await fetch(url, {
+    method: "GET",
+    signal: AbortSignal.timeout(8_000),
+  }).catch(() => undefined)
+  if (!res?.ok) {
+    return { bySession: new Map(), reachable: false }
+  }
+  const payload = await res.json().catch(() => undefined)
+  if (!payload || typeof payload !== "object") {
+    return { bySession: new Map(), reachable: true }
+  }
+  const bySession = new Map<string, string>()
+  for (const [key, value] of Object.entries(payload as Record<string, unknown>)) {
+    const id = normalizeSessionLookupId(key)
+    if (!id) continue
+    const type = readStatusTypeFromEntry(value)
+    if (!type) continue
+    bySession.set(id, type)
+  }
+  return { bySession, reachable: true }
+}
+
+async function readSubsessionSummary(
+  config: BridgeConfig,
+  parentSessionId: string,
+  sourceId = "default",
+  snapshot?: SessionStatusSnapshot,
+) {
+  const parentId = normalizeSessionLookupId(parentSessionId)
+  if (!parentId) return { text: "none" }
+  const url = opencodeUrl(config, "/session")
+  if (config.directory) {
+    url.searchParams.set("directory", config.directory)
+  }
+  const res = await fetch(url, {
+    method: "GET",
+    signal: AbortSignal.timeout(8_000),
+  }).catch(() => undefined)
+  if (!res?.ok) return { text: "unavailable" }
+  const payload = await res.json().catch(() => undefined)
+  const sessions = Array.isArray(payload) ? payload : []
+  const ids = sessions
+    .map((raw) => {
+      if (!raw || typeof raw !== "object") return
+      const row = raw as { id?: unknown; parentID?: unknown }
+      const id = typeof row.id === "string" ? normalizeSessionLookupId(row.id) : undefined
+      const parent = typeof row.parentID === "string" ? normalizeSessionLookupId(row.parentID) : undefined
+      if (!id || parent !== parentId) return
+      return id
+    })
+    .filter((id): id is string => Boolean(id))
+  if (!ids.length) return { text: "none" }
+  const current = snapshot || (await readSessionStatusSnapshot(config))
+  const active = ids.filter((id) => {
+    const scopedId = sourceScopedId(sourceId, id)
+    const live = current.bySession.get(id) || statusBySession.get(scopedId)
+    return live === "busy" || live === "retry"
+  }).length
+  if (!current.reachable) {
+    return { text: `${ids.length} known (activity unavailable)` }
+  }
+  if (!active) {
+    return { text: `${ids.length} known (idle)` }
+  }
+  return { text: `${active} active (${ids.length} known)` }
+}
+
+async function statusText(runtime: Runtime, ref: SessionRef): Promise<string> {
+  const scoped = sourceForSessionRef(runtime, ref)
+  if (!scoped) return sourceUnavailableText(ref.sourceId)
+  const scopedSessionId = sourceScopedId(ref.sourceId, ref.sessionId)
+  const [title, snapshot] = await Promise.all([
+    safeSessionTitle(scoped, ref.sessionId, ref.sourceId),
+    readSessionStatusSnapshot(scoped),
+  ])
+  const subsessions = await readSubsessionSummary(scoped, ref.sessionId, ref.sourceId, snapshot)
+  const status = normalizeStatusType(statusBySession.get(scopedSessionId))
+    || normalizeStatusType(snapshot.bySession.get(ref.sessionId))
+    || (snapshot.reachable ? "idle" : "unknown")
+  const project = scoped.directory?.trim() || "unknown"
+  return [
+    `Session: ${formatSessionDisplay(ref.sessionId, title, ref.sourceId)}`,
+    `Project: ${project} (source: ${sourceLabel(ref.sourceId)})`,
+    `Agent: ${formatAgentStatus(status)}`,
+    `Subsessions: ${subsessions.text}`,
+  ].join("\n")
+}
+
 async function readSessionInfo(config: BridgeConfig, sessionId: string): Promise<SessionLookup> {
   const id = sessionId.trim()
   if (!id) return { exists: false }
@@ -2707,13 +2825,7 @@ export async function handleTextUpdate(runtime: Runtime, update: TelegramUpdate)
         await sendTelegramMessage(config, chatId, "Current session mapping is invalid. Use /new to create a fresh session.")
         return true
       }
-      const scoped = sourceForSessionRef(runtime, ref)
-      if (!scoped) {
-        await sendTelegramMessage(config, chatId, sourceUnavailableText(ref.sourceId))
-        return true
-      }
-      const title = await safeSessionTitle(scoped, ref.sessionId, ref.sourceId)
-      await sendTelegramMessage(config, chatId, `Current session: ${formatSessionDisplay(ref.sessionId, title, ref.sourceId)}`)
+      await sendTelegramMessage(config, chatId, await statusText(runtime, ref))
       return true
     }
     if (known?.name === "new") {

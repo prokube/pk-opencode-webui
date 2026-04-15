@@ -683,9 +683,15 @@ describe("telegram bridge config and cache", () => {
         const url = String(input);
         const body = init?.body ? (JSON.parse(String(init.body)) as Record<string, unknown>) : {};
         calls.push({ url, body });
-        if (url === "http://127.0.0.1:4096/session") {
+        if (url === "http://127.0.0.1:4096/session" && (init?.method || "GET") === "POST") {
           const id = createdSessions.shift();
           return new Response(JSON.stringify({ id }), { status: 200 });
+        }
+        if (url === "http://127.0.0.1:4096/session") {
+          return new Response(JSON.stringify([]), { status: 200 });
+        }
+        if (url.includes("/session/status")) {
+          return new Response(JSON.stringify({ "session-1": { type: "idle" }, "session-2": { type: "idle" } }), { status: 200 });
         }
         if (url.includes("/session/")) {
           return new Response(JSON.stringify({ id: "exists" }), { status: 200 });
@@ -736,10 +742,13 @@ describe("telegram bridge config and cache", () => {
       const sentTexts = calls
         .filter((x) => x.url.includes("/sendMessage"))
         .map((x) => String(x.body.text || ""));
-      expect(sentTexts[0]).toBe("Current session: session-1");
+      expect(sentTexts[0]).toContain("Session: session-1");
+      expect(sentTexts[0]).toContain("Project: unknown (source: default)");
+      expect(sentTexts[0]).toContain("Agent: idle");
+      expect(sentTexts[0]).toContain("Subsessions: none");
       expect(sentTexts[1]).toBe("Started a new session: session-2");
       expect(sentTexts[2]).toBe("Unknown command /statuz. Try /status, /sessions or use /help.");
-      expect(calls.filter((x) => x.url.includes("/session/")).length).toBe(1);
+      expect(calls.filter((x) => x.url.includes("/session/")).length).toBeGreaterThanOrEqual(1);
       expect(map.get("chat:7:user:9")).toBe("session-2");
     } finally {
       globalThis.fetch = originalFetch;
@@ -2116,9 +2125,19 @@ describe("telegram bridge config and cache", () => {
         const url = String(input);
         const body = init?.body ? (JSON.parse(String(init.body)) as Record<string, unknown>) : {};
         calls.push({ url, body });
-        if (url === "http://127.0.0.1:4096/session") {
+        if (url === "http://127.0.0.1:4096/session" && (init?.method || "GET") === "POST") {
           const id = createdSessions.shift();
           return new Response(JSON.stringify({ id }), { status: 200 });
+        }
+        if (url === "http://127.0.0.1:4096/session") {
+          return new Response(JSON.stringify([]), { status: 200 });
+        }
+        if (url.includes("/session/status")) {
+          return new Response(JSON.stringify({
+            "session-1": { type: "idle" },
+            "session-2": { type: "idle" },
+            "custom-session": { type: "idle" },
+          }), { status: 200 });
         }
         if (url.includes("/session/session-2")) {
           return new Response(JSON.stringify({ id: "session-2", title: "Second chat" }), { status: 200 });
@@ -2193,7 +2212,9 @@ describe("telegram bridge config and cache", () => {
       expect(sent[2]).toContain("Use /switch [session-id|index] to switch.");
       expect(sent[3]).toBe("Switched to session: First chat (session-1)");
       expect(sent[4]).toBe("Switched to session: Custom thread (custom-session)");
-      expect(sent[5]).toBe("Current session: Custom thread (custom-session)");
+      expect(sent[5]).toContain("Session: Custom thread (custom-session)");
+      expect(sent[5]).toContain("Project: unknown (source: default)");
+      expect(sent[5]).toContain("Subsessions: none");
       expect(map.get("chat:19:user:4")).toBe("custom-session");
     } finally {
       globalThis.fetch = originalFetch;
@@ -2371,7 +2392,214 @@ describe("telegram bridge config and cache", () => {
     expect(sent[0]).toContain(`1. ${expectedTitle} (session-current) (current)`);
     expect(sent[0]).toContain("2. Older thread (session-old)");
     expect(sent[0]).not.toContain("Current\nsession");
-    expect(sent[1]).toBe(`Current session: ${expectedTitle} (session-current)`);
+    expect(sent[1]).toContain(`Session: ${expectedTitle} (session-current)`);
+    expect(sent[1]).toContain("Project: unknown (source: default)");
+  });
+
+  test("/status includes project, agent activity, and subsession activity", async () => {
+    const calls: Array<{ url: string; body: Record<string, unknown> }> = [];
+    const originalFetch = globalThis.fetch;
+    try {
+      globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        const body = init?.body ? (JSON.parse(String(init.body)) as Record<string, unknown>) : {};
+        calls.push({ url, body });
+        if (url.includes("/session/session-current")) {
+          return new Response(JSON.stringify({ id: "session-current", title: "Current thread" }), { status: 200 });
+        }
+        if (url.includes("/session/status")) {
+          return new Response(
+            JSON.stringify({
+              "session-current": { type: "busy" },
+              "child-1": { type: "busy" },
+              "child-2": { type: "idle" },
+            }),
+            { status: 200 },
+          );
+        }
+        if (url.endsWith("/session") || url.includes("/session?")) {
+          return new Response(
+            JSON.stringify([
+              { id: "session-current" },
+              { id: "child-1", parentID: "session-current" },
+              { id: "child-2", parentID: "session-current" },
+              { id: "other", parentID: "session-other" },
+            ]),
+            { status: 200 },
+          );
+        }
+        if (url.includes("/sendMessage")) {
+          return new Response(JSON.stringify({ ok: true, result: { message_id: 1 } }), { status: 200 });
+        }
+        throw new Error(`Unexpected fetch ${url}`);
+      };
+
+      const runtime = {
+        config: {
+          mode: "polling" as const,
+          token: "token",
+          openCodeUrl: "http://127.0.0.1:4096",
+          directory: "/workspace/foo",
+          sessionCacheMax: 10,
+          sessionCacheTtlMs: 10_000,
+          notificationDebounceMs: 20_000,
+          port: 4097,
+          webhookPath: "/webhook",
+          sessionStorePath: "/tmp/test-store.json",
+        },
+        store: {
+          get: async () => "session-current",
+          set: async () => undefined,
+          delete: async () => undefined,
+        },
+      };
+
+      await handleTextUpdate(runtime, {
+        update_id: 1,
+        message: { message_id: 1, text: "/status", chat: { id: 96 }, from: { id: 8 } },
+      });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+
+    const sent = calls
+      .filter((x) => x.url.includes("/sendMessage"))
+      .map((x) => String(x.body.text || ""));
+    expect(sent).toHaveLength(1);
+    expect(sent[0]).toContain("Session: Current thread (session-current)");
+    expect(sent[0]).toContain("Project: /workspace/foo (source: default)");
+    expect(sent[0]).toContain("Agent: busy (working)");
+    expect(sent[0]).toContain("Subsessions: 1 active (2 known)");
+  });
+
+  test("/status reports idle and retry states from live status snapshot", async () => {
+    const calls: Array<{ url: string; body: Record<string, unknown> }> = [];
+    const originalFetch = globalThis.fetch;
+    let mode: "idle" | "retry" = "idle";
+    try {
+      globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        const body = init?.body ? (JSON.parse(String(init.body)) as Record<string, unknown>) : {};
+        calls.push({ url, body });
+        if (url.includes("/session/status")) {
+          if (mode === "idle") {
+            return new Response(JSON.stringify({ "session-current": { type: "idle" } }), { status: 200 });
+          }
+          return new Response(
+            JSON.stringify({
+              "session-current": { type: "retry", attempt: 2, message: "tmp", next: 1710000000 },
+            }),
+            { status: 200 },
+          );
+        }
+        if (url.endsWith("/session") || url.includes("/session?")) {
+          return new Response(JSON.stringify([]), { status: 200 });
+        }
+        if (url.includes("/sendMessage")) {
+          return new Response(JSON.stringify({ ok: true, result: { message_id: 1 } }), { status: 200 });
+        }
+        throw new Error(`Unexpected fetch ${url}`);
+      };
+
+      const runtime = {
+        config: {
+          mode: "polling" as const,
+          token: "token",
+          openCodeUrl: "http://127.0.0.1:4096",
+          sessionCacheMax: 10,
+          sessionCacheTtlMs: 10_000,
+          notificationDebounceMs: 20_000,
+          port: 4097,
+          webhookPath: "/webhook",
+          sessionStorePath: "/tmp/test-store.json",
+        },
+        store: {
+          get: async () => "session-current",
+          set: async () => undefined,
+          delete: async () => undefined,
+        },
+      };
+
+      await handleTextUpdate(runtime, {
+        update_id: 1,
+        message: { message_id: 1, text: "/status", chat: { id: 97 }, from: { id: 8 } },
+      });
+      mode = "retry";
+      await handleTextUpdate(runtime, {
+        update_id: 2,
+        message: { message_id: 2, text: "/status", chat: { id: 97 }, from: { id: 8 } },
+      });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+
+    const sent = calls
+      .filter((x) => x.url.includes("/sendMessage"))
+      .map((x) => String(x.body.text || ""));
+    expect(sent).toHaveLength(2);
+    expect(sent[0]).toContain("Agent: idle");
+    expect(sent[1]).toContain("Agent: retry (waiting to retry)");
+    expect(sent[1]).toContain("Subsessions: none");
+  });
+
+  test("/status uses explicit fallbacks when project or activity metadata is unavailable", async () => {
+    const calls: Array<{ url: string; body: Record<string, unknown> }> = [];
+    const originalFetch = globalThis.fetch;
+    try {
+      globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        const body = init?.body ? (JSON.parse(String(init.body)) as Record<string, unknown>) : {};
+        calls.push({ url, body });
+        if (url.includes("/session/session-current")) {
+          return new Response("missing", { status: 404 });
+        }
+        if (url.includes("/session/status")) {
+          return new Response("error", { status: 500 });
+        }
+        if (url.endsWith("/session") || url.includes("/session?")) {
+          return new Response("error", { status: 503 });
+        }
+        if (url.includes("/sendMessage")) {
+          return new Response(JSON.stringify({ ok: true, result: { message_id: 1 } }), { status: 200 });
+        }
+        throw new Error(`Unexpected fetch ${url}`);
+      };
+
+      const runtime = {
+        config: {
+          mode: "polling" as const,
+          token: "token",
+          openCodeUrl: "http://127.0.0.1:4096",
+          sessionCacheMax: 10,
+          sessionCacheTtlMs: 10_000,
+          notificationDebounceMs: 20_000,
+          port: 4097,
+          webhookPath: "/webhook",
+          sessionStorePath: "/tmp/test-store.json",
+        },
+        store: {
+          get: async () => "session-current",
+          set: async () => undefined,
+          delete: async () => undefined,
+        },
+      };
+
+      await handleTextUpdate(runtime, {
+        update_id: 1,
+        message: { message_id: 1, text: "/status", chat: { id: 98 }, from: { id: 8 } },
+      });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+
+    const sent = calls
+      .filter((x) => x.url.includes("/sendMessage"))
+      .map((x) => String(x.body.text || ""));
+    expect(sent).toHaveLength(1);
+    expect(sent[0]).toContain("Session: session-current");
+    expect(sent[0]).toContain("Project: unknown (source: default)");
+    expect(sent[0]).toContain("Agent: unknown");
+    expect(sent[0]).toContain("Subsessions: unavailable");
   });
 
   test("/status avoids redundant history persistence when current session already first", async () => {
@@ -2423,7 +2651,7 @@ describe("telegram bridge config and cache", () => {
     const sent = calls
       .filter((x) => x.url.includes("/sendMessage"))
       .map((x) => String(x.body.text || ""));
-    expect(sent[0]).toBe("Current session: session-current");
+    expect(sent[0]).toContain("Session: session-current");
     expect(historyWrites).toBe(0);
   });
 
@@ -3183,7 +3411,8 @@ describe("telegram bridge config and cache", () => {
     const sent = calls
       .filter((x) => x.url.includes("/sendMessage"))
       .map((x) => String(x.body.text || ""));
-    expect(sent).toEqual(["Current session: session-current"]);
+    expect(sent).toHaveLength(1);
+    expect(sent[0]).toContain("Session: session-current");
   });
 
   test("/status does not wait for slow history persistence", async () => {
@@ -3245,7 +3474,8 @@ describe("telegram bridge config and cache", () => {
     const sent = calls
       .filter((x) => x.url.includes("/sendMessage"))
       .map((x) => String(x.body.text || ""));
-    expect(sent).toEqual(["Current session: session-current"]);
+    expect(sent).toHaveLength(1);
+    expect(sent[0]).toContain("Session: session-current");
   });
 
   test("/switch returns clear validation errors for missing and invalid index", async () => {
@@ -3759,11 +3989,10 @@ describe("telegram bridge config and cache", () => {
       const sent = calls
         .filter((x) => x.url.includes("/sendMessage"))
         .map((x) => String(x.body.text || ""));
-      expect(sent).toEqual([
-        "Switched to session: session-b",
-        "Switched to session: session-c",
-        "Current session: session-c",
-      ]);
+      expect(sent).toHaveLength(3);
+      expect(sent[0]).toBe("Switched to session: session-b");
+      expect(sent[1]).toBe("Switched to session: session-c");
+      expect(sent[2]).toContain("Session: session-c");
     } finally {
       globalThis.fetch = originalFetch;
     }
@@ -5965,7 +6194,7 @@ describe("telegram bridge config and cache", () => {
         .filter((x) => x.url.includes("/sendMessage"))
         .map((x) => String(x.body.text || ""));
       expect(sentTexts[0]).toContain("Sorry, I ran into an internal error");
-      expect(sentTexts[1]).toBe("Current session: session-2");
+      expect(sentTexts[1]).toContain("Session: session-2");
       expect(map.get("chat:7:user:9")).toBe("session-2");
     } finally {
       globalThis.fetch = originalFetch;
@@ -6034,7 +6263,7 @@ describe("telegram bridge config and cache", () => {
         .filter((x) => x.url.includes("/sendMessage"))
         .map((x) => String(x.body.text || ""));
       expect(sentTexts[0]).toContain("Sorry, I ran into an internal error");
-      expect(sentTexts[1]).toBe("Current session: session-2");
+      expect(sentTexts[1]).toContain("Session: session-2");
       expect(map.get("chat:7:user:9")).toBe("session-2");
     } finally {
       globalThis.fetch = originalFetch;
