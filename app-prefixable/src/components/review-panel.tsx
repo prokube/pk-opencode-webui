@@ -102,6 +102,7 @@ export function ReviewPanel(props: ReviewPanelProps) {
   async function loadDiffs() {
     const current = ++version;
     const currentMode = mode();
+    if (currentMode === "git" || currentMode === "branch") setIsGitRepo(null);
     setLoading(true);
     try {
       if (currentMode === "git" || currentMode === "branch") {
