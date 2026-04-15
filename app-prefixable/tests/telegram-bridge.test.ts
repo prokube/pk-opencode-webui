@@ -2737,6 +2737,77 @@ describe("telegram bridge config and cache", () => {
     expect(text).not.toContain("You: First question");
   });
 
+  test("/recent 1 returns newest exchange when newest-first payload omits timestamps", async () => {
+    const calls: Array<{ url: string; body: Record<string, unknown> }> = [];
+    const originalFetch = globalThis.fetch;
+    try {
+      globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        const body = init?.body ? (JSON.parse(String(init.body)) as Record<string, unknown>) : {};
+        calls.push({ url, body });
+        if (url.includes("/session/session-current/message")) {
+          return new Response(
+            JSON.stringify([
+              {
+                info: { id: "a-2", role: "assistant", parentID: "u-2" },
+                parts: [{ type: "text", text: "Second answer" }],
+              },
+              {
+                info: { id: "u-2", role: "user" },
+                parts: [{ type: "text", text: "Second question" }],
+              },
+              {
+                info: { id: "a-1", role: "assistant", parentID: "u-1" },
+                parts: [{ type: "text", text: "First answer" }],
+              },
+              {
+                info: { id: "u-1", role: "user" },
+                parts: [{ type: "text", text: "First question" }],
+              },
+            ]),
+            { status: 200 },
+          );
+        }
+        if (url.includes("/sendMessage")) {
+          return new Response(JSON.stringify({ ok: true, result: { message_id: 1 } }), { status: 200 });
+        }
+        throw new Error(`Unexpected fetch ${url}`);
+      };
+
+      const runtime = {
+        config: {
+          mode: "polling" as const,
+          token: "token",
+          openCodeUrl: "http://127.0.0.1:4096",
+          sessionCacheMax: 10,
+          sessionCacheTtlMs: 10_000,
+          notificationDebounceMs: 20_000,
+          port: 4097,
+          webhookPath: "/webhook",
+          sessionStorePath: "/tmp/test-store.json",
+        },
+        store: {
+          get: async () => "session-current",
+          set: async () => undefined,
+          delete: async () => undefined,
+        },
+      };
+
+      await handleTextUpdate(runtime, {
+        update_id: 1,
+        message: { message_id: 1, text: "/recent 1", chat: { id: 101 }, from: { id: 4 } },
+      });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+
+    const text = String(calls.filter((x) => x.url.includes("/sendMessage")).at(-1)?.body.text || "");
+    expect(text).toContain("showing 1 of 2");
+    expect(text).toContain("You: Second question");
+    expect(text).toContain("Assistant: Second answer");
+    expect(text).not.toContain("You: First question");
+  });
+
   test("/recent reports empty state when no message history exists", async () => {
     const calls: Array<{ url: string; body: Record<string, unknown> }> = [];
     const originalFetch = globalThis.fetch;
