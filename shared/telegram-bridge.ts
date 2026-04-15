@@ -1710,13 +1710,18 @@ async function recentText(config: BridgeConfig, sessionId: string, count: number
   if (!users.length) {
     return `No recent chat messages found for session ${sessionId}. Send a new message first.`
   }
-  const ordered = users.some((item) => item.created > 0)
+  const hasCreated = users.some((item) => item.created > 0)
+  const ordered = hasCreated
     ? users.slice().sort((a, b) => {
       if (a.created !== b.created) return a.created - b.created
       return a.id.localeCompare(b.id)
     })
     : users
-  const list = ordered.slice(-safeCount)
+  const list = hasCreated
+    ? ordered.slice(-safeCount)
+    : safeCount === 1
+      ? ordered.slice(0, 1)
+      : ordered.slice(-safeCount)
   const lines = [`Recent activity for session ${sessionId} (showing ${list.length} of ${users.length}):`]
   for (let i = 0; i < list.length; i++) {
     const item = list[i]
