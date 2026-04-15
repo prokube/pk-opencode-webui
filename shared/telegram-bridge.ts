@@ -858,15 +858,26 @@ function parsePendingQuestion(properties: Record<string, unknown>): TelegramPend
       const value = row as Record<string, unknown>
       const header = typeof value.header === "string" ? value.header.trim() : ""
       const question = typeof value.question === "string" ? value.question.trim() : ""
-      const options = Array.isArray(value.options)
+      const parsedOptions = Array.isArray(value.options)
         ? value.options
           .map((item) => {
-            if (!item || typeof item !== "object") return ""
-            const option = item as { label?: unknown }
-            return typeof option.label === "string" ? option.label.trim() : ""
+            if (typeof item === "string") {
+              const label = item.trim()
+              if (!label) return
+              return { label, description: "" }
+            }
+            if (!item || typeof item !== "object") return
+            const option = item as { label?: unknown; description?: unknown }
+            const label = typeof option.label === "string" ? option.label.trim() : ""
+            if (!label) return
+            const description = typeof option.description === "string" ? option.description.trim() : ""
+            return { label, description }
           })
-          .filter(Boolean)
+          .filter((item) => item !== undefined)
         : []
+      const options = parsedOptions.map((item) => item.label)
+      const optionDescriptions = parsedOptions.map((item) => item.description)
+      const hasDescriptions = optionDescriptions.some(Boolean)
       const multiple = value.multiple === true
       const custom = value.custom !== false
       if (!header && !question && !options.length) return
@@ -874,6 +885,7 @@ function parsePendingQuestion(properties: Record<string, unknown>): TelegramPend
         header,
         question,
         options,
+        optionDescriptions: hasDescriptions ? optionDescriptions : undefined,
         multiple,
         custom,
       }
@@ -902,6 +914,13 @@ function permissionText(properties: Record<string, unknown>): string {
   return `Permission request: ${permission} (${patterns.join(", ")})`
 }
 
+function optionLine(row: TelegramPendingQuestion["questions"][number], index: number): string {
+  const label = row.options[index] || ""
+  const description = row.optionDescriptions?.[index] || ""
+  if (!description) return `${index + 1}) ${label}`
+  return `${index + 1}) ${label} - ${description}`
+}
+
 function questionPromptText(question: TelegramPendingQuestion): string {
   const lines = ["Question pending:"]
   for (let i = 0; i < question.questions.length; i++) {
@@ -918,7 +937,7 @@ function questionPromptText(question: TelegramPendingQuestion): string {
     const detail = row.question && row.question !== row.header ? row.question : ""
     if (detail) lines.push(detail)
     for (let index = 0; index < row.options.length; index++) {
-      lines.push(`${index + 1}) ${row.options[index]}`)
+      lines.push(optionLine(row, index))
     }
     if (!row.options.length && row.custom) {
       lines.push("Reply with your answer as text.")
@@ -956,7 +975,7 @@ function questionStepText(question: TelegramPendingQuestion, hasButtons = false)
   const detail = row.question && row.question !== row.header ? row.question : ""
   if (detail) lines.push(detail)
   for (let optionIndex = 0; optionIndex < row.options.length; optionIndex++) {
-    lines.push(`${optionIndex + 1}) ${row.options[optionIndex]}`)
+    lines.push(optionLine(row, optionIndex))
   }
   if (!row.options.length && row.custom) {
     lines.push("Reply with your answer as text.")

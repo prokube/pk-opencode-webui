@@ -5962,7 +5962,13 @@ describe("telegram bridge config and cache", () => {
         properties: {
           id: "req-1",
           sessionID: "session-1",
-          questions: [{ header: "Pick one", options: [{ label: "Alpha" }, { label: "Beta" }] }],
+          questions: [{
+            header: "Pick one",
+            options: [
+              { label: "Alpha", description: "Issue #101 - stabilize rollout" },
+              { label: "Beta", description: "Issue #102 - add project picker" },
+            ],
+          }],
         },
       });
 
@@ -5979,7 +5985,7 @@ describe("telegram bridge config and cache", () => {
     const sentTexts = calls
       .filter((x) => x.url.includes("/sendMessage"))
       .map((x) => String(x.body.text || ""));
-    expect(sentTexts.some((text) => text.includes("1) Alpha"))).toBe(true);
+    expect(sentTexts.some((text) => text.includes("1) Alpha - Issue #101 - stabilize rollout"))).toBe(true);
     expect(sentTexts.some((text) => text.includes("Open session session-1"))).toBe(true);
     expect(sentTexts.some((text) => text.includes("Thanks, your answer was sent."))).toBe(true);
   });
