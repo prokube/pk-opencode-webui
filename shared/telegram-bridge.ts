@@ -237,11 +237,20 @@ function sourceLabel(sourceId: string): string {
   return sourceId
 }
 
-function sourceConfig(runtime: Runtime, sourceId: string): BridgeConfig {
+function sourceUnavailableText(sourceId: string): string {
+  return `Source ${sourceLabel(sourceId)} is no longer configured. Use /new to create a fresh session mapping.`
+}
+
+function sourceConfig(runtime: Runtime, sourceId: string): BridgeConfig | undefined {
+  if (sourceId === "default") {
+    return {
+      ...runtime.config,
+      openCodeUrl: runtime.config.openCodeUrl,
+      directory: runtime.config.directory,
+    }
+  }
   const source = runtime.sourceById?.get(sourceId)
-    || (runtime.defaultSourceId ? runtime.sourceById?.get(runtime.defaultSourceId) : undefined)
-    || runtime.sources?.[0]
-    || defaultSource(runtime.config)
+  if (!source) return
   return {
     ...runtime.config,
     openCodeUrl: source.openCodeUrl,
@@ -249,7 +258,7 @@ function sourceConfig(runtime: Runtime, sourceId: string): BridgeConfig {
   }
 }
 
-function sourceForSessionRef(runtime: Runtime, ref: SessionRef): BridgeConfig {
+function sourceForSessionRef(runtime: Runtime, ref: SessionRef): BridgeConfig | undefined {
   return sourceConfig(runtime, ref.sourceId)
 }
 
@@ -1549,7 +1558,9 @@ async function formatSessionRows(runtime: Runtime, list: string[]): Promise<stri
       .map(async (storedRef) => {
         const ref = decodeSessionRef(storedRef)
         if (!ref) return storedRef
-        const title = await safeSessionTitle(sourceForSessionRef(runtime, ref), ref.sessionId, ref.sourceId)
+        const scoped = sourceForSessionRef(runtime, ref)
+        if (!scoped) return formatSessionDisplay(ref.sessionId, undefined, ref.sourceId)
+        const title = await safeSessionTitle(scoped, ref.sessionId, ref.sourceId)
         return formatSessionDisplay(ref.sessionId, title, ref.sourceId)
       }),
   )
@@ -1775,7 +1786,9 @@ async function sessionTitles(runtime: Runtime, list: string[]): Promise<Array<st
   const titles = await Promise.all(list.slice(0, sessionTitleLookupBatchSize).map((storedRef) => {
     const ref = decodeSessionRef(storedRef)
     if (!ref) return Promise.resolve(undefined)
-    return safeSessionTitle(sourceForSessionRef(runtime, ref), ref.sessionId, ref.sourceId)
+    const scoped = sourceForSessionRef(runtime, ref)
+    if (!scoped) return Promise.resolve(undefined)
+    return safeSessionTitle(scoped, ref.sessionId, ref.sourceId)
   }))
   if (list.length <= sessionTitleLookupBatchSize) return titles
   const tail = await sessionTitles(runtime, list.slice(sessionTitleLookupBatchSize))
@@ -1847,7 +1860,12 @@ async function handleSwitchCallback(runtime: Runtime, chatId: number, userId: nu
   await runtime.store.set(key, next)
   cacheSession(runtime.config, key, next)
   await rememberSession(runtime, key, next)
-  const title = await safeSessionTitle(sourceForSessionRef(runtime, ref), ref.sessionId, ref.sourceId)
+  const scoped = sourceForSessionRef(runtime, ref)
+  if (!scoped) {
+    await answerCallback(runtime.config, callbackId, "That source is no longer available.")
+    return
+  }
+  const title = await safeSessionTitle(scoped, ref.sessionId, ref.sourceId)
   await answerCallback(runtime.config, callbackId, "Switched.")
   await sendTelegramMessage(runtime.config, chatId, `Switched to session: ${formatSessionDisplay(ref.sessionId, title, ref.sourceId)}`)
 }
@@ -2113,8 +2131,9 @@ async function savedPrompts(runtime: Runtime, key: string): Promise<{ prompts: S
   const current = await runtime.store.get(key) || sessionFromCache(config, key)
   const parsed = parsedSessionRef(current)
   const scoped = parsed ? sourceForSessionRef(runtime, parsed) : config
-  const bySession = parsed ? await sessionDirectory(scoped, parsed.sessionId) : undefined
-  const candidates = [bySession, scoped.directory]
+  const promptConfig = scoped || config
+  const bySession = parsed && scoped ? await sessionDirectory(scoped, parsed.sessionId) : undefined
+  const candidates = [bySession, promptConfig.directory]
     .filter((value): value is string => Boolean(value))
     .filter((value, index, list) => list.indexOf(value) === index)
   const contexts = [...candidates, undefined]
@@ -2122,7 +2141,7 @@ async function savedPrompts(runtime: Runtime, key: string): Promise<{ prompts: S
   let hasSuccess = false
 
   for (const directory of contexts) {
-    const scopedPrompts = await savedPromptsForDirectory(scoped, directory).catch((error) => {
+    const scopedPrompts = await savedPromptsForDirectory(promptConfig, directory).catch((error) => {
       fallbackGuidance = savedPromptsFailureGuidance(error, directory)
       return
     })
@@ -2224,6 +2243,10 @@ async function runSavedPrompt(runtime: Runtime, chatId: number, key: string, pro
     return
   }
   const config = sourceForSessionRef(runtime, ref)
+  if (!config) {
+    await sendTelegramMessage(runtime.config, chatId, sourceUnavailableText(ref.sourceId))
+    return
+  }
   await resolvePendingForSession(runtime, chatId, ref.sessionId, ref.sourceId)
   const reply = await sendPrompt(config, ref.sessionId, prompt.text).catch(async (error) => {
     if (!isMissingSession(error)) {
@@ -2236,7 +2259,11 @@ async function runSavedPrompt(runtime: Runtime, chatId: number, key: string, pro
     if (!next) {
       throw new Error("OpenCode prompt failed: active source is unavailable")
     }
-    return sendPrompt(sourceForSessionRef(runtime, next), next.sessionId, prompt.text)
+    const nextConfig = sourceForSessionRef(runtime, next)
+    if (!nextConfig) {
+      throw new Error(`OpenCode prompt failed: source ${sourceLabel(next.sourceId)} is unavailable`)
+    }
+    return sendPrompt(nextConfig, next.sessionId, prompt.text)
   })
   await sendTelegramMessage(config, chatId, reply)
 }
@@ -2552,7 +2579,12 @@ export async function handleCallbackUpdate(runtime: Runtime, update: TelegramUpd
       return
     }
     const pendingSource = pending.sourceId || "default"
-    await sendQuestionReply(sourceConfig(runtime, pendingSource), pending.requestId, answers)
+    const replyConfig = sourceConfig(runtime, pendingSource)
+    if (!replyConfig) {
+      await sendTelegramMessage(runtime.config, chatId, sourceUnavailableText(pendingSource))
+      return
+    }
+    await sendQuestionReply(replyConfig, pending.requestId, answers)
       .then(async () => {
         await deletePendingQuestionByKey(runtime, match.itemKey, pending.requestId)
         const remaining = await readPendingQuestionsByKey(runtime, match.itemKey)
@@ -2616,7 +2648,12 @@ export async function handleTextUpdate(runtime: Runtime, update: TelegramUpdate)
         await sendTelegramMessage(config, chatId, "Current session mapping is invalid. Use /new to create a fresh session.")
         return true
       }
-      const title = await safeSessionTitle(sourceForSessionRef(runtime, ref), ref.sessionId, ref.sourceId)
+      const scoped = sourceForSessionRef(runtime, ref)
+      if (!scoped) {
+        await sendTelegramMessage(config, chatId, sourceUnavailableText(ref.sourceId))
+        return true
+      }
+      const title = await safeSessionTitle(scoped, ref.sessionId, ref.sourceId)
       await sendTelegramMessage(config, chatId, `Current session: ${formatSessionDisplay(ref.sessionId, title, ref.sourceId)}`)
       return true
     }
@@ -2654,7 +2691,12 @@ export async function handleTextUpdate(runtime: Runtime, update: TelegramUpdate)
         await sendTelegramMessage(config, chatId, "Current session mapping is invalid. Use /new to create a fresh session.")
         return true
       }
-      const text = await recentText(sourceForSessionRef(runtime, ref), ref.sessionId, parsed.count || recentDefaultCount)
+      const scoped = sourceForSessionRef(runtime, ref)
+      if (!scoped) {
+        await sendTelegramMessage(config, chatId, sourceUnavailableText(ref.sourceId))
+        return true
+      }
+      const text = await recentText(scoped, ref.sessionId, parsed.count || recentDefaultCount)
       await sendTelegramMessage(config, chatId, text)
       return true
     }
@@ -2686,10 +2728,15 @@ export async function handleTextUpdate(runtime: Runtime, update: TelegramUpdate)
         const parsed = parsedSessionRef(next)
         if (parsed) return parsed
         const currentRef = parsedSessionRef(current)
-        const sourceId = currentRef?.sourceId || runtime.defaultSourceId
+        const sourceId = currentRef?.sourceId || runtime.defaultSourceId || "default"
         return { sourceId, sessionId: next }
       })()
-      if (!resolved.fromKnownList && !(await sessionExists(sourceForSessionRef(runtime, nextRef), nextRef.sessionId, nextRef.sourceId))) {
+      const nextConfig = sourceForSessionRef(runtime, nextRef)
+      if (!nextConfig) {
+        await sendTelegramMessage(config, chatId, sourceUnavailableText(nextRef.sourceId))
+        return true
+      }
+      if (!resolved.fromKnownList && !(await sessionExists(nextConfig, nextRef.sessionId, nextRef.sourceId))) {
         await sendTelegramMessage(config, chatId, `Session not found: ${next}. Use /sessions to select a known session or /new to create one.`)
         return true
       }
@@ -2697,7 +2744,7 @@ export async function handleTextUpdate(runtime: Runtime, update: TelegramUpdate)
       await runtime.store.set(key, storedRef)
       cacheSession(config, key, storedRef)
       await rememberSession(runtime, key, storedRef)
-      const title = await safeSessionTitle(sourceForSessionRef(runtime, nextRef), nextRef.sessionId, nextRef.sourceId)
+      const title = await safeSessionTitle(nextConfig, nextRef.sessionId, nextRef.sourceId)
       await sendTelegramMessage(config, chatId, `Switched to session: ${formatSessionDisplay(nextRef.sessionId, title, nextRef.sourceId)}`)
       return true
     }
@@ -2801,7 +2848,12 @@ export async function handleTextUpdate(runtime: Runtime, update: TelegramUpdate)
         return
       }
       const pendingSource = pending.sourceId || "default"
-      await sendQuestionReply(sourceConfig(runtime, pendingSource), pending.requestId, answers)
+      const replyConfig = sourceConfig(runtime, pendingSource)
+      if (!replyConfig) {
+        await sendTelegramMessage(config, chatId, sourceUnavailableText(pendingSource))
+        return
+      }
+      await sendQuestionReply(replyConfig, pending.requestId, answers)
         .then(async () => {
           await deletePendingQuestionByKey(runtime, match.itemKey, pending.requestId)
           const remaining = await readPendingQuestionsByKey(runtime, match.itemKey)
@@ -2830,6 +2882,10 @@ export async function handleTextUpdate(runtime: Runtime, update: TelegramUpdate)
       return
     }
     const scoped = sourceForSessionRef(runtime, ref)
+    if (!scoped) {
+      await sendTelegramMessage(config, chatId, sourceUnavailableText(ref.sourceId))
+      return
+    }
     await resolvePendingForSession(runtime, chatId, ref.sessionId, ref.sourceId)
     const reply = await sendPrompt(scoped, ref.sessionId, text).catch(async (error) => {
       if (!isMissingSession(error)) {
@@ -2842,7 +2898,11 @@ export async function handleTextUpdate(runtime: Runtime, update: TelegramUpdate)
       if (!next) {
         throw new Error("OpenCode prompt failed: active source is unavailable")
       }
-      return sendPrompt(sourceForSessionRef(runtime, next), next.sessionId, text)
+      const nextConfig = sourceForSessionRef(runtime, next)
+      if (!nextConfig) {
+        throw new Error(`OpenCode prompt failed: source ${sourceLabel(next.sourceId)} is unavailable`)
+      }
+      return sendPrompt(nextConfig, next.sessionId, text)
     })
     await sendTelegramMessage(config, chatId, reply)
   } catch (error) {

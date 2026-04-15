@@ -8462,4 +8462,117 @@ describe("telegram bridge config and cache", () => {
       .map((x) => String(x.body.text || ""));
     expect(sentTexts.some((text) => text.includes("Sorry, I ran into an internal error"))).toBe(true);
   });
+
+  test("legacy default session mapping keeps using base OpenCode URL in multi-source mode", async () => {
+    const calls: Array<{ url: string; body: Record<string, unknown> }> = [];
+    const originalFetch = globalThis.fetch;
+    try {
+      globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        const body = init?.body ? (JSON.parse(String(init.body)) as Record<string, unknown>) : {};
+        calls.push({ url, body });
+        if (url === "http://127.0.0.1:4096/session/session-legacy/message") {
+          return new Response(JSON.stringify({ parts: [{ type: "text", text: "base-source reply" }] }), { status: 200 });
+        }
+        if (url === "http://127.0.0.1:5000/session/session-legacy/message") {
+          return new Response(JSON.stringify({ parts: [{ type: "text", text: "wrong-source reply" }] }), { status: 200 });
+        }
+        if (url.includes("/sendMessage")) {
+          return new Response(JSON.stringify({ ok: true, result: { message_id: 1 } }), { status: 200 });
+        }
+        throw new Error(`Unexpected fetch ${url}`);
+      };
+
+      const sources = [{ id: "source-a", openCodeUrl: "http://127.0.0.1:5000", enabled: true }];
+      const runtime = {
+        config: {
+          mode: "polling" as const,
+          token: "token",
+          openCodeUrl: "http://127.0.0.1:4096",
+          multiSourceEnabled: true,
+          sources,
+          sessionCacheMax: 10,
+          sessionCacheTtlMs: 10_000,
+          notificationDebounceMs: 0,
+          port: 4097,
+          webhookPath: "/webhook",
+          sessionStorePath: "/tmp/test-store.json",
+        },
+        sources,
+        sourceById: new Map(sources.map((source) => [source.id, source])),
+        defaultSourceId: "source-a",
+        store: {
+          get: async () => "session-legacy",
+          set: async () => undefined,
+          delete: async () => undefined,
+        },
+      };
+
+      await handleTextUpdate(runtime, {
+        update_id: 99,
+        message: { message_id: 99, text: "hello", chat: { id: 11 }, from: { id: 3 } },
+      });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+
+    const promptCalls = calls.filter((x) => x.url.includes("/session/session-legacy/message"));
+    expect(promptCalls).toHaveLength(1);
+    expect(promptCalls[0]?.url).toBe("http://127.0.0.1:4096/session/session-legacy/message");
+    const sent = String(calls.filter((x) => x.url.includes("/sendMessage")).at(-1)?.body.text || "");
+    expect(sent).toBe("base-source reply");
+  });
+
+  test("missing source mapping does not fall back to another source", async () => {
+    const calls: Array<{ url: string; body: Record<string, unknown> }> = [];
+    const originalFetch = globalThis.fetch;
+    try {
+      globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        const body = init?.body ? (JSON.parse(String(init.body)) as Record<string, unknown>) : {};
+        calls.push({ url, body });
+        if (url.includes("/sendMessage")) {
+          return new Response(JSON.stringify({ ok: true, result: { message_id: 1 } }), { status: 200 });
+        }
+        throw new Error(`Unexpected fetch ${url}`);
+      };
+
+      const sources = [{ id: "source-a", openCodeUrl: "http://127.0.0.1:5000", enabled: true }];
+      const runtime = {
+        config: {
+          mode: "polling" as const,
+          token: "token",
+          openCodeUrl: "http://127.0.0.1:4096",
+          multiSourceEnabled: true,
+          sources,
+          sessionCacheMax: 10,
+          sessionCacheTtlMs: 10_000,
+          notificationDebounceMs: 0,
+          port: 4097,
+          webhookPath: "/webhook",
+          sessionStorePath: "/tmp/test-store.json",
+        },
+        sources,
+        sourceById: new Map(sources.map((source) => [source.id, source])),
+        defaultSourceId: "source-a",
+        store: {
+          get: async () => "source-missing::session-2",
+          set: async () => undefined,
+          delete: async () => undefined,
+        },
+      };
+
+      await handleTextUpdate(runtime, {
+        update_id: 100,
+        message: { message_id: 100, text: "hello", chat: { id: 12 }, from: { id: 4 } },
+      });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+
+    const promptCalls = calls.filter((x) => x.url.includes("/session/session-2/message"));
+    expect(promptCalls).toHaveLength(0);
+    const sent = String(calls.filter((x) => x.url.includes("/sendMessage")).at(-1)?.body.text || "");
+    expect(sent).toContain("Source source-missing is no longer configured.");
+  });
 });
