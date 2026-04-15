@@ -227,7 +227,7 @@ The file-backed session store is single-writer/single-replica only (no cross-pro
 
 Supported bot commands:
 - `/new` creates and switches to a fresh session for the current chat mapping.
-- `/status` shows the current mapped session id.
+- `/status` shows the current mapped session, project/source context, live agent activity, and subsession activity summary.
 - `/notify on|off|status` enables/disables outbound operational notifications per chat (default off).
 - `/help` shows command help.
 - Unknown commands return a short help hint.
