@@ -3014,6 +3014,36 @@ export class Vcs extends HeyApiClient {
       ...params,
     })
   }
+
+  /**
+   * Get VCS diff
+   *
+   * Get git or branch diff for the current project directory.
+   */
+  public diff<ThrowOnError extends boolean = false>(
+    parameters?: {
+      directory?: string
+      mode?: "git" | "branch"
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "mode" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<SessionDiffResponses, unknown, ThrowOnError>({
+      url: "/vcs/diff",
+      ...options,
+      ...params,
+    })
+  }
 }
 
 export class Command extends HeyApiClient {
