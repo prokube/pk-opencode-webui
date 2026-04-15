@@ -264,6 +264,7 @@ const pendingQuestions = new Map<string, TelegramPendingQuestion[]>()
 const sessionHistory = new Map<string, string[]>()
 const sessionInfo = new Map<string, CachedSessionInfo>()
 const switchTargets = new Map<string, { sessionRef: string; expiresAt: number }>()
+const recentTargets = new Map<string, { sessionRef: string; expiresAt: number }>()
 
 let pendingEntrySeq = 0
 
@@ -912,7 +913,7 @@ type SwitchCallbackData =
   | { action: "select"; index: number; token: string }
 
 type UtilityCallbackData =
-  | { action: "recent" }
+  | { action: "recent"; token?: string }
   | { action: "switch"; token: string }
 
 function switchToken(sessionId: string): string {
@@ -974,8 +975,34 @@ function utilityRecentCallbackData(): string {
   return "u:recent"
 }
 
+function utilityRecentSessionCallbackData(sourceId: string, sessionId: string): string {
+  const now = Date.now()
+  pruneSwitchTargets(now)
+  const sessionRef = encodeSessionRef({ sourceId, sessionId })
+  const tokenSeed = `${sessionRef}:recent:${now}:${pendingEntrySeq++}`
+  const token = `${shortId(tokenSeed)}${Math.abs(pendingEntrySeq).toString(36)}`.slice(0, 12)
+  recentTargets.set(token, { sessionRef, expiresAt: now + switchTargetTtlMs })
+  return `u:r:${token}`
+}
+
+function resolveRecentTarget(token: string): string | undefined {
+  const now = Date.now()
+  pruneSwitchTargets(now)
+  const stored = recentTargets.get(token)
+  if (!stored) return
+  if (stored.expiresAt <= now) {
+    recentTargets.delete(token)
+    return
+  }
+  return stored.sessionRef
+}
+
 function parseUtilityCallbackData(input: string): UtilityCallbackData | undefined {
   if (input === "u:recent") return { action: "recent" }
+  const recentSession = input.match(/^u:r:([a-z0-9]{6,24})$/)
+  if (recentSession) {
+    return { action: "recent", token: recentSession[1] || "" }
+  }
   const switchSession = input.match(/^u:s:([a-z0-9]{6,24})$/)
   if (switchSession) {
     return { action: "switch", token: switchSession[1] || "" }
@@ -986,10 +1013,11 @@ function proactiveActionsMarkup(kind: "default" | "task-finished", sourceId: str
   const switchCallback = kind === "task-finished"
     ? utilitySwitchSessionCallbackData(sourceId, sessionId)
     : switchPageCallback(0)
+  const recentCallback = utilityRecentSessionCallbackData(sourceId, sessionId)
   return {
     inline_keyboard: [[
       { text: "Switch session", callback_data: switchCallback },
-      { text: "Latest message", callback_data: utilityRecentCallbackData() },
+      { text: "Latest message", callback_data: recentCallback },
     ]],
   }
 }
@@ -2577,8 +2605,14 @@ export async function handleCallbackUpdate(runtime: Runtime, update: TelegramUpd
       return
     }
     if (utility?.action === "recent") {
+      const tokenRef = utility.token ? resolveRecentTarget(utility.token) : undefined
+      if (utility.token && !tokenRef) {
+        await answerCallback(runtime.config, callbackId, "This latest-message button expired.")
+        state.acknowledged = true
+        return
+      }
       const key = telegramSessionKey(chatId, userId)
-      const current = await runtime.store.get(key) || sessionFromCache(runtime.config, key)
+      const current = tokenRef || await runtime.store.get(key) || sessionFromCache(runtime.config, key)
       if (!current) {
         await answerCallback(runtime.config, callbackId, "No active session mapping.")
         state.acknowledged = true
@@ -3473,4 +3507,5 @@ export function resetSessionCacheForTest() {
   sessionHistory.clear()
   sessionInfo.clear()
   switchTargets.clear()
+  recentTargets.clear()
 }
