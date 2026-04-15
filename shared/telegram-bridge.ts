@@ -291,6 +291,8 @@ const callbackDataMax = 64
 const telegramMessageSoftLimit = 3900
 const recentPayloadMax = telegramMessageSoftLimit * 3
 const switchTargetTtlMs = 30 * 60 * 1000
+const switchTargetMax = 2048
+const recentTargetMax = 2048
 
 const telegramCommands = Object.freeze([
   Object.freeze({
@@ -942,15 +944,22 @@ function parseSwitchCallbackData(input: string): SwitchCallbackData | undefined 
   return { action: "select", index: index - 1, token: selected[2] || "" }
 }
 
+function pruneUtilityTargetMap<T extends { expiresAt: number }>(targets: Map<string, T>, now: number, max: number) {
+  while (targets.size) {
+    const oldest = targets.entries().next().value as [string, T] | undefined
+    if (!oldest || oldest[1].expiresAt > now) break
+    targets.delete(oldest[0])
+  }
+  while (targets.size > max) {
+    const oldest = targets.keys().next().value as string | undefined
+    if (!oldest) break
+    targets.delete(oldest)
+  }
+}
+
 function pruneUtilityTargets(now: number) {
-  for (const [token, value] of switchTargets) {
-    if (value.expiresAt > now) continue
-    switchTargets.delete(token)
-  }
-  for (const [token, value] of recentTargets) {
-    if (value.expiresAt > now) continue
-    recentTargets.delete(token)
-  }
+  pruneUtilityTargetMap(switchTargets, now, switchTargetMax)
+  pruneUtilityTargetMap(recentTargets, now, recentTargetMax)
 }
 
 function utilitySwitchSessionCallbackData(sourceId: string, sessionId: string, chatId: number): string {
@@ -974,7 +983,9 @@ function resolveUtilitySwitchTarget(token: string, chatId: number): string | und
     switchTargets.delete(token)
     return
   }
-  return stored.sessionRef
+  const sessionRef = stored.sessionRef
+  switchTargets.delete(token)
+  return sessionRef
 }
 
 function utilityRecentSessionCallbackData(sourceId: string, sessionId: string, chatId: number): string {
@@ -998,7 +1009,9 @@ function resolveRecentTarget(token: string, chatId: number): string | undefined 
     recentTargets.delete(token)
     return
   }
-  return stored.sessionRef
+  const sessionRef = stored.sessionRef
+  recentTargets.delete(token)
+  return sessionRef
 }
 
 function parseUtilityCallbackData(input: string): UtilityCallbackData | undefined {
