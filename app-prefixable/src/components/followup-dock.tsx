@@ -23,6 +23,7 @@ export function FollowupDock(props: {
   const label = createMemo(() =>
     count() === 0 ? "No followups queued" : count() === 1 ? "1 followup queued" : `${count()} followups queued`,
   );
+  const busy = createMemo(() => !!props.sending || !!props.processing || !!props.loading);
 
   function toggle() {
     setCollapsed((v) => !v);
@@ -96,7 +97,6 @@ export function FollowupDock(props: {
           <For each={props.items}>
             {(item, i) => {
               const sending = () => props.sending === item.id;
-              const busy = () => !!props.sending || !!props.processing || !!props.loading;
               const first = () => i() === 0;
               const last = () => i() === props.items.length - 1;
               return (
@@ -109,6 +109,8 @@ export function FollowupDock(props: {
                     size="sm"
                     variant="ghost"
                     disabled={busy() || first()}
+                    aria-label="Move followup up"
+                    title="Move followup up"
                     onClick={() => props.onMoveUp(item.id)}
                   >
                     Up
@@ -118,6 +120,8 @@ export function FollowupDock(props: {
                     size="sm"
                     variant="ghost"
                     disabled={busy() || last()}
+                    aria-label="Move followup down"
+                    title="Move followup down"
                     onClick={() => props.onMoveDown(item.id)}
                   >
                     Down
