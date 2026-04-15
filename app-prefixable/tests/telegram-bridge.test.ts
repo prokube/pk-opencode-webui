@@ -4880,6 +4880,15 @@ describe("telegram bridge config and cache", () => {
     const sent = calls.filter((x) => x.url.includes("/sendMessage")).map((x) => String(x.body.text || ""));
     expect(sent.some((text) => text.includes("Question pending:"))).toBe(true);
     expect(sent.some((text) => text.includes("Permission request: shell"))).toBe(true);
+    const hasUtilityButtons = calls
+      .filter((x) => x.url.includes("/sendMessage"))
+      .some((x) => {
+        const markup = x.body.reply_markup as { inline_keyboard?: Array<Array<{ callback_data?: string }>> } | undefined
+        const row = markup?.inline_keyboard?.[0] || []
+        const callbacks = row.map((item) => String(item.callback_data || ""))
+        return callbacks.includes("s:p:1") && callbacks.includes("u:recent")
+      })
+    expect(hasUtilityButtons).toBe(true)
     const items = inbox.get("chat:88") || [];
     expect(items).toHaveLength(2);
     expect(items.map((item) => item.kind).sort()).toEqual(["permission", "question"]);
