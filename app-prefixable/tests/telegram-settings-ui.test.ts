@@ -16,6 +16,8 @@ const seed: TelegramPublicSettings = {
   tokenSource: "persisted",
   openCodeUrl: "http://127.0.0.1:4096/",
   directory: null,
+  multiSourceEnabled: false,
+  sources: [],
   sessionCacheMax: 500,
   sessionCacheTtlMs: 60000,
   notificationDebounceMs: 20000,
@@ -65,6 +67,26 @@ describe("telegram settings form helpers", () => {
     expect(errors.sessionCacheMax).toBe("Must be a positive integer")
     expect(errors.webhookPath).toBeUndefined()
     expect(errors.token).toBe("Token is required when setting a new value")
+  })
+
+  test("validates source ids to disallow ':' and reserved default", () => {
+    const form = {
+      ...createTelegramForm({ ...seed, multiSourceEnabled: true }),
+      sourcesJson: JSON.stringify([
+        { id: "alpha:beta", openCodeUrl: "https://api.example.com", enabled: true },
+      ]),
+    }
+
+    const colon = validateTelegramForm(form)
+    expect(colon.sourcesJson).toBe("Entry 1 id must match [A-Za-z0-9._-]+ and must not be default")
+
+    const reserved = validateTelegramForm({
+      ...form,
+      sourcesJson: JSON.stringify([
+        { id: "default", openCodeUrl: "https://api.example.com", enabled: true },
+      ]),
+    })
+    expect(reserved.sourcesJson).toBe("Entry 1 id must match [A-Za-z0-9._-]+ and must not be default")
   })
 
   test("normalizes webhook path patch values to include leading slash", () => {

@@ -9,6 +9,8 @@ export const telegramSettingFields = [
   "token",
   "openCodeUrl",
   "directory",
+  "multiSourceEnabled",
+  "sources",
   "sessionCacheMax",
   "sessionCacheTtlMs",
   "notificationDebounceMs",
@@ -25,10 +27,21 @@ export type TelegramSettingField = (typeof telegramSettingFields)[number]
 
 type TelegramSettingValue = string | number | boolean
 
+export type TelegramSourceSetting = {
+  id: string
+  openCodeUrl: string
+  enabled: boolean
+  directory?: string
+}
+
+type TelegramSourceSettingValue = TelegramSourceSetting[]
+
+type TelegramSettingStoredValue = TelegramSettingValue | TelegramSourceSettingValue
+
 type TelegramSettingsStore = {
   version: 1
   updatedAt: string
-  settings: Partial<Record<TelegramSettingField, TelegramSettingValue>>
+  settings: Partial<Record<TelegramSettingField, TelegramSettingStoredValue>>
 }
 
 type ValidationError = {
@@ -52,6 +65,8 @@ export type TelegramBridgeSettings = {
   token: string
   openCodeUrl: string
   directory?: string
+  multiSourceEnabled: boolean
+  sources: TelegramSourceSetting[]
   sessionCacheMax: number
   sessionCacheTtlMs: number
   notificationDebounceMs: number
@@ -115,6 +130,40 @@ function parsePersistedLinkBase(value: unknown, fallback: string | undefined): s
   const base = trimmed.endsWith("/") ? trimmed.slice(0, -1) : trimmed
   if (!URL.canParse(base)) return fallback
   return normalizeLinkBase(trimmed, "persisted sessionLinkBase")
+}
+
+function parseSourceId(value: unknown): string | undefined {
+  if (typeof value !== "string") return
+  const id = value.trim()
+  if (!id) return
+  if (!/^[A-Za-z0-9._-]+$/.test(id)) return
+  if (id.toLowerCase() === "default") return
+  return id
+}
+
+function parsePersistedSources(value: unknown): TelegramSourceSetting[] | undefined {
+  if (!Array.isArray(value)) return
+  const ids = new Set<string>()
+  const out: TelegramSourceSetting[] = []
+  for (const row of value) {
+    if (!row || typeof row !== "object" || Array.isArray(row)) continue
+    const source = row as {
+      id?: unknown
+      openCodeUrl?: unknown
+      enabled?: unknown
+      directory?: unknown
+    }
+    const id = parseSourceId(source.id)
+    if (!id || ids.has(id)) continue
+    if (typeof source.openCodeUrl !== "string" || !source.openCodeUrl.trim()) continue
+    const openCodeUrl = parsePersistedUrl(source.openCodeUrl, "openCodeUrl", undefined)
+    if (!openCodeUrl) continue
+    const enabled = source.enabled !== false
+    const directory = typeof source.directory === "string" && source.directory.trim() ? source.directory.trim() : undefined
+    out.push({ id, openCodeUrl, enabled, directory })
+    ids.add(id)
+  }
+  return out
 }
 
 function defaultSessionStorePath() {
@@ -444,6 +493,8 @@ function envDefaults(): TelegramBridgeSettings {
     token: env("TELEGRAM_BOT_TOKEN"),
     openCodeUrl: parseUrl(openCodeUrlValue, "openCodeUrl", openCodeUrlSource),
     directory: env("OPENCODE_DIRECTORY") || undefined,
+    multiSourceEnabled: false,
+    sources: [],
     sessionCacheMax: parsePositiveInt(env("TELEGRAM_SESSION_CACHE_MAX") || "", 500),
     sessionCacheTtlMs: parsePositiveInt(env("TELEGRAM_SESSION_CACHE_TTL_MS") || "", 6 * 60 * 60 * 1000),
     notificationDebounceMs: parsePositiveInt(env("TELEGRAM_NOTIFY_DEBOUNCE_MS") || "", 20_000),
@@ -463,9 +514,13 @@ function parseStore(text: string): TelegramSettingsStore | undefined {
   if (!text.trim()) return
   const data = JSON.parse(text) as Partial<TelegramSettingsStore>
   if (!data.settings || typeof data.settings !== "object") return
-  const settings: Partial<Record<TelegramSettingField, TelegramSettingValue>> = {}
+  const settings: Partial<Record<TelegramSettingField, TelegramSettingStoredValue>> = {}
   for (const field of telegramSettingFields) {
     const value = data.settings[field]
+    if (field === "sources" && Array.isArray(value)) {
+      settings[field] = value as TelegramSourceSetting[]
+      continue
+    }
     if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
       settings[field] = value
     }
@@ -493,12 +548,15 @@ function applyPersisted(defaults: TelegramBridgeSettings, store: TelegramSetting
   const openCodeUrl = parsePersistedUrl(s.openCodeUrl, "openCodeUrl", defaults.openCodeUrl) || defaults.openCodeUrl
   const webhookUrl = parsePersistedUrl(s.webhookUrl, "webhookUrl", defaults.webhookUrl)
   const sessionLinkBase = parsePersistedLinkBase(s.sessionLinkBase, defaults.sessionLinkBase)
+  const sources = parsePersistedSources(s.sources)
 
   return {
     mode: s.mode === "polling" || s.mode === "webhook" ? s.mode : defaults.mode,
     token: typeof s.token === "string" && s.token.trim() ? s.token.trim() : defaults.token,
     openCodeUrl,
     directory: typeof s.directory === "string" && s.directory.trim() ? s.directory.trim() : defaults.directory,
+    multiSourceEnabled: typeof s.multiSourceEnabled === "boolean" ? s.multiSourceEnabled : defaults.multiSourceEnabled,
+    sources: sources || defaults.sources,
     sessionCacheMax: typeof s.sessionCacheMax === "number" && s.sessionCacheMax > 0 ? s.sessionCacheMax : defaults.sessionCacheMax,
     sessionCacheTtlMs:
       typeof s.sessionCacheTtlMs === "number" && s.sessionCacheTtlMs > 0 ? s.sessionCacheTtlMs : defaults.sessionCacheTtlMs,
@@ -538,6 +596,8 @@ function publicSettings(settings: TelegramBridgeSettings, store: TelegramSetting
     tokenSource: persistedToken ? "persisted" : settings.token ? "env" : "none",
     openCodeUrl: settings.openCodeUrl,
     directory: settings.directory || null,
+    multiSourceEnabled: settings.multiSourceEnabled,
+    sources: settings.sources,
     sessionCacheMax: settings.sessionCacheMax,
     sessionCacheTtlMs: settings.sessionCacheTtlMs,
     notificationDebounceMs: settings.notificationDebounceMs,
@@ -601,7 +661,7 @@ function pushUrl(errors: ValidationError[], field: string, value: unknown) {
 }
 
 function normalizePayload(input: unknown): {
-  patch: Partial<Record<TelegramSettingField, TelegramSettingValue | undefined>>
+  patch: Partial<Record<TelegramSettingField, TelegramSettingStoredValue | undefined>>
   errors: ValidationError[]
 } {
   const raw = readObject(input)
@@ -609,7 +669,7 @@ function normalizePayload(input: unknown): {
     return { patch: {}, errors: [{ field: "settings", message: "settings object is required" }] }
   }
 
-  const patch: Partial<Record<TelegramSettingField, TelegramSettingValue | undefined>> = {}
+  const patch: Partial<Record<TelegramSettingField, TelegramSettingStoredValue | undefined>> = {}
   const errors: ValidationError[] = []
 
   for (const key of Object.keys(raw)) {
@@ -662,6 +722,65 @@ function normalizePayload(input: unknown): {
     if (typeof raw.directory === "string" && raw.directory.trim()) patch.directory = raw.directory.trim()
     if (raw.directory !== null && raw.directory !== "" && (typeof raw.directory !== "string" || !raw.directory.trim())) {
       errors.push({ field: "directory", message: "directory must be a non-empty string or null" })
+    }
+  }
+
+  if ("multiSourceEnabled" in raw) {
+    if (raw.multiSourceEnabled === null) {
+      patch.multiSourceEnabled = undefined
+    }
+    if (typeof raw.multiSourceEnabled === "boolean") {
+      patch.multiSourceEnabled = raw.multiSourceEnabled
+    }
+    if (raw.multiSourceEnabled !== null && typeof raw.multiSourceEnabled !== "boolean") {
+      errors.push({
+        field: "multiSourceEnabled",
+        message: "multiSourceEnabled must be a boolean or null",
+      })
+    }
+  }
+
+  if ("sources" in raw) {
+    if (raw.sources === null) {
+      patch.sources = undefined
+    }
+    if (Array.isArray(raw.sources)) {
+      const ids = new Set<string>()
+      const out: TelegramSourceSetting[] = []
+      for (let i = 0; i < raw.sources.length; i++) {
+        const entry = raw.sources[i]
+        if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+          errors.push({ field: `sources.${i}`, message: "source must be an object" })
+          continue
+        }
+        const source = entry as Record<string, unknown>
+        const id = parseSourceId(source.id)
+        if (!id) {
+          errors.push({ field: `sources.${i}.id`, message: "id must match [A-Za-z0-9._-]+ and must not be default" })
+          continue
+        }
+        if (ids.has(id)) {
+          errors.push({ field: `sources.${i}.id`, message: "id must be unique" })
+          continue
+        }
+        const valid = pushUrl(errors, `sources.${i}.openCodeUrl`, source.openCodeUrl)
+        if (!valid) continue
+        const openCodeUrl = parseUrl(String(source.openCodeUrl).trim(), "openCodeUrl")
+        const enabled = source.enabled !== false
+        if (source.enabled !== undefined && typeof source.enabled !== "boolean") {
+          errors.push({ field: `sources.${i}.enabled`, message: "enabled must be a boolean" })
+          continue
+        }
+        const directory = typeof source.directory === "string" && source.directory.trim() ? source.directory.trim() : undefined
+        out.push({ id, openCodeUrl, enabled, directory })
+        ids.add(id)
+      }
+      if (!errors.find((error) => error.field.startsWith("sources."))) {
+        patch.sources = out
+      }
+    }
+    if (raw.sources !== null && !Array.isArray(raw.sources)) {
+      errors.push({ field: "sources", message: "sources must be an array or null" })
     }
   }
 
@@ -806,7 +925,7 @@ function normalizePayload(input: unknown): {
   return { patch, errors }
 }
 
-async function writeSettings(path: string, settings: Partial<Record<TelegramSettingField, TelegramSettingValue>>) {
+async function writeSettings(path: string, settings: Partial<Record<TelegramSettingField, TelegramSettingStoredValue>>) {
   await fsp.mkdir(nodePath.dirname(path), { recursive: true })
   const tmpPath = nodePath.join(nodePath.dirname(path), `.${nodePath.basename(path)}.${process.pid}.${randomUUID()}.tmp`)
   const backupPath = `${path}.bak.${Date.now()}.${randomUUID()}`
@@ -905,7 +1024,7 @@ export async function updateTelegramSettings(input: unknown) {
       updatedAt: new Date().toISOString(),
       settings: {},
     }
-    const nextSettings: Partial<Record<TelegramSettingField, TelegramSettingValue>> = { ...current.settings }
+    const nextSettings: Partial<Record<TelegramSettingField, TelegramSettingStoredValue>> = { ...current.settings }
     const changedFields: string[] = []
 
     for (const field of telegramSettingFields) {

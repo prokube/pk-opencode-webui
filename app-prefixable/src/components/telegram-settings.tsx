@@ -260,6 +260,13 @@ export function TelegramSettings(props: Props) {
                   <p>Config: {report().config.status === "ok" ? "loaded" : "invalid"}</p>
                   <p>Telegram API: {report().dependencies.telegramApi.status} - {report().dependencies.telegramApi.message}</p>
                   <p>OpenCode API: {report().dependencies.openCodeApi.status} - {report().dependencies.openCodeApi.message}</p>
+                  <Show when={(report().dependencies.openCodeSources || []).length > 0}>
+                    <div class="space-y-1 pt-1">
+                      {(report().dependencies.openCodeSources || []).map((item) => (
+                        <p>Source {item.sourceId}: {item.status} - {item.message}</p>
+                      ))}
+                    </div>
+                  </Show>
                 </div>
                 <Show when={report().messages.length > 0}>
                   <div class="space-y-2">
@@ -331,6 +338,32 @@ export function TelegramSettings(props: Props) {
                 <Field label="OpenCode API URL" hint="Base URL used by the Telegram bridge to access OpenCode API.">
                   <input class="w-full px-3 py-2 rounded-md text-sm" value={state().openCodeUrl} onInput={(e) => setField("openCodeUrl", e.currentTarget.value)} style={{ background: "var(--surface-inset)", border: `1px solid ${fieldError("openCodeUrl") ? "var(--interactive-critical)" : "var(--border-base)"}`, color: "var(--text-base)" }} />
                   <FieldError text={fieldError("openCodeUrl")} />
+                </Field>
+
+                <Field label="Enable multi-source mode" hint="When enabled, bridge subscribes to all configured sources below.">
+                  <label class="inline-flex items-center gap-2 text-sm" style={{ color: "var(--text-base)" }}>
+                    <input
+                      type="checkbox"
+                      checked={state().multiSourceEnabled}
+                      onInput={(e) => setField("multiSourceEnabled", e.currentTarget.checked)}
+                    />
+                    Use explicit source registry
+                  </label>
+                  <FieldError text={fieldError("multiSourceEnabled")} />
+                </Field>
+
+                <Field
+                  label="Sources (JSON array)"
+                  hint='Example: [{"id":"prod","openCodeUrl":"http://127.0.0.1:5000","enabled":true,"directory":"/workspace"}] (do not use id "default"; it is created implicitly from OpenCode API URL above).'
+                >
+                  <textarea
+                    class="w-full px-3 py-2 rounded-md text-sm font-mono"
+                    rows={6}
+                    value={state().sourcesJson}
+                    onInput={(e) => setField("sourcesJson", e.currentTarget.value)}
+                    style={{ background: "var(--surface-inset)", border: `1px solid ${fieldError("sourcesJson") ? "var(--interactive-critical)" : "var(--border-base)"}`, color: "var(--text-base)" }}
+                  />
+                  <FieldError text={fieldError("sourcesJson")} />
                 </Field>
 
                 <div class="grid gap-4 md:grid-cols-2">

@@ -138,6 +138,47 @@ describe("telegram settings extended API", () => {
     )
   })
 
+  test("PUT rejects source ids with ':' and reserved default id", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "telegram-settings-"))
+    const path = join(dir, "telegram-settings.json")
+    cleanupPaths.push(dir)
+
+    process.env.TELEGRAM_SETTINGS_PATH = path
+
+    const response = await handleExtendedEndpoint(
+      "/api/ext/telegram/settings",
+      "PUT",
+      new URL("http://127.0.0.1/api/ext/telegram/settings"),
+      new Request("http://127.0.0.1/api/ext/telegram/settings", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          settings: {
+            sources: [
+              { id: "alpha:beta", openCodeUrl: "https://api.example.com", enabled: true },
+              { id: "default", openCodeUrl: "https://api2.example.com", enabled: true },
+            ],
+          },
+        }),
+      }),
+    )
+
+    expect(response?.status).toBe(400)
+    const data = await response?.json()
+    expect(data.errors).toEqual(
+      expect.arrayContaining([
+        {
+          field: "sources.0.id",
+          message: "id must match [A-Za-z0-9._-]+ and must not be default",
+        },
+        {
+          field: "sources.1.id",
+          message: "id must match [A-Za-z0-9._-]+ and must not be default",
+        },
+      ]),
+    )
+  })
+
   test("session alarm endpoint persists and reads state by session id", async () => {
     const dir = await mkdtemp(join(tmpdir(), "telegram-settings-"))
     const path = join(dir, "telegram-settings.json")
