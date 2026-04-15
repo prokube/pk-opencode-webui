@@ -12,6 +12,8 @@ export function FollowupDock(props: {
   onSend: (id: string) => void;
   onEdit: (id: string) => void;
   onDelete: (id: string) => void;
+  onMoveUp: (id: string) => void;
+  onMoveDown: (id: string) => void;
 }) {
   const [collapsed, setCollapsed] = createSignal(true);
   const contentId = `followup-dock-${createUniqueId()}`;
@@ -92,8 +94,11 @@ export function FollowupDock(props: {
           aria-label="Queued followup messages"
         >
           <For each={props.items}>
-            {(item) => {
+            {(item, i) => {
               const sending = () => props.sending === item.id;
+              const busy = () => !!props.sending || !!props.processing || !!props.loading;
+              const first = () => i() === 0;
+              const last = () => i() === props.items.length - 1;
               return (
                 <div class="flex items-center gap-2 min-w-0">
                   <span class="text-sm truncate flex-1" style={{ color: "var(--text-base)" }}>
@@ -102,8 +107,26 @@ export function FollowupDock(props: {
                   <Button
                     type="button"
                     size="sm"
+                    variant="ghost"
+                    disabled={busy() || first()}
+                    onClick={() => props.onMoveUp(item.id)}
+                  >
+                    Up
+                  </Button>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="ghost"
+                    disabled={busy() || last()}
+                    onClick={() => props.onMoveDown(item.id)}
+                  >
+                    Down
+                  </Button>
+                  <Button
+                    type="button"
+                    size="sm"
                     variant="secondary"
-                    disabled={!!props.sending || !!props.processing || !!props.loading}
+                    disabled={busy()}
                     onClick={() => props.onSend(item.id)}
                   >
                     Send now

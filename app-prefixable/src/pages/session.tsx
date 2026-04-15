@@ -501,6 +501,21 @@ export function Session() {
     );
   }
 
+  function moveFollowup(id: string, delta: -1 | 1) {
+    const sid = sessionId();
+    if (!sid) return;
+    const list = followups();
+    const index = list.findIndex((item) => item.id === id);
+    if (index < 0) return;
+    const nextIndex = index + delta;
+    if (nextIndex < 0 || nextIndex >= list.length) return;
+    const next = [...list];
+    const current = next[index];
+    next[index] = next[nextIndex];
+    next[nextIndex] = current;
+    setSessionFollowups(sid, next);
+  }
+
   // Double-Escape to abort: track last Escape press timestamp
   const lastEsc = { ts: 0 };
 
@@ -2735,6 +2750,8 @@ export function Session() {
                 onSend={sendFollowupNow}
                 onEdit={editFollowup}
                 onDelete={removeFollowup}
+                onMoveUp={(id) => moveFollowup(id, -1)}
+                onMoveDown={(id) => moveFollowup(id, 1)}
               />
             </Show>
           </div>
