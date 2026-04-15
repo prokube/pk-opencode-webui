@@ -4905,6 +4905,15 @@ export type VcsGetResponses = {
 
 export type VcsGetResponse = VcsGetResponses[keyof VcsGetResponses]
 
+export type VcsDiffResponses = {
+  /**
+   * Diff
+   */
+  200: Array<FileDiff>
+}
+
+export type VcsDiffResponse = VcsDiffResponses[keyof VcsDiffResponses]
+
 export type CommandListData = {
   body?: never
   path?: never
