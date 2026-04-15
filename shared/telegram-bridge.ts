@@ -341,6 +341,23 @@ function parseTelegramKey(key: string): { chatId: number; userId?: number } | un
   return { chatId, userId }
 }
 
+function notificationDebugEnabled() {
+  const raw = (process.env.TELEGRAM_NOTIFY_DEBUG || "").trim().toLowerCase()
+  if (raw === "1") return true
+  if (raw === "true") return true
+  if (raw === "yes") return true
+  return false
+}
+
+function notifyDebug(message: string, data?: Record<string, unknown>) {
+  if (!notificationDebugEnabled()) return
+  if (!data) {
+    console.log(`[TelegramBridge][notify] ${message}`)
+    return
+  }
+  console.log(`[TelegramBridge][notify] ${message}`, data)
+}
+
 async function notificationEnabled(runtime: Runtime, key: string): Promise<boolean> {
   if (runtime.store.notificationGet) {
     return runtime.store.notificationGet(key)
@@ -548,7 +565,10 @@ async function pendingTargets(runtime: Runtime, sessionId: string): Promise<stri
   const alarmEnabled = runtime.store.sessionAlarmGet
     ? await runtime.store.sessionAlarmGet(sessionId)
     : true
-  if (!alarmEnabled) return []
+  if (!alarmEnabled) {
+    notifyDebug("pending targets skipped: session alarm disabled", { sessionId })
+    return []
+  }
 
   const targets = new Set<string>()
   const mapped = await sessionTargets(runtime, sessionId)
@@ -566,12 +586,18 @@ async function eventTargets(runtime: Runtime, sessionId: string): Promise<string
   const alarmEnabled = runtime.store.sessionAlarmGet
     ? await runtime.store.sessionAlarmGet(sessionId)
     : true
-  if (!alarmEnabled) return []
+  if (!alarmEnabled) {
+    notifyDebug("event targets skipped: session alarm disabled", { sessionId })
+    return []
+  }
 
   const optedIn = await notificationTargets(runtime)
   if (optedIn.length) return optedIn
   const keys = await sessionTargets(runtime, sessionId)
-  if (!keys.length) return []
+  if (!keys.length) {
+    notifyDebug("event targets empty: no mapped session keys", { sessionId })
+    return []
+  }
 
   const targets = new Set<string>()
   for (const key of keys) {
@@ -2675,8 +2701,14 @@ async function notifySessionKeys(
   notifyKind?: string,
 ) {
   const pending = await pendingTargets(runtime, sessionId)
-  if (!pending.length) return
+  if (!pending.length) {
+    notifyDebug("session event skipped: no pending targets", { sessionId, kind })
+    return
+  }
   const notify = await eventTargets(runtime, sessionId)
+  if (!notify.length) {
+    notifyDebug("session event has no proactive targets", { sessionId, kind, pendingTargets: pending.length })
+  }
   const notifyChats = new Set<number>()
   for (const key of notify) {
     const parsed = parseTelegramKey(key)
@@ -2709,13 +2741,20 @@ async function notifySessionKeys(
       if (!notifyChats.has(chatId)) continue
       if (proactiveChats.has(chatId)) continue
       proactiveChats.add(chatId)
-      if (!proactiveTelegramEnabled(runtime.config)) continue
-      if (!shouldNotify(runtime.config, chatId, dedupeKey, sessionId)) continue
+      if (!proactiveTelegramEnabled(runtime.config)) {
+        notifyDebug("proactive send skipped: telegram alarm channel disabled", { sessionId, kind, chatId })
+        continue
+      }
+      if (!shouldNotify(runtime.config, chatId, dedupeKey, sessionId)) {
+        notifyDebug("proactive send skipped: debounced", { sessionId, kind, chatId, dedupeKey })
+        continue
+      }
       const message = `${text}\n\nOpen ${sessionLabel(runtime.config, sessionId)}`
       await queueChatUpdate(String(chatId), async () => {
         await sendTelegramMessage(runtime.config, chatId, message)
       })
       stampNotification(chatId, dedupeKey, sessionId)
+      notifyDebug("proactive send delivered", { sessionId, kind, chatId, dedupeKey })
     } catch (error) {
       console.error("[TelegramBridge] outbound notify failed", { sessionId, key, kind, error })
     }
@@ -2724,8 +2763,18 @@ async function notifySessionKeys(
 
 async function notifyQuestion(runtime: Runtime, sessionId: string, question: TelegramPendingQuestion) {
   const pending = await pendingTargets(runtime, sessionId)
-  if (!pending.length) return
+  if (!pending.length) {
+    notifyDebug("question event skipped: no pending targets", { sessionId, requestId: question.requestId })
+    return
+  }
   const notify = await eventTargets(runtime, sessionId)
+  if (!notify.length) {
+    notifyDebug("question event has no proactive targets", {
+      sessionId,
+      requestId: question.requestId,
+      pendingTargets: pending.length,
+    })
+  }
   const notifyChats = new Set<number>()
   for (const key of notify) {
     const parsed = parseTelegramKey(key)
@@ -2769,13 +2818,34 @@ async function notifyQuestion(runtime: Runtime, sessionId: string, question: Tel
       if (!notifyChats.has(chatId)) continue
       if (proactiveChats.has(chatId)) continue
       proactiveChats.add(chatId)
-      if (!proactiveTelegramEnabled(runtime.config)) continue
-      if (!shouldNotify(runtime.config, chatId, kind, sessionId)) continue
+      if (!proactiveTelegramEnabled(runtime.config)) {
+        notifyDebug("question proactive send skipped: telegram alarm channel disabled", {
+          sessionId,
+          requestId: question.requestId,
+          chatId,
+        })
+        continue
+      }
+      if (!shouldNotify(runtime.config, chatId, kind, sessionId)) {
+        notifyDebug("question proactive send skipped: debounced", {
+          sessionId,
+          requestId: question.requestId,
+          chatId,
+          dedupeKey: kind,
+        })
+        continue
+      }
       await queueChatUpdate(String(chatId), async () => {
         await sendTelegramQuestionPrompt(runtime.config, chatId, question)
         await sendTelegramMessage(runtime.config, chatId, `Open ${sessionLabel(runtime.config, sessionId)}`)
       })
       stampNotification(chatId, kind, sessionId)
+      notifyDebug("question proactive send delivered", {
+        sessionId,
+        requestId: question.requestId,
+        chatId,
+        dedupeKey: kind,
+      })
     } catch (error) {
       console.error("[TelegramBridge] outbound question notify failed", { sessionId, key, error })
     }
@@ -3043,6 +3113,10 @@ export async function startTelegramBridge() {
   const runtime = { config, store }
   console.log(`[TelegramBridge] OpenCode API: ${config.openCodeUrl}`)
   console.log(`[TelegramBridge] Session store: ${config.sessionStorePath}`)
+  console.log(`[TelegramBridge] Telegram alarm channel: ${config.telegramAlarmChannelEnabled !== false ? "enabled" : "disabled"}`)
+  if (notificationDebugEnabled()) {
+    console.log("[TelegramBridge] Notification debug logging enabled (TELEGRAM_NOTIFY_DEBUG=1)")
+  }
   if (config.directory) {
     console.log(`[TelegramBridge] OpenCode directory: ${config.directory}`)
   }
