@@ -4709,7 +4709,7 @@ describe("telegram bridge config and cache", () => {
     expect(text.endsWith("...")).toBe(true);
   });
 
-  test("question and permission events still queue pending when notifications are disabled", async () => {
+  test("question and permission events notify mapped chats even when /notify is off", async () => {
     const calls: Array<{ url: string; body: Record<string, unknown> }> = [];
     const originalFetch = globalThis.fetch;
     const inbox = new Map<string, Array<{
@@ -4789,7 +4789,7 @@ describe("telegram bridge config and cache", () => {
       globalThis.fetch = originalFetch;
     }
 
-    expect(calls.some((x) => x.url.includes("/sendMessage"))).toBe(false);
+    expect(calls.some((x) => x.url.includes("/sendMessage"))).toBe(true);
     const items = inbox.get("chat:77") || [];
     expect(items).toHaveLength(2);
     expect(items.map((item) => item.kind).sort()).toEqual(["permission", "question"]);
