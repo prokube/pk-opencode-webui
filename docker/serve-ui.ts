@@ -44,6 +44,19 @@ const validatedBasePath = validateBasePath(BASE_PATH)
 const basePathWithoutTrailing = validatedBasePath.endsWith("/") ? validatedBasePath.slice(0, -1) : validatedBasePath
 const basePathWithTrailing = validatedBasePath.endsWith("/") ? validatedBasePath : validatedBasePath + "/"
 
+function passApiResponse(response: Response) {
+  const responseHeaders = new Headers(response.headers)
+  // Bun fetch may return a decoded body while preserving original encoding headers.
+  // Remove these headers to avoid browser-side decode errors.
+  responseHeaders.delete("content-encoding")
+  responseHeaders.delete("content-length")
+  return new Response(response.body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers: responseHeaders,
+  })
+}
+
 // MIME types for static files
 const mimeTypes: Record<string, string> = {
   js: "application/javascript",
@@ -181,11 +194,12 @@ const server = Bun.serve<{ path: string; search: string }>({
       // Regular API requests
       console.log("[Proxy] API:", req.method, path)
       try {
-        return await fetch(target.toString(), {
+        const response = await fetch(target.toString(), {
           method: req.method,
           headers,
           body: req.body,
         })
+        return passApiResponse(response)
       } catch (e) {
         console.error("[Proxy] API error:", e)
         return new Response("API proxy error", { status: 502 })

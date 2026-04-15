@@ -33,6 +33,19 @@ const validatedBasePath = validateBasePath(BASE_PATH)
 const basePathWithoutTrailing = validatedBasePath.endsWith("/") ? validatedBasePath.slice(0, -1) : validatedBasePath
 const basePathWithTrailing = validatedBasePath.endsWith("/") ? validatedBasePath : validatedBasePath + "/"
 
+function passApiResponse(response: Response) {
+  const responseHeaders = new Headers(response.headers)
+  // Bun fetch may return a decoded body while preserving original encoding headers.
+  // Remove these headers to avoid browser-side decode errors.
+  responseHeaders.delete("content-encoding")
+  responseHeaders.delete("content-length")
+  return new Response(response.body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers: responseHeaders,
+  })
+}
+
 // Track WebSocket connections: client ws -> backend ws
 const wsConnections = new Map<object, WebSocket>()
 
@@ -114,11 +127,12 @@ const server = Bun.serve<{ target: string }>({
       }
 
       console.log("[Proxy] API:", req.method, strippedPath)
-      return fetch(target.toString(), {
+      const response = await fetch(target.toString(), {
         method: req.method,
         headers,
         body: req.body,
       })
+      return passApiResponse(response)
     }
 
     // Frontend routes - try to serve static file
