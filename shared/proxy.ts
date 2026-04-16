@@ -6,6 +6,22 @@
  * Handles both regular API requests and SSE streaming.
  */
 
+export function normalizeProxiedResponse(response: Response, addCors = false) {
+  const responseHeaders = new Headers(response.headers)
+  // Bun fetch may return a decoded body while preserving original encoding headers.
+  // Remove these headers to avoid browser-side decode errors.
+  responseHeaders.delete("content-encoding")
+  responseHeaders.delete("content-length")
+  if (addCors) {
+    responseHeaders.set("Access-Control-Allow-Origin", "*")
+  }
+  return new Response(response.body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers: responseHeaders,
+  })
+}
+
 /**
  * Handle a proxied request to a remote server.
  * @param path - The API path after /__proxy (e.g. "/session", "/event?directory=...")
@@ -84,18 +100,7 @@ export async function handleProxyRequest(path: string, req: Request): Promise<Re
       })
     }
 
-    // Forward the response with CORS headers.
-    // Remove Content-Encoding because fetch() already decompresses the body,
-    // so passing gzip/br encoding to the browser causes double-decode failures.
-    const responseHeaders = new Headers(response.headers)
-    responseHeaders.delete("content-encoding")
-    responseHeaders.delete("content-length") // length no longer matches after decompression
-    responseHeaders.set("Access-Control-Allow-Origin", "*")
-    return new Response(response.body, {
-      status: response.status,
-      statusText: response.statusText,
-      headers: responseHeaders,
-    })
+    return normalizeProxiedResponse(response, true)
   } catch (e) {
     console.error("[Proxy] Connection error:", e)
     return new Response(JSON.stringify({ error: "Proxy connection failed" }), {
