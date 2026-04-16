@@ -580,7 +580,6 @@ export function Session() {
       // Skip if effect was cleaned up, session changed, or user already toggled
       if (cancelled || !state || params.id !== id) return;
       if (notifyEnabled() !== local) return; // user toggled since fetch started
-      if (migrated && local && !state.enabled) return;
       setNotifyEnabled(state.enabled);
       // Sync localStorage to match server truth
       const map = readNotifyMap();
@@ -603,7 +602,7 @@ export function Session() {
         setSessionAlarm(url, id, enabled, resolved);
         return;
       }
-      setSessionAlarm(url, id, enabled);
+      console.warn("[session] skip setSessionAlarm: telegram source id unresolved", { id, dir });
     });
   }
 
