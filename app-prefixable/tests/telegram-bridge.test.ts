@@ -369,6 +369,7 @@ describe("telegram bridge config and cache", () => {
       expect(report.status).toBe("healthy");
       expect(report.dependencies.telegramApi.status).toBe("ok");
       expect(report.dependencies.openCodeApi.status).toBe("ok");
+      expect(report.dependencies.openCodeApi.message).toBe("OpenCode API is reachable for sources: default");
     } finally {
       globalThis.fetch = originalFetch;
     }
@@ -419,6 +420,51 @@ describe("telegram bridge config and cache", () => {
       expect(statusChecks).toContain("http://127.0.0.1:5000/session/status");
       expect(report.dependencies.openCodeSources?.length).toBe(2);
       expect(report.status).toBe("healthy");
+      expect(report.dependencies.openCodeApi.message).toBe("OpenCode API is reachable for sources: default, source-a");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test("readTelegramBridgeHealth reports degraded when no sources are configured", async () => {
+    const calls: string[] = [];
+    const originalFetch = globalThis.fetch;
+    try {
+      globalThis.fetch = async (input: RequestInfo | URL) => {
+        const url = String(input);
+        calls.push(url);
+        if (url.includes("/getMe")) {
+          return new Response(JSON.stringify({ ok: true, result: { id: 1 } }), { status: 200 });
+        }
+        throw new Error(`Unexpected fetch ${url}`);
+      };
+
+      const report = await readTelegramBridgeHealth({
+        config: {
+          mode: "polling",
+          token: "token",
+          openCodeUrl: "http://127.0.0.1:4096",
+          sessionCacheMax: 10,
+          sessionCacheTtlMs: 10_000,
+          notificationDebounceMs: 20_000,
+          port: 4097,
+          webhookPath: "/webhook",
+          sessionStorePath: "/tmp/test-store.json",
+        },
+        sources: [],
+        store: {
+          get: async () => undefined,
+          set: async () => undefined,
+          delete: async () => undefined,
+        },
+      });
+
+      expect(report.status).toBe("degraded");
+      expect(report.dependencies.openCodeApi.status).toBe("error");
+      expect(report.dependencies.openCodeApi.message).toBe("No OpenCode sources configured");
+      expect(report.dependencies.openCodeSources).toEqual([]);
+      const statusChecks = calls.filter((url) => url.includes("/session/status"));
+      expect(statusChecks.length).toBe(0);
     } finally {
       globalThis.fetch = originalFetch;
     }
@@ -463,6 +509,7 @@ describe("telegram bridge config and cache", () => {
 
       expect(report.status).toBe("degraded");
       expect(report.dependencies.openCodeApi.status).toBe("error");
+      expect(report.dependencies.openCodeApi.message).toBe("OpenCode API check failed for sources: source-a; healthy sources: default");
       expect(report.dependencies.openCodeSources).toEqual([
         { sourceId: "default", status: "ok", message: "OpenCode API is reachable" },
         { sourceId: "source-a", status: "error", message: "Source source-a is no longer configured" },
@@ -511,6 +558,7 @@ describe("telegram bridge config and cache", () => {
       expect(report.status).toBe("degraded");
       expect(report.dependencies.telegramApi.status).toBe("error");
       expect(report.dependencies.openCodeApi.status).toBe("ok");
+      expect(report.dependencies.openCodeApi.message).toBe("OpenCode API is reachable for sources: default");
     } finally {
       globalThis.fetch = originalFetch;
     }
