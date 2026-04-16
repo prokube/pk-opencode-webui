@@ -172,7 +172,13 @@ const server = Bun.serve<{ path: string; search: string }>({
 
           if (!response.ok) {
             console.error("[Proxy] SSE error:", response.status, response.statusText)
-            return new Response(response.body, { status: response.status })
+            return withNoStoreHeaders(
+              new Response(response.body, {
+                status: response.status,
+                statusText: response.statusText,
+                headers: response.headers,
+              }),
+            )
           }
 
           return new Response(response.body, {
@@ -188,7 +194,7 @@ const server = Bun.serve<{ path: string; search: string }>({
           })
         } catch (e) {
           console.error("[Proxy] SSE connection error:", e)
-          return new Response("SSE proxy error", { status: 502 })
+          return withNoStoreHeaders(new Response("SSE proxy error", { status: 502 }))
         }
       }
 
@@ -204,7 +210,7 @@ const server = Bun.serve<{ path: string; search: string }>({
         return withNoStoreHeaders(normalizeProxiedResponse(response))
       } catch (e) {
         console.error("[Proxy] API error:", e)
-        return new Response("API proxy error", { status: 502 })
+        return withNoStoreHeaders(new Response("API proxy error", { status: 502 }))
       }
     }
 

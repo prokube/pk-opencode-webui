@@ -2514,7 +2514,7 @@ export function Layout(props: ParentProps) {
                 fallback={
                   <div
                     class="mx-1 my-3 rounded-md border p-3"
-                    role="alert"
+                    role="status"
                     aria-live="polite"
                     style={{
                       color: "var(--text-base)",

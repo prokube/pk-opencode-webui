@@ -106,7 +106,13 @@ const server = Bun.serve<{ target: string }>({
 
           if (!response.ok) {
             console.error("[Proxy] SSE error:", response.status, response.statusText)
-            return new Response(response.body, { status: response.status })
+            return withNoStoreHeaders(
+              new Response(response.body, {
+                status: response.status,
+                statusText: response.statusText,
+                headers: response.headers,
+              }),
+            )
           }
 
           // Pass through the body directly - Bun handles streaming
@@ -123,18 +129,23 @@ const server = Bun.serve<{ target: string }>({
           })
         } catch (e) {
           console.error("[Proxy] SSE connection error:", e)
-          return new Response("SSE proxy error", { status: 502 })
+          return withNoStoreHeaders(new Response("SSE proxy error", { status: 502 }))
         }
       }
 
       console.log("[Proxy] API:", req.method, strippedPath)
-      const body = req.method === "GET" || req.method === "HEAD" ? undefined : req.body
-      const response = await fetch(target.toString(), {
-        method: req.method,
-        headers,
-        body,
-      })
-      return withNoStoreHeaders(normalizeProxiedResponse(response))
+      try {
+        const body = req.method === "GET" || req.method === "HEAD" ? undefined : req.body
+        const response = await fetch(target.toString(), {
+          method: req.method,
+          headers,
+          body,
+        })
+        return withNoStoreHeaders(normalizeProxiedResponse(response))
+      } catch (e) {
+        console.error("[Proxy] API error:", e)
+        return withNoStoreHeaders(new Response("API proxy error", { status: 502 }))
+      }
     }
 
     // Frontend routes - try to serve static file
