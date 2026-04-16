@@ -186,11 +186,37 @@ export interface SessionAlarmState {
   enabled: boolean
 }
 
-const telegramSourceIdCache = new Map<string, string>()
+const TELEGRAM_SOURCE_ID_CACHE_TTL_MS = 30_000
+
+const telegramSourceIdCache = new Map<string, { sourceId: string; expiresAt: number }>()
 const telegramSourceIdPending = new Map<string, Promise<string | undefined>>()
 
 function sourceCacheKey(serverUrl: string, directory: string) {
   return `${serverUrl}::${directory}`
+}
+
+export function invalidateTelegramSourceIdCache(serverUrl?: string, directory?: string) {
+  const url = serverUrl?.trim()
+  const dir = directory?.trim()
+  if (!url) {
+    telegramSourceIdCache.clear()
+    telegramSourceIdPending.clear()
+    return
+  }
+  if (!dir) {
+    for (const key of telegramSourceIdCache.keys()) {
+      if (!key.startsWith(`${url}::`)) continue
+      telegramSourceIdCache.delete(key)
+    }
+    for (const key of telegramSourceIdPending.keys()) {
+      if (!key.startsWith(`${url}::`)) continue
+      telegramSourceIdPending.delete(key)
+    }
+    return
+  }
+  const key = sourceCacheKey(url, dir)
+  telegramSourceIdCache.delete(key)
+  telegramSourceIdPending.delete(key)
 }
 
 function sourceFromSettings(data: unknown, directory?: string) {
@@ -221,7 +247,8 @@ export async function resolveTelegramSourceId(serverUrl: string, directory?: str
   if (!dir) return
   const key = sourceCacheKey(serverUrl, dir)
   const cached = telegramSourceIdCache.get(key)
-  if (cached) return cached
+  if (cached && cached.expiresAt > Date.now()) return cached.sourceId
+  if (cached) telegramSourceIdCache.delete(key)
   const pending = telegramSourceIdPending.get(key)
   if (pending) return pending
   const next = fetch(`${serverUrl}/api/ext/telegram/settings`)
@@ -230,7 +257,7 @@ export async function resolveTelegramSourceId(serverUrl: string, directory?: str
       const data = (await res.json().catch(() => null)) as unknown
       const sourceId = sourceFromSettings(data, dir)
       if (!sourceId) return
-      telegramSourceIdCache.set(key, sourceId)
+      telegramSourceIdCache.set(key, { sourceId, expiresAt: Date.now() + TELEGRAM_SOURCE_ID_CACHE_TTL_MS })
       return sourceId
     })
     .catch(() => undefined)

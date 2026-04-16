@@ -10,6 +10,8 @@ import * as fs from "node:fs"
 import * as nodePath from "node:path"
 import * as os from "node:os"
 import {
+  TELEGRAM_SOURCE_ID_MAX_LENGTH,
+  TELEGRAM_SOURCE_ID_PATTERN,
   readDesiredTelegramSettingsFingerprint,
   readTelegramRuntimeState,
   readTelegramSettings,
@@ -19,8 +21,6 @@ import { createTelegramSessionStore, type TelegramSessionStore } from "./telegra
 
 const MAX_TELEGRAM_SESSION_STORES = 8
 const MAX_SESSION_ALARM_SESSION_ID_LENGTH = 256
-const MAX_SESSION_ALARM_SOURCE_ID_LENGTH = 64
-const SESSION_ALARM_SOURCE_ID_PATTERN = /^[A-Za-z0-9._-]+$/
 const telegramSessionStores = new Map<string, TelegramSessionStore>()
 let telegramSessionStoreFactory = createTelegramSessionStore
 
@@ -36,10 +36,14 @@ function sessionAlarmSessionIdError(sessionId: string) {
 
 function sessionAlarmSourceIdError(sourceId: string) {
   if (!sourceId) return "sourceId parameter is required"
-  if (sourceId.length > MAX_SESSION_ALARM_SOURCE_ID_LENGTH) {
-    return `sourceId must be ${MAX_SESSION_ALARM_SOURCE_ID_LENGTH} characters or fewer`
+  if (sourceId === "default") return
+  if (sourceId.toLowerCase() === "default") {
+    return 'sourceId is reserved; use exact "default" or choose another id'
   }
-  if (!SESSION_ALARM_SOURCE_ID_PATTERN.test(sourceId)) {
+  if (sourceId.length > TELEGRAM_SOURCE_ID_MAX_LENGTH) {
+    return `sourceId must be ${TELEGRAM_SOURCE_ID_MAX_LENGTH} characters or fewer`
+  }
+  if (!TELEGRAM_SOURCE_ID_PATTERN.test(sourceId)) {
     return "sourceId must match [A-Za-z0-9._-]+"
   }
 }

@@ -138,7 +138,7 @@ describe("telegram settings extended API", () => {
     )
   })
 
-  test("PUT rejects source ids with ':' and reserved default id", async () => {
+  test("PUT rejects invalid source ids including reserved and oversized values", async () => {
     const dir = await mkdtemp(join(tmpdir(), "telegram-settings-"))
     const path = join(dir, "telegram-settings.json")
     cleanupPaths.push(dir)
@@ -157,6 +157,7 @@ describe("telegram settings extended API", () => {
             sources: [
               { id: "alpha:beta", openCodeUrl: "https://api.example.com", enabled: true },
               { id: "default", openCodeUrl: "https://api2.example.com", enabled: true },
+              { id: "a".repeat(65), openCodeUrl: "https://api3.example.com", enabled: true },
             ],
           },
         }),
@@ -173,6 +174,10 @@ describe("telegram settings extended API", () => {
         },
         {
           field: "sources.1.id",
+          message: "id must match [A-Za-z0-9._-]+ and must not be default",
+        },
+        {
+          field: "sources.2.id",
           message: "id must match [A-Za-z0-9._-]+ and must not be default",
         },
       ]),
@@ -434,6 +439,14 @@ describe("telegram settings extended API", () => {
       new Request("http://127.0.0.1/api/ext/telegram/session-alarm?sessionId=session-source&sourceId=bad:value"),
     )
     expect(badSource?.status).toBe(400)
+
+    const defaultVariant = await handleExtendedEndpoint(
+      "/api/ext/telegram/session-alarm",
+      "GET",
+      new URL("http://127.0.0.1/api/ext/telegram/session-alarm?sessionId=session-source&sourceId=Default"),
+      new Request("http://127.0.0.1/api/ext/telegram/session-alarm?sessionId=session-source&sourceId=Default"),
+    )
+    expect(defaultVariant?.status).toBe(400)
 
     const mismatch = await handleExtendedEndpoint(
       "/api/ext/telegram/session-alarm",

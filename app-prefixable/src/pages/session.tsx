@@ -579,10 +579,16 @@ export function Session() {
 
   /** Mirror bell toggle to server-side alarm state (fire-and-forget). */
   function syncAlarmToServer(id: string, enabled: boolean) {
-    const dir = directory || base64Decode(params.dir);
-    resolveTelegramSourceId(url, dir).then((sourceId) => {
-      if (sourceId) setNotifySourceId(sourceId);
+    const sourceId = notifySourceId();
+    if (sourceId) {
       setSessionAlarm(url, id, enabled, sourceId);
+      return;
+    }
+    const dir = directory || base64Decode(params.dir);
+    resolveTelegramSourceId(url, dir).then((resolved) => {
+      if (!resolved) return;
+      setNotifySourceId(resolved);
+      setSessionAlarm(url, id, enabled, resolved);
     });
   }
 

@@ -79,6 +79,9 @@ export type TelegramBridgeSettings = {
   sessionLinkBase?: string
 }
 
+export const TELEGRAM_SOURCE_ID_MAX_LENGTH = 64
+export const TELEGRAM_SOURCE_ID_PATTERN = /^[A-Za-z0-9._-]+$/
+
 function env(name: string): string {
   return process.env[name]?.trim() || ""
 }
@@ -136,7 +139,8 @@ function parseSourceId(value: unknown): string | undefined {
   if (typeof value !== "string") return
   const id = value.trim()
   if (!id) return
-  if (!/^[A-Za-z0-9._-]+$/.test(id)) return
+  if (id.length > TELEGRAM_SOURCE_ID_MAX_LENGTH) return
+  if (!TELEGRAM_SOURCE_ID_PATTERN.test(id)) return
   if (id.toLowerCase() === "default") return
   return id
 }
