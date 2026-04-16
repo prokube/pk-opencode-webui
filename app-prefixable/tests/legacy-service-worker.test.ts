@@ -50,7 +50,7 @@ describe("preventLegacyServiceWorkerCaching", () => {
     expect(res).toEqual({ registrations: 0, unregistered: 0, caches: 0 })
   })
 
-  test("unregisters workers that control app scope when legacy caches exist", async () => {
+  test("keeps non-legacy workers registered when only legacy caches exist", async () => {
     let currentUnregisters = 0
     let broadUnregisters = 0
     let otherUnregisters = 0
@@ -106,11 +106,58 @@ describe("preventLegacyServiceWorkerCaching", () => {
 
     const res = await preventLegacyServiceWorkerCaching()
 
-    expect(res).toEqual({ registrations: 2, unregistered: 2, caches: 2 })
-    expect(currentUnregisters).toBe(1)
-    expect(broadUnregisters).toBe(1)
+    expect(res).toEqual({ registrations: 0, unregistered: 0, caches: 2 })
+    expect(currentUnregisters).toBe(0)
+    expect(broadUnregisters).toBe(0)
     expect(otherUnregisters).toBe(0)
     expect(deleted).toEqual(["workbox-runtime-v1", "opencode-precache-v2"])
+  })
+
+  test("unregisters legacy workers even when legacy caches do not exist", async () => {
+    let appLegacyUnregisters = 0
+    let broadNonLegacyUnregisters = 0
+
+    const appLegacy = {
+      scope: "https://example.test/notebook/ns/a/",
+      active: { scriptURL: "https://example.test/assets/opencode-sw.js" },
+      unregister: async () => {
+        appLegacyUnregisters += 1
+        return true
+      },
+    } as ServiceWorkerRegistration
+
+    const broadNonLegacy = {
+      scope: "https://example.test/",
+      active: { scriptURL: "https://example.test/sw.js" },
+      unregister: async () => {
+        broadNonLegacyUnregisters += 1
+        return true
+      },
+    } as ServiceWorkerRegistration
+
+    const navigator = {
+      serviceWorker: {
+        getRegistrations: async () => [appLegacy, broadNonLegacy],
+      },
+    } as Navigator
+
+    const cacheStorage = {
+      keys: async () => ["misc-cache"],
+      delete: async () => true,
+    } as unknown as CacheStorage
+
+    globals.window = {
+      location: { href: "https://example.test/notebook/ns/a/session" },
+      caches: cacheStorage,
+    } as unknown as Window & typeof globalThis
+    globals.navigator = navigator
+    globals.caches = cacheStorage
+
+    const res = await preventLegacyServiceWorkerCaching()
+
+    expect(res).toEqual({ registrations: 1, unregistered: 1, caches: 0 })
+    expect(appLegacyUnregisters).toBe(1)
+    expect(broadNonLegacyUnregisters).toBe(0)
   })
 
   test("keeps non-legacy workers when there are no legacy caches", async () => {
