@@ -14,7 +14,18 @@ export function normalizeProxiedResponse(response: Response, corsOrigin?: string
   responseHeaders.delete("content-length")
   if (corsOrigin) {
     responseHeaders.set("Access-Control-Allow-Origin", corsOrigin)
-    responseHeaders.set("Vary", "Origin")
+    const vary = responseHeaders.get("Vary")
+    if (!vary) {
+      responseHeaders.set("Vary", "Origin")
+    } else {
+      const values = vary
+        .split(",")
+        .map((x) => x.trim())
+        .filter(Boolean)
+      if (!values.some((x) => x.toLowerCase() === "origin")) {
+        responseHeaders.set("Vary", `${vary}, Origin`)
+      }
+    }
   }
   return new Response(response.body, {
     status: response.status,
@@ -27,6 +38,8 @@ function sameOrigin(req: Request) {
   const origin = req.headers.get("origin")
   if (!origin) return
   const requestOrigin = new URL(req.url).origin
+  // Intentionally restrict proxy CORS to same-origin browser requests.
+  // This prevents exposing /__proxy as a generic cross-origin proxy endpoint.
   if (origin !== requestOrigin) return
   return origin
 }

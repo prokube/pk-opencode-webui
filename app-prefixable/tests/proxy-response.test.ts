@@ -29,6 +29,7 @@ describe("normalizeProxiedResponse", () => {
     const response = new Response("ok", {
       headers: {
         "access-control-allow-origin": "https://example.com",
+        vary: "Accept-Encoding",
       },
     })
 
@@ -36,6 +37,19 @@ describe("normalizeProxiedResponse", () => {
 
     expect(await normalized.text()).toBe("ok")
     expect(normalized.headers.get("access-control-allow-origin")).toBe("https://ui.example.com")
-    expect(normalized.headers.get("vary")).toBe("Origin")
+    expect(normalized.headers.get("vary")).toBe("Accept-Encoding, Origin")
+  })
+
+  test("keeps existing Origin vary token without duplication", async () => {
+    const response = new Response("ok", {
+      headers: {
+        vary: "Accept-Encoding, Origin",
+      },
+    })
+
+    const normalized = normalizeProxiedResponse(response, "https://ui.example.com")
+
+    expect(await normalized.text()).toBe("ok")
+    expect(normalized.headers.get("vary")).toBe("Accept-Encoding, Origin")
   })
 })
