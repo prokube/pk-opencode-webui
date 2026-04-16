@@ -611,6 +611,28 @@ async function resolvePendingForSession(runtime: Runtime, chatId: number, sessio
   })
 }
 
+async function hasUnresolvedPendingForSession(runtime: Runtime, sessionId: string, sourceId = "default") {
+  const targets = await pendingTargets(runtime, { sourceId, sessionId })
+  if (!targets.length) return false
+  const chats = new Set<number>()
+  for (const key of targets) {
+    const parsed = parseTelegramKey(key)
+    if (!parsed) continue
+    chats.add(parsed.chatId)
+  }
+  for (const chatId of chats) {
+    const items = await pendingGet(runtime, pendingChatKey(chatId))
+    const hasUnresolved = items.some((item) => {
+      const itemSourceId = item.sourceId || "default"
+      if (item.sessionId !== sessionId || itemSourceId !== sourceId) return false
+      if (item.kind === "task-finished") return false
+      return item.resolved !== true
+    })
+    if (hasUnresolved) return true
+  }
+  return false
+}
+
 function sessionLabel(config: BridgeConfig, sessionId: string, sourceId = "default"): string {
   const prefixed = sourceId === "default" ? `session ${sessionId}` : `[${sourceLabel(sourceId)}] session ${sessionId}`
   if (!config.sessionLinkBase) return prefixed
@@ -1876,7 +1898,7 @@ function parseRecentCreated(value: unknown): number {
   return 0
 }
 
-function parseRecentText(parts: unknown): string {
+function parseRecentText(parts: unknown, maxLen = recentPartTextMax): string {
   if (!Array.isArray(parts)) return ""
   const text = parts
     .map((part) => {
@@ -1892,11 +1914,19 @@ function parseRecentText(parts: unknown): string {
     .replace(/\s+/g, " ")
     .trim()
   if (!text) return ""
-  return truncateTelegramInlineText(text, recentPartTextMax)
+  if (maxLen <= 0) return text
+  return truncateTelegramInlineText(text, maxLen)
 }
 
-async function recentText(config: BridgeConfig, sessionId: string, count: number, sourceId = "default"): Promise<string> {
+async function recentText(
+  config: BridgeConfig,
+  sessionId: string,
+  count: number,
+  sourceId = "default",
+  options?: { preserveFullLatest?: boolean },
+): Promise<string> {
   const safeCount = Math.max(1, Math.min(count, recentMaxCount))
+  const keepFull = options?.preserveFullLatest === true && safeCount === 1
   const url = opencodeUrl(config, `/session/${encodeURIComponent(sessionId)}/message`)
   url.searchParams.set("limit", String(Math.max(20, safeCount * 6)))
   if (config.directory) {
@@ -1929,7 +1959,7 @@ async function recentText(config: BridgeConfig, sessionId: string, count: number
     const created = parseRecentCreated(time?.created)
       || parseRecentCreated((info as { created?: unknown }).created)
       || parseRecentCreated((row as { time?: { created?: unknown } }).time?.created)
-    const text = parseRecentText(row.parts)
+    const text = parseRecentText(row.parts, keepFull ? 0 : recentPartTextMax)
     if (!id || !role || !text) continue
     if (role === "assistant") {
       items.push({ id, role: "assistant", parentID, text, created })
@@ -1968,6 +1998,7 @@ async function recentText(config: BridgeConfig, sessionId: string, count: number
     lines.push(`${i + 1}. You: ${item.text}`)
     lines.push(`   Assistant: ${reply}`)
   }
+  if (keepFull) return lines.join("\n")
   return truncateTelegramText(lines.join("\n"), recentPayloadMax)
 }
 
@@ -2809,7 +2840,7 @@ export async function handleCallbackUpdate(runtime: Runtime, update: TelegramUpd
       }
       await answerCallback(runtime.config, callbackId, "Loading latest message...")
       state.acknowledged = true
-      const text = await recentText(scoped, ref.sessionId, 1, ref.sourceId)
+      const text = await recentText(scoped, ref.sessionId, 1, ref.sourceId, { preserveFullLatest: true })
       await sendTelegramMessage(runtime.config, chatId, text)
       return
     }
@@ -3478,7 +3509,11 @@ export async function handleBridgeEvent(runtime: Runtime, event: { type: string;
     return
   }
   statusBySession.delete(scopedSessionId)
-  if (!prev || prev === "idle") return
+  const fromTransition = Boolean(prev && prev !== "idle")
+  if (!fromTransition) {
+    const pending = await hasUnresolvedPendingForSession(runtime, sessionId, sourceId)
+    if (!pending) return
+  }
   const scoped = sourceForSessionRef(runtime, { sourceId, sessionId })
   const title = scoped ? await safeSessionTitle(scoped, sessionId, sourceId) : undefined
   const message = title

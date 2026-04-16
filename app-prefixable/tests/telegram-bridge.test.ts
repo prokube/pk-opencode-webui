@@ -2230,6 +2230,9 @@ describe("telegram bridge config and cache", () => {
         const url = String(input);
         const body = init?.body ? (JSON.parse(String(init.body)) as Record<string, unknown>) : {};
         calls.push({ url, body });
+        if (url.includes("/session/session-1")) {
+          return new Response(JSON.stringify({ title: "My Session Title" }), { status: 200 });
+        }
         if (url.includes("/sendMessage")) {
           return new Response(JSON.stringify({ ok: true, result: { message_id: 1 } }), { status: 200 });
         }
@@ -5350,6 +5353,7 @@ describe("telegram bridge config and cache", () => {
           mode: "polling" as const,
           token: "token",
           openCodeUrl: "http://127.0.0.1:4096",
+          telegramAlarmChannelEnabled: true,
           sessionCacheMax: 10,
           sessionCacheTtlMs: 10_000,
           notificationDebounceMs: 0,
@@ -5363,6 +5367,7 @@ describe("telegram bridge config and cache", () => {
           delete: async () => undefined,
           sessionKeys: async () => ["chat:77:user:5"],
           notificationGet: async () => false,
+          sessionAlarmGet: async () => true,
           pendingGet: async (chatKey: string) => inbox.get(chatKey) || [],
           pendingSet: async (chatKey: string, items: Array<{
             id: string;
@@ -5402,7 +5407,9 @@ describe("telegram bridge config and cache", () => {
       globalThis.fetch = originalFetch;
     }
 
-    expect(calls.some((x) => x.url.includes("/sendMessage"))).toBe(true);
+    const sendMessageCalls = calls.filter((x) => x.url.includes("/sendMessage"));
+    expect(sendMessageCalls.length).toBeGreaterThan(0);
+    expect(sendMessageCalls.some((x) => x.body.chat_id === 77)).toBe(true);
     const items = inbox.get("chat:77") || [];
     expect(items).toHaveLength(2);
     expect(items.map((item) => item.kind).sort()).toEqual(["permission", "question"]);
@@ -6217,11 +6224,15 @@ describe("telegram bridge config and cache", () => {
   test("handleBridgeEvent sends task-finished only on non-idle to idle transition", async () => {
     const calls: Array<{ url: string; body: Record<string, unknown> }> = [];
     const originalFetch = globalThis.fetch;
+    const sessionId = "session-title-check";
     try {
       globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
         const url = String(input);
         const body = init?.body ? (JSON.parse(String(init.body)) as Record<string, unknown>) : {};
         calls.push({ url, body });
+        if (url.includes(`/session/${sessionId}`)) {
+          return new Response(JSON.stringify({ title: "My Session Title" }), { status: 200 });
+        }
         if (url.includes("/sendMessage")) {
           return new Response(JSON.stringify({ ok: true, result: { message_id: 1 } }), { status: 200 });
         }
@@ -6251,16 +6262,104 @@ describe("telegram bridge config and cache", () => {
 
       await handleBridgeEvent(runtime, {
         type: "session.status",
-        properties: { sessionID: "session-1", status: { type: "idle" } },
+        properties: { sessionID: sessionId, status: { type: "idle" } },
       });
       await handleBridgeEvent(runtime, {
         type: "session.status",
-        properties: { sessionID: "session-1", status: { type: "busy" } },
+        properties: { sessionID: sessionId, status: { type: "busy" } },
       });
       await handleBridgeEvent(runtime, {
         type: "session.status",
-        properties: { sessionID: "session-1", status: { type: "idle" } },
+        properties: { sessionID: sessionId, status: { type: "idle" } },
       });
+      await handleBridgeEvent(runtime, {
+        type: "session.status",
+        properties: { sessionID: sessionId, status: { type: "idle" } },
+      });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+
+    const sentTexts = calls
+      .filter((x) => x.url.includes("/sendMessage"))
+      .map((x) => String(x.body.text || ""));
+    expect(sentTexts).toEqual([`Task finished: My Session Title is now idle.\n\nOpen session ${sessionId}`]);
+    const markup = calls.find((x) => x.url.includes("/sendMessage"))?.body.reply_markup as {
+      inline_keyboard?: Array<Array<{ callback_data?: string }>>
+    } | undefined
+    const callbacks = (markup?.inline_keyboard?.[0] || []).map((item) => String(item.callback_data || ""))
+    expect(callbacks.some((item) => /^u:s:[a-z0-9]{6,24}$/.test(item))).toBe(true)
+    expect(callbacks.some((item) => /^u:r:[a-z0-9]{6,24}$/.test(item))).toBe(true)
+  });
+
+  test("handleBridgeEvent sends task-finished on idle when unresolved pending exists", async () => {
+    const calls: Array<{ url: string; body: Record<string, unknown> }> = [];
+    const originalFetch = globalThis.fetch;
+    const pending = new Map<string, Array<{
+      id: string;
+      kind: "question" | "permission" | "task-finished";
+      sessionId: string;
+      sourceId?: string;
+      text: string;
+      stampedAt: number;
+      resolved: boolean;
+    }>>([
+      [
+        "chat:77",
+        [{
+          id: "default:session-1:question:req-1:77",
+          kind: "question",
+          sessionId: "session-1",
+          text: "Question pending: Need input",
+          stampedAt: Date.now(),
+          resolved: false,
+        }],
+      ],
+    ]);
+    try {
+      globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        const body = init?.body ? (JSON.parse(String(init.body)) as Record<string, unknown>) : {};
+        calls.push({ url, body });
+        if (url.includes("/sendMessage")) {
+          return new Response(JSON.stringify({ ok: true, result: { message_id: 1 } }), { status: 200 });
+        }
+        throw new Error(`Unexpected fetch ${url}`);
+      };
+
+      const runtime = {
+        config: {
+          mode: "polling" as const,
+          token: "token",
+          openCodeUrl: "http://127.0.0.1:4096",
+          sessionCacheMax: 10,
+          sessionCacheTtlMs: 10_000,
+          notificationDebounceMs: 0,
+          port: 4097,
+          webhookPath: "/webhook",
+          sessionStorePath: "/tmp/test-store.json",
+        },
+        store: {
+          get: async () => undefined,
+          set: async () => undefined,
+          delete: async () => undefined,
+          sessionKeys: async () => ["chat:77:user:5"],
+          notificationGet: async () => true,
+          pendingGet: async (chatKey: string) => pending.get(chatKey) || [],
+          pendingSet: async (chatKey: string, items: Array<{
+            id: string;
+            kind: "question" | "permission" | "task-finished";
+            sessionId: string;
+            sourceId?: string;
+            text: string;
+            stampedAt: number;
+            resolved: boolean;
+          }>) => {
+            pending.set(chatKey, [...items]);
+          },
+        },
+      };
+
       await handleBridgeEvent(runtime, {
         type: "session.status",
         properties: { sessionID: "session-1", status: { type: "idle" } },
@@ -6272,13 +6371,10 @@ describe("telegram bridge config and cache", () => {
     const sentTexts = calls
       .filter((x) => x.url.includes("/sendMessage"))
       .map((x) => String(x.body.text || ""));
-    expect(sentTexts).toEqual(["Task finished: the session is now idle.\n\nOpen session session-1"]);
-    const markup = calls.find((x) => x.url.includes("/sendMessage"))?.body.reply_markup as {
-      inline_keyboard?: Array<Array<{ callback_data?: string }>>
-    } | undefined
-    const callbacks = (markup?.inline_keyboard?.[0] || []).map((item) => String(item.callback_data || ""))
-    expect(callbacks.some((item) => /^u:s:[a-z0-9]{6,24}$/.test(item))).toBe(true)
-    expect(callbacks.some((item) => /^u:r:[a-z0-9]{6,24}$/.test(item))).toBe(true)
+    expect(sentTexts).toHaveLength(1);
+    expect(sentTexts[0] || "").toContain("Task finished:");
+    const items = pending.get("chat:77") || [];
+    expect(items.some((item) => item.kind === "question" && item.resolved === true)).toBe(true);
   });
 
   test("handleBridgeEvent clears tracked status on session.deleted without sessionID", async () => {
@@ -7276,6 +7372,7 @@ describe("telegram bridge config and cache", () => {
     const calls: Array<{ url: string; body: Record<string, unknown> }> = [];
     const originalFetch = globalThis.fetch;
     const storeMap = new Map<string, string>([["chat:77:user:5", "session-other"]]);
+    const longReply = "r".repeat(800);
     try {
       globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
         const url = String(input);
@@ -7290,7 +7387,7 @@ describe("telegram bridge config and cache", () => {
         if (url.includes("/session/session-1/message")) {
           return new Response(JSON.stringify([
             { info: { id: "u-2", role: "user" }, parts: [{ type: "text", text: "right session" }] },
-            { info: { id: "a-2", role: "assistant", parentID: "u-2" }, parts: [{ type: "text", text: "right reply" }] },
+            { info: { id: "a-2", role: "assistant", parentID: "u-2" }, parts: [{ type: "text", text: longReply }] },
           ]), { status: 200 });
         }
         if (url.includes("/session/session-other/message")) {
@@ -7363,6 +7460,7 @@ describe("telegram bridge config and cache", () => {
       .find((text) => text.includes("Recent activity for session")) || "";
     expect(recentText).toContain("session-1");
     expect(recentText).toContain("right session");
+    expect(recentText).toContain(`Assistant: ${longReply}`);
   });
 
 
