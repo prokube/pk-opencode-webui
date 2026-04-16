@@ -868,6 +868,10 @@ export function Layout(props: ParentProps) {
       .sort((a, b) => (b.time?.archived || 0) - (a.time?.archived || 0)),
   );
 
+  const hasSessions = createMemo(
+    () => projectSessions().length > 0 || archivedSessions().length > 0,
+  );
+
   const [now, setNow] = createSignal(new Date());
 
   onMount(() => {
@@ -2507,7 +2511,7 @@ export function Layout(props: ParentProps) {
             {/* Normal Session List */}
             <Show when={!loading() && !searchQuery().trim()}>
               <Show
-                when={!sessionError()}
+                when={!sessionError() || hasSessions()}
                 fallback={
                   <div
                     class="mx-1 my-3 rounded-md border p-3"
@@ -2535,9 +2539,7 @@ export function Layout(props: ParentProps) {
                 }
               >
                 <Show
-                  when={
-                    projectSessions().length > 0 || archivedSessions().length > 0
-                  }
+                  when={hasSessions()}
                   fallback={
                     <div
                       class="py-6 text-center"

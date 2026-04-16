@@ -109,4 +109,30 @@ describe("preventLegacyServiceWorkerCaching", () => {
     expect(otherUnregisters).toBe(0)
     expect(deleted).toEqual(["workbox-runtime-v1", "opencode-precache-v2"])
   })
+
+  test("clears legacy caches from window when global caches is unavailable", async () => {
+    const deleted: string[] = []
+
+    const cacheStorage = {
+      keys: async () => ["misc-cache", "opencode-runtime-v3"],
+      delete: async (key: string) => {
+        deleted.push(key)
+        return true
+      },
+    } as unknown as CacheStorage
+
+    globals.window = {
+      location: { href: "https://example.test/notebook/ns/a/session" },
+      caches: cacheStorage,
+    } as unknown as Window & typeof globalThis
+    globals.navigator = {
+      serviceWorker: { getRegistrations: async () => [] },
+    } as Navigator
+    delete globals.caches
+
+    const res = await preventLegacyServiceWorkerCaching()
+
+    expect(res).toEqual({ registrations: 0, unregistered: 0, caches: 1 })
+    expect(deleted).toEqual(["opencode-runtime-v3"])
+  })
 })
