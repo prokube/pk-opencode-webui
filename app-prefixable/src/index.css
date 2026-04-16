@@ -472,11 +472,10 @@
   }
 
   .markdown-copy-icon {
-    @apply flex items-center justify-center;
-  }
-
-  .markdown-copy-icon svg {
-    @apply h-3.5 w-3.5;
+    @apply flex h-3.5 w-3.5 items-center justify-center;
+    font-size: 0.95rem;
+    line-height: 1;
+    font-weight: 600;
   }
 
   .markdown-copy-label {
