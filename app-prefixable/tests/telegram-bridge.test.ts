@@ -7559,8 +7559,9 @@ describe("telegram bridge config and cache", () => {
     expect(latest).toContain("Assistant: Newest answer");
     expect(latest).not.toContain("Older question");
 
-    const messageUrl = calls.find((x) => x.url.includes("/session/session-2/message"))?.url || "";
-    expect(messageUrl.includes("limit=")).toBe(false);
+    const messageCalls = calls.filter((x) => x.url.includes("/session/session-2/message"));
+    expect(messageCalls.length).toBeGreaterThan(0);
+    expect(messageCalls.every((x) => !x.url.includes("limit="))).toBe(true);
   });
 
 
