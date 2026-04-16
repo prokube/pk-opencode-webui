@@ -34,5 +34,10 @@ async function start() {
 
 start().catch((e) => {
   console.error("[OpenCode] Render error:", e)
-  root.innerHTML = `<div style="color: red; padding: 20px;">Error: ${e}</div>`
+  root.innerHTML = ""
+  const message = document.createElement("div")
+  message.style.color = "red"
+  message.style.padding = "20px"
+  message.textContent = `Error: ${e instanceof Error && e.message.trim() ? e.message : String(e)}`
+  root.appendChild(message)
 })

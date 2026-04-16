@@ -1183,12 +1183,11 @@ export function Layout(props: ParentProps) {
     }
   }
 
-  const sessionError = createMemo(() => sessionLoadError() ?? sync.bootstrapError);
+  const sessionError = createMemo(() => sessionLoadError());
 
   function retrySessionBootstrap() {
     setLoading(true);
     void loadSessions();
-    void sync.refresh();
   }
 
   function handleSearchInput(query: string) {

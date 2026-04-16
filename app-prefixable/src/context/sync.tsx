@@ -60,7 +60,7 @@ function sortParts(parts: Part[]): Part[] {
 
 function errorText(err: unknown) {
   if (err instanceof Error && err.message.trim()) return err.message
-  return "Failed to bootstrap sessions from API."
+  return "Failed to bootstrap app state from API."
 }
 
 function binarySearch<T>(arr: T[], id: string, getId: (item: T) => string): { found: boolean; index: number } {
