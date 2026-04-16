@@ -38,7 +38,7 @@ renderer.code = ({ text, lang }) => {
   const code = escapeHtml(text)
   const className = lang ? ` class="language-${escapeHtml(lang)}"` : ""
 
-  return `<div class="markdown-code-block"><button class="markdown-copy-button" type="button" data-state="idle" aria-label="Copy" aria-live="polite" aria-atomic="true">Copy</button><pre><code${className}>${code}</code></pre></div>`
+  return `<div class="markdown-code-block"><button class="markdown-copy-button" type="button" data-state="idle" aria-label="Copy code"><span class="markdown-copy-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="11" height="11" rx="2"></rect><path d="M5 15V6a2 2 0 0 1 2-2h9"></path></svg></span><span class="markdown-copy-label" aria-hidden="true">Copy</span><span class="markdown-copy-live" aria-live="polite" aria-atomic="true">Copy</span></button><pre><code${className}>${code}</code></pre></div>`
 }
 
 function copyLabel(state: "idle" | "copied" | "failed") {
@@ -53,8 +53,14 @@ function setCopyState(button: HTMLButtonElement, state: "idle" | "copied" | "fai
 
   button.dataset.state = state
   const label = copyLabel(state)
-  button.textContent = label
-  button.setAttribute("aria-label", label)
+  button.setAttribute("aria-label", state === "idle" ? "Copy code" : label)
+
+  const text = button.querySelector(".markdown-copy-label")
+  if (text instanceof HTMLElement) text.textContent = label
+
+  const live = button.querySelector(".markdown-copy-live")
+  if (live instanceof HTMLElement) live.textContent = label
+
   if (state === "idle") {
     delete button.dataset.copyReset
     return
@@ -78,14 +84,10 @@ function copyCode(button: HTMLButtonElement) {
     return
   }
 
-  try {
-    navigator.clipboard.writeText(code).then(
-      () => setCopyState(button, "copied"),
-      () => setCopyState(button, "failed"),
-    )
-  } catch {
-    setCopyState(button, "failed")
-  }
+  Promise.resolve(navigator.clipboard.writeText(code)).then(
+    () => setCopyState(button, "copied"),
+    () => setCopyState(button, "failed"),
+  )
 }
 
 interface MarkdownProps {
