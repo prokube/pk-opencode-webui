@@ -39,8 +39,20 @@ describe("preventLegacyServiceWorkerCaching", () => {
     expect(res).toEqual({ registrations: 0, unregistered: 0, caches: 0 })
   })
 
+  test("skips cleanup when navigator is missing", async () => {
+    globals.window = {
+      location: { href: "https://example.test/notebook/ns/a/session" },
+    } as unknown as Window & typeof globalThis
+    delete globals.navigator
+
+    const res = await preventLegacyServiceWorkerCaching()
+
+    expect(res).toEqual({ registrations: 0, unregistered: 0, caches: 0 })
+  })
+
   test("unregisters scoped workers and clears legacy workbox caches", async () => {
     let currentUnregisters = 0
+    let broadUnregisters = 0
     let otherUnregisters = 0
     const deleted: string[] = []
 
@@ -60,9 +72,17 @@ describe("preventLegacyServiceWorkerCaching", () => {
       },
     } as ServiceWorkerRegistration
 
+    const broad = {
+      scope: "https://example.test/",
+      unregister: async () => {
+        broadUnregisters += 1
+        return true
+      },
+    } as ServiceWorkerRegistration
+
     const navigator = {
       serviceWorker: {
-        getRegistrations: async () => [current, other],
+        getRegistrations: async () => [current, broad, other],
       },
     } as Navigator
 
@@ -85,6 +105,7 @@ describe("preventLegacyServiceWorkerCaching", () => {
 
     expect(res).toEqual({ registrations: 1, unregistered: 1, caches: 2 })
     expect(currentUnregisters).toBe(1)
+    expect(broadUnregisters).toBe(0)
     expect(otherUnregisters).toBe(0)
     expect(deleted).toEqual(["workbox-runtime-v1", "opencode-precache-v2"])
   })
