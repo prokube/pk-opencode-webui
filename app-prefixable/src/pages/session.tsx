@@ -49,7 +49,13 @@ import {
   ImageAttachments,
   type ImageAttachment,
 } from "../components/image-attachments";
-import { notifySessionKey, readNotifyMap, writeNotifyMap } from "../utils/notify";
+import {
+  migrateNotifySessionKey,
+  notifyEnabledForSession,
+  readNotifyMap,
+  writeNotifyMap,
+  writeNotifySessionEnabled,
+} from "../utils/notify";
 import { getSessionAlarm, resolveTelegramSourceId, setSessionAlarm } from "../utils/extended-api";
 import { sessionQuestionRequest } from "../utils/session-tree-request";
 import { createRootSession } from "../utils/root-session";
@@ -525,7 +531,9 @@ export function Session() {
       const id = params.id;
       if (!id) return false;
       const dir = directory || base64Decode(params.dir);
-      return readNotifyMap()[notifySessionKey(id, dir)] === true;
+      const map = readNotifyMap();
+      if (migrateNotifySessionKey(map, id, dir)) writeNotifyMap(map);
+      return notifyEnabledForSession(map, id, dir);
     })(),
   );
   const [notifyDenied, setNotifyDenied] = createSignal(false);
@@ -558,8 +566,10 @@ export function Session() {
       return;
     }
     // Seed from localStorage first for instant UI
-    const key = notifySessionKey(id, dir);
-    const local = readNotifyMap()[key] === true;
+    const map = readNotifyMap();
+    const migrated = migrateNotifySessionKey(map, id, dir);
+    if (migrated) writeNotifyMap(map);
+    const local = notifyEnabledForSession(map, id, dir);
     setNotifyEnabled(local);
     if (!sourceReady) return;
     // Cancellation flag for stale responses
@@ -570,14 +580,11 @@ export function Session() {
       // Skip if effect was cleaned up, session changed, or user already toggled
       if (cancelled || !state || params.id !== id) return;
       if (notifyEnabled() !== local) return; // user toggled since fetch started
+      if (migrated && local && !state.enabled) return;
       setNotifyEnabled(state.enabled);
       // Sync localStorage to match server truth
       const map = readNotifyMap();
-      if (state.enabled) {
-        map[key] = true;
-      } else {
-        delete map[key];
-      }
+      writeNotifySessionEnabled(map, id, state.enabled, dir);
       writeNotifyMap(map);
     });
   });
@@ -608,8 +615,7 @@ export function Session() {
     if (notifyEnabled()) {
       const map = readNotifyMap();
       const dir = directory || base64Decode(params.dir);
-      const key = notifySessionKey(id, dir);
-      delete map[key];
+      writeNotifySessionEnabled(map, id, false, dir);
       writeNotifyMap(map);
       setNotifyEnabled(false);
       setNotifyDenied(false);
@@ -624,7 +630,7 @@ export function Session() {
     if (perm === "granted") {
       const map = readNotifyMap();
       const dir = directory || base64Decode(params.dir);
-      map[notifySessionKey(id, dir)] = true;
+      writeNotifySessionEnabled(map, id, true, dir);
       writeNotifyMap(map);
       setNotifyEnabled(true);
       syncAlarmToServer(id, true);
@@ -641,7 +647,7 @@ export function Session() {
       if (result === "granted") {
         const map = readNotifyMap();
         const dir = directory || base64Decode(params.dir);
-        map[notifySessionKey(id, dir)] = true;
+        writeNotifySessionEnabled(map, id, true, dir);
         writeNotifyMap(map);
         setNotifyEnabled(true);
         syncAlarmToServer(id, true);

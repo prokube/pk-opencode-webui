@@ -170,15 +170,15 @@ describe("telegram settings extended API", () => {
       expect.arrayContaining([
         {
           field: "sources.0.id",
-          message: "id must match [A-Za-z0-9._-]+ and must not be default",
+          message: "id must match [A-Za-z0-9._-]+",
         },
         {
           field: "sources.1.id",
-          message: "id must match [A-Za-z0-9._-]+ and must not be default",
+          message: 'id must not be "default" (case-insensitive)',
         },
         {
           field: "sources.2.id",
-          message: "id must match [A-Za-z0-9._-]+ and must not be default",
+          message: "id must be 64 characters or fewer",
         },
       ]),
     )

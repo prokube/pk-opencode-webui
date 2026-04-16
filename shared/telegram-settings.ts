@@ -135,14 +135,24 @@ function parsePersistedLinkBase(value: unknown, fallback: string | undefined): s
   return normalizeLinkBase(trimmed, "persisted sessionLinkBase")
 }
 
-function parseSourceId(value: unknown): string | undefined {
-  if (typeof value !== "string") return
+function parseSourceId(value: unknown): { id?: string; error?: string } {
+  if (typeof value !== "string") {
+    return { error: "id must be a string" }
+  }
   const id = value.trim()
-  if (!id) return
-  if (id.length > TELEGRAM_SOURCE_ID_MAX_LENGTH) return
-  if (!TELEGRAM_SOURCE_ID_PATTERN.test(id)) return
-  if (id.toLowerCase() === "default") return
-  return id
+  if (!id) {
+    return { error: "id must not be empty" }
+  }
+  if (id.length > TELEGRAM_SOURCE_ID_MAX_LENGTH) {
+    return { error: `id must be ${TELEGRAM_SOURCE_ID_MAX_LENGTH} characters or fewer` }
+  }
+  if (!TELEGRAM_SOURCE_ID_PATTERN.test(id)) {
+    return { error: "id must match [A-Za-z0-9._-]+" }
+  }
+  if (id.toLowerCase() === "default") {
+    return { error: 'id must not be "default" (case-insensitive)' }
+  }
+  return { id }
 }
 
 function parsePersistedSources(value: unknown): TelegramSourceSetting[] | undefined {
@@ -157,7 +167,8 @@ function parsePersistedSources(value: unknown): TelegramSourceSetting[] | undefi
       enabled?: unknown
       directory?: unknown
     }
-    const id = parseSourceId(source.id)
+    const parsed = parseSourceId(source.id)
+    const id = parsed.id
     if (!id || ids.has(id)) continue
     if (typeof source.openCodeUrl !== "string" || !source.openCodeUrl.trim()) continue
     const openCodeUrl = parsePersistedUrl(source.openCodeUrl, "openCodeUrl", undefined)
@@ -758,9 +769,11 @@ function normalizePayload(input: unknown): {
           continue
         }
         const source = entry as Record<string, unknown>
-        const id = parseSourceId(source.id)
+        const parsed = parseSourceId(source.id)
+        const id = parsed.id
         if (!id) {
-          errors.push({ field: `sources.${i}.id`, message: "id must match [A-Za-z0-9._-]+ and must not be default" })
+          const message = parsed.error || "id must match [A-Za-z0-9._-]+ and must not be default"
+          errors.push({ field: `sources.${i}.id`, message })
           continue
         }
         if (ids.has(id)) {

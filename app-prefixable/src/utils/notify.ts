@@ -16,6 +16,37 @@ export function notifySessionKey(id: string, directory?: string) {
   return `${dir}::${id}`
 }
 
+export function notifyEnabledForSession(map: Record<string, boolean>, id: string, directory?: string) {
+  const key = notifySessionKey(id, directory)
+  if (map[key] === true) return true
+  return map[id] === true
+}
+
+export function migrateNotifySessionKey(map: Record<string, boolean>, id: string, directory?: string) {
+  const key = notifySessionKey(id, directory)
+  if (key === id) return false
+  if (map[id] !== true) return false
+  map[key] = true
+  delete map[id]
+  return true
+}
+
+export function writeNotifySessionEnabled(
+  map: Record<string, boolean>,
+  id: string,
+  enabled: boolean,
+  directory?: string,
+) {
+  const key = notifySessionKey(id, directory)
+  if (enabled) {
+    map[key] = true
+    if (key !== id) delete map[id]
+    return
+  }
+  delete map[key]
+  delete map[id]
+}
+
 const DEFAULT_ALARM_CHANNELS: AlarmChannels = {
   browser: true,
   telegram: false,
