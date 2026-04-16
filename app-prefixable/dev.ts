@@ -36,6 +36,18 @@ const basePathWithTrailing = validatedBasePath.endsWith("/") ? validatedBasePath
 // Track WebSocket connections: client ws -> backend ws
 const wsConnections = new Map<object, WebSocket>()
 
+function withNoStoreHeaders(response: Response) {
+  const headers = new Headers(response.headers)
+  headers.set("Cache-Control", "no-store")
+  headers.set("Pragma", "no-cache")
+  headers.set("Expires", "0")
+  return new Response(response.body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers,
+  })
+}
+
 const server = Bun.serve<{ target: string }>({
   port: PORT,
   idleTimeout: 0, // Disable timeout for SSE connections
@@ -76,7 +88,7 @@ const server = Bun.serve<{ target: string }>({
 
     // Extended API endpoints (handled locally, not proxied)
     const extResponse = await handleExtendedEndpoint(strippedPath, req.method, url, req)
-    if (extResponse) return extResponse
+    if (extResponse) return withNoStoreHeaders(extResponse)
 
     // API requests go directly to the backend
     if (isApiPath(strippedPath)) {
@@ -102,7 +114,9 @@ const server = Bun.serve<{ target: string }>({
             status: response.status,
             headers: {
               "Content-Type": "text/event-stream",
-              "Cache-Control": "no-cache",
+              "Cache-Control": "no-store",
+              Pragma: "no-cache",
+              Expires: "0",
               Connection: "keep-alive",
               "X-Accel-Buffering": "no",
             },
@@ -120,7 +134,7 @@ const server = Bun.serve<{ target: string }>({
         headers,
         body,
       })
-      return normalizeProxiedResponse(response)
+      return withNoStoreHeaders(normalizeProxiedResponse(response))
     }
 
     // Frontend routes - try to serve static file

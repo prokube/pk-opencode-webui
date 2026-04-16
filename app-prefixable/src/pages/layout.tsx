@@ -269,6 +269,7 @@ export function Layout(props: ParentProps) {
 
   const [sessions, setSessions] = createSignal<Session[]>([]);
   const [loading, setLoading] = createSignal(true);
+  const [sessionLoadError, setSessionLoadError] = createSignal<string | null>(null);
   const [projects, setProjects] = createSignal<Project[]>([]);
   const [sidebarExpanded, setSidebarExpanded] = createSignal(true);
   const [showArchived, setShowArchived] = createSignal(false);
@@ -1149,6 +1150,11 @@ export function Layout(props: ParentProps) {
     });
   }
 
+  function errorText(err: unknown) {
+    if (err instanceof Error && err.message.trim()) return err.message;
+    return "Session bootstrap failed. Check API connectivity and retry.";
+  }
+
   async function loadSessions() {
     try {
       const res = await client.session.list({ roots: true });
@@ -1159,15 +1165,26 @@ export function Layout(props: ParentProps) {
             s && typeof s === "object" && typeof s.id === "string",
         );
         setSessions(valid);
+        setSessionLoadError(null);
       } else {
         setSessions([]);
+        setSessionLoadError(null);
       }
     } catch (e) {
       console.error("Failed to load sessions:", e);
       setSessions([]);
+      setSessionLoadError(errorText(e));
     } finally {
       setLoading(false);
     }
+  }
+
+  const sessionError = createMemo(() => sessionLoadError() ?? sync.bootstrapError);
+
+  function retrySessionBootstrap() {
+    setLoading(true);
+    void loadSessions();
+    void sync.refresh();
   }
 
   function handleSearchInput(query: string) {
@@ -2490,19 +2507,45 @@ export function Layout(props: ParentProps) {
             {/* Normal Session List */}
             <Show when={!loading() && !searchQuery().trim()}>
               <Show
-                when={
-                  projectSessions().length > 0 || archivedSessions().length > 0
-                }
+                when={!sessionError()}
                 fallback={
                   <div
-                    class="py-6 text-center"
-                    style={{ color: "var(--text-weak)" }}
+                    class="mx-1 my-3 rounded-md border p-3"
+                    style={{
+                      color: "var(--text-base)",
+                      background: "var(--surface-inset)",
+                      "border-color": "var(--border-base)",
+                    }}
                   >
-                    <p class="text-sm">No sessions yet</p>
-                    <p class="text-xs mt-1">Click "New Session" to start</p>
+                    <div class="flex items-start gap-2">
+                      <AlertTriangle class="w-4 h-4 mt-0.5 shrink-0" style={{ color: "var(--text-critical-base)" }} />
+                      <div class="min-w-0">
+                        <p class="text-sm font-medium">Could not load sessions</p>
+                        <p class="text-xs mt-1" style={{ color: "var(--text-weak)" }}>{sessionError()}</p>
+                        <div class="mt-3">
+                          <Button size="sm" variant="secondary" onClick={retrySessionBootstrap}>
+                            Retry
+                          </Button>
+                        </div>
+                      </div>
+                    </div>
                   </div>
                 }
               >
+                <Show
+                  when={
+                    projectSessions().length > 0 || archivedSessions().length > 0
+                  }
+                  fallback={
+                    <div
+                      class="py-6 text-center"
+                      style={{ color: "var(--text-weak)" }}
+                    >
+                      <p class="text-sm">No sessions yet</p>
+                      <p class="text-xs mt-1">Click "New Session" to start</p>
+                    </div>
+                  }
+                >
                 {/* Pinned Sessions (drag-and-drop reorderable) */}
                 <Show when={pinnedSessions().length > 0}>
                   <div class="pb-2">
