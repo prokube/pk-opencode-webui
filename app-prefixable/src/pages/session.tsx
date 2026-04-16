@@ -539,6 +539,7 @@ export function Session() {
   const [notifyDenied, setNotifyDenied] = createSignal(false);
   const [notifySourceId, setNotifySourceId] = createSignal<string | undefined>();
   const [notifySourceReady, setNotifySourceReady] = createSignal(false);
+  const notifyVersion = { value: 0 };
   const deniedTimer = { id: null as ReturnType<typeof setTimeout> | null };
   onCleanup(() => { if (deniedTimer.id !== null) clearTimeout(deniedTimer.id) });
 
@@ -574,12 +575,13 @@ export function Session() {
     if (!sourceReady) return;
     // Cancellation flag for stale responses
     let cancelled = false;
+    const version = notifyVersion.value;
     onCleanup(() => { cancelled = true });
     // Then fetch server-side alarm state asynchronously
     getSessionAlarm(url, id, sourceId).then((state) => {
-      // Skip if effect was cleaned up, session changed, or user already toggled
+      // Skip if effect was cleaned up, session changed, or local state was updated
       if (cancelled || !state || params.id !== id) return;
-      if (notifyEnabled() !== local) return; // user toggled since fetch started
+      if (notifyVersion.value !== version) return;
       setNotifyEnabled(state.enabled);
       // Sync localStorage to match server truth
       const map = readNotifyMap();
@@ -616,6 +618,7 @@ export function Session() {
       const dir = directory || base64Decode(params.dir);
       writeNotifySessionEnabled(map, id, false, dir);
       writeNotifyMap(map);
+      notifyVersion.value += 1;
       setNotifyEnabled(false);
       setNotifyDenied(false);
       syncAlarmToServer(id, false);
@@ -631,6 +634,7 @@ export function Session() {
       const dir = directory || base64Decode(params.dir);
       writeNotifySessionEnabled(map, id, true, dir);
       writeNotifyMap(map);
+      notifyVersion.value += 1;
       setNotifyEnabled(true);
       syncAlarmToServer(id, true);
       return;
@@ -648,6 +652,7 @@ export function Session() {
         const dir = directory || base64Decode(params.dir);
         writeNotifySessionEnabled(map, id, true, dir);
         writeNotifyMap(map);
+        notifyVersion.value += 1;
         setNotifyEnabled(true);
         syncAlarmToServer(id, true);
         return;
