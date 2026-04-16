@@ -25,6 +25,20 @@ describe("normalizeProxiedResponse", () => {
     expect(normalized.headers.get("access-control-allow-origin")).toBe("https://example.com")
   })
 
+  test("keeps content-length when upstream response is unencoded", async () => {
+    const response = new Response("ok", {
+      headers: {
+        "content-length": "2",
+      },
+    })
+
+    const normalized = normalizeProxiedResponse(response)
+
+    expect(await normalized.text()).toBe("ok")
+    expect(normalized.headers.get("content-length")).toBe("2")
+    expect(normalized.headers.get("content-encoding")).toBeNull()
+  })
+
   test("sets explicit cors origin and vary when requested", async () => {
     const response = new Response("ok", {
       headers: {
