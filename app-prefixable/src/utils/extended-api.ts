@@ -235,10 +235,12 @@ export function invalidateTelegramSourceIdCache(serverUrl?: string, directory?: 
 }
 
 function sourceFromSettings(data: unknown, directory?: string) {
-  if (!directory) return
   if (!data || typeof data !== "object") return
   const settings = (data as { settings?: unknown }).settings
   if (!settings || typeof settings !== "object") return
+  const multiSourceEnabled = (settings as { multiSourceEnabled?: unknown }).multiSourceEnabled
+  if (multiSourceEnabled !== true) return "default"
+  if (!directory) return
   const rootDirectory = (settings as { directory?: unknown }).directory
   if (typeof rootDirectory === "string" && rootDirectory === directory) {
     return "default"

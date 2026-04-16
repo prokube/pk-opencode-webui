@@ -15,6 +15,7 @@ describe("resolveTelegramSourceId", () => {
       return new Response(
         JSON.stringify({
           settings: {
+            multiSourceEnabled: true,
             sources: [{ id: "alpha", directory: "/workspace/app", enabled: true }],
           },
         }),
@@ -36,6 +37,7 @@ describe("resolveTelegramSourceId", () => {
       return new Response(
         JSON.stringify({
           settings: {
+            multiSourceEnabled: true,
             sources: [{ id: "alpha", directory: "/workspace/app", enabled: true }],
           },
         }),
@@ -60,6 +62,7 @@ describe("resolveTelegramSourceId", () => {
       return new Response(
         JSON.stringify({
           settings: {
+            multiSourceEnabled: true,
             sources: [{ id: "alpha", directory: "/workspace/app", enabled: true }],
           },
         }),
@@ -86,6 +89,7 @@ describe("resolveTelegramSourceId", () => {
       return new Response(
         JSON.stringify({
           settings: {
+            multiSourceEnabled: true,
             sources: [{ id: "beta", directory: "/workspace/app", enabled: true }],
           },
         }),
@@ -101,6 +105,7 @@ describe("resolveTelegramSourceId", () => {
       new Response(
         JSON.stringify({
           settings: {
+            multiSourceEnabled: true,
             sources: [{ id: "alpha", directory: "/workspace/app", enabled: true }],
           },
         }),
@@ -113,6 +118,42 @@ describe("resolveTelegramSourceId", () => {
     expect(second).toBe("beta")
     expect(third).toBe("beta")
     expect(fetchSpy).toHaveBeenCalledTimes(2)
+    fetchSpy.mockRestore()
+  })
+
+  test("returns default source when multi-source mode is disabled", async () => {
+    const fetchSpy = spyOn(globalThis, "fetch").mockImplementation(async () => {
+      return new Response(
+        JSON.stringify({
+          settings: {
+            multiSourceEnabled: false,
+          },
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      )
+    })
+
+    const sourceId = await resolveTelegramSourceId("http://127.0.0.1:3000", "/workspace/app")
+
+    expect(sourceId).toBe("default")
+    expect(fetchSpy).toHaveBeenCalledTimes(1)
+    fetchSpy.mockRestore()
+  })
+
+  test("returns default source when multi-source flag is missing", async () => {
+    const fetchSpy = spyOn(globalThis, "fetch").mockImplementation(async () => {
+      return new Response(
+        JSON.stringify({
+          settings: {},
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      )
+    })
+
+    const sourceId = await resolveTelegramSourceId("http://127.0.0.1:3000", "/workspace/app")
+
+    expect(sourceId).toBe("default")
+    expect(fetchSpy).toHaveBeenCalledTimes(1)
     fetchSpy.mockRestore()
   })
 })
