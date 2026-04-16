@@ -313,6 +313,10 @@ const telegramCommands = Object.freeze([
     args: "[count]",
   }),
   Object.freeze({
+    name: "latest",
+    text: "Show latest user/assistant exchange",
+  }),
+  Object.freeze({
     name: "switch",
     text: "Switch this chat/user mapping to an existing session",
     args: "[session-id|index]",
@@ -3111,6 +3115,26 @@ export async function handleTextUpdate(runtime: Runtime, update: TelegramUpdate)
         return true
       }
       const text = await recentText(scoped, ref.sessionId, parsed.count || recentDefaultCount, ref.sourceId)
+      await sendTelegramMessage(config, chatId, text)
+      return true
+    }
+    if (known?.name === "latest") {
+      const current = await runtime.store.get(key) || sessionFromCache(config, key)
+      if (!current) {
+        await sendTelegramMessage(config, chatId, "No active session mapping for this chat/user yet. Use /status or /new first.")
+        return true
+      }
+      const ref = parsedSessionRef(current)
+      if (!ref) {
+        await sendTelegramMessage(config, chatId, "Current session mapping is invalid. Use /new to create a fresh session.")
+        return true
+      }
+      const scoped = sourceForSessionRef(runtime, ref)
+      if (!scoped) {
+        await sendTelegramMessage(config, chatId, sourceUnavailableText(ref.sourceId))
+        return true
+      }
+      const text = await recentText(scoped, ref.sessionId, 1, ref.sourceId, { preserveFullLatest: true })
       await sendTelegramMessage(config, chatId, text)
       return true
     }

@@ -300,6 +300,7 @@ describe("telegram bridge config and cache", () => {
       { command: "status", description: "Show current session mapping" },
       { command: "sessions", description: "List known sessions for this chat/user mapping" },
       { command: "recent", description: "Show latest user/assistant exchanges" },
+      { command: "latest", description: "Show latest user/assistant exchange" },
       { command: "switch", description: "Switch this chat/user mapping to an existing session" },
       { command: "notify", description: "Control proactive notifications" },
       { command: "pending", description: "Show pending inbox items" },
@@ -670,6 +671,7 @@ describe("telegram bridge config and cache", () => {
     expect(calls).toHaveLength(1);
     expect(calls[0]?.url).toContain("/sendMessage");
     expect(String(calls[0]?.body.text || "")).toContain("Available commands:");
+    expect(String(calls[0]?.body.text || "")).toContain("/latest - Show latest user/assistant exchange");
     expect(String(calls[0]?.body.text || "")).toContain("/pending - Show pending inbox items");
     expect(String(calls[0]?.body.text || "")).toContain("/notify - Control proactive notifications (on|off|status)");
   });
@@ -3484,6 +3486,186 @@ describe("telegram bridge config and cache", () => {
     const text = String(calls.filter((x) => x.url.includes("/sendMessage")).at(-1)?.body.text || "");
     expect(text).toBe("No active session mapping for this chat/user yet. Use /status or /new first.");
     expect(calls.some((x) => x.url.includes("/session/"))).toBe(false);
+  });
+
+  test("/latest returns the newest exchange with full assistant text", async () => {
+    const calls: Array<{ url: string; body: Record<string, unknown> }> = [];
+    const originalFetch = globalThis.fetch;
+    const longReply = "l".repeat(1200);
+    try {
+      globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        const body = init?.body ? (JSON.parse(String(init.body)) as Record<string, unknown>) : {};
+        calls.push({ url, body });
+        if (url.includes("/session/session-current/message")) {
+          return new Response(
+            JSON.stringify([
+              {
+                info: { id: "a-2", role: "assistant", parentID: "u-2", time: { created: 200 } },
+                parts: [{ type: "text", text: longReply }],
+              },
+              {
+                info: { id: "u-2", role: "user", time: { created: 199 } },
+                parts: [{ type: "text", text: "Newest question" }],
+              },
+              {
+                info: { id: "a-1", role: "assistant", parentID: "u-1", time: { created: 100 } },
+                parts: [{ type: "text", text: "Older answer" }],
+              },
+              {
+                info: { id: "u-1", role: "user", time: { created: 99 } },
+                parts: [{ type: "text", text: "Older question" }],
+              },
+            ]),
+            { status: 200 },
+          );
+        }
+        if (url.includes("/sendMessage")) {
+          return new Response(JSON.stringify({ ok: true, result: { message_id: 1 } }), { status: 200 });
+        }
+        throw new Error(`Unexpected fetch ${url}`);
+      };
+
+      const runtime = {
+        config: {
+          mode: "polling" as const,
+          token: "token",
+          openCodeUrl: "http://127.0.0.1:4096",
+          sessionCacheMax: 10,
+          sessionCacheTtlMs: 10_000,
+          notificationDebounceMs: 20_000,
+          port: 4097,
+          webhookPath: "/webhook",
+          sessionStorePath: "/tmp/test-store.json",
+        },
+        store: {
+          get: async () => "session-current",
+          set: async () => undefined,
+          delete: async () => undefined,
+        },
+      };
+
+      await handleTextUpdate(runtime, {
+        update_id: 8,
+        message: { message_id: 8, text: "/latest", chat: { id: 101 }, from: { id: 4 } },
+      });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+
+    const text = String(calls.filter((x) => x.url.includes("/sendMessage")).at(-1)?.body.text || "");
+    expect(text).toContain("showing 1 of 2");
+    expect(text).toContain("You: Newest question");
+    expect(text).toContain(`Assistant: ${longReply}`);
+    expect(text).not.toContain("Older question");
+
+    const messageCalls = calls.filter((x) => x.url.includes("/session/session-current/message"));
+    expect(messageCalls.length).toBeGreaterThan(0);
+    expect(messageCalls.every((x) => !x.url.includes("limit="))).toBe(true);
+  });
+
+  test("/latest reports missing active mapping", async () => {
+    const calls: Array<{ url: string; body: Record<string, unknown> }> = [];
+    const originalFetch = globalThis.fetch;
+    try {
+      globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        const body = init?.body ? (JSON.parse(String(init.body)) as Record<string, unknown>) : {};
+        calls.push({ url, body });
+        if (url.includes("/sendMessage")) {
+          return new Response(JSON.stringify({ ok: true, result: { message_id: 1 } }), { status: 200 });
+        }
+        throw new Error(`Unexpected fetch ${url}`);
+      };
+
+      const runtime = {
+        config: {
+          mode: "polling" as const,
+          token: "token",
+          openCodeUrl: "http://127.0.0.1:4096",
+          sessionCacheMax: 10,
+          sessionCacheTtlMs: 10_000,
+          notificationDebounceMs: 20_000,
+          port: 4097,
+          webhookPath: "/webhook",
+          sessionStorePath: "/tmp/test-store.json",
+        },
+        store: {
+          get: async () => undefined,
+          set: async () => undefined,
+          delete: async () => undefined,
+        },
+      };
+
+      await handleTextUpdate(runtime, {
+        update_id: 9,
+        message: { message_id: 9, text: "/latest", chat: { id: 101 }, from: { id: 4 } },
+      });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+
+    const text = String(calls.filter((x) => x.url.includes("/sendMessage")).at(-1)?.body.text || "");
+    expect(text).toBe("No active session mapping for this chat/user yet. Use /status or /new first.");
+    expect(calls.some((x) => x.url.includes("/session/"))).toBe(false);
+  });
+
+  test("/latest output is chunked for Telegram message size limits", async () => {
+    const calls: Array<{ url: string; body: Record<string, unknown> }> = [];
+    const originalFetch = globalThis.fetch;
+    const long = "x".repeat(4200);
+    try {
+      globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        const body = init?.body ? (JSON.parse(String(init.body)) as Record<string, unknown>) : {};
+        calls.push({ url, body });
+        if (url.includes("/session/session-current/message")) {
+          return new Response(
+            JSON.stringify([
+              { info: { id: "u-1", role: "user" }, parts: [{ type: "text", text: "Newest prompt" }] },
+              { info: { id: "a-1", role: "assistant", parentID: "u-1" }, parts: [{ type: "text", text: long }] },
+            ]),
+            { status: 200 },
+          );
+        }
+        if (url.includes("/sendMessage")) {
+          return new Response(JSON.stringify({ ok: true, result: { message_id: 1 } }), { status: 200 });
+        }
+        throw new Error(`Unexpected fetch ${url}`);
+      };
+
+      const runtime = {
+        config: {
+          mode: "polling" as const,
+          token: "token",
+          openCodeUrl: "http://127.0.0.1:4096",
+          sessionCacheMax: 10,
+          sessionCacheTtlMs: 10_000,
+          notificationDebounceMs: 20_000,
+          port: 4097,
+          webhookPath: "/webhook",
+          sessionStorePath: "/tmp/test-store.json",
+        },
+        store: {
+          get: async () => "session-current",
+          set: async () => undefined,
+          delete: async () => undefined,
+        },
+      };
+
+      await handleTextUpdate(runtime, {
+        update_id: 10,
+        message: { message_id: 10, text: "/latest", chat: { id: 101 }, from: { id: 4 } },
+      });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+
+    const sent = calls.filter((x) => x.url.includes("/sendMessage"));
+    expect(sent.length).toBeGreaterThan(1);
+    for (const row of sent) {
+      expect(String(row.body.text || "").length).toBeLessThanOrEqual(3900);
+    }
   });
 
   test("/recent excludes non-chat and ignored message parts", async () => {
