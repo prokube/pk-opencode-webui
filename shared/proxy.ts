@@ -25,8 +25,13 @@ export function normalizeProxiedResponse(response: Response, corsOrigin?: string
         .split(",")
         .map((x) => x.trim())
         .filter(Boolean)
-      if (!values.some((x) => x.toLowerCase() === "origin")) {
-        responseHeaders.set("Vary", `${vary}, Origin`)
+      if (values.length === 1 && values[0] === "*") {
+        responseHeaders.set("Vary", "*")
+      } else {
+        if (!values.some((x) => x.toLowerCase() === "origin")) {
+          values.push("Origin")
+        }
+        responseHeaders.set("Vary", values.join(", "))
       }
     }
   }

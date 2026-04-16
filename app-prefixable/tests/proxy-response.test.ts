@@ -66,4 +66,18 @@ describe("normalizeProxiedResponse", () => {
     expect(await normalized.text()).toBe("ok")
     expect(normalized.headers.get("vary")).toBe("Accept-Encoding, Origin")
   })
+
+  test("preserves wildcard vary when cors origin is applied", async () => {
+    const response = new Response("ok", {
+      headers: {
+        vary: "*",
+      },
+    })
+
+    const normalized = normalizeProxiedResponse(response, "https://ui.example.com")
+
+    expect(await normalized.text()).toBe("ok")
+    expect(normalized.headers.get("vary")).toBe("*")
+    expect(normalized.headers.get("access-control-allow-origin")).toBe("https://ui.example.com")
+  })
 })
