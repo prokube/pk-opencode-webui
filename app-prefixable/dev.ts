@@ -114,10 +114,11 @@ const server = Bun.serve<{ target: string }>({
       }
 
       console.log("[Proxy] API:", req.method, strippedPath)
+      const body = req.method === "GET" || req.method === "HEAD" ? undefined : req.body
       const response = await fetch(target.toString(), {
         method: req.method,
         headers,
-        body: req.body,
+        body,
       })
       return normalizeProxiedResponse(response)
     }
