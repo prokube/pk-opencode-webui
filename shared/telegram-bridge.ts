@@ -2289,6 +2289,26 @@ function parsedSessionRef(stored: string | undefined): SessionRef | undefined {
   return decodeSessionRef(stored)
 }
 
+async function resolveActiveSessionMapping(runtime: Runtime, key: string): Promise<{
+  ref?: SessionRef
+  scoped?: BridgeConfig
+  error?: string
+}> {
+  const current = await runtime.store.get(key) || sessionFromCache(runtime.config, key)
+  if (!current) {
+    return { error: "No active session mapping for this chat/user yet. Use /status or /new first." }
+  }
+  const ref = parsedSessionRef(current)
+  if (!ref) {
+    return { error: "Current session mapping is invalid. Use /new to create a fresh session." }
+  }
+  const scoped = sourceForSessionRef(runtime, ref)
+  if (!scoped) {
+    return { error: sourceUnavailableText(ref.sourceId) }
+  }
+  return { ref, scoped }
+}
+
 export function extractReply(payload: unknown): string {
   const data = payload as {
     parts?: Array<{ type?: string; text?: string }>
@@ -3099,42 +3119,22 @@ export async function handleTextUpdate(runtime: Runtime, update: TelegramUpdate)
         await sendTelegramMessage(config, chatId, parsed.error)
         return true
       }
-      const current = await runtime.store.get(key) || sessionFromCache(config, key)
-      if (!current) {
-        await sendTelegramMessage(config, chatId, "No active session mapping for this chat/user yet. Use /status or /new first.")
+      const active = await resolveActiveSessionMapping(runtime, key)
+      if (active.error || !active.ref || !active.scoped) {
+        await sendTelegramMessage(config, chatId, active.error || "Current session mapping is invalid. Use /new to create a fresh session.")
         return true
       }
-      const ref = parsedSessionRef(current)
-      if (!ref) {
-        await sendTelegramMessage(config, chatId, "Current session mapping is invalid. Use /new to create a fresh session.")
-        return true
-      }
-      const scoped = sourceForSessionRef(runtime, ref)
-      if (!scoped) {
-        await sendTelegramMessage(config, chatId, sourceUnavailableText(ref.sourceId))
-        return true
-      }
-      const text = await recentText(scoped, ref.sessionId, parsed.count || recentDefaultCount, ref.sourceId)
+      const text = await recentText(active.scoped, active.ref.sessionId, parsed.count || recentDefaultCount, active.ref.sourceId)
       await sendTelegramMessage(config, chatId, text)
       return true
     }
     if (known?.name === "latest") {
-      const current = await runtime.store.get(key) || sessionFromCache(config, key)
-      if (!current) {
-        await sendTelegramMessage(config, chatId, "No active session mapping for this chat/user yet. Use /status or /new first.")
+      const active = await resolveActiveSessionMapping(runtime, key)
+      if (active.error || !active.ref || !active.scoped) {
+        await sendTelegramMessage(config, chatId, active.error || "Current session mapping is invalid. Use /new to create a fresh session.")
         return true
       }
-      const ref = parsedSessionRef(current)
-      if (!ref) {
-        await sendTelegramMessage(config, chatId, "Current session mapping is invalid. Use /new to create a fresh session.")
-        return true
-      }
-      const scoped = sourceForSessionRef(runtime, ref)
-      if (!scoped) {
-        await sendTelegramMessage(config, chatId, sourceUnavailableText(ref.sourceId))
-        return true
-      }
-      const text = await recentText(scoped, ref.sessionId, 1, ref.sourceId, { preserveFullLatest: true })
+      const text = await recentText(active.scoped, active.ref.sessionId, 1, active.ref.sourceId, { preserveFullLatest: true })
       await sendTelegramMessage(config, chatId, text)
       return true
     }
