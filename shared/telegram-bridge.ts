@@ -2759,9 +2759,15 @@ export async function readTelegramBridgeHealth(runtime: Runtime): Promise<Bridge
       }
     })),
   ])
-  const openCodeApi = sourceChecks.every((item) => item.status === "ok")
-    ? { status: "ok" as const, message: `OpenCode API is reachable for ${sourceChecks.length} source(s)` }
-    : { status: "error" as const, message: `OpenCode API check failed for ${sourceChecks.filter((item) => item.status !== "ok").length} source(s)` }
+  const okSources = sourceChecks.filter((item) => item.status === "ok").map((item) => item.sourceId)
+  const errorSources = sourceChecks.filter((item) => item.status !== "ok").map((item) => item.sourceId)
+  const allHealthy = errorSources.length === 0
+  const healthyList = okSources.length > 0 ? okSources.join(", ") : "none"
+  const failingList = errorSources.length > 0 ? errorSources.join(", ") : "none"
+  const healthySuffix = okSources.length > 0 ? `; healthy sources: ${healthyList}` : ""
+  const openCodeApi = allHealthy
+    ? { status: "ok" as const, message: `OpenCode API is reachable for sources: ${healthyList}` }
+    : { status: "error" as const, message: `OpenCode API check failed for sources: ${failingList}${healthySuffix}` }
   const healthy = telegramApi.status === "ok" && sourceChecks.every((item) => item.status === "ok")
   return {
     status: healthy ? "healthy" : "degraded",
