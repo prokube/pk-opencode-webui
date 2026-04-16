@@ -75,6 +75,18 @@ let lastActivity = Date.now()
 // Store for backend WebSocket connections (keyed by client WebSocket)
 const backendConnections = new WeakMap<object, WebSocket>()
 
+function withNoStoreHeaders(response: Response) {
+  const headers = new Headers(response.headers)
+  headers.set("Cache-Control", "no-store")
+  headers.set("Pragma", "no-cache")
+  headers.set("Expires", "0")
+  return new Response(response.body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers,
+  })
+}
+
 const server = Bun.serve<{ path: string; search: string }>({
   port: PORT,
   hostname: "0.0.0.0",
@@ -142,7 +154,7 @@ const server = Bun.serve<{ path: string; search: string }>({
 
     // Extended API endpoints (handled locally, not proxied)
     const extResponse = await handleExtendedEndpoint(path, req.method, url, req)
-    if (extResponse) return extResponse
+    if (extResponse) return withNoStoreHeaders(extResponse)
 
     // Check if this is an API request (after stripping prefix)
     if (isApiPath(path)) {
@@ -160,21 +172,29 @@ const server = Bun.serve<{ path: string; search: string }>({
 
           if (!response.ok) {
             console.error("[Proxy] SSE error:", response.status, response.statusText)
-            return new Response(response.body, { status: response.status })
+            return withNoStoreHeaders(
+              new Response(response.body, {
+                status: response.status,
+                statusText: response.statusText,
+                headers: response.headers,
+              }),
+            )
           }
 
           return new Response(response.body, {
             status: response.status,
             headers: {
               "Content-Type": "text/event-stream",
-              "Cache-Control": "no-cache",
+              "Cache-Control": "no-store",
+              Pragma: "no-cache",
+              Expires: "0",
               Connection: "keep-alive",
               "X-Accel-Buffering": "no",
             },
           })
         } catch (e) {
           console.error("[Proxy] SSE connection error:", e)
-          return new Response("SSE proxy error", { status: 502 })
+          return withNoStoreHeaders(new Response("SSE proxy error", { status: 502 }))
         }
       }
 
@@ -187,10 +207,10 @@ const server = Bun.serve<{ path: string; search: string }>({
           headers,
           body,
         })
-        return normalizeProxiedResponse(response)
+        return withNoStoreHeaders(normalizeProxiedResponse(response))
       } catch (e) {
         console.error("[Proxy] API error:", e)
-        return new Response("API proxy error", { status: 502 })
+        return withNoStoreHeaders(new Response("API proxy error", { status: 502 }))
       }
     }
 

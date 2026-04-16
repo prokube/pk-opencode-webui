@@ -1,6 +1,7 @@
 /* @refresh reload */
 import { render } from "solid-js/web"
 import { App } from "./app"
+import { preventLegacyServiceWorkerCaching } from "./utils/legacy-service-worker"
 
 console.log("[OpenCode] Starting app...")
 
@@ -13,12 +14,30 @@ if (!root) {
 // Clear the loading text first
 root.innerHTML = ""
 
-try {
+async function start() {
+  const cleanup = await preventLegacyServiceWorkerCaching().catch((e) => {
+    console.warn("[OpenCode] Legacy service worker cleanup failed:", e)
+    return null
+  })
+  if (cleanup && (cleanup.registrations > 0 || cleanup.caches > 0)) {
+    console.log(
+      "[OpenCode] Cleared legacy service worker state:",
+      `${cleanup.unregistered}/${cleanup.registrations} registrations, ${cleanup.caches} caches`,
+    )
+  }
+
   console.log("[OpenCode] Rendering...")
   render(() => <App />, root)
   console.log("[OpenCode] Rendered successfully")
   console.log("[OpenCode] Root innerHTML:", root.innerHTML.slice(0, 200))
-} catch (e) {
-  console.error("[OpenCode] Render error:", e)
-  root.innerHTML = `<div style="color: red; padding: 20px;">Error: ${e}</div>`
 }
+
+start().catch((e) => {
+  console.error("[OpenCode] Render error:", e)
+  root.innerHTML = ""
+  const message = document.createElement("div")
+  message.style.color = "red"
+  message.style.padding = "20px"
+  message.textContent = `Error: ${e instanceof Error && e.message.trim() ? e.message : String(e)}`
+  root.appendChild(message)
+})

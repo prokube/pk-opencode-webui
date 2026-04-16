@@ -24,6 +24,7 @@ type ProviderData = {
 
 type SyncStore = {
   ready: boolean
+  error: string | null
   session: Session[]
   archivedSession: Session[]
   message: Record<string, MessageWithParts[]>
@@ -34,6 +35,7 @@ type SyncStore = {
 interface SyncContextValue {
   data: SyncStore
   ready: boolean
+  bootstrapError: string | null
   sessions: () => Session[]
   archivedSessions: () => Session[]
   messages: (sessionID: string) => MessageWithParts[]
@@ -56,6 +58,11 @@ function sortParts(parts: Part[]): Part[] {
   return [...withId, ...withoutId]
 }
 
+function errorText(err: unknown) {
+  if (err instanceof Error && err.message.trim()) return err.message
+  return "Failed to bootstrap app state from API."
+}
+
 function binarySearch<T>(arr: T[], id: string, getId: (item: T) => string): { found: boolean; index: number } {
   let low = 0
   let high = arr.length - 1
@@ -75,6 +82,7 @@ export function SyncProvider(props: ParentProps) {
 
   const [store, setStore] = createStore<SyncStore>({
     ready: false,
+    error: null,
     session: [],
     archivedSession: [],
     message: {},
@@ -320,6 +328,7 @@ export function SyncProvider(props: ParentProps) {
   }
 
   async function bootstrap() {
+    setStore("error", null)
     try {
       const [sessionsRes, providersRes] = await Promise.all([client.session.list(), client.provider.list()])
 
@@ -341,6 +350,7 @@ export function SyncProvider(props: ParentProps) {
       console.log("[Sync] Bootstrap complete, sessions:", store.session.length)
     } catch (err) {
       console.error("[Sync] Bootstrap failed:", err)
+      setStore("error", errorText(err))
     }
   }
 
@@ -451,6 +461,9 @@ export function SyncProvider(props: ParentProps) {
     },
     get ready() {
       return store.ready
+    },
+    get bootstrapError() {
+      return store.error
     },
     sessions: () => store.session,
     archivedSessions: () => store.archivedSession,

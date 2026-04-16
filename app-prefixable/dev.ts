@@ -36,6 +36,18 @@ const basePathWithTrailing = validatedBasePath.endsWith("/") ? validatedBasePath
 // Track WebSocket connections: client ws -> backend ws
 const wsConnections = new Map<object, WebSocket>()
 
+function withNoStoreHeaders(response: Response) {
+  const headers = new Headers(response.headers)
+  headers.set("Cache-Control", "no-store")
+  headers.set("Pragma", "no-cache")
+  headers.set("Expires", "0")
+  return new Response(response.body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers,
+  })
+}
+
 const server = Bun.serve<{ target: string }>({
   port: PORT,
   idleTimeout: 0, // Disable timeout for SSE connections
@@ -76,7 +88,7 @@ const server = Bun.serve<{ target: string }>({
 
     // Extended API endpoints (handled locally, not proxied)
     const extResponse = await handleExtendedEndpoint(strippedPath, req.method, url, req)
-    if (extResponse) return extResponse
+    if (extResponse) return withNoStoreHeaders(extResponse)
 
     // API requests go directly to the backend
     if (isApiPath(strippedPath)) {
@@ -94,7 +106,13 @@ const server = Bun.serve<{ target: string }>({
 
           if (!response.ok) {
             console.error("[Proxy] SSE error:", response.status, response.statusText)
-            return new Response(response.body, { status: response.status })
+            return withNoStoreHeaders(
+              new Response(response.body, {
+                status: response.status,
+                statusText: response.statusText,
+                headers: response.headers,
+              }),
+            )
           }
 
           // Pass through the body directly - Bun handles streaming
@@ -102,25 +120,32 @@ const server = Bun.serve<{ target: string }>({
             status: response.status,
             headers: {
               "Content-Type": "text/event-stream",
-              "Cache-Control": "no-cache",
+              "Cache-Control": "no-store",
+              Pragma: "no-cache",
+              Expires: "0",
               Connection: "keep-alive",
               "X-Accel-Buffering": "no",
             },
           })
         } catch (e) {
           console.error("[Proxy] SSE connection error:", e)
-          return new Response("SSE proxy error", { status: 502 })
+          return withNoStoreHeaders(new Response("SSE proxy error", { status: 502 }))
         }
       }
 
       console.log("[Proxy] API:", req.method, strippedPath)
-      const body = req.method === "GET" || req.method === "HEAD" ? undefined : req.body
-      const response = await fetch(target.toString(), {
-        method: req.method,
-        headers,
-        body,
-      })
-      return normalizeProxiedResponse(response)
+      try {
+        const body = req.method === "GET" || req.method === "HEAD" ? undefined : req.body
+        const response = await fetch(target.toString(), {
+          method: req.method,
+          headers,
+          body,
+        })
+        return withNoStoreHeaders(normalizeProxiedResponse(response))
+      } catch (e) {
+        console.error("[Proxy] API error:", e)
+        return withNoStoreHeaders(new Response("API proxy error", { status: 502 }))
+      }
     }
 
     // Frontend routes - try to serve static file
