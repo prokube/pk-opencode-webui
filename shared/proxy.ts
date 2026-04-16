@@ -6,20 +6,29 @@
  * Handles both regular API requests and SSE streaming.
  */
 
-export function normalizeProxiedResponse(response: Response, addCors = false) {
+export function normalizeProxiedResponse(response: Response, corsOrigin?: string) {
   const responseHeaders = new Headers(response.headers)
   // Bun fetch may return a decoded body while preserving original encoding headers.
   // Remove these headers to avoid browser-side decode errors.
   responseHeaders.delete("content-encoding")
   responseHeaders.delete("content-length")
-  if (addCors) {
-    responseHeaders.set("Access-Control-Allow-Origin", "*")
+  if (corsOrigin) {
+    responseHeaders.set("Access-Control-Allow-Origin", corsOrigin)
+    responseHeaders.set("Vary", "Origin")
   }
   return new Response(response.body, {
     status: response.status,
     statusText: response.statusText,
     headers: responseHeaders,
   })
+}
+
+function sameOrigin(req: Request) {
+  const origin = req.headers.get("origin")
+  if (!origin) return
+  const requestOrigin = new URL(req.url).origin
+  if (origin !== requestOrigin) return
+  return origin
 }
 
 /**
@@ -29,16 +38,21 @@ export function normalizeProxiedResponse(response: Response, addCors = false) {
  * @returns {Promise<Response>} The proxied response.
  */
 export async function handleProxyRequest(path: string, req: Request): Promise<Response> {
+  const corsOrigin = sameOrigin(req)
   // Handle CORS preflight for custom headers (x-proxy-target, x-api-key, etc.)
   if (req.method === "OPTIONS") {
+    const headers = new Headers({
+      "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, PATCH, OPTIONS",
+      "Access-Control-Allow-Headers": req.headers.get("access-control-request-headers") || "*",
+      "Access-Control-Max-Age": "86400",
+    })
+    if (corsOrigin) {
+      headers.set("Access-Control-Allow-Origin", corsOrigin)
+      headers.set("Vary", "Origin")
+    }
     return new Response(null, {
       status: 204,
-      headers: {
-        "Access-Control-Allow-Origin": "*",
-        "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, PATCH, OPTIONS",
-        "Access-Control-Allow-Headers": req.headers.get("access-control-request-headers") || "*",
-        "Access-Control-Max-Age": "86400",
-      },
+      headers,
     })
   }
 
@@ -80,7 +94,7 @@ export async function handleProxyRequest(path: string, req: Request): Promise<Re
       body: req.method !== "GET" && req.method !== "HEAD" ? req.body : undefined,
     })
 
-    const corsHeaders = { "Access-Control-Allow-Origin": "*" }
+    const corsHeaders = corsOrigin ? { "Access-Control-Allow-Origin": corsOrigin, Vary: "Origin" } : {}
 
     if (isSSE) {
       if (!response.ok) {
@@ -100,7 +114,7 @@ export async function handleProxyRequest(path: string, req: Request): Promise<Re
       })
     }
 
-    return normalizeProxiedResponse(response, true)
+    return normalizeProxiedResponse(response, corsOrigin)
   } catch (e) {
     console.error("[Proxy] Connection error:", e)
     return new Response(JSON.stringify({ error: "Proxy connection failed" }), {

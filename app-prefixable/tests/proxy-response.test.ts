@@ -25,16 +25,17 @@ describe("normalizeProxiedResponse", () => {
     expect(normalized.headers.get("access-control-allow-origin")).toBe("https://example.com")
   })
 
-  test("adds wildcard cors only when requested", async () => {
+  test("sets explicit cors origin and vary when requested", async () => {
     const response = new Response("ok", {
       headers: {
         "access-control-allow-origin": "https://example.com",
       },
     })
 
-    const normalized = normalizeProxiedResponse(response, true)
+    const normalized = normalizeProxiedResponse(response, "https://ui.example.com")
 
     expect(await normalized.text()).toBe("ok")
-    expect(normalized.headers.get("access-control-allow-origin")).toBe("*")
+    expect(normalized.headers.get("access-control-allow-origin")).toBe("https://ui.example.com")
+    expect(normalized.headers.get("vary")).toBe("Origin")
   })
 })
