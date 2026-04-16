@@ -10,6 +10,8 @@ import * as fs from "node:fs"
 import * as nodePath from "node:path"
 import * as os from "node:os"
 import {
+  TELEGRAM_SOURCE_ID_MAX_LENGTH,
+  TELEGRAM_SOURCE_ID_PATTERN,
   readDesiredTelegramSettingsFingerprint,
   readTelegramRuntimeState,
   readTelegramSettings,
@@ -29,6 +31,92 @@ function sessionAlarmSessionIdError(sessionId: string) {
   }
   if (/[\x00-\x1F\x7F]/.test(sessionId)) {
     return "sessionId contains unsupported control characters"
+  }
+}
+
+function sessionAlarmSourceIdError(sourceId: string) {
+  if (!sourceId) return "sourceId parameter is required"
+  if (sourceId === "default") return
+  if (sourceId.toLowerCase() === "default") {
+    return 'sourceId is reserved; use exact "default" or choose another id'
+  }
+  if (sourceId.length > TELEGRAM_SOURCE_ID_MAX_LENGTH) {
+    return `sourceId must be ${TELEGRAM_SOURCE_ID_MAX_LENGTH} characters or fewer`
+  }
+  if (!TELEGRAM_SOURCE_ID_PATTERN.test(sourceId)) {
+    return "sourceId must match [A-Za-z0-9._-]+"
+  }
+}
+
+function sourceScopedId(sourceId: string, sessionId: string): string {
+  if (sourceId === "default") return sessionId
+  return `${sourceId}::${sessionId}`
+}
+
+type SessionAlarmRef = {
+  sourceId: string
+  sessionId: string
+  scopedSessionId: string
+}
+
+function decodeSessionAlarmRef(value: string): SessionAlarmRef | undefined {
+  const trimmed = value.trim()
+  if (!trimmed) return
+  const parts = trimmed.split("::")
+  if (parts.length === 1) {
+    const sessionId = parts[0] || ""
+    return { sourceId: "default", sessionId, scopedSessionId: sessionId }
+  }
+  const sourceId = parts[0]?.trim() || ""
+  const sessionId = parts.slice(1).join("::").trim()
+  if (!sourceId || !sessionId) return
+  return {
+    sourceId,
+    sessionId,
+    scopedSessionId: sourceScopedId(sourceId, sessionId),
+  }
+}
+
+function sessionAlarmRefFromInput(input: {
+  sessionId: string
+  sourceId: string
+  scopedSessionId: string
+}): { ref?: SessionAlarmRef; error?: string } {
+  const scopedSessionId = input.scopedSessionId.trim()
+  if (scopedSessionId) {
+    const decoded = decodeSessionAlarmRef(scopedSessionId)
+    if (!decoded) return { error: "scopedSessionId is invalid" }
+    const sourceIdError = sessionAlarmSourceIdError(decoded.sourceId)
+    if (sourceIdError) return { error: sourceIdError }
+    const sessionIdError = sessionAlarmSessionIdError(decoded.sessionId)
+    if (sessionIdError) return { error: sessionIdError }
+
+    const sourceId = input.sourceId.trim()
+    if (sourceId && sourceId !== decoded.sourceId) {
+      return { error: "sourceId does not match scopedSessionId" }
+    }
+
+    const sessionId = input.sessionId.trim()
+    if (sessionId && sessionId !== decoded.sessionId) {
+      return { error: "sessionId does not match scopedSessionId" }
+    }
+    return { ref: decoded }
+  }
+
+  const sessionId = input.sessionId.trim()
+  const sessionIdError = sessionAlarmSessionIdError(sessionId)
+  if (sessionIdError) return { error: sessionIdError }
+
+  const sourceId = input.sourceId.trim() || "default"
+  const sourceIdError = sessionAlarmSourceIdError(sourceId)
+  if (sourceIdError) return { error: sourceIdError }
+
+  return {
+    ref: {
+      sourceId,
+      sessionId,
+      scopedSessionId: sourceScopedId(sourceId, sessionId),
+    },
   }
 }
 
@@ -637,11 +725,15 @@ export async function handleExtendedEndpoint(
   }
 
   if (path === "/api/ext/telegram/session-alarm" && method === "GET") {
-    const sessionId = (url.searchParams.get("sessionId") || "").trim()
-    const sessionIdError = sessionAlarmSessionIdError(sessionId)
-    if (sessionIdError) {
-      return Response.json({ error: sessionIdError }, { status: 400 })
+    const parsed = sessionAlarmRefFromInput({
+      sessionId: url.searchParams.get("sessionId") || "",
+      sourceId: url.searchParams.get("sourceId") || "",
+      scopedSessionId: url.searchParams.get("scopedSessionId") || "",
+    })
+    if (!parsed.ref) {
+      return Response.json({ error: parsed.error || "invalid request" }, { status: 400 })
     }
+    const ref = parsed.ref
     const settings = await readTelegramSettings().catch((error) => {
       console.error("[ExtAPI] telegram settings read error", error)
       return null
@@ -659,25 +751,28 @@ export async function handleExtendedEndpoint(
         { status: 501 },
       )
     }
-    const enabled = await store.sessionAlarmGet(sessionId).catch((error) => {
+    const enabled = await store.sessionAlarmGet(ref.scopedSessionId).catch((error) => {
       console.error("[ExtAPI] telegram session alarm read error", error)
       return undefined
     })
     if (enabled === undefined) {
       return Response.json({ error: "failed to read telegram session alarm" }, { status: 500 })
     }
-    return Response.json({ sessionId, enabled: enabled === true })
+    return Response.json({ sessionId: ref.sessionId, sourceId: ref.sourceId, enabled: enabled === true })
   }
 
   if (path === "/api/ext/telegram/session-alarm" && method === "PUT") {
     const body = await req.json().catch(() => null)
     const payload = body && typeof body === "object" && !Array.isArray(body) ? (body as Record<string, unknown>) : null
-    const sessionId = typeof payload?.sessionId === "string" ? payload.sessionId.trim() : ""
+    const sessionId = typeof payload?.sessionId === "string" ? payload.sessionId : ""
+    const sourceId = typeof payload?.sourceId === "string" ? payload.sourceId : ""
+    const scopedSessionId = typeof payload?.scopedSessionId === "string" ? payload.scopedSessionId : ""
     const enabled = payload?.enabled
-    const sessionIdError = sessionAlarmSessionIdError(sessionId)
-    if (sessionIdError) {
-      return Response.json({ error: sessionIdError }, { status: 400 })
+    const parsed = sessionAlarmRefFromInput({ sessionId, sourceId, scopedSessionId })
+    if (!parsed.ref) {
+      return Response.json({ error: parsed.error || "invalid request" }, { status: 400 })
     }
+    const ref = parsed.ref
     if (typeof enabled !== "boolean") {
       return Response.json({ error: "enabled must be a boolean" }, { status: 400 })
     }
@@ -698,7 +793,7 @@ export async function handleExtendedEndpoint(
         { status: 501 },
       )
     }
-    const ok = await store.sessionAlarmSet(sessionId, enabled).then(
+    const ok = await store.sessionAlarmSet(ref.scopedSessionId, enabled).then(
       () => true,
       (error) => {
         console.error("[ExtAPI] telegram session alarm write error", error)
@@ -709,11 +804,15 @@ export async function handleExtendedEndpoint(
       return Response.json({ error: "failed to update telegram session alarm" }, { status: 500 })
     }
     if (enabled) {
-      await enableTelegramNotifyForSession(store, sessionId).catch((error) => {
-        console.error("[ExtAPI] telegram notify sync on session alarm enable failed", { sessionId, error })
+      await enableTelegramNotifyForSession(store, ref.scopedSessionId).catch((error) => {
+        console.error("[ExtAPI] telegram notify sync on session alarm enable failed", {
+          sessionId: ref.sessionId,
+          sourceId: ref.sourceId,
+          error,
+        })
       })
     }
-    return Response.json({ sessionId, enabled })
+    return Response.json({ sessionId: ref.sessionId, sourceId: ref.sourceId, enabled })
   }
 
   if (path === "/api/ext/telegram/restart" && method === "GET") {

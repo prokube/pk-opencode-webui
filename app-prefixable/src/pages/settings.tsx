@@ -18,7 +18,7 @@ import { useOptionalPermission } from "../context/permission"
 import { ServerDialog } from "../components/server-dialog"
 import { SETTINGS_BASE_TABS } from "./settings-tabs"
 import { TelegramSettings } from "../components/telegram-settings"
-import { writeFile } from "../utils/extended-api"
+import { invalidateTelegramSourceIdCache, writeFile } from "../utils/extended-api"
 import { ALARM_CHANNELS_STORAGE_KEY, readAlarmChannels, writeAlarmChannels, type AlarmChannels } from "../utils/notify"
 import type { TelegramHealthResponse, TelegramSettingsResponse } from "../utils/telegram-settings"
 import type { Config, PermissionActionConfig } from "../sdk/client"
@@ -154,6 +154,8 @@ export function Settings() {
       void loadTelegramAlarmState()
       return
     }
+
+    invalidateTelegramSourceIdCache(basePath.serverUrl)
 
     const data = await res.json().catch(() => null) as (TelegramSettingsResponse & {
       restartRequired?: boolean

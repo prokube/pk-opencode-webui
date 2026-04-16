@@ -75,7 +75,10 @@ import type { DragEvent as SolidDragEvent } from "@thisbeyond/solid-dnd";
 import { ConstrainDragXAxis } from "../utils/solid-dnd";
 
 import {
+  migrateNotifySessionKey,
+  notifyEnabledForSession,
   readNotifyMap,
+  writeNotifyMap,
   cleanupNotifyState,
   NOTIFY_STORAGE_KEY,
   readAlarmChannels,
@@ -1763,7 +1766,14 @@ export function Layout(props: ParentProps) {
 
           const sess = sync.session.get(sid);
           const nc = notifyCache();
-          if (nc[sid] !== true) return;
+          const notifyDir = sess?.directory || directory;
+          const enabled = notifyEnabledForSession(nc, sid, notifyDir);
+          if (!enabled) return;
+          const next = { ...nc };
+          if (migrateNotifySessionKey(next, sid, notifyDir)) {
+            writeNotifyMap(next);
+            setNotifyCache(next);
+          }
 
           const title = sess?.title || "Task complete";
           fireNotification(sid, title, getSessionSummary(sid), `session-complete-${sid}`);
@@ -1784,7 +1794,15 @@ export function Layout(props: ParentProps) {
         const sess = sync.session.get(sid);
         const nc = notifyCache();
         const bellSid = rootAncestorId(sync.session.get, sid);
-        if (nc[bellSid] !== true) return;
+        const bell = sync.session.get(bellSid);
+        const bellDir = bell?.directory || sess?.directory || directory;
+        const enabled = notifyEnabledForSession(nc, bellSid, bellDir);
+        if (!enabled) return;
+        const next = { ...nc };
+        if (migrateNotifySessionKey(next, bellSid, bellDir)) {
+          writeNotifyMap(next);
+          setNotifyCache(next);
+        }
         firedPermission.add(rid);
 
         const title = sess?.title || "Permission needed";
@@ -1818,7 +1836,15 @@ export function Layout(props: ParentProps) {
         const sess = sync.session.get(sid);
         const nc = notifyCache();
         const bellSid = rootAncestorId(sync.session.get, sid);
-        if (nc[bellSid] !== true) return;
+        const bell = sync.session.get(bellSid);
+        const bellDir = bell?.directory || sess?.directory || directory;
+        const enabled = notifyEnabledForSession(nc, bellSid, bellDir);
+        if (!enabled) return;
+        const next = { ...nc };
+        if (migrateNotifySessionKey(next, bellSid, bellDir)) {
+          writeNotifyMap(next);
+          setNotifyCache(next);
+        }
         firedQuestion.add(rid);
 
         const title = sess?.title || "Question from agent";
@@ -1949,7 +1975,7 @@ export function Layout(props: ParentProps) {
     setSessions((prev) => prev.filter((s) => s.id !== session.id));
 
     // Clean up notification toggle state
-    cleanupNotifyState(session.id);
+    cleanupNotifyState(session.id, session.directory);
 
     client.session.update({
       sessionID: session.id,
@@ -1995,7 +2021,7 @@ export function Layout(props: ParentProps) {
     client.session.delete({ sessionID: session.id })
       .then(() => {
         setConfirmDeleteSession(null);
-        cleanupNotifyState(session.id);
+        cleanupNotifyState(session.id, session.directory);
         unpinSession(session.id);
         if (isActive(session.id)) {
           navigate(neighborId ? `/${dirSlug()}/session/${neighborId}` : `/${dirSlug()}/session`);

@@ -15,6 +15,7 @@ import {
   telegramHealthLabel,
   validateTelegramForm,
 } from "../utils/telegram-settings"
+import { invalidateTelegramSourceIdCache } from "../utils/extended-api"
 import { TelegramSetupGuide } from "./telegram-setup-guide"
 
 type Props = {
@@ -184,6 +185,7 @@ export function TelegramSettings(props: Props) {
       setError("Failed to save Telegram settings")
       return
     }
+    invalidateTelegramSourceIdCache(props.serverUrl)
     const next = createTelegramForm(data.settings)
     setInitial(next)
     setForm(next)

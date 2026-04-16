@@ -138,7 +138,7 @@ describe("telegram settings extended API", () => {
     )
   })
 
-  test("PUT rejects source ids with ':' and reserved default id", async () => {
+  test("PUT rejects invalid source ids including reserved and oversized values", async () => {
     const dir = await mkdtemp(join(tmpdir(), "telegram-settings-"))
     const path = join(dir, "telegram-settings.json")
     cleanupPaths.push(dir)
@@ -157,6 +157,7 @@ describe("telegram settings extended API", () => {
             sources: [
               { id: "alpha:beta", openCodeUrl: "https://api.example.com", enabled: true },
               { id: "default", openCodeUrl: "https://api2.example.com", enabled: true },
+              { id: "a".repeat(65), openCodeUrl: "https://api3.example.com", enabled: true },
             ],
           },
         }),
@@ -169,11 +170,15 @@ describe("telegram settings extended API", () => {
       expect.arrayContaining([
         {
           field: "sources.0.id",
-          message: "id must match [A-Za-z0-9._-]+ and must not be default",
+          message: "id must match [A-Za-z0-9._-]+",
         },
         {
           field: "sources.1.id",
-          message: "id must match [A-Za-z0-9._-]+ and must not be default",
+          message: 'id must not be "default" (case-insensitive)',
+        },
+        {
+          field: "sources.2.id",
+          message: "id must be 64 characters or fewer",
         },
       ]),
     )
@@ -201,7 +206,7 @@ describe("telegram settings extended API", () => {
 
     expect(set?.status).toBe(200)
     const setData = await set?.json()
-    expect(setData).toEqual({ sessionId: "session-alarm-a", enabled: true })
+    expect(setData).toEqual({ sessionId: "session-alarm-a", sourceId: "default", enabled: true })
 
     const get = await handleExtendedEndpoint(
       "/api/ext/telegram/session-alarm",
@@ -212,7 +217,7 @@ describe("telegram settings extended API", () => {
 
     expect(get?.status).toBe(200)
     const getData = await get?.json()
-    expect(getData).toEqual({ sessionId: "session-alarm-a", enabled: true })
+    expect(getData).toEqual({ sessionId: "session-alarm-a", sourceId: "default", enabled: true })
 
     const stored = JSON.parse(await Bun.file(storePath).text()) as { sessionAlarms?: Record<string, boolean> }
     expect(stored.sessionAlarms?.["session-alarm-a"]).toBe(true)
@@ -262,6 +267,99 @@ describe("telegram settings extended API", () => {
     expect(stored.notifications?.["chat:99"]).toBe(true)
     expect(stored.notifications?.["chat:100"]).toBe(true)
     expect(stored.notifications?.["chat:101"]).toBeUndefined()
+  })
+
+  test("session alarm endpoint isolates same session id across sources", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "telegram-settings-"))
+    const path = join(dir, "telegram-settings.json")
+    const storePath = join(dir, "telegram-sessions.json")
+    cleanupPaths.push(dir)
+
+    process.env.TELEGRAM_SETTINGS_PATH = path
+    process.env.TELEGRAM_SESSION_STORE_PATH = storePath
+
+    const setDefault = await handleExtendedEndpoint(
+      "/api/ext/telegram/session-alarm",
+      "PUT",
+      new URL("http://127.0.0.1/api/ext/telegram/session-alarm"),
+      new Request("http://127.0.0.1/api/ext/telegram/session-alarm", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ sessionId: "shared-session", enabled: true }),
+      }),
+    )
+    expect(setDefault?.status).toBe(200)
+
+    const setOther = await handleExtendedEndpoint(
+      "/api/ext/telegram/session-alarm",
+      "PUT",
+      new URL("http://127.0.0.1/api/ext/telegram/session-alarm"),
+      new Request("http://127.0.0.1/api/ext/telegram/session-alarm", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ sessionId: "shared-session", sourceId: "alpha", enabled: false }),
+      }),
+    )
+    expect(setOther?.status).toBe(200)
+
+    const getDefault = await handleExtendedEndpoint(
+      "/api/ext/telegram/session-alarm",
+      "GET",
+      new URL("http://127.0.0.1/api/ext/telegram/session-alarm?sessionId=shared-session"),
+      new Request("http://127.0.0.1/api/ext/telegram/session-alarm?sessionId=shared-session"),
+    )
+    expect(getDefault?.status).toBe(200)
+    expect(await getDefault?.json()).toEqual({ sessionId: "shared-session", sourceId: "default", enabled: true })
+
+    const getOther = await handleExtendedEndpoint(
+      "/api/ext/telegram/session-alarm",
+      "GET",
+      new URL("http://127.0.0.1/api/ext/telegram/session-alarm?sessionId=shared-session&sourceId=alpha"),
+      new Request("http://127.0.0.1/api/ext/telegram/session-alarm?sessionId=shared-session&sourceId=alpha"),
+    )
+    expect(getOther?.status).toBe(200)
+    expect(await getOther?.json()).toEqual({ sessionId: "shared-session", sourceId: "alpha", enabled: false })
+
+    const stored = JSON.parse(await Bun.file(storePath).text()) as { sessionAlarms?: Record<string, boolean> }
+    expect(stored.sessionAlarms?.["shared-session"]).toBe(true)
+    expect(stored.sessionAlarms?.["alpha::shared-session"]).toBeUndefined()
+  })
+
+  test("session alarm endpoint accepts scopedSessionId for reads and writes", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "telegram-settings-"))
+    const path = join(dir, "telegram-settings.json")
+    const storePath = join(dir, "telegram-sessions.json")
+    cleanupPaths.push(dir)
+
+    process.env.TELEGRAM_SETTINGS_PATH = path
+    process.env.TELEGRAM_SESSION_STORE_PATH = storePath
+
+    const set = await handleExtendedEndpoint(
+      "/api/ext/telegram/session-alarm",
+      "PUT",
+      new URL("http://127.0.0.1/api/ext/telegram/session-alarm"),
+      new Request("http://127.0.0.1/api/ext/telegram/session-alarm", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ scopedSessionId: "beta::session-scoped", enabled: true }),
+      }),
+    )
+
+    expect(set?.status).toBe(200)
+    expect(await set?.json()).toEqual({ sessionId: "session-scoped", sourceId: "beta", enabled: true })
+
+    const get = await handleExtendedEndpoint(
+      "/api/ext/telegram/session-alarm",
+      "GET",
+      new URL("http://127.0.0.1/api/ext/telegram/session-alarm?scopedSessionId=beta::session-scoped"),
+      new Request("http://127.0.0.1/api/ext/telegram/session-alarm?scopedSessionId=beta::session-scoped"),
+    )
+
+    expect(get?.status).toBe(200)
+    expect(await get?.json()).toEqual({ sessionId: "session-scoped", sourceId: "beta", enabled: true })
+
+    const stored = JSON.parse(await Bun.file(storePath).text()) as { sessionAlarms?: Record<string, boolean> }
+    expect(stored.sessionAlarms?.["beta::session-scoped"]).toBe(true)
   })
 
   test("session alarm endpoint validates session id and enabled payload", async () => {
@@ -333,6 +431,34 @@ describe("telegram settings extended API", () => {
       }),
     )
     expect(controlPut?.status).toBe(400)
+
+    const badSource = await handleExtendedEndpoint(
+      "/api/ext/telegram/session-alarm",
+      "GET",
+      new URL("http://127.0.0.1/api/ext/telegram/session-alarm?sessionId=session-source&sourceId=bad:value"),
+      new Request("http://127.0.0.1/api/ext/telegram/session-alarm?sessionId=session-source&sourceId=bad:value"),
+    )
+    expect(badSource?.status).toBe(400)
+
+    const defaultVariant = await handleExtendedEndpoint(
+      "/api/ext/telegram/session-alarm",
+      "GET",
+      new URL("http://127.0.0.1/api/ext/telegram/session-alarm?sessionId=session-source&sourceId=Default"),
+      new Request("http://127.0.0.1/api/ext/telegram/session-alarm?sessionId=session-source&sourceId=Default"),
+    )
+    expect(defaultVariant?.status).toBe(400)
+
+    const mismatch = await handleExtendedEndpoint(
+      "/api/ext/telegram/session-alarm",
+      "PUT",
+      new URL("http://127.0.0.1/api/ext/telegram/session-alarm"),
+      new Request("http://127.0.0.1/api/ext/telegram/session-alarm", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ sessionId: "session-x", scopedSessionId: "alpha::session-y", enabled: true }),
+      }),
+    )
+    expect(mismatch?.status).toBe(400)
   })
 
   test("session alarm endpoint reuses cached store by session store path", async () => {

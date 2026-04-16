@@ -10,6 +10,43 @@ export type AlarmChannels = {
   telegram: boolean
 }
 
+export function notifySessionKey(id: string, directory?: string) {
+  const dir = directory?.trim()
+  if (!dir) return id
+  return `${dir}::${id}`
+}
+
+export function notifyEnabledForSession(map: Record<string, boolean>, id: string, directory?: string) {
+  const key = notifySessionKey(id, directory)
+  if (map[key] === true) return true
+  return map[id] === true
+}
+
+export function migrateNotifySessionKey(map: Record<string, boolean>, id: string, directory?: string) {
+  const key = notifySessionKey(id, directory)
+  if (key === id) return false
+  if (map[id] !== true) return false
+  map[key] = true
+  delete map[id]
+  return true
+}
+
+export function writeNotifySessionEnabled(
+  map: Record<string, boolean>,
+  id: string,
+  enabled: boolean,
+  directory?: string,
+) {
+  const key = notifySessionKey(id, directory)
+  if (enabled) {
+    map[key] = true
+    if (key !== id) delete map[id]
+    return
+  }
+  delete map[key]
+  delete map[id]
+}
+
 const DEFAULT_ALARM_CHANNELS: AlarmChannels = {
   browser: true,
   telegram: false,
@@ -59,10 +96,12 @@ export function writeNotifyMap(map: Record<string, boolean>) {
 }
 
 /** Remove a session's entry from the notification toggle map */
-export function cleanupNotifyState(id: string) {
+export function cleanupNotifyState(id: string, directory?: string) {
   const map = readNotifyMap();
-  if (!(id in map)) return;
+  const key = notifySessionKey(id, directory)
+  if (!(id in map) && !(key in map)) return;
   delete map[id];
+  delete map[key]
   writeNotifyMap(map);
 }
 
