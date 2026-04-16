@@ -10,6 +10,12 @@ export type AlarmChannels = {
   telegram: boolean
 }
 
+export function notifySessionKey(id: string, directory?: string) {
+  const dir = directory?.trim()
+  if (!dir) return id
+  return `${dir}::${id}`
+}
+
 const DEFAULT_ALARM_CHANNELS: AlarmChannels = {
   browser: true,
   telegram: false,
@@ -59,10 +65,12 @@ export function writeNotifyMap(map: Record<string, boolean>) {
 }
 
 /** Remove a session's entry from the notification toggle map */
-export function cleanupNotifyState(id: string) {
+export function cleanupNotifyState(id: string, directory?: string) {
   const map = readNotifyMap();
-  if (!(id in map)) return;
+  const key = notifySessionKey(id, directory)
+  if (!(id in map) && !(key in map)) return;
   delete map[id];
+  delete map[key]
   writeNotifyMap(map);
 }
 

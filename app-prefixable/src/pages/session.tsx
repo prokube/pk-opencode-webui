@@ -49,7 +49,7 @@ import {
   ImageAttachments,
   type ImageAttachment,
 } from "../components/image-attachments";
-import { readNotifyMap, writeNotifyMap } from "../utils/notify";
+import { notifySessionKey, readNotifyMap, writeNotifyMap } from "../utils/notify";
 import { getSessionAlarm, resolveTelegramSourceId, setSessionAlarm } from "../utils/extended-api";
 import { sessionQuestionRequest } from "../utils/session-tree-request";
 import { createRootSession } from "../utils/root-session";
@@ -524,7 +524,8 @@ export function Session() {
     (() => {
       const id = params.id;
       if (!id) return false;
-      return readNotifyMap()[id] === true;
+      const dir = directory || base64Decode(params.dir);
+      return readNotifyMap()[notifySessionKey(id, dir)] === true;
     })(),
   );
   const [notifyDenied, setNotifyDenied] = createSignal(false);
@@ -546,13 +547,15 @@ export function Session() {
   createEffect(() => {
     const id = params.id;
     const sourceId = notifySourceId();
+    const dir = directory || base64Decode(params.dir);
     setNotifyDenied(false);
     if (!id) {
       setNotifyEnabled(false);
       return;
     }
     // Seed from localStorage first for instant UI
-    const local = readNotifyMap()[id] === true;
+    const key = notifySessionKey(id, dir);
+    const local = readNotifyMap()[key] === true;
     setNotifyEnabled(local);
     // Cancellation flag for stale responses
     let cancelled = false;
@@ -566,9 +569,9 @@ export function Session() {
       // Sync localStorage to match server truth
       const map = readNotifyMap();
       if (state.enabled) {
-        map[id] = true;
+        map[key] = true;
       } else {
-        delete map[id];
+        delete map[key];
       }
       writeNotifyMap(map);
     });
@@ -590,7 +593,9 @@ export function Session() {
     // Turning off
     if (notifyEnabled()) {
       const map = readNotifyMap();
-      delete map[id];
+      const dir = directory || base64Decode(params.dir);
+      const key = notifySessionKey(id, dir);
+      delete map[key];
       writeNotifyMap(map);
       setNotifyEnabled(false);
       setNotifyDenied(false);
@@ -604,7 +609,8 @@ export function Session() {
     const perm = Notification.permission;
     if (perm === "granted") {
       const map = readNotifyMap();
-      map[id] = true;
+      const dir = directory || base64Decode(params.dir);
+      map[notifySessionKey(id, dir)] = true;
       writeNotifyMap(map);
       setNotifyEnabled(true);
       syncAlarmToServer(id, true);
@@ -620,7 +626,8 @@ export function Session() {
     Notification.requestPermission().then((result) => {
       if (result === "granted") {
         const map = readNotifyMap();
-        map[id] = true;
+        const dir = directory || base64Decode(params.dir);
+        map[notifySessionKey(id, dir)] = true;
         writeNotifyMap(map);
         setNotifyEnabled(true);
         syncAlarmToServer(id, true);
