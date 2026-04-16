@@ -1,6 +1,6 @@
 import { watch } from "fs"
 import { handleExtendedEndpoint, isApiPath } from "../shared/extended-api"
-import { handleProxyRequest } from "../shared/proxy"
+import { handleProxyRequest, normalizeProxiedResponse } from "../shared/proxy"
 
 const BASE_PATH = process.env.BASE_PATH || "/"
 const PORT = parseInt(process.env.PORT || "3000", 10)
@@ -114,11 +114,13 @@ const server = Bun.serve<{ target: string }>({
       }
 
       console.log("[Proxy] API:", req.method, strippedPath)
-      return fetch(target.toString(), {
+      const body = req.method === "GET" || req.method === "HEAD" ? undefined : req.body
+      const response = await fetch(target.toString(), {
         method: req.method,
         headers,
-        body: req.body,
+        body,
       })
+      return normalizeProxiedResponse(response)
     }
 
     // Frontend routes - try to serve static file

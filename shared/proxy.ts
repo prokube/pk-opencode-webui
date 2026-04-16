@@ -6,23 +6,74 @@
  * Handles both regular API requests and SSE streaming.
  */
 
+export function normalizeProxiedResponse(response: Response, corsOrigin?: string) {
+  const responseHeaders = new Headers(response.headers)
+  // Bun fetch may return a decoded body while preserving original encoding headers.
+  // Remove encoding/length headers only when a non-identity encoding is present.
+  const encoding = responseHeaders.get("content-encoding")?.trim().toLowerCase()
+  if (encoding && encoding !== "identity") {
+    responseHeaders.delete("content-encoding")
+    responseHeaders.delete("content-length")
+  }
+  if (corsOrigin) {
+    responseHeaders.set("Access-Control-Allow-Origin", corsOrigin)
+    const vary = responseHeaders.get("Vary")
+    if (!vary) {
+      responseHeaders.set("Vary", "Origin")
+    } else {
+      const values = vary
+        .split(",")
+        .map((x) => x.trim())
+        .filter(Boolean)
+      if (values.length === 1 && values[0] === "*") {
+        responseHeaders.set("Vary", "*")
+      } else {
+        if (!values.some((x) => x.toLowerCase() === "origin")) {
+          values.push("Origin")
+        }
+        responseHeaders.set("Vary", values.join(", "))
+      }
+    }
+  }
+  return new Response(response.body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers: responseHeaders,
+  })
+}
+
+function sameOrigin(req: Request) {
+  const origin = req.headers.get("origin")
+  if (!origin) return
+  const requestOrigin = new URL(req.url).origin
+  // Intentionally restrict proxy CORS to same-origin browser requests.
+  // This prevents exposing /__proxy as a generic cross-origin proxy endpoint.
+  if (origin !== requestOrigin) return
+  return origin
+}
+
 /**
  * Handle a proxied request to a remote server.
- * @param path - The API path after /__proxy (e.g. "/session", "/event?directory=...")
+ * @param path - Pathname after /__proxy (for example: "/session" or "/event"). Query comes from req.url.
  * @param req - The incoming request
- * @returns Response or null if not a proxy request
+ * @returns {Promise<Response>} The proxied response.
  */
 export async function handleProxyRequest(path: string, req: Request): Promise<Response> {
+  const corsOrigin = sameOrigin(req)
   // Handle CORS preflight for custom headers (x-proxy-target, x-api-key, etc.)
   if (req.method === "OPTIONS") {
+    const headers = new Headers({
+      "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, PATCH, OPTIONS",
+      "Access-Control-Allow-Headers": req.headers.get("access-control-request-headers") || "*",
+      "Access-Control-Max-Age": "86400",
+    })
+    if (corsOrigin) {
+      headers.set("Access-Control-Allow-Origin", corsOrigin)
+      headers.set("Vary", "Origin")
+    }
     return new Response(null, {
       status: 204,
-      headers: {
-        "Access-Control-Allow-Origin": "*",
-        "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, PATCH, OPTIONS",
-        "Access-Control-Allow-Headers": req.headers.get("access-control-request-headers") || "*",
-        "Access-Control-Max-Age": "86400",
-      },
+      headers,
     })
   }
 
@@ -64,7 +115,7 @@ export async function handleProxyRequest(path: string, req: Request): Promise<Re
       body: req.method !== "GET" && req.method !== "HEAD" ? req.body : undefined,
     })
 
-    const corsHeaders = { "Access-Control-Allow-Origin": "*" }
+    const corsHeaders = corsOrigin ? { "Access-Control-Allow-Origin": corsOrigin, Vary: "Origin" } : {}
 
     if (isSSE) {
       if (!response.ok) {
@@ -84,18 +135,7 @@ export async function handleProxyRequest(path: string, req: Request): Promise<Re
       })
     }
 
-    // Forward the response with CORS headers.
-    // Remove Content-Encoding because fetch() already decompresses the body,
-    // so passing gzip/br encoding to the browser causes double-decode failures.
-    const responseHeaders = new Headers(response.headers)
-    responseHeaders.delete("content-encoding")
-    responseHeaders.delete("content-length") // length no longer matches after decompression
-    responseHeaders.set("Access-Control-Allow-Origin", "*")
-    return new Response(response.body, {
-      status: response.status,
-      statusText: response.statusText,
-      headers: responseHeaders,
-    })
+    return normalizeProxiedResponse(response, corsOrigin)
   } catch (e) {
     console.error("[Proxy] Connection error:", e)
     return new Response(JSON.stringify({ error: "Proxy connection failed" }), {

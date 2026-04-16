@@ -10,7 +10,7 @@
  */
 
 import { handleExtendedEndpoint, isApiPath } from "../shared/extended-api"
-import { handleProxyRequest } from "../shared/proxy"
+import { handleProxyRequest, normalizeProxiedResponse } from "../shared/proxy"
 
 const BASE_PATH = process.env.NB_PREFIX || process.env.BASE_PATH || "/"
 const PORT = parseInt(process.env.PORT || "8080", 10)
@@ -181,11 +181,13 @@ const server = Bun.serve<{ path: string; search: string }>({
       // Regular API requests
       console.log("[Proxy] API:", req.method, path)
       try {
-        return await fetch(target.toString(), {
+        const body = req.method === "GET" || req.method === "HEAD" ? undefined : req.body
+        const response = await fetch(target.toString(), {
           method: req.method,
           headers,
-          body: req.body,
+          body,
         })
+        return normalizeProxiedResponse(response)
       } catch (e) {
         console.error("[Proxy] API error:", e)
         return new Response("API proxy error", { status: 502 })
