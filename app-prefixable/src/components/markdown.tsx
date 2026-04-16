@@ -84,10 +84,12 @@ function copyCode(button: HTMLButtonElement) {
     return
   }
 
-  Promise.resolve(navigator.clipboard.writeText(code)).then(
-    () => setCopyState(button, "copied"),
-    () => setCopyState(button, "failed"),
-  )
+  Promise.resolve()
+    .then(() => navigator.clipboard.writeText(code))
+    .then(
+      () => setCopyState(button, "copied"),
+      () => setCopyState(button, "failed"),
+    )
 }
 
 interface MarkdownProps {
