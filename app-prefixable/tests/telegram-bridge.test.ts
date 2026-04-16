@@ -7463,6 +7463,107 @@ describe("telegram bridge config and cache", () => {
     expect(recentText).toContain(`Assistant: ${longReply}`);
   });
 
+  test("task-finished latest-message keeps server newest-first order when timestamps and ids are unreliable", async () => {
+    const calls: Array<{ url: string; body: Record<string, unknown> }> = [];
+    const originalFetch = globalThis.fetch;
+    try {
+      globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        const body = init?.body ? (JSON.parse(String(init.body)) as Record<string, unknown>) : {};
+        calls.push({ url, body });
+        if (url.includes("/sendMessage")) {
+          return new Response(JSON.stringify({ ok: true, result: { message_id: 1 } }), { status: 200 });
+        }
+        if (url.includes("/answerCallbackQuery")) {
+          return new Response(JSON.stringify({ ok: true, result: true }), { status: 200 });
+        }
+        if (url.includes("/session/session-2/message")) {
+          return new Response(JSON.stringify([
+            {
+              info: { id: "a-10", role: "assistant", parentID: "u-10", time: { created: 123 } },
+              parts: [{ type: "text", text: "Newest answer" }],
+            },
+            {
+              info: { id: "u-10", role: "user", time: { created: 123 } },
+              parts: [{ type: "text", text: "Newest question" }],
+            },
+            {
+              info: { id: "a-99", role: "assistant", parentID: "u-99", time: { created: 123 } },
+              parts: [{ type: "text", text: "Older answer" }],
+            },
+            {
+              info: { id: "u-99", role: "user", time: { created: 123 } },
+              parts: [{ type: "text", text: "Older question" }],
+            },
+          ]), { status: 200 });
+        }
+        throw new Error(`Unexpected fetch ${url}`);
+      };
+
+      const runtime = {
+        config: {
+          mode: "polling" as const,
+          token: "token",
+          openCodeUrl: "http://127.0.0.1:4096",
+          sessionCacheMax: 10,
+          sessionCacheTtlMs: 10_000,
+          notificationDebounceMs: 0,
+          port: 4097,
+          webhookPath: "/webhook",
+          sessionStorePath: "/tmp/test-store.json",
+        },
+        store: {
+          get: async () => undefined,
+          set: async () => undefined,
+          delete: async () => undefined,
+          sessionKeys: async () => ["chat:88:user:8"],
+          notificationGet: async () => true,
+        },
+      };
+
+      await handleBridgeEvent(runtime, {
+        type: "session.status",
+        properties: { sessionID: "session-2", status: { type: "busy" } },
+      });
+      await handleBridgeEvent(runtime, {
+        type: "session.status",
+        properties: { sessionID: "session-2", status: { type: "idle" } },
+      });
+
+      const taskFinished = calls.find((x) =>
+        x.url.includes("/sendMessage") && String(x.body.text || "").includes("Task finished:"),
+      );
+      const recentCallback = String(
+        ((taskFinished?.body.reply_markup as { inline_keyboard?: Array<Array<{ callback_data?: string }>> } | undefined)
+          ?.inline_keyboard?.[0]?.find((item) => String(item.callback_data || "").startsWith("u:r:"))?.callback_data) || "",
+      );
+
+      await handleCallbackUpdate(runtime, {
+        update_id: 90,
+        callback_query: {
+          id: "cb-task-recent-unreliable-order",
+          data: recentCallback,
+          from: { id: 8 },
+          message: { message_id: 11, chat: { id: 88 } },
+        },
+      });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+
+    const latest = calls
+      .filter((x) => x.url.includes("/sendMessage"))
+      .map((x) => String(x.body.text || ""))
+      .find((text) => text.includes("Recent activity for session")) || "";
+    expect(latest).toContain("You: Newest question");
+    expect(latest).toContain("Assistant: Newest answer");
+    expect(latest).not.toContain("Older question");
+
+    const messageCalls = calls.filter((x) => x.url.includes("/session/session-2/message"));
+    expect(messageCalls.length).toBeGreaterThan(0);
+    expect(messageCalls.every((x) => !x.url.includes("limit="))).toBe(true);
+  });
+
 
   test("callback query submits selected option and confirms success", async () => {
     const calls: Array<{ url: string; body: Record<string, unknown> }> = [];

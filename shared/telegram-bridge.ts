@@ -1918,6 +1918,43 @@ function parseRecentText(parts: unknown, maxLen = recentPartTextMax): string {
   return truncateTelegramInlineText(text, maxLen)
 }
 
+function recentOrder(items: Array<{ id: string; role: "user" | "assistant"; parentID?: string; created: number }>): "oldest-first" | "newest-first" {
+  const users = items.filter((item) => item.role === "user")
+  if (users.length >= 2) {
+    const stamped = users.filter((item) => item.created > 0)
+    if (stamped.length >= 2) {
+      const asc = stamped.every((item, index) => {
+        if (index === 0) return true
+        const prev = stamped[index - 1]
+        if (!prev) return true
+        return prev.created <= item.created
+      })
+      const desc = stamped.every((item, index) => {
+        if (index === 0) return true
+        const prev = stamped[index - 1]
+        if (!prev) return true
+        return prev.created >= item.created
+      })
+      if (asc && !desc) return "oldest-first"
+      if (desc && !asc) return "newest-first"
+    }
+  }
+  const userIndex = new Map<string, number>()
+  items.forEach((item, index) => {
+    if (item.role !== "user") return
+    userIndex.set(item.id, index)
+  })
+  const links = items.reduce((sum, item, index) => {
+    if (item.role !== "assistant" || !item.parentID) return sum
+    const parent = userIndex.get(item.parentID)
+    if (parent === undefined) return sum
+    if (parent <= index) return { older: sum.older + 1, newer: sum.newer }
+    return { older: sum.older, newer: sum.newer + 1 }
+  }, { older: 0, newer: 0 })
+  if (links.older > links.newer) return "oldest-first"
+  return "newest-first"
+}
+
 async function recentText(
   config: BridgeConfig,
   sessionId: string,
@@ -1928,7 +1965,9 @@ async function recentText(
   const safeCount = Math.max(1, Math.min(count, recentMaxCount))
   const keepFull = options?.preserveFullLatest === true && safeCount === 1
   const url = opencodeUrl(config, `/session/${encodeURIComponent(sessionId)}/message`)
-  url.searchParams.set("limit", String(Math.max(20, safeCount * 6)))
+  if (!keepFull) {
+    url.searchParams.set("limit", String(Math.max(20, safeCount * 6)))
+  }
   if (config.directory) {
     url.searchParams.set("directory", config.directory)
   }
@@ -1967,18 +2006,24 @@ async function recentText(
     }
     items.push({ id, role: "user", text, created })
   }
-  const hasCreated = items.some((item) => item.created > 0)
-  items.sort((a, b) => {
-    if (hasCreated && a.created > 0 && b.created > 0 && a.created !== b.created) {
-      return a.created - b.created
-    }
-    return a.id.localeCompare(b.id, undefined, { numeric: true, sensitivity: "base" })
-  })
+  const order = keepFull ? recentOrder(items) : "oldest-first"
+  if (!keepFull) {
+    const hasCreated = items.some((item) => item.created > 0)
+    items.sort((a, b) => {
+      if (hasCreated && a.created > 0 && b.created > 0 && a.created !== b.created) {
+        return a.created - b.created
+      }
+      return a.id.localeCompare(b.id, undefined, { numeric: true, sensitivity: "base" })
+    })
+  }
   const assistants = new Map<string, string>()
   const users: Array<{ id: string; text: string; created: number }> = []
   for (const item of items) {
     if (item.role === "assistant") {
-      if (item.parentID) assistants.set(item.parentID, item.text)
+      if (item.parentID) {
+        if (keepFull && order === "newest-first" && assistants.has(item.parentID)) continue
+        assistants.set(item.parentID, item.text)
+      }
       continue
     }
     users.push({ id: item.id, text: item.text, created: item.created })
@@ -1988,7 +2033,11 @@ async function recentText(
   }
   const title = await safeSessionTitle(config, sessionId, sourceId)
   const name = formatSessionTitleOnly(sessionId, title, sourceId)
-  const list = users.slice(-safeCount)
+  const list = keepFull
+    ? order === "newest-first"
+      ? users.slice(0, safeCount)
+      : users.slice(-safeCount)
+    : users.slice(-safeCount)
   const lines = [`Recent activity for ${name} (showing ${list.length} of ${users.length}):`]
   for (let i = 0; i < list.length; i++) {
     const item = list[i]
