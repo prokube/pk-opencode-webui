@@ -190,9 +190,14 @@ const TELEGRAM_SOURCE_ID_CACHE_TTL_MS = 30_000
 
 const telegramSourceIdCache = new Map<string, { sourceId: string; expiresAt: number }>()
 const telegramSourceIdPending = new Map<string, Promise<string | undefined>>()
+const telegramSourceIdGeneration = new Map<string, number>()
 
 function sourceCacheKey(serverUrl: string, directory: string) {
   return `${serverUrl}::${directory}`
+}
+
+function bumpSourceGeneration(key: string) {
+  telegramSourceIdGeneration.set(key, (telegramSourceIdGeneration.get(key) ?? 0) + 1)
 }
 
 export function invalidateTelegramSourceIdCache(serverUrl?: string, directory?: string) {
@@ -201,20 +206,30 @@ export function invalidateTelegramSourceIdCache(serverUrl?: string, directory?: 
   if (!url) {
     telegramSourceIdCache.clear()
     telegramSourceIdPending.clear()
+    telegramSourceIdGeneration.clear()
     return
   }
   if (!dir) {
+    const keys = new Set<string>()
     for (const key of telegramSourceIdCache.keys()) {
       if (!key.startsWith(`${url}::`)) continue
+      keys.add(key)
       telegramSourceIdCache.delete(key)
     }
     for (const key of telegramSourceIdPending.keys()) {
       if (!key.startsWith(`${url}::`)) continue
+      keys.add(key)
       telegramSourceIdPending.delete(key)
     }
+    for (const key of telegramSourceIdGeneration.keys()) {
+      if (!key.startsWith(`${url}::`)) continue
+      keys.add(key)
+    }
+    for (const key of keys) bumpSourceGeneration(key)
     return
   }
   const key = sourceCacheKey(url, dir)
+  bumpSourceGeneration(key)
   telegramSourceIdCache.delete(key)
   telegramSourceIdPending.delete(key)
 }
@@ -251,12 +266,14 @@ export async function resolveTelegramSourceId(serverUrl: string, directory?: str
   if (cached) telegramSourceIdCache.delete(key)
   const pending = telegramSourceIdPending.get(key)
   if (pending) return pending
+  const generation = telegramSourceIdGeneration.get(key) ?? 0
   const next = fetch(`${serverUrl}/api/ext/telegram/settings`)
     .then(async (res) => {
       if (!res.ok) return
       const data = (await res.json().catch(() => null)) as unknown
       const sourceId = sourceFromSettings(data, dir)
       if (!sourceId) return
+      if ((telegramSourceIdGeneration.get(key) ?? 0) !== generation) return
       telegramSourceIdCache.set(key, { sourceId, expiresAt: Date.now() + TELEGRAM_SOURCE_ID_CACHE_TTL_MS })
       return sourceId
     })

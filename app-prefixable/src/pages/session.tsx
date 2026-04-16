@@ -530,22 +530,26 @@ export function Session() {
   );
   const [notifyDenied, setNotifyDenied] = createSignal(false);
   const [notifySourceId, setNotifySourceId] = createSignal<string | undefined>();
+  const [notifySourceReady, setNotifySourceReady] = createSignal(false);
   const deniedTimer = { id: null as ReturnType<typeof setTimeout> | null };
   onCleanup(() => { if (deniedTimer.id !== null) clearTimeout(deniedTimer.id) });
 
   createEffect(() => {
     const dir = directory || base64Decode(params.dir);
+    setNotifySourceReady(false);
     let cancelled = false;
     onCleanup(() => { cancelled = true });
     resolveTelegramSourceId(url, dir).then((sourceId) => {
       if (cancelled) return;
       setNotifySourceId(sourceId);
+      setNotifySourceReady(true);
     });
   });
 
   // Re-read notification state when session changes, and seed from server alarm state
   createEffect(() => {
     const id = params.id;
+    const sourceReady = notifySourceReady();
     const sourceId = notifySourceId();
     const dir = directory || base64Decode(params.dir);
     setNotifyDenied(false);
@@ -557,6 +561,7 @@ export function Session() {
     const key = notifySessionKey(id, dir);
     const local = readNotifyMap()[key] === true;
     setNotifyEnabled(local);
+    if (!sourceReady) return;
     // Cancellation flag for stale responses
     let cancelled = false;
     onCleanup(() => { cancelled = true });
@@ -586,9 +591,12 @@ export function Session() {
     }
     const dir = directory || base64Decode(params.dir);
     resolveTelegramSourceId(url, dir).then((resolved) => {
-      if (!resolved) return;
-      setNotifySourceId(resolved);
-      setSessionAlarm(url, id, enabled, resolved);
+      if (resolved) {
+        setNotifySourceId(resolved);
+        setSessionAlarm(url, id, enabled, resolved);
+        return;
+      }
+      setSessionAlarm(url, id, enabled);
     });
   }
 

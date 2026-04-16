@@ -1764,7 +1764,8 @@ export function Layout(props: ParentProps) {
 
           const sess = sync.session.get(sid);
           const nc = notifyCache();
-          if (nc[notifySessionKey(sid, directory)] !== true) return;
+          const notifyDir = sess?.directory || directory;
+          if (nc[notifySessionKey(sid, notifyDir)] !== true) return;
 
           const title = sess?.title || "Task complete";
           fireNotification(sid, title, getSessionSummary(sid), `session-complete-${sid}`);
@@ -1785,7 +1786,9 @@ export function Layout(props: ParentProps) {
         const sess = sync.session.get(sid);
         const nc = notifyCache();
         const bellSid = rootAncestorId(sync.session.get, sid);
-        if (nc[notifySessionKey(bellSid, directory)] !== true) return;
+        const bell = sync.session.get(bellSid);
+        const bellDir = bell?.directory || sess?.directory || directory;
+        if (nc[notifySessionKey(bellSid, bellDir)] !== true) return;
         firedPermission.add(rid);
 
         const title = sess?.title || "Permission needed";
@@ -1819,7 +1822,9 @@ export function Layout(props: ParentProps) {
         const sess = sync.session.get(sid);
         const nc = notifyCache();
         const bellSid = rootAncestorId(sync.session.get, sid);
-        if (nc[notifySessionKey(bellSid, directory)] !== true) return;
+        const bell = sync.session.get(bellSid);
+        const bellDir = bell?.directory || sess?.directory || directory;
+        if (nc[notifySessionKey(bellSid, bellDir)] !== true) return;
         firedQuestion.add(rid);
 
         const title = sess?.title || "Question from agent";

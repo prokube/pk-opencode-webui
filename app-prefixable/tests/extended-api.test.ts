@@ -74,4 +74,45 @@ describe("resolveTelegramSourceId", () => {
     fetchSpy.mockRestore()
     nowSpy.mockRestore()
   })
+
+  test("does not let invalidated in-flight responses overwrite fresh cache", async () => {
+    let releaseFirst: ((value: Response) => void) | undefined
+    const fetchSpy = spyOn(globalThis, "fetch").mockImplementation(async () => {
+      if (!releaseFirst) {
+        return await new Promise<Response>((resolve) => {
+          releaseFirst = resolve
+        })
+      }
+      return new Response(
+        JSON.stringify({
+          settings: {
+            sources: [{ id: "beta", directory: "/workspace/app", enabled: true }],
+          },
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      )
+    })
+
+    const first = resolveTelegramSourceId("http://127.0.0.1:3000", "/workspace/app")
+    invalidateTelegramSourceIdCache("http://127.0.0.1:3000", "/workspace/app")
+    const second = await resolveTelegramSourceId("http://127.0.0.1:3000", "/workspace/app")
+
+    releaseFirst?.(
+      new Response(
+        JSON.stringify({
+          settings: {
+            sources: [{ id: "alpha", directory: "/workspace/app", enabled: true }],
+          },
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      ),
+    )
+    await first
+    const third = await resolveTelegramSourceId("http://127.0.0.1:3000", "/workspace/app")
+
+    expect(second).toBe("beta")
+    expect(third).toBe("beta")
+    expect(fetchSpy).toHaveBeenCalledTimes(2)
+    fetchSpy.mockRestore()
+  })
 })
