@@ -50,7 +50,7 @@ import {
   type ImageAttachment,
 } from "../components/image-attachments";
 import { readNotifyMap, writeNotifyMap } from "../utils/notify";
-import { getSessionAlarm, setSessionAlarm } from "../utils/extended-api";
+import { getSessionAlarm, resolveTelegramSourceId, setSessionAlarm } from "../utils/extended-api";
 import { sessionQuestionRequest } from "../utils/session-tree-request";
 import { createRootSession } from "../utils/root-session";
 import {
@@ -528,12 +528,24 @@ export function Session() {
     })(),
   );
   const [notifyDenied, setNotifyDenied] = createSignal(false);
+  const [notifySourceId, setNotifySourceId] = createSignal<string | undefined>();
   const deniedTimer = { id: null as ReturnType<typeof setTimeout> | null };
   onCleanup(() => { if (deniedTimer.id !== null) clearTimeout(deniedTimer.id) });
+
+  createEffect(() => {
+    const dir = directory || base64Decode(params.dir);
+    let cancelled = false;
+    onCleanup(() => { cancelled = true });
+    resolveTelegramSourceId(url, dir).then((sourceId) => {
+      if (cancelled) return;
+      setNotifySourceId(sourceId);
+    });
+  });
 
   // Re-read notification state when session changes, and seed from server alarm state
   createEffect(() => {
     const id = params.id;
+    const sourceId = notifySourceId();
     setNotifyDenied(false);
     if (!id) {
       setNotifyEnabled(false);
@@ -546,7 +558,7 @@ export function Session() {
     let cancelled = false;
     onCleanup(() => { cancelled = true });
     // Then fetch server-side alarm state asynchronously
-    getSessionAlarm(url, id).then((state) => {
+    getSessionAlarm(url, id, sourceId).then((state) => {
       // Skip if effect was cleaned up, session changed, or user already toggled
       if (cancelled || !state || params.id !== id) return;
       if (notifyEnabled() !== local) return; // user toggled since fetch started
@@ -564,7 +576,11 @@ export function Session() {
 
   /** Mirror bell toggle to server-side alarm state (fire-and-forget). */
   function syncAlarmToServer(id: string, enabled: boolean) {
-    setSessionAlarm(url, id, enabled);
+    const dir = directory || base64Decode(params.dir);
+    resolveTelegramSourceId(url, dir).then((sourceId) => {
+      if (sourceId) setNotifySourceId(sourceId);
+      setSessionAlarm(url, id, enabled, sourceId);
+    });
   }
 
   function toggleNotify() {

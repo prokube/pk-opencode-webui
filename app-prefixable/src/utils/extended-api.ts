@@ -182,12 +182,70 @@ export async function writeSavedPrompts(
 
 export interface SessionAlarmState {
   sessionId: string
+  sourceId: string
   enabled: boolean
 }
 
+const telegramSourceIdCache = new Map<string, string>()
+const telegramSourceIdPending = new Map<string, Promise<string | undefined>>()
+
+function sourceCacheKey(serverUrl: string, directory: string) {
+  return `${serverUrl}::${directory}`
+}
+
+function sourceFromSettings(data: unknown, directory?: string) {
+  if (!directory) return
+  if (!data || typeof data !== "object") return
+  const settings = (data as { settings?: unknown }).settings
+  if (!settings || typeof settings !== "object") return
+  const rootDirectory = (settings as { directory?: unknown }).directory
+  if (typeof rootDirectory === "string" && rootDirectory === directory) {
+    return "default"
+  }
+  const sources = (settings as { sources?: unknown }).sources
+  if (!Array.isArray(sources)) return
+  const match = sources.find((item) => {
+    if (!item || typeof item !== "object") return false
+    const source = item as { id?: unknown; directory?: unknown; enabled?: unknown }
+    if (source.enabled === false) return false
+    if (typeof source.id !== "string") return false
+    if (typeof source.directory !== "string") return false
+    return source.directory === directory
+  }) as { id?: string } | undefined
+  if (!match?.id) return
+  return match.id
+}
+
+export async function resolveTelegramSourceId(serverUrl: string, directory?: string): Promise<string | undefined> {
+  const dir = directory?.trim()
+  if (!dir) return
+  const key = sourceCacheKey(serverUrl, dir)
+  const cached = telegramSourceIdCache.get(key)
+  if (cached) return cached
+  const pending = telegramSourceIdPending.get(key)
+  if (pending) return pending
+  const next = fetch(`${serverUrl}/api/ext/telegram/settings`)
+    .then(async (res) => {
+      if (!res.ok) return
+      const data = (await res.json().catch(() => null)) as unknown
+      const sourceId = sourceFromSettings(data, dir)
+      if (!sourceId) return
+      telegramSourceIdCache.set(key, sourceId)
+      return sourceId
+    })
+    .catch(() => undefined)
+    .finally(() => {
+      telegramSourceIdPending.delete(key)
+    })
+  telegramSourceIdPending.set(key, next)
+  return next
+}
+
 /** Read session alarm state from the server (Telegram bridge). Returns null on failure. */
-export async function getSessionAlarm(serverUrl: string, sessionId: string): Promise<SessionAlarmState | null> {
+export async function getSessionAlarm(serverUrl: string, sessionId: string, sourceId?: string): Promise<SessionAlarmState | null> {
   const params = new URLSearchParams({ sessionId })
+  const source = sourceId?.trim()
+  if (source) params.set("sourceId", source)
   const res = await fetch(`${serverUrl}/api/ext/telegram/session-alarm?${params}`).catch(() => null)
   if (!res) {
     console.warn("[extended-api] getSessionAlarm: network error for session", sessionId)
@@ -202,15 +260,20 @@ export async function getSessionAlarm(serverUrl: string, sessionId: string): Pro
     console.warn("[extended-api] getSessionAlarm: invalid response data")
     return null
   }
-  return { sessionId: data.sessionId || sessionId, enabled: data.enabled }
+  return {
+    sessionId: data.sessionId || sessionId,
+    sourceId: typeof (data as { sourceId?: unknown }).sourceId === "string" ? (data as { sourceId: string }).sourceId : source || "default",
+    enabled: data.enabled,
+  }
 }
 
 /** Update session alarm state on the server (Telegram bridge). Returns true on success. */
-export async function setSessionAlarm(serverUrl: string, sessionId: string, enabled: boolean): Promise<boolean> {
+export async function setSessionAlarm(serverUrl: string, sessionId: string, enabled: boolean, sourceId?: string): Promise<boolean> {
+  const source = sourceId?.trim()
   const res = await fetch(`${serverUrl}/api/ext/telegram/session-alarm`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ sessionId, enabled }),
+    body: JSON.stringify(source ? { sessionId, sourceId: source, enabled } : { sessionId, enabled }),
   }).catch(() => null)
   if (!res) {
     console.warn("[extended-api] setSessionAlarm: network error for session", sessionId)
