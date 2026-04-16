@@ -24,9 +24,9 @@ export function normalizeProxiedResponse(response: Response, addCors = false) {
 
 /**
  * Handle a proxied request to a remote server.
- * @param path - The API path after /__proxy (e.g. "/session", "/event?directory=...")
+ * @param path - Pathname after /__proxy (for example: "/session" or "/event"). Query comes from req.url.
  * @param req - The incoming request
- * @returns Response or null if not a proxy request
+ * @returns Response
  */
 export async function handleProxyRequest(path: string, req: Request): Promise<Response> {
   // Handle CORS preflight for custom headers (x-proxy-target, x-api-key, etc.)
