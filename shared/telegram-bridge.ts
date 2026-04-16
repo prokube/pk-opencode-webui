@@ -2763,8 +2763,8 @@ export async function readTelegramBridgeHealth(runtime: Runtime): Promise<Bridge
   const errorSources = sourceChecks.filter((item) => item.status !== "ok").map((item) => item.sourceId)
   const hasSources = sourceChecks.length > 0
   const allHealthy = hasSources && errorSources.length === 0
-  const healthyList = okSources.length > 0 ? okSources.join(", ") : "none"
-  const failingList = errorSources.length > 0 ? errorSources.join(", ") : "none"
+  const healthyList = okSources.join(", ")
+  const failingList = errorSources.join(", ")
   const healthySuffix = okSources.length > 0 ? `; healthy sources: ${healthyList}` : ""
   const openCodeApi = !hasSources
     ? { status: "error" as const, message: "No OpenCode sources configured" }
