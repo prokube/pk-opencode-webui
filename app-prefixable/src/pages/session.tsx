@@ -522,6 +522,20 @@ export function Session() {
     setSessionFollowups(sid, next);
   }
 
+  function reorderFollowup(from: string, to: string) {
+    const sid = sessionId();
+    if (!sid) return;
+    if (from === to) return;
+    const list = followups();
+    const fromIndex = list.findIndex((item) => item.id === from);
+    const toIndex = list.findIndex((item) => item.id === to);
+    if (fromIndex < 0 || toIndex < 0) return;
+    const next = [...list];
+    next.splice(fromIndex, 1);
+    next.splice(toIndex, 0, list[fromIndex]);
+    setSessionFollowups(sid, next);
+  }
+
   // Double-Escape to abort: track last Escape press timestamp
   const lastEsc = { ts: 0 };
 
@@ -2799,6 +2813,7 @@ export function Session() {
                 onDelete={removeFollowup}
                 onMoveUp={(id) => moveFollowup(id, -1)}
                 onMoveDown={(id) => moveFollowup(id, 1)}
+                onReorder={reorderFollowup}
               />
             </Show>
           </div>
