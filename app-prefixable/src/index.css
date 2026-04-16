@@ -451,19 +451,57 @@
   }
 
   .markdown-code-block pre {
-    @apply mb-0 pt-12;
+    @apply mb-0 pt-10;
   }
 
   .markdown-copy-button {
-    @apply absolute right-3 top-3 rounded-md border px-2.5 py-1 text-xs font-medium transition-colors;
+    @apply absolute right-3 top-3 inline-flex h-7 w-7 items-center justify-center rounded-md border p-0 transition-colors;
     border-color: var(--border-strong);
     background: color-mix(in srgb, var(--surface-base) 88%, transparent);
-    color: var(--text-strong);
+    color: var(--icon-base);
     backdrop-filter: blur(2px);
   }
 
   .markdown-copy-button:hover {
     background: var(--surface-base);
+    color: var(--icon-strong);
+  }
+
+  .markdown-copy-button:focus-visible {
+    color: var(--icon-strong);
+  }
+
+  .markdown-copy-icon {
+    @apply flex h-3.5 w-3.5 items-center justify-center;
+    font-size: 0.95rem;
+    line-height: 1;
+    font-weight: 600;
+  }
+
+  .markdown-copy-label {
+    @apply pointer-events-none absolute right-[calc(100%+0.35rem)] top-1/2 -translate-y-1/2 translate-x-0.5 rounded-md border px-2 py-1 text-xs font-medium;
+    border-color: var(--border-strong);
+    background: color-mix(in srgb, var(--surface-base) 92%, transparent);
+    color: var(--text-strong);
+    white-space: nowrap;
+    opacity: 0;
+    transition: opacity 120ms ease, transform 120ms ease;
+    backdrop-filter: blur(2px);
+  }
+
+  .markdown-copy-live {
+    @apply absolute -m-px h-px w-px overflow-hidden border-0 p-0;
+    clip: rect(0, 0, 0, 0);
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+
+  .markdown-copy-button:hover .markdown-copy-label,
+  .markdown-copy-button:focus-visible .markdown-copy-label,
+  .markdown-copy-button[data-state="copied"] .markdown-copy-label,
+  .markdown-copy-button[data-state="failed"] .markdown-copy-label {
+    opacity: 1;
+    transform: translateX(0) translateY(-50%);
   }
 
   .markdown-copy-button[data-state="copied"] {
@@ -471,7 +509,17 @@
     color: var(--icon-success-base);
   }
 
+  .markdown-copy-button[data-state="copied"] .markdown-copy-label {
+    border-color: color-mix(in srgb, var(--icon-success-base) 40%, var(--border-strong));
+    color: var(--icon-success-base);
+  }
+
   .markdown-copy-button[data-state="failed"] {
+    border-color: color-mix(in srgb, var(--interactive-critical) 40%, var(--border-strong));
+    color: var(--interactive-critical);
+  }
+
+  .markdown-copy-button[data-state="failed"] .markdown-copy-label {
     border-color: color-mix(in srgb, var(--interactive-critical) 40%, var(--border-strong));
     color: var(--interactive-critical);
   }
