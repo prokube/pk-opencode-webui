@@ -252,7 +252,9 @@ export function Session() {
     const msgs = sync.messages(id);
     const revertID = sync.session.get(id)?.revert?.messageID;
     if (!revertID) return msgs;
-    return msgs.filter((msg) => msg.info.id < revertID);
+    const revertIndex = msgs.findIndex((msg) => msg.info.id === revertID);
+    if (revertIndex === -1) return msgs;
+    return msgs.slice(0, revertIndex);
   }
 
   // Viewport-aware maximum matching the CSS max-height on the textarea
