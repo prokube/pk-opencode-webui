@@ -735,7 +735,7 @@ export function Session() {
         setLoadingHistory(false);
         // Initialize per-session model from existing messages if not already set
         if (!providers.getSessionModel(id)) {
-          const msgs = sync.messages(id);
+          const msgs = visibleSyncMessages(id);
           for (let i = msgs.length - 1; i >= 0; i--) {
             const info = msgs[i].info;
             if (info.role === "assistant" && info.providerID && info.modelID) {
