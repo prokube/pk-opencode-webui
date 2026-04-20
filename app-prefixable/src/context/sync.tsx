@@ -83,10 +83,18 @@ function toolRank(part: Extract<Part, { type: "tool" }>): number {
 function mergePart(existing: Part, synced: Part): Part {
   if (existing.type !== "tool") {
     if (synced.type !== "tool") {
-      const existingTime = (existing as TextPart).time
-      const syncedTime = (synced as TextPart).time
-      const existingEnd = existingTime?.end ?? existingTime?.start ?? 0
-      const syncedEnd = syncedTime?.end ?? syncedTime?.start ?? 0
+      const getTimeValue = (part: Part): number => {
+        if (part.type === "text" || part.type === "reasoning") {
+          const t = (part as TextPart).time
+          return t?.end ?? t?.start ?? 0
+        }
+        if (part.type === "retry") {
+          return (part as { time?: { created?: number } }).time?.created ?? 0
+        }
+        return 0
+      }
+      const existingEnd = getTimeValue(existing)
+      const syncedEnd = getTimeValue(synced)
       if (existingEnd > syncedEnd) return existing
       return synced
     }
@@ -114,6 +122,7 @@ function mergePart(existing: Part, synced: Part): Part {
 
 function mergeMessage(existing: MessageWithParts, synced: MessageWithParts): MessageWithParts {
   const existingWithId = existing.parts.filter((p) => !!p.id)
+  const existingWithoutId = existing.parts.filter((p) => !p.id)
   const map = new Map(existingWithId.map((part) => [part.id, part]))
   const merged = synced.parts.map((part) => {
     const current = map.get(part.id)
@@ -124,6 +133,10 @@ function mergeMessage(existing: MessageWithParts, synced: MessageWithParts): Mes
 
   for (const part of existingWithId) {
     if (ids.has(part.id)) continue
+    merged.push(part)
+  }
+
+  for (const part of existingWithoutId) {
     merged.push(part)
   }
 
@@ -366,6 +379,10 @@ export function SyncProvider(props: ParentProps) {
           if (i !== msgIdx) return m
           if (hasId) {
             const partIdx = m.parts.findIndex((p) => p.id === part.id)
+            if (partIdx !== -1) {
+              const existingPart = m.parts[partIdx]
+              if (!existingPart.id || isNewer(existingPart, part)) return m
+            }
             const newParts = partIdx === -1 ? [...m.parts, part] : m.parts.map((p, pi) => (pi === partIdx ? part : p))
             return { ...m, parts: newParts }
           }
