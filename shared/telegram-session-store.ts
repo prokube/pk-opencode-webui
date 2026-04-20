@@ -11,6 +11,8 @@ type StoreShape = {
   pending: Record<string, TelegramPendingQuestion[]>
 }
 
+const REFRESH_STAT_INTERVAL_MS = 250
+
 type TelegramPendingItem = {
   id: string
   kind: "question" | "permission" | "task-finished"
@@ -462,6 +464,7 @@ export function createTelegramSessionStore(path: string): TelegramSessionStore {
 
   let writes = Promise.resolve()
   let ops = Promise.resolve()
+  let lastRefreshCheckMs = 0
 
   function flush() {
     const payload: StoreShape = {
@@ -477,6 +480,9 @@ export function createTelegramSessionStore(path: string): TelegramSessionStore {
       () => writeStore(path, payload),
       () => writeStore(path, payload),
     )
+    writes = writes.then(() => stat(path).then((file) => {
+      loadedMtimeMs = file.mtimeMs
+    }).catch(() => undefined))
     return writes
   }
 
@@ -486,18 +492,23 @@ export function createTelegramSessionStore(path: string): TelegramSessionStore {
     return step
   }
 
-  async function refreshFromDisk() {
-    await ready
-    const file = await stat(path).catch(() => undefined)
-    if (!file) return
-    if (file.mtimeMs <= loadedMtimeMs) return
-    const data = await readStore(path).catch((error) => {
-      console.warn("[TelegramBridge] session store refresh failed", { path, error })
-      return
+  function refreshFromDisk() {
+    return run(async () => {
+      await ready
+      const now = Date.now()
+      if (now - lastRefreshCheckMs < REFRESH_STAT_INTERVAL_MS) return
+      lastRefreshCheckMs = now
+      const file = await stat(path).catch(() => undefined)
+      if (!file) return
+      if (file.mtimeMs <= loadedMtimeMs) return
+      const data = await readStore(path).catch((error) => {
+        console.warn("[TelegramBridge] session store refresh failed", { path, error })
+        return
+      })
+      if (!data) return
+      applyData(data)
+      loadedMtimeMs = file.mtimeMs
     })
-    if (!data) return
-    applyData(data)
-    loadedMtimeMs = file.mtimeMs
   }
 
   function sameList(a: string[] | undefined, b: string[]): boolean {

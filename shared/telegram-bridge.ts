@@ -148,6 +148,10 @@ export function allowTelegramHealthRequest(address: string | undefined): boolean
   return isLocalAddress(address)
 }
 
+function allowSessionAlarmRequest(address: string | undefined): boolean {
+  return isLocalAddress(address)
+}
+
 type TelegramCommand = {
   name: string
   text: string
@@ -240,6 +244,10 @@ function sessionAlarmSessionIdError(sessionId: string): string | undefined {
 
 function sessionAlarmSourceIdError(sourceId: string): string | undefined {
   if (!sourceId) return "sourceId is required"
+  if (sourceId === "default") return
+  if (sourceId.toLowerCase() === "default") {
+    return 'sourceId is reserved; use exact "default" or choose another id'
+  }
   if (sourceId.length > 128) return "sourceId must be 128 characters or fewer"
   if (!/^[a-zA-Z0-9._-]+$/.test(sourceId)) return "sourceId contains unsupported characters"
 }
@@ -249,6 +257,10 @@ function parseSessionAlarmRef(input: { sessionId: string; sourceId: string; scop
   if (scoped) {
     const decoded = decodeSessionRef(scoped)
     if (!decoded) return { error: "scopedSessionId is invalid" }
+    const sourceIdError = sessionAlarmSourceIdError(decoded.sourceId)
+    if (sourceIdError) return { error: sourceIdError }
+    const sessionIdError = sessionAlarmSessionIdError(decoded.sessionId)
+    if (sessionIdError) return { error: sessionIdError }
     const mismatch = input.sessionId.trim() && input.sessionId.trim() !== decoded.sessionId
     if (mismatch) return { error: "sessionId does not match scopedSessionId" }
     return { ref: { sourceId: decoded.sourceId, sessionId: decoded.sessionId, scopedSessionId: sourceScopedId(decoded.sourceId, decoded.sessionId) } }
@@ -266,11 +278,7 @@ async function enableAlarmTargets(runtime: Runtime, scopedSessionId: string): Pr
   if (!runtime.store.sessionKeys || !runtime.store.notificationSet) {
     return { mappedChats: 0, sessionKeys: 0, fallbackSessionKeys: 0, usedFallback: false }
   }
-  const mappedKeys = await runtime.store.sessionKeys(scopedSessionId)
-  const fallbackKeys = !mappedKeys.length && runtime.store.sessionMapKeys
-    ? await runtime.store.sessionMapKeys()
-    : []
-  const keys = mappedKeys.length ? mappedKeys : fallbackKeys
+  const keys = await runtime.store.sessionKeys(scopedSessionId)
   if (!keys.length) {
     return { mappedChats: 0, sessionKeys: 0, fallbackSessionKeys: 0, usedFallback: false }
   }
@@ -285,9 +293,9 @@ async function enableAlarmTargets(runtime: Runtime, scopedSessionId: string): Pr
   }
   return {
     mappedChats: chats.size,
-    sessionKeys: mappedKeys.length,
-    fallbackSessionKeys: mappedKeys.length ? 0 : fallbackKeys.length,
-    usedFallback: !mappedKeys.length && fallbackKeys.length > 0,
+    sessionKeys: keys.length,
+    fallbackSessionKeys: 0,
+    usedFallback: false,
   }
 }
 
@@ -3964,11 +3972,14 @@ export function runPollingHealthServer(runtime: Runtime): boolean {
       hostname: host,
       async fetch(req, server) {
         const url = new URL(req.url)
+        if (url.pathname === "/session-alarm" && (req.method === "GET" || req.method === "PUT")) {
+          if (!allowSessionAlarmRequest(server.requestIP(req)?.address)) {
+            return new Response("Not Found", { status: 404 })
+          }
+          return handleSessionAlarmEndpoint(runtime, req, url)
+        }
         if (!allowTelegramHealthRequest(server.requestIP(req)?.address)) {
           return new Response("Not Found", { status: 404 })
-        }
-        if (url.pathname === "/session-alarm" && (req.method === "GET" || req.method === "PUT")) {
-          return handleSessionAlarmEndpoint(runtime, req, url)
         }
         if (req.method !== "GET" || url.pathname !== "/health") {
           return new Response("Not Found", { status: 404 })
@@ -4009,7 +4020,7 @@ async function runWebhook(runtime: Runtime) {
         return Response.json(report)
       }
       if (url.pathname === "/session-alarm" && (req.method === "GET" || req.method === "PUT")) {
-        if (!allowTelegramHealthRequest(server.requestIP(req)?.address)) {
+        if (!allowSessionAlarmRequest(server.requestIP(req)?.address)) {
           return new Response("Not Found", { status: 404 })
         }
         return handleSessionAlarmEndpoint(runtime, req, url)

@@ -56,7 +56,7 @@ import {
   writeNotifyMap,
   writeNotifySessionEnabled,
 } from "../utils/notify";
-import { getSessionAlarm, setSessionAlarm } from "../utils/extended-api";
+import { getSessionAlarm, resolveTelegramSourceId, setSessionAlarm } from "../utils/extended-api";
 import { sessionQuestionRequest } from "../utils/session-tree-request";
 import { createRootSession } from "../utils/root-session";
 import {
@@ -584,29 +584,33 @@ export function Session() {
     const version = notifyVersion.value;
     onCleanup(() => { cancelled = true });
     // Then fetch server-side alarm state asynchronously
-    getSessionAlarm(url, id).then((state) => {
-      // Skip if effect was cleaned up, session changed, or local state was updated
-      if (cancelled || !state || params.id !== id) return;
-      if (notifyVersion.value !== version) return;
-      setNotifyEnabled(state.enabled);
-      // Sync localStorage to match server truth
-      const map = readNotifyMap();
-      writeNotifySessionEnabled(map, id, state.enabled, dir);
-      writeNotifyMap(map);
-    });
+    resolveTelegramSourceId(url, dir)
+      .then((sourceId) => getSessionAlarm(url, id, sourceId))
+      .then((state) => {
+        // Skip if effect was cleaned up, session changed, or local state was updated
+        if (cancelled || !state || params.id !== id) return;
+        if (notifyVersion.value !== version) return;
+        setNotifyEnabled(state.enabled);
+        // Sync localStorage to match server truth
+        const map = readNotifyMap();
+        writeNotifySessionEnabled(map, id, state.enabled, dir);
+        writeNotifyMap(map);
+      });
   });
 
   /** Mirror bell toggle to server-side alarm state (fire-and-forget). */
   function syncAlarmToServer(id: string, enabled: boolean) {
     const dir = directory || base64Decode(params.dir)
     console.log("[session] syncing telegram session alarm", { sessionId: id, enabled, directory: dir })
-    setSessionAlarm(url, id, enabled, undefined, dir).then((ok) => {
-      if (ok) {
-        console.log("[session] telegram session alarm synced", { sessionId: id, enabled, directory: dir })
-        return
-      }
-      console.warn("[session] telegram session alarm sync failed", { sessionId: id, enabled, directory: dir })
-    })
+    resolveTelegramSourceId(url, dir)
+      .then((sourceId) => setSessionAlarm(url, id, enabled, sourceId, dir))
+      .then((ok) => {
+        if (ok) {
+          console.log("[session] telegram session alarm synced", { sessionId: id, enabled, directory: dir })
+          return
+        }
+        console.warn("[session] telegram session alarm sync failed", { sessionId: id, enabled, directory: dir })
+      })
   }
 
   function toggleNotify() {

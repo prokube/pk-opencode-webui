@@ -132,11 +132,7 @@ async function enableTelegramNotifyForSession(store: TelegramSessionStore, sessi
   if (!store.sessionKeys || !store.notificationSet) {
     return { mappedChats: 0, sessionKeys: 0, fallbackSessionKeys: 0, usedFallback: false }
   }
-  const mappedKeys = await store.sessionKeys(sessionId)
-  const fallbackKeys = !mappedKeys.length && store.sessionMapKeys
-    ? await store.sessionMapKeys()
-    : []
-  const keys = mappedKeys.length ? mappedKeys : fallbackKeys
+  const keys = await store.sessionKeys(sessionId)
   if (!keys.length) {
     return { mappedChats: 0, sessionKeys: 0, fallbackSessionKeys: 0, usedFallback: false }
   }
@@ -151,9 +147,9 @@ async function enableTelegramNotifyForSession(store: TelegramSessionStore, sessi
   }
   return {
     mappedChats: chats.size,
-    sessionKeys: mappedKeys.length,
-    fallbackSessionKeys: mappedKeys.length ? 0 : fallbackKeys.length,
-    usedFallback: !mappedKeys.length && fallbackKeys.length > 0,
+    sessionKeys: keys.length,
+    fallbackSessionKeys: 0,
+    usedFallback: false,
   }
 }
 
