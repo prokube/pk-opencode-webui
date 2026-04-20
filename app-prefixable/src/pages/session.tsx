@@ -248,6 +248,15 @@ export function Session() {
     return text;
   }
 
+  function visibleSyncMessages(id: string) {
+    const msgs = sync.messages(id);
+    const revertID = sync.session.get(id)?.revert?.messageID;
+    if (!revertID) return msgs;
+    const revertIndex = msgs.findIndex((msg) => msg.info.id === revertID);
+    if (revertIndex === -1) return msgs;
+    return msgs.slice(0, revertIndex);
+  }
+
   // Viewport-aware maximum matching the CSS max-height on the textarea
   function maxInputHeight() {
     return Math.max(200, window.innerHeight - 200);
@@ -274,7 +283,7 @@ export function Session() {
   const forkPickerItems = createMemo(() => {
     const id = sessionId();
     if (!id) return [];
-    const msgs = sync.messages(id);
+    const msgs = visibleSyncMessages(id);
     return msgs
       .filter((m) => m.info.role === "user")
       .sort((a, b) => b.info.time.created - a.info.time.created)
@@ -726,7 +735,7 @@ export function Session() {
         setLoadingHistory(false);
         // Initialize per-session model from existing messages if not already set
         if (!providers.getSessionModel(id)) {
-          const msgs = sync.messages(id);
+          const msgs = visibleSyncMessages(id);
           for (let i = msgs.length - 1; i >= 0; i--) {
             const info = msgs[i].info;
             if (info.role === "assistant" && info.providerID && info.modelID) {
@@ -831,7 +840,7 @@ export function Session() {
   const syncMessages = createMemo(() => {
     const id = sessionId();
     if (!id) return [];
-    return sync.messages(id).map((msg) => {
+    return visibleSyncMessages(id).map((msg) => {
       const info = msg.info;
       if (info.role === "assistant") {
         return {
