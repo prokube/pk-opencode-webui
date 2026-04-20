@@ -111,16 +111,16 @@ export function SessionHeader(props: SessionHeaderProps) {
                     onClick={props.onOpenVariantPicker}
                     onMouseEnter={(e) => ((e.currentTarget as HTMLElement).style.borderColor = "var(--interactive-base)")}
                     onMouseLeave={(e) => ((e.currentTarget as HTMLElement).style.borderColor = "var(--border-base)")}
-                    onFocus={(e) => ((e.currentTarget as HTMLElement).style.boxShadow = "0 0 0 2px var(--interactive-base)")}
-                    onBlur={(e) => ((e.currentTarget as HTMLElement).style.boxShadow = "none")}
                     title="Select model variant"
                     aria-label="Select model variant"
                     aria-haspopup="dialog"
                   >
-                    <span class="truncate">{props.modelLabel}</span>
-                    <Show when={props.variantLabel}>
-                      <span class="truncate" style={{ color: "var(--text-interactive-base)" }}> [{props.variantLabel}]</span>
-                    </Show>
+                    <span class="min-w-0 truncate">
+                      {props.modelLabel}
+                      <Show when={props.variantLabel}>
+                        <span style={{ color: "var(--text-interactive-base)" }}> [{props.variantLabel}]</span>
+                      </Show>
+                    </span>
                     <ChevronDown class="w-3 h-3 shrink-0" aria-hidden="true" />
                   </button>
                 </Show>
