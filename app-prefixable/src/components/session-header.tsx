@@ -6,7 +6,7 @@ import { useMCP } from "../context/mcp"
 import { usePermission } from "../context/permission"
 import { useTerminal } from "../context/terminal"
 import { useSDK } from "../context/sdk"
-import { PanelBottom, FileCode, ListTodo, Plug, ArrowLeft, Users, Bell, BellRing, BookOpen } from "lucide-solid"
+import { PanelBottom, FileCode, ListTodo, Plug, ArrowLeft, Users, Bell, BellRing, BookOpen, ChevronDown } from "lucide-solid"
 import { base64Encode } from "../utils/path"
 import type { Session } from "../sdk/client"
 
@@ -103,19 +103,26 @@ export function SessionHeader(props: SessionHeaderProps) {
                 >
                   <button
                     type="button"
-                    class="truncate px-1.5 py-0.5 rounded-md transition-colors"
-                    style={{ color: "var(--text-base)" }}
+                    class="inline-flex items-center gap-1 max-w-full truncate px-2 py-0.5 rounded-md transition-colors cursor-pointer"
+                    style={{
+                      color: "var(--text-interactive-base)",
+                      border: "1px solid var(--border-base)",
+                      background: "var(--surface-inset)",
+                    }}
                     onClick={props.onOpenVariantPicker}
-                    onMouseEnter={(e) => ((e.currentTarget as HTMLElement).style.background = "var(--surface-inset)")}
-                    onMouseLeave={(e) => ((e.currentTarget as HTMLElement).style.background = "transparent")}
+                    onMouseEnter={(e) => ((e.currentTarget as HTMLElement).style.borderColor = "var(--interactive-base)")}
+                    onMouseLeave={(e) => ((e.currentTarget as HTMLElement).style.borderColor = "var(--border-base)")}
+                    onFocus={(e) => ((e.currentTarget as HTMLElement).style.boxShadow = "0 0 0 2px var(--interactive-base)")}
+                    onBlur={(e) => ((e.currentTarget as HTMLElement).style.boxShadow = "none")}
                     title="Select model variant"
                     aria-label="Select model variant"
                     aria-haspopup="dialog"
                   >
-                    {props.modelLabel}
+                    <span class="truncate">{props.modelLabel}</span>
                     <Show when={props.variantLabel}>
                       <span style={{ color: "var(--text-interactive-base)" }}> [{props.variantLabel}]</span>
                     </Show>
+                    <ChevronDown class="w-3 h-3 shrink-0" aria-hidden="true" />
                   </button>
                 </Show>
               </Show>
@@ -185,24 +192,6 @@ export function SessionHeader(props: SessionHeaderProps) {
           </div>
         </Show>
 
-        <Show when={props.canPickVariant}>
-          <button
-            type="button"
-            onClick={props.onCycleVariant}
-            class="flex items-center gap-1.5 px-2 py-1 text-xs rounded-md transition-colors"
-            style={{
-              border: "1px solid var(--border-base)",
-              color: "var(--text-base)",
-            }}
-            onMouseEnter={(e) => ((e.currentTarget as HTMLElement).style.background = "var(--surface-inset)")}
-            onMouseLeave={(e) => ((e.currentTarget as HTMLElement).style.background = "transparent")}
-            title="Cycle model variant (Alt+V)"
-            aria-label="Cycle model variant"
-            aria-keyshortcuts="Alt+V"
-          >
-            <span>Variant</span>
-          </button>
-        </Show>
       </div>
 
       {/* Right side: panel toggles */}
