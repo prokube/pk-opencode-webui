@@ -113,15 +113,16 @@ function mergePart(existing: Part, synced: Part): Part {
 }
 
 function mergeMessage(existing: MessageWithParts, synced: MessageWithParts): MessageWithParts {
-  const map = new Map(existing.parts.map((part) => [part.id, part]))
+  const existingWithId = existing.parts.filter((p) => !!p.id)
+  const map = new Map(existingWithId.map((part) => [part.id, part]))
   const merged = synced.parts.map((part) => {
     const current = map.get(part.id)
     if (!current) return part
     return mergePart(current, part)
   })
-  const ids = new Set(merged.map((part) => part.id))
+  const ids = new Set(merged.filter((p) => !!p.id).map((part) => part.id))
 
-  for (const part of existing.parts) {
+  for (const part of existingWithId) {
     if (ids.has(part.id)) continue
     merged.push(part)
   }
@@ -322,8 +323,8 @@ export function SyncProvider(props: ParentProps) {
 
     function isNewer(a: Part, b: Part): boolean {
       if (a.type !== "tool" || b.type !== "tool") return false
-      const aState = a.state as ToolPart["state"]
-      const bState = b.state as ToolPart["state"]
+      const aState = a.state as Extract<Part, { type: "tool" }>["state"]
+      const bState = b.state as Extract<Part, { type: "tool" }>["state"]
       const aEnd = aState.time?.end ?? aState.time?.start
       const bEnd = bState.time?.end ?? bState.time?.start
       if (!aEnd) return false
@@ -370,7 +371,6 @@ export function SyncProvider(props: ParentProps) {
           }
           return { ...m, parts: [...m.parts, part] }
         })
-        return { ...m, parts: newParts }
       })
     }
 
