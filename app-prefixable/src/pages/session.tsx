@@ -2405,7 +2405,6 @@ export function Session() {
           processing={processing()}
           onOpenMCPDialog={() => setShowMCPDialog(true)}
           onOpenVariantPicker={() => setShowVariantPicker(true)}
-          onCycleVariant={cycleVariant}
           notifyEnabled={notifyEnabled()}
           notifyDenied={notifyDenied()}
           onToggleNotify={toggleNotify}
