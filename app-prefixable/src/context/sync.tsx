@@ -96,7 +96,8 @@ function mergePart(existing: Part, synced: Part): Part {
       const existingEnd = getTimeValue(existing)
       const syncedEnd = getTimeValue(synced)
       if (existingEnd > syncedEnd) return existing
-      return synced
+      if (syncedEnd > existingEnd) return synced
+      return existing
     }
     return synced
   }
@@ -117,7 +118,7 @@ function mergePart(existing: Part, synced: Part): Part {
   if (existingRank > syncedRank) return existing
   if (syncedRank > existingRank) return synced
 
-  return synced
+  return existing
 }
 
 function mergeMessage(existing: MessageWithParts, synced: MessageWithParts): MessageWithParts {
