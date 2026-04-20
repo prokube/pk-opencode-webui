@@ -274,7 +274,7 @@ export function TelegramSettings(props: Props) {
                   <p>Config: {report().config.status === "ok" ? "loaded" : "invalid"}</p>
                   <p>Telegram API: {report().dependencies.telegramApi.status} - {report().dependencies.telegramApi.message}</p>
                   <p>OpenCode API: {report().dependencies.openCodeApi.status} - {report().dependencies.openCodeApi.message}</p>
-                  <Show when={(report().dependencies.openCodeSources || []).length > 0}>
+                  <Show when={(report().dependencies.openCodeSources || []).length > 1}>
                     <div class="space-y-1 pt-1">
                       {(report().dependencies.openCodeSources || []).map((item) => (
                         <p>Source {item.sourceId}: {item.status} - {item.message}</p>

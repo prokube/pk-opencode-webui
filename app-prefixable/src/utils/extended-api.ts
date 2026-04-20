@@ -314,12 +314,21 @@ export async function getSessionAlarm(serverUrl: string, sessionId: string, sour
 }
 
 /** Update session alarm state on the server (Telegram bridge). Returns true on success. */
-export async function setSessionAlarm(serverUrl: string, sessionId: string, enabled: boolean, sourceId?: string): Promise<boolean> {
+export async function setSessionAlarm(
+  serverUrl: string,
+  sessionId: string,
+  enabled: boolean,
+  sourceId?: string,
+  directory?: string,
+): Promise<boolean> {
   const source = sourceId?.trim()
+  const dir = directory?.trim()
+  const base = source ? { sessionId, sourceId: source, enabled } : { sessionId, enabled }
+  const body = dir ? { ...base, directory: dir } : base
   const res = await fetch(`${serverUrl}/api/ext/telegram/session-alarm`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(source ? { sessionId, sourceId: source, enabled } : { sessionId, enabled }),
+    body: JSON.stringify(body),
   }).catch(() => null)
   if (!res) {
     console.warn("[extended-api] setSessionAlarm: network error for session", sessionId)

@@ -1,4 +1,4 @@
-import { mkdir, readdir, rename, rm } from "node:fs/promises"
+import { mkdir, readdir, rename, rm, stat } from "node:fs/promises"
 import { basename, dirname, join } from "node:path"
 
 type StoreShape = {
@@ -35,6 +35,7 @@ export type TelegramPendingQuestion = {
   callbackId: string
   sessionId: string
   sourceId?: string
+  directory?: string
   createdAt: number
   expiresAt: number
   questions: TelegramPendingQuestionEntry[]
@@ -140,6 +141,7 @@ function parsePendingQuestion(value: unknown): TelegramPendingQuestion | undefin
     callbackId: pendingId,
     sessionId,
     sourceId: typeof row.sourceId === "string" && row.sourceId.trim() ? row.sourceId.trim() : undefined,
+    directory: typeof row.directory === "string" && row.directory.trim() ? row.directory.trim() : undefined,
     createdAt,
     expiresAt,
     questions,
@@ -362,6 +364,7 @@ export type TelegramSessionStore = {
   set: (key: string, sessionId: string) => Promise<void>
   delete: (key: string) => Promise<void>
   sessionKeys?: (sessionId: string) => Promise<string[]>
+  sessionMapKeys?: () => Promise<string[]>
   historyGet?: (key: string) => Promise<string[]>
   historySet?: (key: string, ids: string[]) => Promise<void>
   notificationGet?: (key: string) => Promise<boolean>
@@ -388,6 +391,7 @@ export function createTelegramSessionStore(path: string): TelegramSessionStore {
   const sessionAlarms = new Map<string, boolean>()
   const inbox = new Map<string, TelegramPendingItem[]>()
   const pending = new Map<string, TelegramPendingQuestion[]>()
+  let loadedMtimeMs = 0
 
   function indexAdd(sessionId: string, key: string) {
     const set = sessionIndex.get(sessionId)
@@ -414,27 +418,43 @@ export function createTelegramSessionStore(path: string): TelegramSessionStore {
       indexAdd(next, key)
     }
   }
+  function applyData(data: StoreShape) {
+    sessions.clear()
+    sessionIndex.clear()
+    history.clear()
+    notifications.clear()
+    sessionAlarms.clear()
+    inbox.clear()
+    pending.clear()
+    for (const [key, value] of Object.entries(data.sessions)) {
+      sessions.set(key, value)
+      indexAdd(value, key)
+    }
+    for (const [key, value] of Object.entries(data.history)) {
+      history.set(key, value)
+    }
+    for (const [key, value] of Object.entries(data.notifications)) {
+      notifications.set(key, value)
+    }
+    for (const [key, value] of Object.entries(data.sessionAlarms)) {
+      sessionAlarms.set(key, value)
+    }
+    for (const [key, value] of Object.entries(data.inbox)) {
+      inbox.set(key, value)
+    }
+    for (const [key, value] of Object.entries(data.pending)) {
+      pending.set(key, value)
+    }
+  }
+
   const ready = readStore(path)
     .then((data) => {
-      for (const [key, value] of Object.entries(data.sessions)) {
-        sessions.set(key, value)
-        indexAdd(value, key)
-      }
-      for (const [key, value] of Object.entries(data.history)) {
-        history.set(key, value)
-      }
-      for (const [key, value] of Object.entries(data.notifications)) {
-        notifications.set(key, value)
-      }
-      for (const [key, value] of Object.entries(data.sessionAlarms)) {
-        sessionAlarms.set(key, value)
-      }
-      for (const [key, value] of Object.entries(data.inbox)) {
-        inbox.set(key, value)
-      }
-      for (const [key, value] of Object.entries(data.pending)) {
-        pending.set(key, value)
-      }
+      applyData(data)
+      return stat(path).then((file) => {
+        loadedMtimeMs = file.mtimeMs
+      }).catch(() => {
+        loadedMtimeMs = 0
+      })
     })
     .catch((error) => {
       console.warn("[TelegramBridge] session store load failed, starting empty", { path, error })
@@ -466,6 +486,20 @@ export function createTelegramSessionStore(path: string): TelegramSessionStore {
     return step
   }
 
+  async function refreshFromDisk() {
+    await ready
+    const file = await stat(path).catch(() => undefined)
+    if (!file) return
+    if (file.mtimeMs <= loadedMtimeMs) return
+    const data = await readStore(path).catch((error) => {
+      console.warn("[TelegramBridge] session store refresh failed", { path, error })
+      return
+    })
+    if (!data) return
+    applyData(data)
+    loadedMtimeMs = file.mtimeMs
+  }
+
   function sameList(a: string[] | undefined, b: string[]): boolean {
     if (!a) return b.length === 0
     if (a.length !== b.length) return false
@@ -476,14 +510,14 @@ export function createTelegramSessionStore(path: string): TelegramSessionStore {
   }
 
   async function inboxGet(key: string) {
-    await ready
+    await refreshFromDisk()
     const rows = inbox.get(key)
     if (!rows) return []
     return [...rows]
   }
 
   async function inboxSet(key: string, items: TelegramPendingItem[]) {
-    await ready
+    await refreshFromDisk()
     await run(async () => {
       const prev = inbox.get(key) || []
       if (items.length) inbox.set(key, [...items])
@@ -501,11 +535,11 @@ export function createTelegramSessionStore(path: string): TelegramSessionStore {
 
   return {
     async get(key: string) {
-      await ready
+      await refreshFromDisk()
       return sessions.get(key)
     },
     async set(key: string, sessionId: string) {
-      await ready
+      await refreshFromDisk()
       await run(async () => {
         const prev = sessions.get(key)
         if (prev === sessionId) return
@@ -524,7 +558,7 @@ export function createTelegramSessionStore(path: string): TelegramSessionStore {
       })
     },
     async delete(key: string) {
-      await ready
+      await refreshFromDisk()
       await run(async () => {
         const prev = sessions.get(key)
         if (prev === undefined) return
@@ -538,17 +572,21 @@ export function createTelegramSessionStore(path: string): TelegramSessionStore {
       })
     },
     async sessionKeys(sessionId: string) {
-      await ready
+      await refreshFromDisk()
       const keys = sessionIndex.get(sessionId)
       if (!keys) return []
       return Array.from(keys)
     },
+    async sessionMapKeys() {
+      await refreshFromDisk()
+      return Array.from(sessions.keys())
+    },
     async historyGet(key: string) {
-      await ready
+      await refreshFromDisk()
       return [...(history.get(key) || [])]
     },
     async historySet(key: string, ids: string[]) {
-      await ready
+      await refreshFromDisk()
       await run(async () => {
         const next = parseHistoryList(ids)
         const prev = history.get(key)
@@ -566,11 +604,11 @@ export function createTelegramSessionStore(path: string): TelegramSessionStore {
       })
     },
     async notificationGet(key: string) {
-      await ready
+      await refreshFromDisk()
       return notifications.get(key) === true
     },
     async notificationSet(key: string, enabled: boolean) {
-      await ready
+      await refreshFromDisk()
       await run(async () => {
         const prev = notifications.get(key)
         if (enabled) notifications.set(key, true)
@@ -586,15 +624,15 @@ export function createTelegramSessionStore(path: string): TelegramSessionStore {
       })
     },
     async notificationKeys() {
-      await ready
+      await refreshFromDisk()
       return Array.from(notifications.keys())
     },
     async sessionAlarmGet(sessionId: string) {
-      await ready
+      await refreshFromDisk()
       return sessionAlarms.get(sessionId) === true
     },
     async sessionAlarmSet(sessionId: string, enabled: boolean) {
-      await ready
+      await refreshFromDisk()
       await run(async () => {
         const prev = sessionAlarms.get(sessionId)
         if ((prev === true && enabled) || (prev === undefined && !enabled)) return
@@ -615,13 +653,13 @@ export function createTelegramSessionStore(path: string): TelegramSessionStore {
     pendingGet: inboxGet,
     pendingSet: inboxSet,
     async questionList(key: string) {
-      await ready
+      await refreshFromDisk()
       const rows = pending.get(key)
       if (!rows) return []
       return [...rows]
     },
     async questionUpsert(key: string, question: TelegramPendingQuestion) {
-      await ready
+      await refreshFromDisk()
       await run(async () => {
         const prev = pending.get(key) || []
         const filtered = prev.filter((item) => item.requestId !== question.requestId)
@@ -640,7 +678,7 @@ export function createTelegramSessionStore(path: string): TelegramSessionStore {
       })
     },
     async questionDelete(key: string, requestId: string) {
-      await ready
+      await refreshFromDisk()
       await run(async () => {
         const prev = pending.get(key) || []
         if (!prev.length) return

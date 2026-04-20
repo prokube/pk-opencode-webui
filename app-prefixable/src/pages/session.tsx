@@ -56,7 +56,7 @@ import {
   writeNotifyMap,
   writeNotifySessionEnabled,
 } from "../utils/notify";
-import { getSessionAlarm, resolveTelegramSourceId, setSessionAlarm } from "../utils/extended-api";
+import { getSessionAlarm, setSessionAlarm } from "../utils/extended-api";
 import { sessionQuestionRequest } from "../utils/session-tree-request";
 import { createRootSession } from "../utils/root-session";
 import {
@@ -560,29 +560,13 @@ export function Session() {
     })(),
   );
   const [notifyDenied, setNotifyDenied] = createSignal(false);
-  const [notifySourceId, setNotifySourceId] = createSignal<string | undefined>();
-  const [notifySourceReady, setNotifySourceReady] = createSignal(false);
   const notifyVersion = { value: 0 };
   const deniedTimer = { id: null as ReturnType<typeof setTimeout> | null };
   onCleanup(() => { if (deniedTimer.id !== null) clearTimeout(deniedTimer.id) });
 
-  createEffect(() => {
-    const dir = directory || base64Decode(params.dir);
-    setNotifySourceReady(false);
-    let cancelled = false;
-    onCleanup(() => { cancelled = true });
-    resolveTelegramSourceId(url, dir).then((sourceId) => {
-      if (cancelled) return;
-      setNotifySourceId(sourceId);
-      setNotifySourceReady(true);
-    });
-  });
-
   // Re-read notification state when session changes, and seed from server alarm state
   createEffect(() => {
     const id = params.id;
-    const sourceReady = notifySourceReady();
-    const sourceId = notifySourceId();
     const dir = directory || base64Decode(params.dir);
     setNotifyDenied(false);
     if (!id) {
@@ -595,13 +579,12 @@ export function Session() {
     if (migrated) writeNotifyMap(map);
     const local = notifyEnabledForSession(map, id, dir);
     setNotifyEnabled(local);
-    if (!sourceReady) return;
     // Cancellation flag for stale responses
     let cancelled = false;
     const version = notifyVersion.value;
     onCleanup(() => { cancelled = true });
     // Then fetch server-side alarm state asynchronously
-    getSessionAlarm(url, id, sourceId).then((state) => {
+    getSessionAlarm(url, id).then((state) => {
       // Skip if effect was cleaned up, session changed, or local state was updated
       if (cancelled || !state || params.id !== id) return;
       if (notifyVersion.value !== version) return;
@@ -615,20 +598,15 @@ export function Session() {
 
   /** Mirror bell toggle to server-side alarm state (fire-and-forget). */
   function syncAlarmToServer(id: string, enabled: boolean) {
-    const sourceId = notifySourceId();
-    if (sourceId) {
-      setSessionAlarm(url, id, enabled, sourceId);
-      return;
-    }
-    const dir = directory || base64Decode(params.dir);
-    resolveTelegramSourceId(url, dir).then((resolved) => {
-      if (resolved) {
-        setNotifySourceId(resolved);
-        setSessionAlarm(url, id, enabled, resolved);
-        return;
+    const dir = directory || base64Decode(params.dir)
+    console.log("[session] syncing telegram session alarm", { sessionId: id, enabled, directory: dir })
+    setSessionAlarm(url, id, enabled, undefined, dir).then((ok) => {
+      if (ok) {
+        console.log("[session] telegram session alarm synced", { sessionId: id, enabled, directory: dir })
+        return
       }
-      console.warn("[session] skip setSessionAlarm: telegram source id unresolved", { id, dir });
-    });
+      console.warn("[session] telegram session alarm sync failed", { sessionId: id, enabled, directory: dir })
+    })
   }
 
   function toggleNotify() {

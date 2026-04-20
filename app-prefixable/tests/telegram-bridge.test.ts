@@ -369,7 +369,7 @@ describe("telegram bridge config and cache", () => {
       expect(report.status).toBe("healthy");
       expect(report.dependencies.telegramApi.status).toBe("ok");
       expect(report.dependencies.openCodeApi.status).toBe("ok");
-      expect(report.dependencies.openCodeApi.message).toBe("OpenCode API is reachable for sources: default");
+      expect(report.dependencies.openCodeApi.message).toBe("OpenCode API is reachable");
     } finally {
       globalThis.fetch = originalFetch;
     }
@@ -558,7 +558,7 @@ describe("telegram bridge config and cache", () => {
       expect(report.status).toBe("degraded");
       expect(report.dependencies.telegramApi.status).toBe("error");
       expect(report.dependencies.openCodeApi.status).toBe("ok");
-      expect(report.dependencies.openCodeApi.message).toBe("OpenCode API is reachable for sources: default");
+      expect(report.dependencies.openCodeApi.message).toBe("OpenCode API is reachable");
     } finally {
       globalThis.fetch = originalFetch;
     }

@@ -138,7 +138,6 @@ export function Settings() {
   async function toggleTelegramAlarmChannel() {
     if (telegramAlarmSaving()) return
     const current = alarmChannels().telegram
-    if (!telegramAlarmReady() && !current) return
 
     setTelegramAlarmSaving(true)
     const target = !current
@@ -2458,7 +2457,7 @@ Add your project-specific instructions here.
                     <button
                       type="button"
                       onClick={() => void toggleTelegramAlarmChannel()}
-                      disabled={telegramAlarmSaving() || (!telegramAlarmReady() && !alarmChannels().telegram)}
+                      disabled={telegramAlarmSaving()}
                       class="relative w-10 h-5 rounded-full transition-colors disabled:opacity-50"
                       style={{
                         background: alarmChannels().telegram ? "var(--interactive-base)" : "var(--surface-inset)",

@@ -129,9 +129,17 @@ function notifyChatKeyFromSessionKey(value: string) {
 }
 
 async function enableTelegramNotifyForSession(store: TelegramSessionStore, sessionId: string) {
-  if (!store.sessionKeys || !store.notificationSet) return
-  const keys = await store.sessionKeys(sessionId)
-  if (!keys.length) return
+  if (!store.sessionKeys || !store.notificationSet) {
+    return { mappedChats: 0, sessionKeys: 0, fallbackSessionKeys: 0, usedFallback: false }
+  }
+  const mappedKeys = await store.sessionKeys(sessionId)
+  const fallbackKeys = !mappedKeys.length && store.sessionMapKeys
+    ? await store.sessionMapKeys()
+    : []
+  const keys = mappedKeys.length ? mappedKeys : fallbackKeys
+  if (!keys.length) {
+    return { mappedChats: 0, sessionKeys: 0, fallbackSessionKeys: 0, usedFallback: false }
+  }
   const chats = new Set<string>()
   for (const key of keys) {
     const chatKey = notifyChatKeyFromSessionKey(key)
@@ -140,6 +148,12 @@ async function enableTelegramNotifyForSession(store: TelegramSessionStore, sessi
   }
   for (const chatKey of chats) {
     await store.notificationSet(chatKey, true)
+  }
+  return {
+    mappedChats: chats.size,
+    sessionKeys: mappedKeys.length,
+    fallbackSessionKeys: mappedKeys.length ? 0 : fallbackKeys.length,
+    usedFallback: !mappedKeys.length && fallbackKeys.length > 0,
   }
 }
 
@@ -525,6 +539,35 @@ async function queryTelegramBridgeHealth(port: number): Promise<TelegramBridgeHe
   return res.json().catch(() => undefined)
 }
 
+async function updateTelegramBridgeSessionAlarm(
+  port: number,
+  ref: { sessionId: string; sourceId: string; scopedSessionId: string },
+  enabled: boolean,
+  directory?: string,
+) {
+  const timeoutMs = 2_500
+  const payload: Record<string, unknown> = {
+    sessionId: ref.sessionId,
+    enabled,
+  }
+  if (ref.sourceId !== "default") {
+    payload.sourceId = ref.sourceId
+  }
+  if (directory?.trim()) {
+    payload.directory = directory.trim()
+  }
+  const res = await fetch(`http://127.0.0.1:${port}/session-alarm`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+    signal: AbortSignal.timeout(timeoutMs),
+  }).catch(() => undefined)
+  if (!res?.ok) return
+  const data = await res.json().catch(() => undefined) as { enabled?: unknown } | undefined
+  if (typeof data?.enabled !== "boolean") return
+  return data
+}
+
 interface StoredPrompt {
   id: string
   title: string
@@ -767,9 +810,25 @@ export async function handleExtendedEndpoint(
     const sessionId = typeof payload?.sessionId === "string" ? payload.sessionId : ""
     const sourceId = typeof payload?.sourceId === "string" ? payload.sourceId : ""
     const scopedSessionId = typeof payload?.scopedSessionId === "string" ? payload.scopedSessionId : ""
+    const directory = typeof payload?.directory === "string" ? payload.directory : ""
     const enabled = payload?.enabled
+    console.log("[TelegramBridge] session alarm endpoint hit", {
+      sessionId,
+      sourceId,
+      scopedSessionId,
+      directory,
+      enabled,
+      payloadValid: Boolean(payload),
+    })
     const parsed = sessionAlarmRefFromInput({ sessionId, sourceId, scopedSessionId })
     if (!parsed.ref) {
+      console.warn("[TelegramBridge] session alarm request rejected", {
+        sessionId,
+        sourceId,
+        scopedSessionId,
+        enabled,
+        error: parsed.error || "invalid request",
+      })
       return Response.json({ error: parsed.error || "invalid request" }, { status: 400 })
     }
     const ref = parsed.ref
@@ -793,6 +852,12 @@ export async function handleExtendedEndpoint(
         { status: 501 },
       )
     }
+    console.log("[TelegramBridge] session alarm write requested", {
+      sessionId: ref.sessionId,
+      sourceId: ref.sourceId,
+      scopedSessionId: ref.scopedSessionId,
+      enabled,
+    })
     const ok = await store.sessionAlarmSet(ref.scopedSessionId, enabled).then(
       () => true,
       (error) => {
@@ -803,13 +868,52 @@ export async function handleExtendedEndpoint(
     if (ok === false) {
       return Response.json({ error: "failed to update telegram session alarm" }, { status: 500 })
     }
+    console.log("[TelegramBridge] session alarm write applied", {
+      sessionId: ref.sessionId,
+      sourceId: ref.sourceId,
+      scopedSessionId: ref.scopedSessionId,
+      enabled,
+    })
+    console.log(`[TelegramBridge] session alarm ${enabled ? "enabled" : "disabled"}`, {
+      sessionId: ref.sessionId,
+      sourceId: ref.sourceId,
+      scopedSessionId: ref.scopedSessionId,
+    })
+    const sourceExplicit = Boolean(sourceId.trim() || scopedSessionId.trim())
     if (enabled) {
-      await enableTelegramNotifyForSession(store, ref.scopedSessionId).catch((error) => {
+      const sync = await enableTelegramNotifyForSession(store, ref.scopedSessionId).catch((error) => {
         console.error("[ExtAPI] telegram notify sync on session alarm enable failed", {
           sessionId: ref.sessionId,
           sourceId: ref.sourceId,
           error,
         })
+        return null
+      })
+      console.log("[TelegramBridge] session alarm registered", {
+        sessionId: ref.sessionId,
+        sourceId: ref.sourceId,
+        scopedSessionId: ref.scopedSessionId,
+        sourceExplicit,
+        mappedChats: sync?.mappedChats ?? 0,
+        sessionKeys: sync?.sessionKeys ?? 0,
+        fallbackSessionKeys: sync?.fallbackSessionKeys ?? 0,
+        usedFallback: sync?.usedFallback ?? false,
+      })
+      if (!sourceExplicit && settings.settings.multiSourceEnabled) {
+        console.warn("[TelegramBridge] session alarm registered with implicit default source while multi-source is enabled", {
+          sessionId: ref.sessionId,
+          scopedSessionId: ref.scopedSessionId,
+        })
+      }
+    }
+    const bridgePort = restartProbePort(null, settings)
+    const bridge = await updateTelegramBridgeSessionAlarm(bridgePort, ref, enabled, directory)
+    if (bridge && typeof bridge.enabled === "boolean") {
+      console.log("[ExtAPI] session alarm write forwarded to bridge", {
+        sessionId: ref.sessionId,
+        sourceId: ref.sourceId,
+        scopedSessionId: ref.scopedSessionId,
+        enabled: bridge.enabled,
       })
     }
     return Response.json({ sessionId: ref.sessionId, sourceId: ref.sourceId, enabled })
