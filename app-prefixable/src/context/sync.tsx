@@ -310,17 +310,34 @@ export function SyncProvider(props: ParentProps) {
       setStore("message", session.id, reconcile([]))
     }
 
+    function isNewer(a: Part, b: Part): boolean {
+      const aEnd = a.time?.completed ?? a.time?.start
+      const bEnd = b.time?.completed ?? b.time?.start
+      if (!aEnd) return false
+      if (!bEnd) return true
+      return aEnd > bEnd
+    }
+
     // Message part events - the main real-time update mechanism
     if (event.type === "message.part.updated") {
       const part = props.part as Part
       if (!part?.sessionID || !part?.messageID) return
 
-      // Update or insert the part
+      const hasId = !!part.id
       setStore("part", part.messageID, (existing: Part[] | undefined) => {
         if (!existing) return sortParts([part])
-        const idx = existing.findIndex((p) => p.id === part.id)
-        if (idx === -1) return sortParts([...existing, part])
-        return existing.map((p, i) => (i === idx ? part : p))
+
+        if (hasId) {
+          const idx = existing.findIndex((p) => p.id === part.id)
+          if (idx === -1) return sortParts([...existing, part])
+          const existingPart = existing[idx]
+          if (!existingPart.id || isNewer(existingPart, part)) return existing
+          return existing.map((p, i) => (i === idx ? part : p))
+        }
+
+        const noIdParts = existing.filter((p) => !p.id)
+        const withIdParts = existing.filter((p) => !!p.id)
+        return sortParts([...withIdParts, ...noIdParts, part])
       })
 
       // Update parts in existing messages only - don't synthesize messages from parts
@@ -333,8 +350,13 @@ export function SyncProvider(props: ParentProps) {
         // Update existing message parts
         return msgs.map((m, i) => {
           if (i !== msgIdx) return m
-          const partIdx = m.parts.findIndex((p) => p.id === part.id)
-          const newParts = partIdx === -1 ? [...m.parts, part] : m.parts.map((p, pi) => (pi === partIdx ? part : p))
+          if (hasId) {
+            const partIdx = m.parts.findIndex((p) => p.id === part.id)
+            const newParts = partIdx === -1 ? [...m.parts, part] : m.parts.map((p, pi) => (pi === partIdx ? part : p))
+            return { ...m, parts: newParts }
+          }
+          return { ...m, parts: [...m.parts, part] }
+        })
           return { ...m, parts: newParts }
         })
       })
@@ -370,9 +392,17 @@ export function SyncProvider(props: ParentProps) {
         if (!existing || existing.length === 0) return existing
         return existing.map((m) => {
           if (m.info.id !== info.id) return m
-          // Merge info and optionally update parts if provided
+          // Prefer info with newer time.completed
+          const mergedInfo =
+            m.info.time?.completed && info.time?.completed
+              ? m.info.time.completed > info.time.completed
+                ? m.info
+                : info
+              : info.time?.completed
+                ? info
+                : m.info
           const updatedParts = parts ? sortParts(parts) : m.parts
-          return { info, parts: updatedParts }
+          return { info: mergedInfo, parts: updatedParts }
         })
       })
 
