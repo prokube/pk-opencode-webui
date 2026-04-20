@@ -58,6 +58,70 @@ function sortParts(parts: Part[]): Part[] {
   return [...withId, ...withoutId]
 }
 
+function toolEnd(part: Extract<Part, { type: "tool" }>): number {
+  const state = part.state
+  if (state.status === "completed") return state.time.end
+  if (state.status === "error") return state.time.end
+  return 0
+}
+
+function toolStart(part: Extract<Part, { type: "tool" }>): number {
+  const state = part.state
+  if (state.status === "running") return state.time.start
+  if (state.status === "completed") return state.time.start
+  if (state.status === "error") return state.time.start
+  return 0
+}
+
+function toolRank(part: Extract<Part, { type: "tool" }>): number {
+  const state = part.state
+  if (state.status === "pending") return 1
+  if (state.status === "running") return 2
+  return 3
+}
+
+function mergePart(existing: Part, synced: Part): Part {
+  if (existing.type !== "tool") return synced
+  if (synced.type !== "tool") return synced
+
+  const existingEnd = toolEnd(existing)
+  const syncedEnd = toolEnd(synced)
+  if (existingEnd > syncedEnd) return existing
+  if (syncedEnd > existingEnd) return synced
+
+  const existingStart = toolStart(existing)
+  const syncedStart = toolStart(synced)
+  if (existingStart > syncedStart) return existing
+  if (syncedStart > existingStart) return synced
+
+  const existingRank = toolRank(existing)
+  const syncedRank = toolRank(synced)
+  if (existingRank > syncedRank) return existing
+  if (syncedRank > existingRank) return synced
+
+  return synced
+}
+
+function mergeMessage(existing: MessageWithParts, synced: MessageWithParts): MessageWithParts {
+  const map = new Map(existing.parts.map((part) => [part.id, part]))
+  const merged = synced.parts.map((part) => {
+    const current = map.get(part.id)
+    if (!current) return part
+    return mergePart(current, part)
+  })
+  const ids = new Set(merged.map((part) => part.id))
+
+  for (const part of existing.parts) {
+    if (ids.has(part.id)) continue
+    merged.push(part)
+  }
+
+  return {
+    info: synced.info,
+    parts: sortParts(merged),
+  }
+}
+
 function errorText(err: unknown) {
   if (err instanceof Error && err.message.trim()) return err.message
   return "Failed to bootstrap app state from API."
@@ -405,19 +469,18 @@ export function SyncProvider(props: ParentProps) {
             setStore("message", sessionID, (existing: MessageWithParts[]) => {
               if (!existing || existing.length === 0) return synced
 
-              // Merge: use existing message if it has more recent parts
-              const merged = synced.map((s) => {
-                const e = existing.find((m) => m.info.id === s.info.id)
-                if (!e) return s
-                // Keep existing if it has more parts (SSE updates arrived)
-                return e.parts.length >= s.parts.length ? e : s
+              const map = new Map(existing.map((msg) => [msg.info.id, msg]))
+              const merged = synced.map((msg) => {
+                const current = map.get(msg.info.id)
+                if (!current) return msg
+                return mergeMessage(current, msg)
               })
+              const ids = new Set(merged.map((msg) => msg.info.id))
 
               // Add any messages from existing that aren't in synced (new SSE messages)
-              for (const e of existing) {
-                if (!merged.find((m) => m.info.id === e.info.id)) {
-                  merged.push(e)
-                }
+              for (const msg of existing) {
+                if (ids.has(msg.info.id)) continue
+                merged.push(msg)
               }
 
               return merged.sort((a, b) => cmp(a.info.id, b.info.id))
