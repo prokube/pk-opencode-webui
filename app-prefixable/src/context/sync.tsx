@@ -1,6 +1,6 @@
 import { createContext, useContext, onCleanup, batch, type ParentProps } from "solid-js"
 import { createStore, reconcile, produce } from "solid-js/store"
-import type { Session, Message, Part, Provider } from "../sdk/client"
+import type { Session, Message, Part, Provider, TextPart } from "../sdk/client"
 import { useSDK } from "./sdk"
 import { useServer } from "./server"
 import { createSSEParser } from "../utils/sse"
@@ -81,7 +81,17 @@ function toolRank(part: Extract<Part, { type: "tool" }>): number {
 }
 
 function mergePart(existing: Part, synced: Part): Part {
-  if (existing.type !== "tool") return synced
+  if (existing.type !== "tool") {
+    if (synced.type !== "tool") {
+      const existingTime = (existing as TextPart).time
+      const syncedTime = (synced as TextPart).time
+      const existingEnd = existingTime?.end ?? existingTime?.start ?? 0
+      const syncedEnd = syncedTime?.end ?? syncedTime?.start ?? 0
+      if (existingEnd > syncedEnd) return existing
+      return synced
+    }
+    return synced
+  }
   if (synced.type !== "tool") return synced
 
   const existingEnd = toolEnd(existing)
@@ -311,8 +321,11 @@ export function SyncProvider(props: ParentProps) {
     }
 
     function isNewer(a: Part, b: Part): boolean {
-      const aEnd = a.time?.completed ?? a.time?.start
-      const bEnd = b.time?.completed ?? b.time?.start
+      if (a.type !== "tool" || b.type !== "tool") return false
+      const aState = a.state as ToolPart["state"]
+      const bState = b.state as ToolPart["state"]
+      const aEnd = aState.time?.end ?? aState.time?.start
+      const bEnd = bState.time?.end ?? bState.time?.start
       if (!aEnd) return false
       if (!bEnd) return true
       return aEnd > bEnd
@@ -357,8 +370,7 @@ export function SyncProvider(props: ParentProps) {
           }
           return { ...m, parts: [...m.parts, part] }
         })
-          return { ...m, parts: newParts }
-        })
+        return { ...m, parts: newParts }
       })
     }
 
