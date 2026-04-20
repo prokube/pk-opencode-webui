@@ -18,7 +18,6 @@ interface SessionHeaderProps {
   processing: boolean
   onOpenMCPDialog: () => void
   onOpenVariantPicker: () => void
-  onCycleVariant: () => void
   notifyEnabled: boolean
   notifyDenied: boolean
   onToggleNotify: () => void
@@ -103,7 +102,7 @@ export function SessionHeader(props: SessionHeaderProps) {
                 >
                   <button
                     type="button"
-                    class="inline-flex items-center gap-1 max-w-full truncate px-2 py-0.5 rounded-md transition-colors cursor-pointer"
+                    class="inline-flex items-center gap-1 min-w-0 max-w-full px-2 py-0.5 rounded-md transition-colors cursor-pointer"
                     style={{
                       color: "var(--text-interactive-base)",
                       border: "1px solid var(--border-base)",
@@ -120,7 +119,7 @@ export function SessionHeader(props: SessionHeaderProps) {
                   >
                     <span class="truncate">{props.modelLabel}</span>
                     <Show when={props.variantLabel}>
-                      <span style={{ color: "var(--text-interactive-base)" }}> [{props.variantLabel}]</span>
+                      <span class="truncate" style={{ color: "var(--text-interactive-base)" }}> [{props.variantLabel}]</span>
                     </Show>
                     <ChevronDown class="w-3 h-3 shrink-0" aria-hidden="true" />
                   </button>
