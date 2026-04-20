@@ -75,7 +75,7 @@ function loadServers(): ServerConfig[] {
         const parsed: ServerConfig[] = raw
           .filter(isValidServerEntry)
           .map((s) => {
-            const obj = s as Record<string, unknown>
+            const obj = s as unknown as Record<string, unknown>
             // Prefer credentials from sessionStorage; fall back to authMethod stub
             if (creds[obj.id as string]) {
               return { ...s, auth: normalizeAuth({ auth: creds[obj.id as string] } as unknown as Record<string, unknown>) }
