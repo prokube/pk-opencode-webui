@@ -26,6 +26,7 @@ export function PickerDialog(props: Props) {
   const [filter, setFilter] = createSignal(props.initialFilter ?? "")
   const [activeIndex, setActiveIndex] = createSignal(0)
   const [collapsed, setCollapsed] = createSignal(new Set<string>())
+  const [keyboardSection, setKeyboardSection] = createSignal<string>()
   let inputRef: HTMLInputElement | undefined
   let listRef: HTMLDivElement | undefined
   let closeButtonRef: HTMLButtonElement | undefined
@@ -102,6 +103,9 @@ export function PickerDialog(props: Props) {
   const keyboardSectionKey = createMemo(() => {
     if (!props.collapsibleGroups || filter().trim()) return
 
+    const key = keyboardSection()
+    if (key && visibleSections().some((section) => section.key === key && section.canCollapse)) return key
+
     const idx = activeIndex()
     const active = visibleSections().find((section) => section.rows.some((row) => row.index === idx))
     if (active?.canCollapse) return active.key
@@ -123,6 +127,17 @@ export function PickerDialog(props: Props) {
   createEffect(() => {
     const keys = sectionKeys()
     setCollapsed((prev) => new Set(Array.from(prev).filter((key) => keys.has(key))))
+  })
+
+  createEffect(() => {
+    const key = keyboardSection()
+    if (!key) return
+    if (filter().trim()) {
+      setKeyboardSection()
+      return
+    }
+    if (visibleSections().some((section) => section.key === key && section.canCollapse)) return
+    setKeyboardSection()
   })
 
   createEffect(() => {
@@ -156,19 +171,32 @@ export function PickerDialog(props: Props) {
         if (!key || keyboardSectionCollapsed()) return
         e.preventDefault()
         setSectionCollapsed(key, true)
+        setKeyboardSection(key)
       } else if (e.key === "ArrowRight") {
         const key = keyboardSectionKey()
         if (!key || !keyboardSectionCollapsed()) return
         e.preventDefault()
         setSectionCollapsed(key, false)
+        setKeyboardSection()
+        setSectionActiveIndex(key)
       } else if (e.key === "ArrowDown" && items.length > 0) {
         e.preventDefault()
+        setKeyboardSection()
         setActiveIndex((i) => (i + 1) % items.length)
       } else if (e.key === "ArrowUp" && items.length > 0) {
         e.preventDefault()
+        setKeyboardSection()
         setActiveIndex((i) => (i - 1 + items.length) % items.length)
       } else if (e.key === "Enter" && items.length > 0) {
         if (!isSelectableEnterTarget(e.target)) return
+        const key = keyboardSectionKey()
+        if (key && keyboardSectionCollapsed()) {
+          e.preventDefault()
+          setSectionCollapsed(key, false)
+          setKeyboardSection()
+          setSectionActiveIndex(key)
+          return
+        }
         e.preventDefault()
         const item = items[activeIndex()]
         if (item) {
@@ -202,6 +230,11 @@ export function PickerDialog(props: Props) {
   function toggleSection(key: string) {
     if (!props.collapsibleGroups || filter().trim()) return
     setSectionCollapsed(key, !collapsed().has(key))
+  }
+
+  function setSectionActiveIndex(key: string) {
+    const row = visibleSections().find((section) => section.key === key)?.rows[0]
+    if (row) setActiveIndex(row.index)
   }
 
   function isSelectableEnterTarget(target: EventTarget | null) {
@@ -321,7 +354,10 @@ export function PickerDialog(props: Props) {
                           props.onSelect(item())
                           props.onClose()
                         }}
-                        onMouseEnter={() => setActiveIndex(idx)}
+                        onMouseEnter={() => {
+                          setKeyboardSection()
+                          setActiveIndex(idx)
+                        }}
                         class="w-full px-4 py-2.5 text-left flex flex-col gap-0.5 transition-colors"
                         style={{
                           background: isActive()
@@ -398,7 +434,10 @@ export function PickerDialog(props: Props) {
                               props.onSelect(row().item)
                               props.onClose()
                             }}
-                            onMouseEnter={() => setActiveIndex(row().index)}
+                            onMouseEnter={() => {
+                              setKeyboardSection()
+                              setActiveIndex(row().index)
+                            }}
                             class="w-full px-4 py-2.5 text-left flex flex-col gap-0.5 transition-colors"
                             style={{
                               background: isActive()
