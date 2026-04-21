@@ -65,6 +65,8 @@ export function PickerDialog(props: Props) {
     return Array.from(map.values())
   })
 
+  const sectionKeys = createMemo(() => new Set(props.items.map((item) => item.groupKey?.trim() || item.id)))
+
   const visibleSections = createMemo(() => {
     const canCollapse = !!props.collapsibleGroups && !filter().trim()
     let index = 0
@@ -79,7 +81,7 @@ export function PickerDialog(props: Props) {
         key: section.key,
         label: section.label,
         rows,
-        canCollapse: !!props.collapsibleGroups && !!section.label,
+        canCollapse: canCollapse && !!section.label,
         isCollapsed,
       }
     })
@@ -112,7 +114,7 @@ export function PickerDialog(props: Props) {
   })
 
   createEffect(() => {
-    const keys = new Set(sections().map((section) => section.key))
+    const keys = sectionKeys()
     setCollapsed((prev) => new Set(Array.from(prev).filter((key) => keys.has(key))))
   })
 
@@ -159,6 +161,7 @@ export function PickerDialog(props: Props) {
         e.preventDefault()
         setActiveIndex((i) => (i - 1 + items.length) % items.length)
       } else if (e.key === "Enter" && items.length > 0) {
+        if (!isSelectableEnterTarget(e.target)) return
         e.preventDefault()
         const item = items[activeIndex()]
         if (item) {
@@ -192,6 +195,12 @@ export function PickerDialog(props: Props) {
   function toggleSection(key: string) {
     if (!props.collapsibleGroups || filter().trim()) return
     setSectionCollapsed(key, !collapsed().has(key))
+  }
+
+  function isSelectableEnterTarget(target: EventTarget | null) {
+    if (!(target instanceof Element)) return true
+    if (target.closest('[role="option"]')) return true
+    return target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement
   }
 
   return (
