@@ -339,6 +339,7 @@ export function SyncProvider(props: ParentProps) {
       if (a.type !== "tool" || b.type !== "tool") return false
       const aState = a.state as Extract<Part, { type: "tool" }>["state"]
       const bState = b.state as Extract<Part, { type: "tool" }>["state"]
+      if (aState.status === "pending" || bState.status === "pending") return false
       const aEnd = aState.time?.end ?? aState.time?.start
       const bEnd = bState.time?.end ?? bState.time?.start
       if (!aEnd) return false
