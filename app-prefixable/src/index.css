@@ -451,7 +451,7 @@
   }
 
   .markdown-code-block pre {
-    @apply mb-0 pt-8;
+    @apply mb-0 pt-10;
   }
 
   .markdown-copy-button {
