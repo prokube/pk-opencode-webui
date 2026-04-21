@@ -25,14 +25,17 @@ interface Props {
 export function PickerDialog(props: Props) {
   const [filter, setFilter] = createSignal(props.initialFilter ?? "")
   const [activeIndex, setActiveIndex] = createSignal(0)
+  const [activeId, setActiveId] = createSignal<string>()
   const [collapsed, setCollapsed] = createSignal(new Set<string>())
   const [keyboardSection, setKeyboardSection] = createSignal<string>()
   let inputRef: HTMLInputElement | undefined
   let listRef: HTMLDivElement | undefined
   let closeButtonRef: HTMLButtonElement | undefined
 
+  const query = createMemo(() => filter().trim().toLowerCase())
+
   const filtered = createMemo(() => {
-    const q = filter().toLowerCase()
+    const q = query()
     if (!q) return props.items
     return props.items.filter(
       (item) =>
@@ -69,7 +72,7 @@ export function PickerDialog(props: Props) {
   const sectionKeys = createMemo(() => new Set(props.items.map((item) => item.groupKey?.trim() || item.id)))
 
   const visibleSections = createMemo(() => {
-    const canCollapse = !!props.collapsibleGroups && !filter().trim()
+    const canCollapse = !!props.collapsibleGroups && !query()
     let index = 0
 
     return sections().map((section) => {
@@ -101,7 +104,7 @@ export function PickerDialog(props: Props) {
   const showCollapseHint = createMemo(() => visibleSections().some((section) => section.canCollapse))
 
   const keyboardSectionKey = createMemo(() => {
-    if (!props.collapsibleGroups || filter().trim()) return
+    if (!props.collapsibleGroups || query()) return
 
     const key = keyboardSection()
     if (key && visibleSections().some((section) => section.key === key && section.canCollapse)) return key
@@ -120,8 +123,9 @@ export function PickerDialog(props: Props) {
   })
 
   createEffect(() => {
-    filter()
+    query()
     setActiveIndex(0)
+    setActiveId()
   })
 
   createEffect(() => {
@@ -132,7 +136,7 @@ export function PickerDialog(props: Props) {
   createEffect(() => {
     const key = keyboardSection()
     if (!key) return
-    if (filter().trim()) {
+    if (query()) {
       setKeyboardSection()
       return
     }
@@ -148,6 +152,19 @@ export function PickerDialog(props: Props) {
       return
     }
     if (idx >= count) setActiveIndex(count - 1)
+  })
+
+  createEffect(() => {
+    if (activeId()) return
+    const item = visibleItems()[activeIndex()] || visibleItems()[0]
+    if (item) setActiveId(item.id)
+  })
+
+  createEffect(() => {
+    const id = activeId()
+    if (!id) return
+    const idx = visibleItems().findIndex((item) => item.id === id)
+    if (idx >= 0 && idx !== activeIndex()) setActiveIndex(idx)
   })
 
   createEffect(() => {
@@ -182,11 +199,11 @@ export function PickerDialog(props: Props) {
       } else if (e.key === "ArrowDown" && items.length > 0) {
         e.preventDefault()
         setKeyboardSection()
-        setActiveIndex((i) => (i + 1) % items.length)
+        setActive((activeIndex() + 1) % items.length)
       } else if (e.key === "ArrowUp" && items.length > 0) {
         e.preventDefault()
         setKeyboardSection()
-        setActiveIndex((i) => (i - 1 + items.length) % items.length)
+        setActive((activeIndex() - 1 + items.length) % items.length)
       } else if (e.key === "Enter" && items.length > 0) {
         if (!isSelectableEnterTarget(e.target)) return
         const key = keyboardSectionKey()
@@ -228,13 +245,25 @@ export function PickerDialog(props: Props) {
   }
 
   function toggleSection(key: string) {
-    if (!props.collapsibleGroups || filter().trim()) return
-    setSectionCollapsed(key, !collapsed().has(key))
+    if (!props.collapsibleGroups || query()) return
+    const item = visibleItems()[activeIndex()]
+    if (item) setActiveId(item.id)
+    const next = !collapsed().has(key)
+    const activeKey = item?.groupKey?.trim() || item?.id
+    if (next && activeKey === key) setKeyboardSection(key)
+    if (!next && keyboardSection() === key) setKeyboardSection()
+    setSectionCollapsed(key, next)
   }
 
   function setSectionActiveIndex(key: string) {
     const row = visibleSections().find((section) => section.key === key)?.rows[0]
-    if (row) setActiveIndex(row.index)
+    if (row) setActive(row.index)
+  }
+
+  function setActive(index: number) {
+    const item = visibleItems()[index]
+    if (item) setActiveId(item.id)
+    setActiveIndex(index)
   }
 
   function isSelectableEnterTarget(target: EventTarget | null) {
@@ -356,7 +385,7 @@ export function PickerDialog(props: Props) {
                         }}
                         onMouseEnter={() => {
                           setKeyboardSection()
-                          setActiveIndex(idx)
+                          setActive(idx)
                         }}
                         class="w-full px-4 py-2.5 text-left flex flex-col gap-0.5 transition-colors"
                         style={{
@@ -436,7 +465,7 @@ export function PickerDialog(props: Props) {
                             }}
                             onMouseEnter={() => {
                               setKeyboardSection()
-                              setActiveIndex(row().index)
+                              setActive(row().index)
                             }}
                             class="w-full px-4 py-2.5 text-left flex flex-col gap-0.5 transition-colors"
                             style={{
