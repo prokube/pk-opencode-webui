@@ -108,7 +108,7 @@
 
 @layer components {
   @media (hover: none), (pointer: coarse) {
-    .copy-turn-button {
+    .markdown-copy-button {
       opacity: 1;
     }
   }

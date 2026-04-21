@@ -804,7 +804,7 @@ export function MessageTurn(props: {
               e.stopPropagation()
               copy()
             }}
-            class="copy-turn-button shrink-0 p-1.5 rounded transition-colors opacity-0 group-hover:opacity-100 focus:opacity-100"
+            class="shrink-0 p-1.5 rounded transition-colors opacity-0 group-hover:opacity-100 focus:opacity-100"
             classList={{ "opacity-100": focused() || copied() }}
             style={{
               background: "var(--surface-inset)",
