@@ -1,6 +1,6 @@
 import { createSignal, createEffect, createMemo, Show, onMount, onCleanup, For, Index } from "solid-js"
 import { Portal } from "solid-js/web"
-import { X, Search } from "lucide-solid"
+import { X, Search, ChevronDown, ChevronRight } from "lucide-solid"
 import { createBackdropDismiss } from "../utils/backdrop"
 
 interface PickerItem {
@@ -19,11 +19,13 @@ interface Props {
   emptyMessage?: string
   placeholder?: string
   initialFilter?: string
+  collapsibleGroups?: boolean
 }
 
 export function PickerDialog(props: Props) {
   const [filter, setFilter] = createSignal(props.initialFilter ?? "")
   const [activeIndex, setActiveIndex] = createSignal(0)
+  const [collapsed, setCollapsed] = createSignal(new Set<string>())
   let inputRef: HTMLInputElement | undefined
   let listRef: HTMLDivElement | undefined
   let closeButtonRef: HTMLButtonElement | undefined
@@ -43,29 +45,69 @@ export function PickerDialog(props: Props) {
   const isGrouped = createMemo(() => props.items.some((item) => !!item.groupKey?.trim()))
 
   const sections = createMemo(() => {
-    const map = new Map<string, { key: string; label?: string; rows: { item: PickerItem; index: number }[] }>()
+    const map = new Map<string, { key: string; label?: string; rows: PickerItem[] }>()
 
-    filtered().forEach((item, index) => {
+    filtered().forEach((item) => {
       const key = item.groupKey?.trim() || item.id
       const section = map.get(key)
       if (section) {
-        section.rows.push({ item, index })
+        section.rows.push(item)
         return
       }
 
       map.set(key, {
         key,
         label: item.group?.trim() || undefined,
-        rows: [{ item, index }],
+        rows: [item],
       })
     })
 
     return Array.from(map.values())
   })
 
+  const visibleSections = createMemo(() => {
+    const canCollapse = !!props.collapsibleGroups && !filter().trim()
+    let index = 0
+
+    return sections().map((section) => {
+      const isCollapsed = canCollapse && !!section.label && collapsed().has(section.key)
+      const rows = isCollapsed
+        ? []
+        : section.rows.map((item) => ({ item, index: index++ }))
+
+      return {
+        key: section.key,
+        label: section.label,
+        rows,
+        canCollapse: !!props.collapsibleGroups && !!section.label,
+        isCollapsed,
+      }
+    })
+  })
+
+  const visibleItems = createMemo(() => {
+    if (!isGrouped()) return filtered()
+    return visibleSections().flatMap((section) => section.rows.map((row) => row.item))
+  })
+
   createEffect(() => {
     filter()
     setActiveIndex(0)
+  })
+
+  createEffect(() => {
+    const keys = new Set(sections().map((section) => section.key))
+    setCollapsed((prev) => new Set(Array.from(prev).filter((key) => keys.has(key))))
+  })
+
+  createEffect(() => {
+    const count = visibleItems().length
+    const idx = activeIndex()
+    if (count === 0) {
+      if (idx !== 0) setActiveIndex(0)
+      return
+    }
+    if (idx >= count) setActiveIndex(count - 1)
   })
 
   createEffect(() => {
@@ -79,7 +121,7 @@ export function PickerDialog(props: Props) {
     inputRef?.focus()
 
     const handler = (e: KeyboardEvent) => {
-      const items = filtered()
+      const items = visibleItems()
       if (e.key === "Escape") {
         e.preventDefault()
         e.stopPropagation()
@@ -111,6 +153,16 @@ export function PickerDialog(props: Props) {
   })
 
   const backdrop = createBackdropDismiss(() => props.onClose())
+
+  function toggleSection(key: string) {
+    if (!props.collapsibleGroups || filter().trim()) return
+    setCollapsed((prev) => {
+      const next = new Set(prev)
+      if (next.has(key)) next.delete(key)
+      else next.add(key)
+      return next
+    })
+  }
 
   return (
     <Portal>
@@ -247,18 +299,39 @@ export function PickerDialog(props: Props) {
                 </Index>
               }
             >
-              <For each={sections()}>
+              <For each={visibleSections()}>
                 {(section) => (
                   <div role={section.label ? "group" : "presentation"} aria-label={section.label || undefined}>
                     <Show when={section.label}>
-                      <div
-                        role="presentation"
-                        aria-hidden="true"
-                        class="px-4 pt-3 pb-1 text-[11px] font-semibold uppercase tracking-wide"
-                        style={{ color: "var(--text-weak)", opacity: 0.9 }}
+                      <Show
+                        when={section.canCollapse}
+                        fallback={
+                          <div
+                            role="presentation"
+                            aria-hidden="true"
+                            class="px-4 pt-3 pb-1 text-[11px] font-semibold uppercase tracking-wide"
+                            style={{ color: "var(--text-weak)", opacity: 0.9 }}
+                          >
+                            {section.label}
+                          </div>
+                        }
                       >
-                        {section.label}
-                      </div>
+                        <button
+                          type="button"
+                          class="w-full px-4 pt-3 pb-1 flex items-center gap-2 text-[11px] font-semibold uppercase tracking-wide transition-colors"
+                          style={{ color: "var(--text-weak)", opacity: 0.9 }}
+                          aria-expanded={!section.isCollapsed}
+                          onClick={() => toggleSection(section.key)}
+                        >
+                          <Show when={section.isCollapsed} fallback={<ChevronDown class="w-3 h-3 shrink-0" />}>
+                            <ChevronRight class="w-3 h-3 shrink-0" />
+                          </Show>
+                          <span>{section.label}</span>
+                          <span class="ml-auto text-[10px] tracking-normal normal-case opacity-70">
+                            {section.isCollapsed ? "Collapsed" : "Expanded"}
+                          </span>
+                        </button>
+                      </Show>
                     </Show>
 
                     <Index each={section.rows}>
