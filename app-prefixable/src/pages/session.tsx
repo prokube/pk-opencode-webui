@@ -2854,6 +2854,7 @@ export function Session() {
             title="Select Model"
             placeholder="Filter models..."
             emptyMessage="No models found. Connect a provider in settings."
+            collapsibleGroups
             items={providers.providers
               .filter((p) => providers.connected.includes(p.id))
               .flatMap((p) =>
