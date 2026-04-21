@@ -451,31 +451,45 @@
   }
 
   .markdown-code-block pre {
-    @apply mb-0 pt-10;
+    @apply mb-0 pt-8;
   }
 
   .markdown-copy-button {
-    @apply absolute right-3 top-3 inline-flex h-7 w-7 items-center justify-center rounded-md border p-0 transition-colors;
-    border-color: var(--border-strong);
-    background: color-mix(in srgb, var(--surface-base) 88%, transparent);
+    @apply absolute right-3 top-3 inline-flex items-center gap-1 rounded p-1.5 transition-colors;
     color: var(--icon-base);
-    backdrop-filter: blur(2px);
+    background: transparent;
   }
 
   .markdown-copy-button:hover {
-    background: var(--surface-base);
+    background: var(--surface-inset);
     color: var(--icon-strong);
   }
 
   .markdown-copy-button:focus-visible {
+    background: var(--surface-inset);
     color: var(--icon-strong);
   }
 
   .markdown-copy-icon {
-    @apply flex h-3.5 w-3.5 items-center justify-center;
-    font-size: 0.95rem;
-    line-height: 1;
-    font-weight: 600;
+    @apply block h-4 w-4;
+    background: currentColor;
+    mask-position: center;
+    mask-repeat: no-repeat;
+    mask-size: contain;
+    -webkit-mask-position: center;
+    -webkit-mask-repeat: no-repeat;
+    -webkit-mask-size: contain;
+  }
+
+  .markdown-copy-icon-copy {
+    mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Crect width='14' height='14' x='8' y='8' rx='2' ry='2'/%3E%3Cpath d='M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2'/%3E%3C/svg%3E");
+    -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Crect width='14' height='14' x='8' y='8' rx='2' ry='2'/%3E%3Cpath d='M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2'/%3E%3C/svg%3E");
+  }
+
+  .markdown-copy-icon-check {
+    @apply hidden;
+    mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M20 6 9 17l-5-5'/%3E%3C/svg%3E");
+    -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M20 6 9 17l-5-5'/%3E%3C/svg%3E");
   }
 
   .markdown-copy-label {
@@ -496,8 +510,6 @@
     white-space: nowrap;
   }
 
-  .markdown-copy-button:hover .markdown-copy-label,
-  .markdown-copy-button:focus-visible .markdown-copy-label,
   .markdown-copy-button[data-state="copied"] .markdown-copy-label,
   .markdown-copy-button[data-state="failed"] .markdown-copy-label {
     opacity: 1;
@@ -505,8 +517,16 @@
   }
 
   .markdown-copy-button[data-state="copied"] {
-    border-color: color-mix(in srgb, var(--icon-success-base) 40%, var(--border-strong));
+    background: var(--surface-inset);
     color: var(--icon-success-base);
+  }
+
+  .markdown-copy-button[data-state="copied"] .markdown-copy-icon-copy {
+    @apply hidden;
+  }
+
+  .markdown-copy-button[data-state="copied"] .markdown-copy-icon-check {
+    @apply block;
   }
 
   .markdown-copy-button[data-state="copied"] .markdown-copy-label {
@@ -515,7 +535,7 @@
   }
 
   .markdown-copy-button[data-state="failed"] {
-    border-color: color-mix(in srgb, var(--interactive-critical) 40%, var(--border-strong));
+    background: var(--surface-inset);
     color: var(--interactive-critical);
   }
 

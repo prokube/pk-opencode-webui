@@ -38,7 +38,7 @@ renderer.code = ({ text, lang }) => {
   const code = escapeHtml(text)
   const className = lang ? ` class="language-${escapeHtml(lang)}"` : ""
 
-  return `<div class="markdown-code-block"><button class="markdown-copy-button" type="button" data-state="idle" aria-label="Copy code"><span class="markdown-copy-icon" aria-hidden="true">&#x29C9;</span><span class="markdown-copy-label" aria-hidden="true">Copy</span><span class="markdown-copy-live" aria-live="polite" aria-atomic="true">Copy</span></button><pre><code${className}>${code}</code></pre></div>`
+  return `<div class="markdown-code-block"><button class="markdown-copy-button" type="button" data-state="idle" aria-label="Copy code"><span class="markdown-copy-icon markdown-copy-icon-copy" aria-hidden="true"></span><span class="markdown-copy-icon markdown-copy-icon-check" aria-hidden="true"></span><span class="markdown-copy-label" aria-hidden="true">Copy</span><span class="markdown-copy-live" aria-live="polite" aria-atomic="true">Copy</span></button><pre><code${className}>${code}</code></pre></div>`
 }
 
 function copyLabel(state: "idle" | "copied" | "failed") {
