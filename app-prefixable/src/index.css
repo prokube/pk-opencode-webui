@@ -107,12 +107,6 @@
 }
 
 @layer components {
-  @media (hover: none), (pointer: coarse) {
-    .markdown-copy-button {
-      opacity: 1;
-    }
-  }
-
   /* ============================================
      BUTTONS
      ============================================ */
@@ -464,14 +458,21 @@
     @apply absolute right-3 top-2 inline-flex items-center gap-1 rounded p-1.5 transition-[opacity,color,background-color];
     color: var(--icon-base);
     background: transparent;
-    opacity: 0;
   }
 
-  .markdown-code-block:hover .markdown-copy-button,
-  .markdown-code-block:focus-within .markdown-copy-button,
-  .markdown-copy-button[data-state="copied"],
-  .markdown-copy-button[data-state="failed"] {
-    opacity: 1;
+  @media (hover: hover) and (pointer: fine) {
+    .markdown-copy-button {
+      opacity: 0;
+      pointer-events: none;
+    }
+
+    .markdown-code-block:hover .markdown-copy-button,
+    .markdown-code-block:focus-within .markdown-copy-button,
+    .markdown-copy-button[data-state="copied"],
+    .markdown-copy-button[data-state="failed"] {
+      opacity: 1;
+      pointer-events: auto;
+    }
   }
 
   .markdown-copy-button:hover {
