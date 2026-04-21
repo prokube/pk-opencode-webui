@@ -90,6 +90,22 @@ export function PickerDialog(props: Props) {
     return visibleSections().flatMap((section) => section.rows.map((row) => row.item))
   })
 
+  const keyboardSectionKey = createMemo(() => {
+    if (!props.collapsibleGroups || filter().trim()) return
+
+    const idx = activeIndex()
+    const active = visibleSections().find((section) => section.rows.some((row) => row.index === idx))
+    if (active?.canCollapse) return active.key
+
+    return visibleSections().find((section) => section.canCollapse)?.key
+  })
+
+  const keyboardSectionCollapsed = createMemo(() => {
+    const key = keyboardSectionKey()
+    if (!key) return false
+    return !!visibleSections().find((section) => section.key === key)?.isCollapsed
+  })
+
   createEffect(() => {
     filter()
     setActiveIndex(0)
@@ -126,6 +142,16 @@ export function PickerDialog(props: Props) {
         e.preventDefault()
         e.stopPropagation()
         props.onClose()
+      } else if (e.key === "ArrowLeft") {
+        const key = keyboardSectionKey()
+        if (!key || keyboardSectionCollapsed()) return
+        e.preventDefault()
+        setSectionCollapsed(key, true)
+      } else if (e.key === "ArrowRight") {
+        const key = keyboardSectionKey()
+        if (!key || !keyboardSectionCollapsed()) return
+        e.preventDefault()
+        setSectionCollapsed(key, false)
       } else if (e.key === "ArrowDown" && items.length > 0) {
         e.preventDefault()
         setActiveIndex((i) => (i + 1) % items.length)
@@ -154,14 +180,18 @@ export function PickerDialog(props: Props) {
 
   const backdrop = createBackdropDismiss(() => props.onClose())
 
-  function toggleSection(key: string) {
-    if (!props.collapsibleGroups || filter().trim()) return
+  function setSectionCollapsed(key: string, value: boolean) {
     setCollapsed((prev) => {
       const next = new Set(prev)
-      if (next.has(key)) next.delete(key)
-      else next.add(key)
+      if (value) next.add(key)
+      if (!value) next.delete(key)
       return next
     })
+  }
+
+  function toggleSection(key: string) {
+    if (!props.collapsibleGroups || filter().trim()) return
+    setSectionCollapsed(key, !collapsed().has(key))
   }
 
   return (
@@ -233,6 +263,10 @@ export function PickerDialog(props: Props) {
             </div>
             <div class="mt-1.5 text-[10px]" style={{ color: "var(--text-weak)" }}>
               <span class="opacity-70">Arrow keys to navigate</span>
+              <Show when={props.collapsibleGroups}>
+                <span class="mx-1.5">-</span>
+                <span class="opacity-70">Left/right to collapse or expand groups</span>
+              </Show>
               <span class="mx-1.5">-</span>
               <span class="opacity-70">Enter to select</span>
               <span class="mx-1.5">-</span>
