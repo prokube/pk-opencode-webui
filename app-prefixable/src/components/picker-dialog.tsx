@@ -92,6 +92,13 @@ export function PickerDialog(props: Props) {
     return visibleSections().flatMap((section) => section.rows.map((row) => row.item))
   })
 
+  const activeDescendant = createMemo(() => {
+    if (visibleItems().length === 0) return
+    return `picker-option-${activeIndex()}`
+  })
+
+  const showCollapseHint = createMemo(() => visibleSections().some((section) => section.canCollapse))
+
   const keyboardSectionKey = createMemo(() => {
     if (!props.collapsibleGroups || filter().trim()) return
 
@@ -260,7 +267,7 @@ export function PickerDialog(props: Props) {
                 role="combobox"
                 aria-controls="picker-listbox"
                 aria-expanded="true"
-                aria-activedescendant={`picker-option-${activeIndex()}`}
+                aria-activedescendant={activeDescendant()}
                 placeholder={props.placeholder || "Filter..."}
                 value={filter()}
                 onInput={(e) => setFilter(e.currentTarget.value)}
@@ -272,7 +279,7 @@ export function PickerDialog(props: Props) {
             </div>
             <div class="mt-1.5 text-[10px]" style={{ color: "var(--text-weak)" }}>
               <span class="opacity-70">Arrow keys to navigate</span>
-              <Show when={props.collapsibleGroups}>
+              <Show when={showCollapseHint()}>
                 <span class="mx-1.5">-</span>
                 <span class="opacity-70">Left/right to collapse or expand groups</span>
               </Show>
