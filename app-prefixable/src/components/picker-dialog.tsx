@@ -402,11 +402,11 @@ export function PickerDialog(props: Props) {
                           </div>
                         }
                       >
-                        <button
-                          type="button"
-                          class="w-full px-4 pt-3 pb-1 flex items-center gap-2 text-[11px] font-semibold uppercase tracking-wide transition-colors"
+                        <div
+                          role="presentation"
+                          class="w-full px-4 pt-3 pb-1 flex items-center gap-2 text-[11px] font-semibold uppercase tracking-wide transition-colors select-none cursor-pointer"
                           style={{ color: "var(--text-weak)", opacity: 0.9 }}
-                          aria-expanded={!section.isCollapsed}
+                          onMouseDown={(e) => e.preventDefault()}
                           onClick={() => toggleSection(section.key)}
                         >
                           <Show when={section.isCollapsed} fallback={<ChevronDown class="w-3 h-3 shrink-0" />}>
@@ -416,7 +416,7 @@ export function PickerDialog(props: Props) {
                           <span class="ml-auto text-[10px] tracking-normal normal-case opacity-70">
                             {section.isCollapsed ? "Collapsed" : "Expanded"}
                           </span>
-                        </button>
+                        </div>
                       </Show>
                     </Show>
 
