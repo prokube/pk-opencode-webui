@@ -107,6 +107,12 @@
 }
 
 @layer components {
+  @media (hover: none), (pointer: coarse) {
+    .copy-turn-button {
+      opacity: 1;
+    }
+  }
+
   /* ============================================
      BUTTONS
      ============================================ */
