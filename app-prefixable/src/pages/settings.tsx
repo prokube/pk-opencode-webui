@@ -51,6 +51,7 @@ export function Settings() {
   const [mcpLoading, setMcpLoading] = createSignal<string | null>(null)
   const [mcpDeleting, setMcpDeleting] = createSignal<string | null>(null)
   const [mcpToDelete, setMcpToDelete] = createSignal<string | null>(null)
+  const [providerToDelete, setProviderToDelete] = createSignal<string | null>(null)
 
   // Saved prompts
   const savedPrompts = useSavedPrompts()
@@ -215,6 +216,12 @@ export function Settings() {
     const id = selectedProvider()
     if (!id) return []
     return providers.authMethods[id] || []
+  })
+
+  const selectedProviderName = createMemo(() => {
+    const id = selectedProvider()
+    if (!id) return null
+    return getProviderDisplayName(id)
   })
 
   // Popular providers shown first
@@ -564,6 +571,7 @@ Add your project-specific instructions here.
     const key = apiKey().trim()
 
     if (!providerID || !key) return
+    const wasConnected = providers.connected.includes(providerID)
 
     setConnecting(true)
     setError(null)
@@ -574,12 +582,45 @@ Add your project-specific instructions here.
     setConnecting(false)
 
     if (ok) {
-      setSuccess(`Connected to ${providerID}!`)
+      setSuccess(`${wasConnected ? "Updated" : "Connected to"} ${getProviderDisplayName(providerID)}!`)
       setApiKey("")
       setSelectedProvider(null)
+      setProviderSearch("")
     } else {
       setError("Failed to connect. Please check your API key.")
     }
+  }
+
+  function startProviderEdit(providerID: string) {
+    setError(null)
+    setSuccess(null)
+    setOauthPending(null)
+    setOauthCode("")
+    setCodeCopied(false)
+    setApiKey("")
+    setProviderSearch("")
+    setSelectedProvider(providerID)
+  }
+
+  async function confirmProviderDelete() {
+    const providerID = providerToDelete()
+    if (!providerID) return
+    setProviderToDelete(null)
+    setError(null)
+    setSuccess(null)
+    const ok = await providers.disconnectProvider(providerID)
+    if (ok) {
+      if (selectedProvider() === providerID) {
+        setSelectedProvider(null)
+        setApiKey("")
+        setOauthPending(null)
+        setOauthCode("")
+        setCodeCopied(false)
+      }
+      setSuccess(`Disconnected ${getProviderDisplayName(providerID)}.`)
+      return
+    }
+    setError(`Failed to disconnect ${getProviderDisplayName(providerID)}. Please try again.`)
   }
 
   async function handleOAuthStart(providerID: string, methodIndex: number) {
@@ -1039,7 +1080,7 @@ Add your project-specific instructions here.
                       <For each={providers.connected}>
                         {(providerID) => (
                           <div
-                            class="flex items-center justify-between p-3 rounded-md"
+                            class="flex items-center justify-between gap-3 p-3 rounded-md"
                             style={{ background: "var(--surface-inset)" }}
                           >
                             <div class="flex items-center gap-3">
@@ -1050,9 +1091,31 @@ Add your project-specific instructions here.
                                 {getProviderDisplayName(providerID)}
                               </span>
                             </div>
-                            <span class="text-xs" style={{ color: "var(--text-weak)" }}>
-                              Connected
-                            </span>
+                            <div class="flex items-center gap-2">
+                              <span class="text-xs" style={{ color: "var(--text-weak)" }}>
+                                Connected
+                              </span>
+                              <button
+                                type="button"
+                                onClick={() => startProviderEdit(providerID)}
+                                class="p-1.5 rounded transition-colors"
+                                style={{ color: "var(--text-weak)" }}
+                                title={`Reconfigure ${getProviderDisplayName(providerID)}`}
+                                aria-label={`Reconfigure ${getProviderDisplayName(providerID)}`}
+                              >
+                                <Pencil class="w-4 h-4" />
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => setProviderToDelete(providerID)}
+                                class="p-1.5 rounded transition-colors"
+                                style={{ color: "var(--interactive-critical)" }}
+                                title={`Disconnect ${getProviderDisplayName(providerID)}`}
+                                aria-label={`Disconnect ${getProviderDisplayName(providerID)}`}
+                              >
+                                <Trash2 class="w-4 h-4" />
+                              </button>
+                            </div>
                           </div>
                         )}
                       </For>
@@ -1220,92 +1283,119 @@ Add your project-specific instructions here.
                     {/* Search and Provider Selection */}
                     <Show when={!oauthPending()}>
                       <div>
-                        {/* Search input */}
-                        <div class="relative mb-3">
-                          <Search
-                            class="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4"
-                            style={{ color: "var(--text-weak)" }}
-                          />
-                          <input
-                            type="text"
-                            value={providerSearch()}
-                            onInput={(e) => setProviderSearch(e.currentTarget.value)}
-                            placeholder="Search providers..."
-                            class="w-full pl-9 pr-8 py-2 rounded-md text-sm"
+                        <Show when={selectedProvider() && providers.connected.includes(selectedProvider()!)}>
+                          <div
+                            class="mb-3 p-3 rounded-md text-sm"
                             style={{
-                              background: "var(--background-base)",
+                              background: "var(--surface-inset)",
                               border: "1px solid var(--border-base)",
                               color: "var(--text-base)",
                             }}
-                          />
-                          <Show when={providerSearch()}>
-                            <button
-                              type="button"
-                              onClick={() => setProviderSearch("")}
-                              class="absolute right-2 top-1/2 -translate-y-1/2 p-1"
-                              style={{ color: "var(--text-weak)" }}
-                            >
-                              <X class="w-4 h-4" />
-                            </button>
-                          </Show>
-                        </div>
-
-                        {/* Provider grid - max height with scroll */}
-                        <div class="grid grid-cols-2 gap-2 max-h-64 overflow-y-auto">
-                          <For each={filteredProviders()}>
-                            {(provider) => (
-                              <button
-                                type="button"
-                                onClick={() => setSelectedProvider(provider.id)}
-                                class="p-3 rounded-md text-left transition-colors"
-                                style={{
-                                  border:
-                                    selectedProvider() === provider.id
-                                      ? "1px solid var(--interactive-base)"
-                                      : "1px solid var(--border-base)",
-                                  background:
-                                    selectedProvider() === provider.id ? "var(--surface-inset)" : "transparent",
-                                }}
-                              >
-                                <div class="flex items-center gap-2">
-                                  <span class="text-sm font-medium" style={{ color: "var(--text-strong)" }}>
-                                    {provider.name}
-                                  </span>
-                                  <Show when={provider.id === "opencode"}>
-                                    <span
-                                      class="text-xs px-1.5 py-0.5 rounded"
-                                      style={{
-                                        background: "var(--interactive-base)",
-                                        color: "white",
-                                      }}
-                                    >
-                                      Recommended
-                                    </span>
-                                  </Show>
-                                </div>
-                                <div class="text-xs" style={{ color: "var(--text-weak)" }}>
-                                  {Object.keys(provider.models).length} models
-                                </div>
-                              </button>
-                            )}
-                          </For>
-                        </div>
-
-                        <Show when={filteredProviders().length === 0 && providerSearch()}>
-                          <p class="text-sm text-center py-4" style={{ color: "var(--text-weak)" }}>
-                            No providers found matching "{providerSearch()}"
-                          </p>
+                          >
+                            Reconfiguring {selectedProviderName()}
+                          </div>
                         </Show>
 
+                        {/* Search input */}
                         <Show
-                          when={
-                            providers.providers.filter((p) => !providers.connected.includes(p.id)).length === 0 &&
-                            !providerSearch()
+                          when={!selectedProvider() || !providers.connected.includes(selectedProvider()!)}
+                          fallback={
+                            <button
+                              type="button"
+                              onClick={() => setSelectedProvider(null)}
+                              class="text-sm"
+                              style={{ color: "var(--text-weak)" }}
+                            >
+                              Choose a different provider
+                            </button>
                           }
                         >
-                          <p class="text-sm" style={{ color: "var(--text-weak)" }}>
-                            All available providers are connected!
-                          </p>
+                          <div class="relative mb-3">
+                            <Search
+                              class="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4"
+                              style={{ color: "var(--text-weak)" }}
+                            />
+                            <input
+                              type="text"
+                              value={providerSearch()}
+                              onInput={(e) => setProviderSearch(e.currentTarget.value)}
+                              placeholder="Search providers..."
+                              class="w-full pl-9 pr-8 py-2 rounded-md text-sm"
+                              style={{
+                                background: "var(--background-base)",
+                                border: "1px solid var(--border-base)",
+                                color: "var(--text-base)",
+                              }}
+                            />
+                            <Show when={providerSearch()}>
+                              <button
+                                type="button"
+                                onClick={() => setProviderSearch("")}
+                                class="absolute right-2 top-1/2 -translate-y-1/2 p-1"
+                                style={{ color: "var(--text-weak)" }}
+                              >
+                                <X class="w-4 h-4" />
+                              </button>
+                            </Show>
+                          </div>
+
+                          {/* Provider grid - max height with scroll */}
+                          <div class="grid grid-cols-2 gap-2 max-h-64 overflow-y-auto">
+                            <For each={filteredProviders()}>
+                              {(provider) => (
+                                <button
+                                  type="button"
+                                  onClick={() => setSelectedProvider(provider.id)}
+                                  class="p-3 rounded-md text-left transition-colors"
+                                  style={{
+                                    border:
+                                      selectedProvider() === provider.id
+                                        ? "1px solid var(--interactive-base)"
+                                        : "1px solid var(--border-base)",
+                                    background:
+                                      selectedProvider() === provider.id ? "var(--surface-inset)" : "transparent",
+                                  }}
+                                >
+                                  <div class="flex items-center gap-2">
+                                    <span class="text-sm font-medium" style={{ color: "var(--text-strong)" }}>
+                                      {provider.name}
+                                    </span>
+                                    <Show when={provider.id === "opencode"}>
+                                      <span
+                                        class="text-xs px-1.5 py-0.5 rounded"
+                                        style={{
+                                          background: "var(--interactive-base)",
+                                          color: "white",
+                                        }}
+                                      >
+                                        Recommended
+                                      </span>
+                                    </Show>
+                                  </div>
+                                  <div class="text-xs" style={{ color: "var(--text-weak)" }}>
+                                    {Object.keys(provider.models).length} models
+                                  </div>
+                                </button>
+                              )}
+                            </For>
+                          </div>
+
+                          <Show when={filteredProviders().length === 0 && providerSearch()}>
+                            <p class="text-sm text-center py-4" style={{ color: "var(--text-weak)" }}>
+                              No providers found matching "{providerSearch()}"
+                            </p>
+                          </Show>
+
+                          <Show
+                            when={
+                              providers.providers.filter((p) => !providers.connected.includes(p.id)).length === 0 &&
+                              !providerSearch()
+                            }
+                          >
+                            <p class="text-sm" style={{ color: "var(--text-weak)" }}>
+                              All available providers are connected!
+                            </p>
+                          </Show>
                         </Show>
                       </div>
                     </Show>
@@ -1314,7 +1404,7 @@ Add your project-specific instructions here.
                     <Show when={selectedProvider() && !oauthPending()}>
                       <div class="space-y-3">
                         <label class="block text-sm font-medium" style={{ color: "var(--text-base)" }}>
-                          Connect {getProviderDisplayName(selectedProvider()!)}
+                          {providers.connected.includes(selectedProvider()!) ? "Update" : "Connect"} {getProviderDisplayName(selectedProvider()!)}
                         </label>
 
                         {/* Show auth method buttons */}
@@ -1344,7 +1434,7 @@ Add your project-specific instructions here.
                                   color: "white",
                                 }}
                               >
-                                <Show when={connecting()} fallback="Connect with API Key">
+                                <Show when={connecting()} fallback={providers.connected.includes(selectedProvider()!) ? "Update API Key" : "Connect with API Key"}>
                                   <Spinner class="w-4 h-4" />
                                   Connecting...
                                 </Show>
@@ -1388,7 +1478,7 @@ Add your project-specific instructions here.
                                           color: "white",
                                         }}
                                       >
-                                        <Show when={connecting()} fallback="Connect">
+                                        <Show when={connecting()} fallback={providers.connected.includes(selectedProvider()!) ? "Update" : "Connect"}>
                                           <Spinner class="w-4 h-4" />
                                           Connecting...
                                         </Show>
@@ -2601,6 +2691,16 @@ Add your project-specific instructions here.
         variant="danger"
         onConfirm={confirmMcpDelete}
         onCancel={() => setMcpToDelete(null)}
+      />
+
+      <ConfirmDialog
+        open={!!providerToDelete()}
+        title="Disconnect Provider"
+        message={`Are you sure you want to disconnect ${providerToDelete() ? getProviderDisplayName(providerToDelete()!) : "this provider"}?`}
+        confirmLabel="Disconnect"
+        variant="danger"
+        onConfirm={confirmProviderDelete}
+        onCancel={() => setProviderToDelete(null)}
       />
 
       {/* Prompt Add/Edit Dialog */}
