@@ -52,6 +52,8 @@ export function Settings() {
   const [mcpDeleting, setMcpDeleting] = createSignal<string | null>(null)
   const [mcpToDelete, setMcpToDelete] = createSignal<string | null>(null)
   const [providerToDelete, setProviderToDelete] = createSignal<string | null>(null)
+  const [providerDeleting, setProviderDeleting] = createSignal<string | null>(null)
+  const [providerDeleteError, setProviderDeleteError] = createSignal<string | null>(null)
 
   // Saved prompts
   const savedPrompts = useSavedPrompts()
@@ -222,6 +224,12 @@ export function Settings() {
     const id = selectedProvider()
     if (!id) return null
     return getProviderDisplayName(id)
+  })
+
+  const selectedProviderConnected = createMemo(() => {
+    const id = selectedProvider()
+    if (!id) return false
+    return providers.connected.includes(id)
   })
 
   // Popular providers shown first
@@ -592,6 +600,7 @@ Add your project-specific instructions here.
   }
 
   function startProviderEdit(providerID: string) {
+    if (providerDeleting()) return
     setError(null)
     setSuccess(null)
     setOauthPending(null)
@@ -604,12 +613,15 @@ Add your project-specific instructions here.
 
   async function confirmProviderDelete() {
     const providerID = providerToDelete()
-    if (!providerID) return
-    setProviderToDelete(null)
+    if (!providerID || providerDeleting()) return
+    setProviderDeleting(providerID)
+    setProviderDeleteError(null)
     setError(null)
     setSuccess(null)
     const ok = await providers.disconnectProvider(providerID)
+    setProviderDeleting(null)
     if (ok) {
+      setProviderToDelete(null)
       if (selectedProvider() === providerID) {
         setSelectedProvider(null)
         setApiKey("")
@@ -620,7 +632,7 @@ Add your project-specific instructions here.
       setSuccess(`Disconnected ${getProviderDisplayName(providerID)}.`)
       return
     }
-    setError(`Failed to disconnect ${getProviderDisplayName(providerID)}. Please try again.`)
+    setProviderDeleteError(`Failed to disconnect ${getProviderDisplayName(providerID)}. Please try again.`)
   }
 
   async function handleOAuthStart(providerID: string, methodIndex: number) {
@@ -1098,8 +1110,12 @@ Add your project-specific instructions here.
                               <button
                                 type="button"
                                 onClick={() => startProviderEdit(providerID)}
+                                disabled={!!providerDeleting()}
                                 class="p-1.5 rounded transition-colors"
-                                style={{ color: "var(--text-weak)" }}
+                                style={{
+                                  color: "var(--text-weak)",
+                                  ...(providerDeleting() ? { opacity: "0.6", cursor: "not-allowed" } : {}),
+                                }}
                                 title={`Reconfigure ${getProviderDisplayName(providerID)}`}
                                 aria-label={`Reconfigure ${getProviderDisplayName(providerID)}`}
                               >
@@ -1107,9 +1123,13 @@ Add your project-specific instructions here.
                               </button>
                               <button
                                 type="button"
+                                disabled={!!providerDeleting()}
                                 onClick={() => setProviderToDelete(providerID)}
                                 class="p-1.5 rounded transition-colors"
-                                style={{ color: "var(--interactive-critical)" }}
+                                style={{
+                                  color: "var(--interactive-critical)",
+                                  ...(providerDeleting() ? { opacity: "0.6", cursor: "not-allowed" } : {}),
+                                }}
                                 title={`Disconnect ${getProviderDisplayName(providerID)}`}
                                 aria-label={`Disconnect ${getProviderDisplayName(providerID)}`}
                               >
@@ -1283,7 +1303,7 @@ Add your project-specific instructions here.
                     {/* Search and Provider Selection */}
                     <Show when={!oauthPending()}>
                       <div>
-                        <Show when={selectedProvider() && providers.connected.includes(selectedProvider()!)}>
+                        <Show when={selectedProvider() && selectedProviderConnected()}>
                           <div
                             class="mb-3 p-3 rounded-md text-sm"
                             style={{
@@ -1298,7 +1318,7 @@ Add your project-specific instructions here.
 
                         {/* Search input */}
                         <Show
-                          when={!selectedProvider() || !providers.connected.includes(selectedProvider()!)}
+                          when={!selectedProvider() || !selectedProviderConnected()}
                           fallback={
                             <button
                               type="button"
@@ -1404,7 +1424,7 @@ Add your project-specific instructions here.
                     <Show when={selectedProvider() && !oauthPending()}>
                       <div class="space-y-3">
                         <label class="block text-sm font-medium" style={{ color: "var(--text-base)" }}>
-                          {providers.connected.includes(selectedProvider()!) ? "Update" : "Connect"} {getProviderDisplayName(selectedProvider()!)}
+                          {selectedProviderConnected() ? "Update" : "Connect"} {getProviderDisplayName(selectedProvider()!)}
                         </label>
 
                         {/* Show auth method buttons */}
@@ -1434,9 +1454,9 @@ Add your project-specific instructions here.
                                   color: "white",
                                 }}
                               >
-                                <Show when={connecting()} fallback={providers.connected.includes(selectedProvider()!) ? "Update API Key" : "Connect with API Key"}>
+                                <Show when={connecting()} fallback={selectedProviderConnected() ? "Update API Key" : "Connect with API Key"}>
                                   <Spinner class="w-4 h-4" />
-                                  Connecting...
+                                  {selectedProviderConnected() ? "Updating..." : "Connecting..."}
                                 </Show>
                               </button>
                             </div>
@@ -1478,9 +1498,9 @@ Add your project-specific instructions here.
                                           color: "white",
                                         }}
                                       >
-                                        <Show when={connecting()} fallback={providers.connected.includes(selectedProvider()!) ? "Update" : "Connect"}>
+                                        <Show when={connecting()} fallback={selectedProviderConnected() ? "Update" : "Connect"}>
                                           <Spinner class="w-4 h-4" />
-                                          Connecting...
+                                          {selectedProviderConnected() ? "Updating..." : "Connecting..."}
                                         </Show>
                                       </button>
                                     </div>
@@ -2697,10 +2717,17 @@ Add your project-specific instructions here.
         open={!!providerToDelete()}
         title="Disconnect Provider"
         message={`Are you sure you want to disconnect ${providerToDelete() ? getProviderDisplayName(providerToDelete()!) : "this provider"}?`}
-        confirmLabel="Disconnect"
+        confirmLabel={providerDeleting() ? "Disconnecting..." : "Disconnect"}
+        confirmDisabled={!!providerDeleting()}
+        cancelDisabled={!!providerDeleting()}
         variant="danger"
+        error={providerDeleteError()}
         onConfirm={confirmProviderDelete}
-        onCancel={() => setProviderToDelete(null)}
+        onCancel={() => {
+          if (providerDeleting()) return
+          setProviderToDelete(null)
+          setProviderDeleteError(null)
+        }}
       />
 
       {/* Prompt Add/Edit Dialog */}
