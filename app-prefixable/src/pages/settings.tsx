@@ -232,6 +232,8 @@ export function Settings() {
     return providers.connected.includes(id)
   })
 
+  const providerActionBusy = createMemo(() => !!providerDeleting() || connecting() || !!oauthPending())
+
   // Popular providers shown first
   const popularProviders = ["opencode", "anthropic", "github-copilot", "openai", "google", "openrouter"]
 
@@ -600,7 +602,7 @@ Add your project-specific instructions here.
   }
 
   function startProviderEdit(providerID: string) {
-    if (providerDeleting()) return
+    if (providerActionBusy()) return
     setError(null)
     setSuccess(null)
     setOauthPending(null)
@@ -1110,11 +1112,11 @@ Add your project-specific instructions here.
                               <button
                                 type="button"
                                 onClick={() => startProviderEdit(providerID)}
-                                disabled={!!providerDeleting()}
+                                disabled={providerActionBusy()}
                                 class="p-1.5 rounded transition-colors"
                                 style={{
                                   color: "var(--text-weak)",
-                                  ...(providerDeleting() ? { opacity: "0.6", cursor: "not-allowed" } : {}),
+                                  ...(providerActionBusy() ? { opacity: "0.6", cursor: "not-allowed" } : {}),
                                 }}
                                 title={`Reconfigure ${getProviderDisplayName(providerID)}`}
                                 aria-label={`Reconfigure ${getProviderDisplayName(providerID)}`}
@@ -1123,12 +1125,12 @@ Add your project-specific instructions here.
                               </button>
                               <button
                                 type="button"
-                                disabled={!!providerDeleting()}
+                                disabled={providerActionBusy()}
                                 onClick={() => setProviderToDelete(providerID)}
                                 class="p-1.5 rounded transition-colors"
                                 style={{
                                   color: "var(--interactive-critical)",
-                                  ...(providerDeleting() ? { opacity: "0.6", cursor: "not-allowed" } : {}),
+                                  ...(providerActionBusy() ? { opacity: "0.6", cursor: "not-allowed" } : {}),
                                 }}
                                 title={`Disconnect ${getProviderDisplayName(providerID)}`}
                                 aria-label={`Disconnect ${getProviderDisplayName(providerID)}`}
@@ -2718,13 +2720,13 @@ Add your project-specific instructions here.
         title="Disconnect Provider"
         message={`Are you sure you want to disconnect ${providerToDelete() ? getProviderDisplayName(providerToDelete()!) : "this provider"}?`}
         confirmLabel={providerDeleting() ? "Disconnecting..." : "Disconnect"}
-        confirmDisabled={!!providerDeleting()}
-        cancelDisabled={!!providerDeleting()}
+        confirmDisabled={providerActionBusy()}
+        cancelDisabled={providerActionBusy()}
         variant="danger"
         error={providerDeleteError()}
         onConfirm={confirmProviderDelete}
         onCancel={() => {
-          if (providerDeleting()) return
+          if (providerActionBusy()) return
           setProviderToDelete(null)
           setProviderDeleteError(null)
         }}
