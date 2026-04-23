@@ -463,8 +463,12 @@ export function ProviderProvider(props: ParentProps) {
           delete state[sessionID]
         }
       }))
-      await client.instance.dispose()
-      await refetchProviders()
+      try {
+        await client.instance.dispose()
+        await refetchProviders()
+      } catch (e) {
+        console.error("Failed to refresh providers after disconnect:", e)
+      }
       return true
     } catch (e) {
       console.error("Failed to disconnect provider:", e)
