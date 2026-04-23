@@ -193,6 +193,7 @@ export function Settings() {
   const [oauthPending, setOauthPending] = createSignal<{
     providerID: string
     providerName: string
+    updating: boolean
     methodIndex: number
     method: "auto" | "code"
     instructions: string
@@ -640,6 +641,7 @@ Add your project-specific instructions here.
   async function handleOAuthStart(providerID: string, methodIndex: number) {
     setError(null)
     setSuccess(null)
+    const updating = providers.connected.includes(providerID)
 
     const result = await providers.startOAuth(providerID, methodIndex)
 
@@ -655,6 +657,7 @@ Add your project-specific instructions here.
         setOauthPending({
           providerID,
           providerName,
+          updating,
           methodIndex,
           method: "code",
           instructions: result.instructions,
@@ -667,6 +670,7 @@ Add your project-specific instructions here.
         setOauthPending({
           providerID,
           providerName,
+          updating,
           methodIndex,
           method: "auto",
           instructions: result.instructions,
@@ -685,7 +689,7 @@ Add your project-specific instructions here.
         setConnecting(false)
 
         if (ok) {
-          setSuccess(`Connected to ${providerName}!`)
+          setSuccess(`${updating ? "Updated" : "Connected to"} ${providerName}!`)
           setOauthPending(null)
           setSelectedProvider(null)
           setProviderSearch("")
@@ -712,7 +716,7 @@ Add your project-specific instructions here.
     setConnecting(false)
 
     if (ok) {
-      setSuccess(`Connected to ${pending.providerName}!`)
+      setSuccess(`${pending.updating ? "Updated" : "Connected to"} ${pending.providerName}!`)
       setOauthPending(null)
       setOauthCode("")
       setSelectedProvider(null)
@@ -1324,9 +1328,13 @@ Add your project-specific instructions here.
                           fallback={
                             <button
                               type="button"
+                              disabled={providerActionBusy()}
                               onClick={() => setSelectedProvider(null)}
                               class="text-sm"
-                              style={{ color: "var(--text-weak)" }}
+                              style={{
+                                color: "var(--text-weak)",
+                                ...(providerActionBusy() ? { opacity: "0.6", cursor: "not-allowed" } : {}),
+                              }}
                             >
                               Choose a different provider
                             </button>
