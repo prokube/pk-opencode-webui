@@ -451,6 +451,18 @@ export function ProviderProvider(props: ParentProps) {
   async function disconnectProvider(providerID: string): Promise<boolean> {
     try {
       await client.auth.remove({ providerID })
+      setStore("modelsByAgent", produce((state) => {
+        for (const [agent, model] of Object.entries(state)) {
+          if (model.providerID !== providerID) continue
+          delete state[agent]
+        }
+      }))
+      setStore("sessionModels", produce((state) => {
+        for (const [sessionID, model] of Object.entries(state)) {
+          if (model.providerID !== providerID) continue
+          delete state[sessionID]
+        }
+      }))
       await client.instance.dispose()
       await refetchProviders()
       return true
