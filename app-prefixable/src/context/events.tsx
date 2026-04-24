@@ -1,4 +1,4 @@
-import { createContext, useContext, onCleanup, onMount, type ParentProps } from "solid-js"
+import { createContext, useContext, createSignal, onCleanup, onMount, type ParentProps } from "solid-js"
 import { createStore, produce } from "solid-js/store"
 import type { Event, SessionStatus, QuestionRequest } from "../sdk/client"
 import { useSDK } from "./sdk"
@@ -10,6 +10,7 @@ type EventHandler = (event: Event) => void
 interface EventContextValue {
   subscribe: (handler: EventHandler) => () => void
   status: Record<string, SessionStatus>
+  statusReady: () => boolean
   pendingQuestions: Record<string, QuestionRequest | undefined>
   dismissQuestion: (sessionID: string, requestID: string) => void
 }
@@ -21,6 +22,7 @@ export function EventProvider(props: ParentProps) {
   const { authHeaders } = useServer()
   const handlers = new Set<EventHandler>()
   const [status, setStatus] = createStore<Record<string, SessionStatus>>({})
+  const [statusReady, setStatusReady] = createSignal(false)
   const [pendingQuestions, setPendingQuestions] = createStore<Record<string, QuestionRequest | undefined>>({})
 
   // Connect to SSE endpoint using fetch (supports custom headers unlike EventSource)
@@ -140,7 +142,10 @@ export function EventProvider(props: ParentProps) {
 
   onMount(() => {
     connect()
-    if (!directory) return
+    if (!directory) {
+      setStatusReady(true)
+      return
+    }
     client.question.list({ directory })
       .then((res) => {
         const questions = Array.isArray(res.data) ? res.data : []
@@ -159,6 +164,7 @@ export function EventProvider(props: ParentProps) {
         for (const [sessionID, s] of Object.entries(statuses)) {
           if (!sseSeenStatuses.has(sessionID)) setStatus(sessionID, s)
         }
+        setStatusReady(true)
       })
       .catch((err) => console.error("[Events] Failed to load statuses:", err))
   })
@@ -184,7 +190,7 @@ export function EventProvider(props: ParentProps) {
     }))
   }
 
-  return <EventContext.Provider value={{ subscribe, status, pendingQuestions, dismissQuestion }}>{props.children}</EventContext.Provider>
+  return <EventContext.Provider value={{ subscribe, status, statusReady, pendingQuestions, dismissQuestion }}>{props.children}</EventContext.Provider>
 }
 
 export function useEvents() {
