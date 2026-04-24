@@ -489,6 +489,7 @@ export function Session() {
 
   function followupSessionAvailable(id: string) {
     const status = events.status[id]?.type;
+    if (!status && !events.statusReady()) return false;
     return status !== "busy" && status !== "retry";
   }
 
