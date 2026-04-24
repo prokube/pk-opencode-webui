@@ -487,6 +487,11 @@ export function Session() {
     setError(message);
   }
 
+  function followupSessionAvailable(id: string) {
+    const status = events.status[id]?.type;
+    return status !== "busy" && status !== "retry";
+  }
+
   function toggleFollowupAutoSend() {
     const id = sessionId();
     if (!id) return;
@@ -494,8 +499,7 @@ export function Session() {
     setSessionFollowupAutoSend(id, enabled);
     clearAutoFollowupStatusError();
     if (!enabled) return;
-    const status = events.status[id]?.type;
-    if (status !== "idle") return;
+    if (!followupSessionAvailable(id)) return;
     queueAutoFollowupSend();
   }
 
@@ -805,8 +809,7 @@ export function Session() {
     if (!followupAutoSend()) return;
     if (followupAutoPending()) return;
     if (loading() || followupSending() || processing()) return;
-    const status = events.status[sid]?.type;
-    if (status !== "idle") return;
+    if (!followupSessionAvailable(sid)) return;
     const next = followups()[0];
     if (!next) return;
     if (followupAutoPaused() === next.id) return;
@@ -827,8 +830,7 @@ export function Session() {
       return;
     }
     if (loading() || followupSending() || processing()) return;
-    const status = events.status[sid]?.type;
-    if (status !== "idle") return;
+    if (!followupSessionAvailable(sid)) return;
     const next = followups()[0];
     if (!next) {
       setFollowupAutoPending(false);
