@@ -164,9 +164,9 @@ export function EventProvider(props: ParentProps) {
         for (const [sessionID, s] of Object.entries(statuses)) {
           if (!sseSeenStatuses.has(sessionID)) setStatus(sessionID, s)
         }
+        setStatusReady(true)
       })
       .catch((err) => console.error("[Events] Failed to load statuses:", err))
-      .finally(() => setStatusReady(true))
   })
 
   onCleanup(() => {
