@@ -20,6 +20,7 @@ import { SETTINGS_BASE_TABS } from "./settings-tabs"
 import { TelegramSettings } from "../components/telegram-settings"
 import { invalidateTelegramSourceIdCache, writeFile } from "../utils/extended-api"
 import { ALARM_CHANNELS_STORAGE_KEY, readAlarmChannels, writeAlarmChannels, type AlarmChannels } from "../utils/notify"
+import { browserOAuthUnsupported, extractProviderAuthCode, providerOAuthMethodUnsupported } from "../utils/provider-auth"
 import type { TelegramHealthResponse, TelegramSettingsResponse } from "../utils/telegram-settings"
 import type { Config, PermissionActionConfig } from "../sdk/client"
 
@@ -589,11 +590,18 @@ Add your project-specific instructions here.
     const result = await providers.startOAuth(providerID, methodIndex)
 
     if (result) {
-      // Extract code from instructions (e.g., "Enter code: XXXX-YYYY" -> "XXXX-YYYY")
-      const codeMatch = result.instructions.match(/:\s*([A-Z0-9]{4}-[A-Z0-9]{4})/i)
-      const code = codeMatch ? codeMatch[1] : ""
+      const code = extractProviderAuthCode(result.instructions)
 
       const providerName = getProviderDisplayName(providerID)
+
+      if (browserOAuthUnsupported({
+        authUrl: result.url,
+        method: result.method,
+        browserHostname: window.location.hostname,
+      })) {
+        setError(`${providerName} browser authentication redirects to a loopback address (localhost/127.0.0.1/::1) and is only supported when this UI runs on your local machine. Use API key authentication or a headless/code method instead.`)
+        return
+      }
 
       if (result.method === "code") {
         // User needs to enter a code manually
@@ -642,6 +650,10 @@ Add your project-specific instructions here.
     } else {
       setError("Failed to start authentication.")
     }
+  }
+
+  function oauthMethodUnsupported(providerID: string, label: string) {
+    return providerOAuthMethodUnsupported({ providerID, label, browserHostname: window.location.hostname })
   }
 
   async function handleOAuthComplete() {
@@ -1139,7 +1151,7 @@ Add your project-specific instructions here.
                         <Show when={pending().code}>
                           <div class="mb-3">
                             <div class="text-xs mb-1" style={{ color: "var(--text-weak)" }}>
-                              Enter this code on GitHub:
+                              Enter this code on the provider page:
                             </div>
                             <div class="flex items-center gap-2">
                               <code
@@ -1167,6 +1179,24 @@ Add your project-specific instructions here.
                                 </Show>
                               </button>
                             </div>
+                          </div>
+                        </Show>
+
+                        <Show when={pending().instructions}>
+                          <div class="mb-3">
+                            <div class="text-xs mb-1" style={{ color: "var(--text-weak)" }}>
+                              Provider instructions:
+                            </div>
+                            <pre
+                              class="text-xs whitespace-pre-wrap break-words px-3 py-2 rounded"
+                              style={{
+                                background: "var(--background-base)",
+                                color: "var(--text-base)",
+                                border: "1px solid var(--border-base)",
+                              }}
+                            >
+                              {pending().instructions}
+                            </pre>
                           </div>
                         </Show>
 
@@ -1397,21 +1427,28 @@ Add your project-specific instructions here.
                                   }
                                 >
                                   {/* OAuth method */}
-                                  <button
-                                    type="button"
-                                    disabled={connecting()}
-                                    onClick={() => handleOAuthStart(selectedProvider()!, index())}
-                                    class="w-full flex items-center justify-center gap-2 px-4 py-3 rounded-md text-sm font-medium transition-colors disabled:opacity-50"
-                                    style={{
-                                      background: "var(--interactive-base)",
-                                      color: "white",
-                                    }}
-                                  >
-                                    <Show when={connecting()} fallback={<ExternalLink class="w-4 h-4" />}>
-                                      <Spinner class="w-4 h-4" />
+                                  <div class="space-y-1">
+                                    <button
+                                      type="button"
+                                      disabled={connecting() || oauthMethodUnsupported(selectedProvider()!, method.label)}
+                                      onClick={() => handleOAuthStart(selectedProvider()!, index())}
+                                      class="w-full flex items-center justify-center gap-2 px-4 py-3 rounded-md text-sm font-medium transition-colors disabled:opacity-50"
+                                      style={{
+                                        background: "var(--interactive-base)",
+                                        color: "white",
+                                      }}
+                                    >
+                                      <Show when={connecting()} fallback={<ExternalLink class="w-4 h-4" />}>
+                                        <Spinner class="w-4 h-4" />
+                                      </Show>
+                                      {method.label}
+                                    </button>
+                                    <Show when={oauthMethodUnsupported(selectedProvider()!, method.label)}>
+                                      <p class="text-xs" style={{ color: "var(--text-weak)" }}>
+                                        Browser authentication uses a localhost callback and is only supported when this UI runs on your local machine. Use API key authentication or a headless/code method in notebooks.
+                                      </p>
                                     </Show>
-                                    {method.label}
-                                  </button>
+                                  </div>
                                 </Show>
                               )}
                             </For>
