@@ -42,8 +42,23 @@ describe("sync event helpers", () => {
     expect(mergePartUpdate([first], updated)).toEqual([updated])
   })
 
+  test("message.part.updated preserves order when replacing existing parts", () => {
+    const first = text("part_1", "msg_1", "hello")
+    const second = text("part_2", "msg_1", "world")
+    const updated = text("part_1", "msg_1", "hi")
+
+    expect(mergePartUpdate([first, second], updated)).toEqual([updated, second])
+  })
+
   test("message.part.delta appends string fields", () => {
     expect(applyPartDelta(text("part_1", "msg_1", "hel"), "text", "lo")).toMatchObject({
+      text: "hello",
+    })
+  })
+
+  test("message.part.delta ignores non-appendable fields", () => {
+    expect(applyPartDelta(text("part_1", "msg_1", "hello"), "id", "_bad")).toMatchObject({
+      id: "part_1",
       text: "hello",
     })
   })
