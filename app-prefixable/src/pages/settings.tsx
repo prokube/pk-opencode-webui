@@ -586,6 +586,7 @@ Add your project-specific instructions here.
   }
 
   async function confirmProviderDisconnect() {
+    if (disconnecting()) return
     const providerID = providerToDisconnect()
     if (!providerID) return
     setProviderToDisconnect(null)
@@ -1108,7 +1109,7 @@ Add your project-specific instructions here.
                                 </button>
                                 <button
                                   type="button"
-                                  disabled={busy()}
+                                  disabled={!!disconnecting()}
                                   onClick={() => setProviderToDisconnect(providerID)}
                                   class="p-1.5 rounded transition-colors disabled:opacity-50"
                                   style={{ color: "var(--interactive-critical)" }}
@@ -2692,6 +2693,7 @@ Add your project-specific instructions here.
         message={`Are you sure you want to disconnect ${getProviderDisplayName(providerToDisconnect() ?? "this provider")}?`}
         confirmLabel="Disconnect"
         variant="danger"
+        confirmDisabled={!!disconnecting()}
         onConfirm={confirmProviderDisconnect}
         onCancel={() => setProviderToDisconnect(null)}
       />
