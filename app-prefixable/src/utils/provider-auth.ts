@@ -1,6 +1,6 @@
 export function isLocalBrowserHost(hostname: string) {
   const host = hostname.toLowerCase()
-  return host === "localhost" || host === "127.0.0.1" || host === "::1" || host === "[::1]"
+  return host === "localhost" || host === "127.0.0.1" || host === "0.0.0.0" || host === "::1" || host === "[::1]"
 }
 
 function urlHasLoopbackTarget(value: string): boolean {
@@ -11,7 +11,7 @@ function urlHasLoopbackTarget(value: string): boolean {
       if (urlHasLoopbackTarget(param)) return true
     }
   } catch {
-    return /(?:^|[^a-z0-9.-])(localhost|127\.0\.0\.1|\[::1\]|::1)(?::\d+)?(?:\/|$)/i.test(value)
+    return /(?:^|[^a-z0-9.-])(localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1\]|::1)(?::\d+)?(?:\/|$)/i.test(value)
   }
   return false
 }

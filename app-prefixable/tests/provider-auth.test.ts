@@ -17,6 +17,7 @@ describe("provider auth helpers", () => {
   test("detects local browser hosts", () => {
     expect(isLocalBrowserHost("localhost")).toBe(true)
     expect(isLocalBrowserHost("127.0.0.1")).toBe(true)
+    expect(isLocalBrowserHost("0.0.0.0")).toBe(true)
     expect(isLocalBrowserHost("notebook.example.com")).toBe(false)
   })
 
