@@ -168,14 +168,46 @@ export function MessageTimeline(props: {
     return scrollHeight - scrollTop - clientHeight < 100
   }
 
+  function isAtBottom(): boolean {
+    if (!containerRef) return true
+    return containerRef.scrollHeight - containerRef.scrollTop - containerRef.clientHeight < SCROLL_INTENT_THRESHOLD
+  }
+
+  function clearProgrammaticScroll() {
+    programmaticScroll = false
+    if (programmaticScrollTimer !== undefined) clearTimeout(programmaticScrollTimer)
+    programmaticScrollTimer = undefined
+  }
+
+  function scheduleProgrammaticScrollEnd() {
+    if (programmaticScrollTimer !== undefined) clearTimeout(programmaticScrollTimer)
+    programmaticScrollTimer = window.setTimeout(() => {
+      clearProgrammaticScroll()
+    }, 150)
+  }
+
+  function engageManualScrollLock() {
+    clearProgrammaticScroll()
+    manualScrollLock = true
+    setUserScrolledUp(true)
+  }
+
+  function releaseManualScrollLock() {
+    manualScrollLock = false
+    setUserScrolledUp(false)
+  }
+
   // Handle scroll
   function handleScroll() {
     const nearBottom = isNearBottom()
+    const atBottom = isAtBottom()
     const top = containerRef?.scrollTop ?? 0
     const scrollingDown = top > lastScrollTop
     lastScrollTop = top
 
     if (programmaticScroll) {
+      if (atBottom) clearProgrammaticScroll()
+      else scheduleProgrammaticScrollEnd()
       props.onScroll?.(nearBottom)
       return
     }
@@ -186,20 +218,22 @@ export function MessageTimeline(props: {
       return
     }
 
-    if (!manualScrollLock || scrollingDown) {
-      manualScrollLock = false
+    if (!manualScrollLock) {
       setUserScrolledUp(false)
+      props.onScroll?.(nearBottom)
+      return
+    }
+
+    if (atBottom && scrollingDown) {
+      releaseManualScrollLock()
     }
     props.onScroll?.(nearBottom)
   }
 
   function handleWheel(event: WheelEvent) {
-    if (!containerRef || containerRef.scrollTop <= 0) return
-    if (event.deltaY < -SCROLL_INTENT_THRESHOLD) {
-      programmaticScroll = false
-      manualScrollLock = true
-      setUserScrolledUp(true)
-    }
+    const unit = event.deltaMode === WheelEvent.DOM_DELTA_LINE ? 16 : containerRef?.clientHeight ?? 1
+    const delta = event.deltaMode === WheelEvent.DOM_DELTA_PIXEL ? event.deltaY : event.deltaY * unit
+    if (delta < -SCROLL_INTENT_THRESHOLD) engageManualScrollLock()
   }
 
   function handleTouchStart(event: TouchEvent) {
@@ -208,29 +242,26 @@ export function MessageTimeline(props: {
 
   function handleTouchMove(event: TouchEvent) {
     const y = event.touches[0]?.clientY
-    if (containerRef && containerRef.scrollTop > 0 && touchY !== undefined && y !== undefined) {
+    if (touchY !== undefined && y !== undefined) {
       const delta = y - touchY
-      if (delta > SCROLL_INTENT_THRESHOLD) {
-        programmaticScroll = false
-        manualScrollLock = true
-        setUserScrolledUp(true)
-      }
+      if (delta > SCROLL_INTENT_THRESHOLD) engageManualScrollLock()
     }
     touchY = y
+  }
+
+  function handleTouchEnd() {
+    touchY = undefined
   }
 
   // Scroll to bottom
   function scrollToBottom(force = false) {
     if (userScrolledUp() && !force) return
-    if (force) manualScrollLock = false
+    if (force) releaseManualScrollLock()
     requestAnimationFrame(() => {
       if (userScrolledUp() && !force) return
       programmaticScroll = true
       endRef?.scrollIntoView({ behavior: "smooth" })
-      if (programmaticScrollTimer !== undefined) clearTimeout(programmaticScrollTimer)
-      programmaticScrollTimer = window.setTimeout(() => {
-        programmaticScroll = false
-      }, 500)
+      scheduleProgrammaticScrollEnd()
     })
   }
 
@@ -283,6 +314,8 @@ export function MessageTimeline(props: {
       onWheel={handleWheel}
       onTouchStart={handleTouchStart}
       onTouchMove={handleTouchMove}
+      onTouchEnd={handleTouchEnd}
+      onTouchCancel={handleTouchEnd}
       class="flex-1 overflow-y-auto p-6"
       style={{ background: "var(--background-stronger)" }}
     >
