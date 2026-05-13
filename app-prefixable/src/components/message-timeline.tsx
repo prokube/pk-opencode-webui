@@ -12,6 +12,7 @@ import { extractTextContent } from "../utils/message"
 // Number of turns to render initially and on each "load more"
 const TURNS_PER_BATCH = 10
 const INITIAL_TURNS = 5
+const SCROLL_INTENT_THRESHOLD = 4
 
 // Compute turn-level timing from user and assistant message timestamps
 function computeTurnTime(user: DisplayMessage, assistants: DisplayMessage[]): Turn["time"] {
@@ -79,6 +80,9 @@ export function MessageTimeline(props: {
   let containerRef: HTMLDivElement | undefined
   let endRef: HTMLDivElement | undefined
   let programmaticScroll = false
+  let programmaticScrollTimer: number | undefined
+  let manualScrollLock = false
+  let lastScrollTop = 0
   let touchY: number | undefined
 
   // Shared clock signal for relative timestamps — one timer for all turns
@@ -89,6 +93,7 @@ export function MessageTimeline(props: {
   })
   onCleanup(() => {
     if (tick !== undefined) clearInterval(tick)
+    if (programmaticScrollTimer !== undefined) clearTimeout(programmaticScrollTimer)
   })
 
   // Track which turns are expanded
@@ -166,13 +171,35 @@ export function MessageTimeline(props: {
   // Handle scroll
   function handleScroll() {
     const nearBottom = isNearBottom()
-    if (programmaticScroll && userScrolledUp()) return
-    setUserScrolledUp(!nearBottom)
+    const top = containerRef?.scrollTop ?? 0
+    const scrollingDown = top > lastScrollTop
+    lastScrollTop = top
+
+    if (programmaticScroll) {
+      props.onScroll?.(nearBottom)
+      return
+    }
+
+    if (!nearBottom) {
+      setUserScrolledUp(true)
+      props.onScroll?.(nearBottom)
+      return
+    }
+
+    if (!manualScrollLock || scrollingDown) {
+      manualScrollLock = false
+      setUserScrolledUp(false)
+    }
     props.onScroll?.(nearBottom)
   }
 
   function handleWheel(event: WheelEvent) {
-    if (event.deltaY < 0) setUserScrolledUp(true)
+    if (!containerRef || containerRef.scrollTop <= 0) return
+    if (event.deltaY < -SCROLL_INTENT_THRESHOLD) {
+      programmaticScroll = false
+      manualScrollLock = true
+      setUserScrolledUp(true)
+    }
   }
 
   function handleTouchStart(event: TouchEvent) {
@@ -181,19 +208,29 @@ export function MessageTimeline(props: {
 
   function handleTouchMove(event: TouchEvent) {
     const y = event.touches[0]?.clientY
-    if (touchY !== undefined && y !== undefined && y > touchY) setUserScrolledUp(true)
+    if (containerRef && containerRef.scrollTop > 0 && touchY !== undefined && y !== undefined) {
+      const delta = y - touchY
+      if (delta > SCROLL_INTENT_THRESHOLD) {
+        programmaticScroll = false
+        manualScrollLock = true
+        setUserScrolledUp(true)
+      }
+    }
     touchY = y
   }
 
   // Scroll to bottom
   function scrollToBottom(force = false) {
     if (userScrolledUp() && !force) return
+    if (force) manualScrollLock = false
     requestAnimationFrame(() => {
+      if (userScrolledUp() && !force) return
       programmaticScroll = true
-      endRef?.scrollIntoView({ behavior: "auto" })
-      requestAnimationFrame(() => {
+      endRef?.scrollIntoView({ behavior: "smooth" })
+      if (programmaticScrollTimer !== undefined) clearTimeout(programmaticScrollTimer)
+      programmaticScrollTimer = window.setTimeout(() => {
         programmaticScroll = false
-      })
+      }, 500)
     })
   }
 
