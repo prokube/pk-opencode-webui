@@ -12,6 +12,7 @@ import { extractTextContent } from "../utils/message"
 // Number of turns to render initially and on each "load more"
 const TURNS_PER_BATCH = 10
 const INITIAL_TURNS = 5
+const SCROLL_INTENT_THRESHOLD = 4
 
 // Compute turn-level timing from user and assistant message timestamps
 function computeTurnTime(user: DisplayMessage, assistants: DisplayMessage[]): Turn["time"] {
@@ -78,10 +79,14 @@ export function MessageTimeline(props: {
 }) {
   let containerRef: HTMLDivElement | undefined
   let endRef: HTMLDivElement | undefined
-  let programmaticScroll = false
-  let programmaticScrollTimer: number | undefined
-  let manualScrollLock = false
-  let lastScrollTop: number | undefined
+  let touchY: number | undefined
+  // These flags mirror DOM scroll state and do not drive rendering directly.
+  const scroll = {
+    programmatic: false,
+    timer: undefined as number | undefined,
+    manualLock: false,
+    lastTop: undefined as number | undefined,
+  }
 
   // Shared clock signal for relative timestamps — one timer for all turns
   const [now, setNow] = createSignal(Date.now())
@@ -91,7 +96,7 @@ export function MessageTimeline(props: {
   })
   onCleanup(() => {
     if (tick !== undefined) clearInterval(tick)
-    if (programmaticScrollTimer !== undefined) clearTimeout(programmaticScrollTimer)
+    if (scroll.timer !== undefined) clearTimeout(scroll.timer)
   })
 
   // Track which turns are expanded
@@ -138,7 +143,9 @@ export function MessageTimeline(props: {
     // Restore scroll position after DOM update
     requestAnimationFrame(() => {
       if (containerRef) {
+        beginProgrammaticScroll()
         containerRef.scrollTop = containerRef.scrollHeight - scrollBottom
+        scheduleProgrammaticScrollEnd()
       }
     })
   }
@@ -167,76 +174,97 @@ export function MessageTimeline(props: {
   }
 
   function clearProgrammaticScroll() {
-    programmaticScroll = false
-    if (programmaticScrollTimer !== undefined) clearTimeout(programmaticScrollTimer)
-    programmaticScrollTimer = undefined
+    scroll.programmatic = false
+    if (scroll.timer !== undefined) clearTimeout(scroll.timer)
+    scroll.timer = undefined
   }
 
   function scheduleProgrammaticScrollEnd() {
-    if (programmaticScrollTimer !== undefined) clearTimeout(programmaticScrollTimer)
-    programmaticScrollTimer = window.setTimeout(() => {
+    if (scroll.timer !== undefined) clearTimeout(scroll.timer)
+    scroll.timer = window.setTimeout(() => {
       clearProgrammaticScroll()
-    }, 1_000)
+    }, 2_000)
+  }
+
+  function beginProgrammaticScroll() {
+    scroll.programmatic = true
+    scheduleProgrammaticScrollEnd()
   }
 
   function engageManualScrollLock() {
     clearProgrammaticScroll()
-    manualScrollLock = true
+    scroll.manualLock = true
     setUserScrolledUp(true)
   }
 
   function releaseManualScrollLock() {
-    manualScrollLock = false
+    scroll.manualLock = false
     setUserScrolledUp(false)
+  }
+
+  function canScrollUp(): boolean {
+    if (!containerRef) return false
+    return containerRef.scrollHeight > containerRef.clientHeight && containerRef.scrollTop > 0
   }
 
   // Handle scroll
   function handleScroll() {
     const nearBottom = isNearBottom()
     const top = containerRef?.scrollTop ?? 0
-    const previous = lastScrollTop
+    const previous = scroll.lastTop
     const scrollingUp = previous !== undefined && top < previous
     const scrollingDown = previous !== undefined && top > previous
-    lastScrollTop = top
+    scroll.lastTop = top
 
-    if (programmaticScroll) {
+    if (scroll.programmatic) {
       if (nearBottom) clearProgrammaticScroll()
       else scheduleProgrammaticScrollEnd()
-      props.onScroll?.(nearBottom)
-      return
-    }
-
-    if (scrollingUp) {
+    } else if (scrollingUp) {
       engageManualScrollLock()
-      props.onScroll?.(nearBottom)
-      return
-    }
-
-    if (!nearBottom) {
+    } else if (!nearBottom) {
       engageManualScrollLock()
-      props.onScroll?.(nearBottom)
-      return
-    }
-
-    if (!manualScrollLock) {
+    } else if (!scroll.manualLock) {
       setUserScrolledUp(false)
-      props.onScroll?.(nearBottom)
-      return
-    }
-
-    if (scrollingDown) {
+    } else if (scrollingDown) {
       releaseManualScrollLock()
     }
+
     props.onScroll?.(nearBottom)
+  }
+
+  function handleWheel(event: WheelEvent) {
+    const page = containerRef?.clientHeight ?? 1
+    const unit = event.deltaMode === WheelEvent.DOM_DELTA_LINE ? 16 : page
+    const delta = event.deltaMode === WheelEvent.DOM_DELTA_PIXEL ? event.deltaY : event.deltaY * unit
+    if (delta < -SCROLL_INTENT_THRESHOLD && canScrollUp()) engageManualScrollLock()
+  }
+
+  function handleTouchStart(event: TouchEvent) {
+    touchY = event.touches[0]?.clientY
+  }
+
+  function handleTouchMove(event: TouchEvent) {
+    const y = event.touches[0]?.clientY
+    if (touchY !== undefined && y !== undefined && y - touchY > SCROLL_INTENT_THRESHOLD && canScrollUp()) {
+      engageManualScrollLock()
+    }
+    touchY = y
+  }
+
+  function handleTouchEnd() {
+    touchY = undefined
   }
 
   // Scroll to bottom
   function scrollToBottom(force = false) {
     if (userScrolledUp() && !force) return
     if (force) releaseManualScrollLock()
+    beginProgrammaticScroll()
     requestAnimationFrame(() => {
-      if (userScrolledUp() && !force) return
-      programmaticScroll = true
+      if (userScrolledUp() && !force) {
+        clearProgrammaticScroll()
+        return
+      }
       endRef?.scrollIntoView({ behavior: "smooth" })
       scheduleProgrammaticScrollEnd()
     })
@@ -253,6 +281,7 @@ export function MessageTimeline(props: {
 
   // Scroll to bottom on mount
   onMount(() => {
+    scroll.lastTop = containerRef?.scrollTop
     setTimeout(() => scrollToBottom(true), 100)
   })
 
@@ -288,6 +317,11 @@ export function MessageTimeline(props: {
     <div
       ref={containerRef}
       onScroll={handleScroll}
+      onWheel={handleWheel}
+      onTouchStart={handleTouchStart}
+      onTouchMove={handleTouchMove}
+      onTouchEnd={handleTouchEnd}
+      onTouchCancel={handleTouchEnd}
       class="flex-1 overflow-y-auto p-6"
       style={{ background: "var(--background-stronger)" }}
     >
