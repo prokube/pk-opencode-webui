@@ -219,6 +219,41 @@ describe("OpenCode API Contract", () => {
     });
   });
 
+  // VCS Endpoints
+  describe("VCS API", () => {
+    test("GET /vcs/diff?mode=git endpoint exists", async () => {
+      if (skipIfNoServer()) return;
+      const res = await fetch(`${BASE_URL}/vcs/diff?mode=git`);
+      expect(res.status).not.toBe(404);
+      if (!res.ok) return;
+
+      const data = await res.json();
+      expect(Array.isArray(data)).toBe(true);
+      for (const diff of data) {
+        expect(typeof diff.file).toBe("string");
+        expect(typeof diff.patch).toBe("string");
+        expect(typeof diff.additions).toBe("number");
+        expect(typeof diff.deletions).toBe("number");
+      }
+    });
+
+    test("GET /vcs/diff?mode=branch endpoint exists", async () => {
+      if (skipIfNoServer()) return;
+      const res = await fetch(`${BASE_URL}/vcs/diff?mode=branch`);
+      expect(res.status).not.toBe(404);
+      if (!res.ok) return;
+
+      const data = await res.json();
+      expect(Array.isArray(data)).toBe(true);
+      for (const diff of data) {
+        expect(typeof diff.file).toBe("string");
+        expect(typeof diff.patch).toBe("string");
+        expect(typeof diff.additions).toBe("number");
+        expect(typeof diff.deletions).toBe("number");
+      }
+    });
+  });
+
   // PTY Endpoints
   describe("PTY API", () => {
     test("GET /pty returns pty list", async () => {
