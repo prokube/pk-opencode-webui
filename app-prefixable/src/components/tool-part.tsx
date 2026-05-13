@@ -165,9 +165,6 @@ function truncateSummary(value: string): string {
 }
 
 function getInvocationSummary(tool: string, state: ToolState): string | undefined {
-  const status = getStatus(state);
-  if (status !== "running" && status !== "pending") return undefined;
-
   const input = getInput(state);
   if (!input) return undefined;
 
