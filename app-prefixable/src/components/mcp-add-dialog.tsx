@@ -195,12 +195,12 @@ export function MCPAddDialog(props: Props) {
               type="text"
               value={url()}
               onInput={(e) => setUrl(e.currentTarget.value)}
-              placeholder="https://mcp.example.com/sse"
+              placeholder="https://mcp.example.com/mcp/"
               class="w-full px-3 py-2 rounded-md text-sm"
               style={inputStyle}
             />
             <p class="text-xs mt-1" style={{ color: "var(--text-weak)" }}>
-              The URL of the remote MCP server (SSE or HTTP endpoint)
+              The URL of the remote MCP server. OpenCode supports streamable HTTP and SSE transports.
             </p>
           </div>
 
