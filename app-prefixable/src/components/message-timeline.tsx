@@ -12,7 +12,6 @@ import { extractTextContent } from "../utils/message"
 // Number of turns to render initially and on each "load more"
 const TURNS_PER_BATCH = 10
 const INITIAL_TURNS = 5
-const SCROLL_INTENT_THRESHOLD = 4
 
 // Compute turn-level timing from user and assistant message timestamps
 function computeTurnTime(user: DisplayMessage, assistants: DisplayMessage[]): Turn["time"] {
@@ -82,8 +81,7 @@ export function MessageTimeline(props: {
   let programmaticScroll = false
   let programmaticScrollTimer: number | undefined
   let manualScrollLock = false
-  let lastScrollTop = 0
-  let touchY: number | undefined
+  let lastScrollTop: number | undefined
 
   // Shared clock signal for relative timestamps — one timer for all turns
   const [now, setNow] = createSignal(Date.now())
@@ -168,11 +166,6 @@ export function MessageTimeline(props: {
     return scrollHeight - scrollTop - clientHeight < 100
   }
 
-  function isAtBottom(): boolean {
-    if (!containerRef) return true
-    return containerRef.scrollHeight - containerRef.scrollTop - containerRef.clientHeight < SCROLL_INTENT_THRESHOLD
-  }
-
   function clearProgrammaticScroll() {
     programmaticScroll = false
     if (programmaticScrollTimer !== undefined) clearTimeout(programmaticScrollTimer)
@@ -183,7 +176,7 @@ export function MessageTimeline(props: {
     if (programmaticScrollTimer !== undefined) clearTimeout(programmaticScrollTimer)
     programmaticScrollTimer = window.setTimeout(() => {
       clearProgrammaticScroll()
-    }, 150)
+    }, 1_000)
   }
 
   function engageManualScrollLock() {
@@ -200,20 +193,27 @@ export function MessageTimeline(props: {
   // Handle scroll
   function handleScroll() {
     const nearBottom = isNearBottom()
-    const atBottom = isAtBottom()
     const top = containerRef?.scrollTop ?? 0
-    const scrollingDown = top > lastScrollTop
+    const previous = lastScrollTop
+    const scrollingUp = previous !== undefined && top < previous
+    const scrollingDown = previous !== undefined && top > previous
     lastScrollTop = top
 
     if (programmaticScroll) {
-      if (atBottom) clearProgrammaticScroll()
+      if (nearBottom) clearProgrammaticScroll()
       else scheduleProgrammaticScrollEnd()
       props.onScroll?.(nearBottom)
       return
     }
 
+    if (scrollingUp) {
+      engageManualScrollLock()
+      props.onScroll?.(nearBottom)
+      return
+    }
+
     if (!nearBottom) {
-      setUserScrolledUp(true)
+      engageManualScrollLock()
       props.onScroll?.(nearBottom)
       return
     }
@@ -224,33 +224,10 @@ export function MessageTimeline(props: {
       return
     }
 
-    if (atBottom && scrollingDown) {
+    if (scrollingDown) {
       releaseManualScrollLock()
     }
     props.onScroll?.(nearBottom)
-  }
-
-  function handleWheel(event: WheelEvent) {
-    const unit = event.deltaMode === WheelEvent.DOM_DELTA_LINE ? 16 : containerRef?.clientHeight ?? 1
-    const delta = event.deltaMode === WheelEvent.DOM_DELTA_PIXEL ? event.deltaY : event.deltaY * unit
-    if (delta < -SCROLL_INTENT_THRESHOLD) engageManualScrollLock()
-  }
-
-  function handleTouchStart(event: TouchEvent) {
-    touchY = event.touches[0]?.clientY
-  }
-
-  function handleTouchMove(event: TouchEvent) {
-    const y = event.touches[0]?.clientY
-    if (touchY !== undefined && y !== undefined) {
-      const delta = y - touchY
-      if (delta > SCROLL_INTENT_THRESHOLD) engageManualScrollLock()
-    }
-    touchY = y
-  }
-
-  function handleTouchEnd() {
-    touchY = undefined
   }
 
   // Scroll to bottom
@@ -311,11 +288,6 @@ export function MessageTimeline(props: {
     <div
       ref={containerRef}
       onScroll={handleScroll}
-      onWheel={handleWheel}
-      onTouchStart={handleTouchStart}
-      onTouchMove={handleTouchMove}
-      onTouchEnd={handleTouchEnd}
-      onTouchCancel={handleTouchEnd}
       class="flex-1 overflow-y-auto p-6"
       style={{ background: "var(--background-stronger)" }}
     >
