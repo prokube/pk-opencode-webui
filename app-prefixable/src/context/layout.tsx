@@ -12,8 +12,11 @@ const LAYOUT_STORAGE_KEY = "opencode.layout";
 const DEFAULT_REVIEW_WIDTH = 320;
 const DEFAULT_INFO_WIDTH = 256;
 const DEFAULT_SIDEBAR_WIDTH = 256;
+const DEFAULT_REVIEW_MODE = "session";
 export const SIDEBAR_MIN_WIDTH = 180;
 export const SIDEBAR_MAX_WIDTH = 480;
+
+export type ReviewMode = "session" | "git" | "branch" | "turn";
 
 interface PanelState {
   opened: boolean;
@@ -29,6 +32,7 @@ interface LayoutState {
   review: PanelState;
   info: PanelState;
   sidebar: { width?: number };
+  reviewMode?: ReviewMode;
   tabs?: FileTab[];
   activeTab?: string | null; // null = Review tab, string = file path
 }
@@ -38,10 +42,12 @@ interface LayoutContextValue {
   review: {
     opened: () => boolean;
     width: () => number;
+    mode: () => ReviewMode;
     toggle: () => void;
     open: () => void;
     close: () => void;
     resize: (width: number) => void;
+    setMode: (mode: ReviewMode) => void;
   };
   // Info panel (todos, context usage)
   info: {
@@ -68,6 +74,10 @@ interface LayoutContextValue {
 }
 
 const LayoutContext = createContext<LayoutContextValue>();
+
+function isReviewMode(value: unknown): value is ReviewMode {
+  return value === "session" || value === "git" || value === "branch" || value === "turn";
+}
 
 function basename(path: string) {
   const idx = path.lastIndexOf("/");
@@ -98,6 +108,9 @@ function loadState(): LayoutState {
         sidebar: {
           width: parsed.sidebar?.width ?? DEFAULT_SIDEBAR_WIDTH,
         },
+        reviewMode: isReviewMode(parsed.reviewMode)
+          ? parsed.reviewMode
+          : DEFAULT_REVIEW_MODE,
         tabs,
         activeTab,
       };
@@ -109,6 +122,7 @@ function loadState(): LayoutState {
     review: { opened: false, width: DEFAULT_REVIEW_WIDTH },
     info: { opened: false, width: DEFAULT_INFO_WIDTH },
     sidebar: { width: DEFAULT_SIDEBAR_WIDTH },
+    reviewMode: DEFAULT_REVIEW_MODE,
     tabs: [],
     activeTab: null,
   };
@@ -129,6 +143,9 @@ export function LayoutProvider(props: ParentProps) {
   const [reviewOpened, setReviewOpened] = createSignal(initial.review.opened);
   const [reviewWidth, setReviewWidth] = createSignal(
     initial.review.width ?? DEFAULT_REVIEW_WIDTH,
+  );
+  const [reviewMode, setReviewMode] = createSignal<ReviewMode>(
+    initial.reviewMode ?? DEFAULT_REVIEW_MODE,
   );
 
   // Info panel state
@@ -156,6 +173,7 @@ export function LayoutProvider(props: ParentProps) {
       review: { opened: reviewOpened(), width: reviewWidth() },
       info: { opened: infoOpened(), width: infoWidth() },
       sidebar: { width: sidebarWidth() },
+      reviewMode: reviewMode(),
       tabs: fileTabs(),
       activeTab: activeTab(),
     });
@@ -165,6 +183,7 @@ export function LayoutProvider(props: ParentProps) {
     review: {
       opened: reviewOpened,
       width: reviewWidth,
+      mode: reviewMode,
       toggle: () => {
         setReviewOpened((v) => !v);
         persist();
@@ -179,6 +198,11 @@ export function LayoutProvider(props: ParentProps) {
       },
       resize: (width: number) => {
         setReviewWidth(width);
+        persist();
+      },
+      setMode: (mode: ReviewMode) => {
+        if (reviewMode() === mode) return;
+        setReviewMode(mode);
         persist();
       },
     },

@@ -1,9 +1,30 @@
 export * from "./gen/types.gen.js"
 
 import { createClient } from "./gen/client/client.gen.js"
-import { type Config } from "./gen/client/types.gen.js"
+import {
+  type Client,
+  type Config,
+  type RequestResult,
+} from "./gen/client/types.gen.js"
 import { OpencodeClient } from "./gen/sdk.gen.js"
+import type { FileDiff } from "./gen/types.gen.js"
 export { type Config as OpencodeClientConfig, OpencodeClient }
+
+export type VcsDiffMode = "git" | "branch"
+
+type VcsDiffParameters = {
+  directory?: string
+  mode?: VcsDiffMode
+}
+
+type VcsDiffOptions = Partial<Omit<Parameters<Client["get"]>[0], "url" | "query">>
+
+type VcsDiffClient = {
+  diff: <ThrowOnError extends boolean = false>(
+    parameters?: VcsDiffParameters,
+    options?: VcsDiffOptions & { throwOnError?: ThrowOnError },
+  ) => RequestResult<FileDiff[], unknown, ThrowOnError>
+}
 
 export function createOpencodeClient(config?: Config & { directory?: string }) {
   if (!config?.fetch) {
@@ -28,5 +49,20 @@ export function createOpencodeClient(config?: Config & { directory?: string }) {
   }
 
   const client = createClient(config)
-  return new OpencodeClient({ client })
+  const sdk = new OpencodeClient({ client })
+  const diff: VcsDiffClient["diff"] = <ThrowOnError extends boolean = false>(
+    parameters?: VcsDiffParameters,
+    options?: VcsDiffOptions & { throwOnError?: ThrowOnError },
+  ) => client.get<FileDiff[], unknown, ThrowOnError>({
+    ...options,
+    url: "/vcs/diff",
+    query: {
+      directory: parameters?.directory,
+      mode: parameters?.mode,
+    },
+  })
+
+  return Object.assign(sdk, {
+    vcs: Object.assign(sdk.vcs, { diff }),
+  })
 }

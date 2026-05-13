@@ -10,7 +10,8 @@ import * as Diff from "diff";
 import type { FileDiff, FileNode } from "../sdk/client";
 import { useSDK } from "../context/sdk";
 import { sessionStatusEvent, useEvents } from "../context/events";
-import { useLayout } from "../context/layout";
+import { useLayout, type ReviewMode } from "../context/layout";
+import { useSync } from "../context/sync";
 
 import { FileTree } from "./file-tree";
 import { FileViewer } from "./file-viewer";
@@ -41,10 +42,22 @@ interface ReviewPanelProps {
   sessionId: string;
 }
 
+const REVIEW_MODES: Array<{ value: ReviewMode; label: string; title: string }> = [
+  { value: "session", label: "Session", title: "Show session changes" },
+  { value: "git", label: "Git", title: "Show uncommitted changes" },
+  { value: "branch", label: "Branch", title: "Show current branch changes" },
+  { value: "turn", label: "Turn", title: "Show last turn changes" },
+];
+
+function lastUserMessageID(messages: ReturnType<ReturnType<typeof useSync>["messages"]>) {
+  return messages.toReversed().find((message) => message.info.role === "user")?.info.id;
+}
+
 export function ReviewPanel(props: ReviewPanelProps) {
   const { client, directory } = useSDK();
   const events = useEvents();
   const layout = useLayout();
+  const sync = useSync();
 
   const [diffs, setDiffs] = createSignal<FileDiff[]>([]);
   const [selected, setSelected] = createSignal<string | null>(null);
@@ -54,55 +67,83 @@ export function ReviewPanel(props: ReviewPanelProps) {
 
   // Track the latest request to prevent race conditions
   let version = 0;
+  let previousSessionId: string | undefined;
 
-  async function checkGitRepo() {
-    try {
-      // Try to get VCS info - if it fails or returns no branch, it's not a git repo
-      const res = await client.vcs.get({ directory });
-      setIsGitRepo(res.data?.branch !== undefined);
-    } catch {
-      setIsGitRepo(false);
+  const mode = () => layout.review.mode();
+  const isGitMode = createMemo(() => mode() === "git" || mode() === "branch");
+  const lastMessageID = createMemo(() => lastUserMessageID(sync.messages(props.sessionId)));
+
+  function isNotGitRepoError(error: unknown) {
+    if (!error) return false;
+    const text = typeof error === "string" ? error : JSON.stringify(error);
+    return /not a git repository|not a repository|outside repository/i.test(text);
+  }
+
+  async function checkGitRepo(current: number) {
+    const res = await client.vcs.get({ directory }, { throwOnError: false });
+    if (current !== version) return;
+    if (res.data) {
+      setIsGitRepo(true);
+      return;
     }
+    if (isNotGitRepoError(res.error)) {
+      setIsGitRepo(false);
+      return;
+    }
+    setIsGitRepo(null);
+  }
+
+  function setFiles(files: FileDiff[]) {
+    setDiffs(files);
+    const filesByPath = files.map((d) => d.file);
+    const sel = selected();
+    if (!sel || !filesByPath.includes(sel)) setSelected(files[0]?.file ?? null);
   }
 
   async function loadDiffs() {
     const current = ++version;
+    const currentMode = mode();
+    if (currentMode === "git" || currentMode === "branch") setIsGitRepo(null);
     setLoading(true);
     try {
-      const res = await client.session.diff({ sessionID: props.sessionId, directory });
+      const res = currentMode === "git" || currentMode === "branch"
+        ? await client.vcs.diff({ directory, mode: currentMode }, { throwOnError: false })
+        : await client.session.diff({
+          sessionID: props.sessionId,
+          directory,
+          messageID: currentMode === "turn" ? lastMessageID() : undefined,
+        }, { throwOnError: false });
       // Only update state if this is still the latest request
       if (current !== version) return;
       if (res.data) {
-        setDiffs(res.data);
+        setFiles(res.data);
         setIsGitRepo(true); // If we got diffs, it's definitely a git repo
-        // Auto-select first file if none selected or selection no longer exists
-        const files = res.data.map((d) => d.file);
-        const sel = selected();
-        if (!sel || !files.includes(sel)) {
-          setSelected(res.data.length > 0 ? res.data[0].file : null);
-        }
-      } else {
-        // No diffs returned - check if it's because no git repo
-        await checkGitRepo();
+        return;
       }
+      setFiles([]);
+      if (isGitMode() || isNotGitRepoError(res.error)) await checkGitRepo(current);
     } catch (e) {
       if (current !== version) return;
       console.error("[ReviewPanel] Failed to load diffs:", e);
       // Check if it's a git repo issue
-      await checkGitRepo();
+      setFiles([]);
+      if (isGitMode() || isNotGitRepoError(e)) await checkGitRepo(current);
     } finally {
       if (current === version) setLoading(false);
     }
   }
 
-  // Load diffs when session changes
+  // Load diffs when session, mode, or relevant turn changes
   createEffect(() => {
     const id = props.sessionId;
+    const currentMode = mode();
+    if (currentMode === "turn") lastMessageID();
     if (id) {
-      // Reset selection when session changes
-      setSelected(null);
+      if (previousSessionId !== id) setSelected(null);
+      previousSessionId = id;
       loadDiffs();
     } else {
+      previousSessionId = undefined;
       setDiffs([]);
       setSelected(null);
     }
@@ -119,16 +160,9 @@ export function ReviewPanel(props: ReviewPanelProps) {
           sessionID?: string;
           diff?: FileDiff[];
         };
-        if (eventProps.sessionID === id && eventProps.diff) {
-          setDiffs(eventProps.diff);
-          // Auto-select first file if none selected or selection no longer exists
-          const files = eventProps.diff.map((d) => d.file);
-          const sel = selected();
-          if (!sel || !files.includes(sel)) {
-            setSelected(
-              eventProps.diff.length > 0 ? eventProps.diff[0].file : null,
-            );
-          }
+        if (mode() === "session" && eventProps.sessionID === id && eventProps.diff) {
+          setFiles(eventProps.diff);
+          setIsGitRepo(true);
         }
       }
       // Reload on session status idle to catch completed changes
@@ -139,7 +173,7 @@ export function ReviewPanel(props: ReviewPanelProps) {
         }
       }
       if (event.type === "vcs.branch.updated") {
-        loadDiffs();
+        if (isGitMode()) loadDiffs();
       }
     });
 
@@ -192,6 +226,12 @@ export function ReviewPanel(props: ReviewPanelProps) {
   });
 
   const count = createMemo(() => diffs().length);
+  const emptyText = createMemo(() => {
+    if (mode() === "git") return "No uncommitted changes";
+    if (mode() === "branch") return "No branch changes";
+    if (mode() === "turn") return "No changes in the last turn";
+    return "No changes in this session";
+  });
 
   // List of changed file paths for filtering
   const diffFiles = createMemo(() => diffs().map((d) => d.file));
@@ -327,6 +367,8 @@ export function ReviewPanel(props: ReviewPanelProps) {
             >
               <div class="flex items-center gap-2">
                 <button
+                  type="button"
+                  aria-label="Refresh diff list"
                   onClick={() => loadDiffs()}
                   class="p-1 rounded hover:bg-black/5 dark:hover:bg-white/5 transition-colors"
                   style={{ color: "var(--icon-weak)" }}
@@ -339,6 +381,8 @@ export function ReviewPanel(props: ReviewPanelProps) {
                 </button>
               </div>
               <button
+                type="button"
+                aria-label="Close review panel"
                 onClick={() => layout.review.close()}
                 class="p-1 rounded hover:bg-black/5 dark:hover:bg-white/5"
                 style={{ color: "var(--icon-weak)" }}
@@ -347,7 +391,7 @@ export function ReviewPanel(props: ReviewPanelProps) {
               </button>
             </div>
 
-            {/* Tabs for Changed Files / All Files */}
+            {/* Mode selector + tabs for Changed Files / All Files */}
             <Tabs
               variant="pill"
               value={tab()}
@@ -367,6 +411,33 @@ export function ReviewPanel(props: ReviewPanelProps) {
                 class="px-2 py-2"
                 style={{ "border-bottom": "1px solid var(--border-base)" }}
               >
+                <div class="flex gap-1 mb-2" role="group" aria-label="Diff mode">
+                  <For each={REVIEW_MODES}>
+                    {(item) => (
+                      <button
+                        type="button"
+                        onClick={() => layout.review.setMode(item.value)}
+                        aria-pressed={mode() === item.value}
+                        aria-label={`Switch to ${item.label.toLowerCase()} diff mode`}
+                        class="flex-1 px-2 py-1 text-xs rounded transition-colors"
+                        style={{
+                          background:
+                            mode() === item.value
+                              ? "var(--interactive-base)"
+                              : "var(--surface-base)",
+                          color:
+                            mode() === item.value
+                              ? "var(--text-on-interactive)"
+                              : "var(--text-weak)",
+                          border: "1px solid var(--border-base)",
+                        }}
+                        title={item.title}
+                      >
+                        {item.label}
+                      </button>
+                    )}
+                  </For>
+                </div>
                 <Tabs.List class="flex gap-1">
                   <Tabs.Trigger
                     value="changes"
@@ -415,7 +486,7 @@ export function ReviewPanel(props: ReviewPanelProps) {
                           style={{ color: "var(--text-weak)" }}
                         >
                           <Show
-                            when={isGitRepo() === true}
+                            when={!isGitMode() || isGitRepo() !== false}
                             fallback={
                               <div class="flex flex-col items-center gap-2">
                                 <GitBranch
@@ -432,7 +503,7 @@ export function ReviewPanel(props: ReviewPanelProps) {
                               </div>
                             }
                           >
-                            <span>No changes in this session</span>
+                            <span>{emptyText()}</span>
                           </Show>
                         </div>
                       }
@@ -466,7 +537,7 @@ export function ReviewPanel(props: ReviewPanelProps) {
                         >
                           {count() > 0
                             ? "Select a file to view changes"
-                            : "No changes in this session"}
+                            : emptyText()}
                         </span>
                       </div>
                     }
