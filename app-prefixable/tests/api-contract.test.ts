@@ -244,8 +244,31 @@ describe("OpenCode API Contract", () => {
 
   // Extended Endpoints
   describe("Extended API", () => {
+    let extendedApiAvailable = false;
+
+    beforeAll(async () => {
+      if (!serverIsAvailable) return;
+      const res = await fetch(`${BASE_URL}/api/ext/saved-prompts`, {
+        signal: AbortSignal.timeout(3000),
+      }).catch(() => null);
+      const contentType = res?.headers.get("content-type") ?? "";
+      extendedApiAvailable = res !== null && contentType.includes("application/json");
+      if (!extendedApiAvailable) {
+        console.warn(
+          `\nExtended API not available at ${BASE_URL}/api/ext/saved-prompts.\n` +
+            "These endpoints are served by the dev/production server, not the backend directly.\n" +
+            "Extended API tests will be skipped.\n"
+        );
+      }
+    });
+
+    function skipIfNoExtendedApi() {
+      if (!extendedApiAvailable) return true;
+      return false;
+    }
+
     test("GET /api/ext/saved-prompts returns prompt arrays", async () => {
-      if (skipIfNoServer()) return;
+      if (skipIfNoServer() || skipIfNoExtendedApi()) return;
       const res = await fetch(`${BASE_URL}/api/ext/saved-prompts`);
       expect(res.status).not.toBe(404);
       expect(res.ok).toBe(true);
@@ -259,7 +282,7 @@ describe("OpenCode API Contract", () => {
 
     test("PUT /api/ext/saved-prompts accepts valid payload", async () => {
       if (!RUN_MUTATION_TESTS) return;
-      if (skipIfNoServer()) return;
+      if (skipIfNoServer() || skipIfNoExtendedApi()) return;
       const readRes = await fetch(`${BASE_URL}/api/ext/saved-prompts`);
       expect(readRes.ok).toBe(true);
       const readContentType = readRes.headers.get("content-type") ?? "";
@@ -280,7 +303,7 @@ describe("OpenCode API Contract", () => {
     });
 
     test("GET /api/ext/saved-prompts supports directory param", async () => {
-      if (skipIfNoServer()) return;
+      if (skipIfNoServer() || skipIfNoExtendedApi()) return;
       const projectRes = await fetch(`${BASE_URL}/project/current`);
       expect(projectRes.ok).toBe(true);
       const project = await projectRes.json();
@@ -296,7 +319,7 @@ describe("OpenCode API Contract", () => {
     });
 
     test("PUT /api/ext/saved-prompts rejects project prompts without directory", async () => {
-      if (skipIfNoServer()) return;
+      if (skipIfNoServer() || skipIfNoExtendedApi()) return;
       const payload = {
         global: [],
         project: [{ id: "x", title: "t", text: "p", createdAt: Date.now(), scope: "project" }],
@@ -312,7 +335,7 @@ describe("OpenCode API Contract", () => {
     });
 
     test("GET /api/ext/saved-prompts rejects outside directory", async () => {
-      if (skipIfNoServer()) return;
+      if (skipIfNoServer() || skipIfNoExtendedApi()) return;
       const candidate = "/tmp";
       const params = new URLSearchParams({ directory: candidate });
       const res = await fetch(`${BASE_URL}/api/ext/saved-prompts?${params.toString()}`);
@@ -324,7 +347,7 @@ describe("OpenCode API Contract", () => {
     });
 
     test("PUT /api/ext/saved-prompts rejects outside directory", async () => {
-      if (skipIfNoServer()) return;
+      if (skipIfNoServer() || skipIfNoExtendedApi()) return;
       const payload = { global: "invalid", project: [] };
       const params = new URLSearchParams({ directory: "/tmp" });
       const res = await fetch(`${BASE_URL}/api/ext/saved-prompts?${params.toString()}`, {
@@ -340,7 +363,7 @@ describe("OpenCode API Contract", () => {
     });
 
     test("GET /api/ext/telegram/session-alarm endpoint exists", async () => {
-      if (skipIfNoServer()) return;
+      if (skipIfNoServer() || skipIfNoExtendedApi()) return;
       const res = await fetch(`${BASE_URL}/api/ext/telegram/session-alarm`);
       expect(res.status).not.toBe(404);
       expect([200, 400]).toContain(res.status);
