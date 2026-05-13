@@ -50,7 +50,7 @@ const REVIEW_MODES: Array<{ value: ReviewMode; label: string; title: string }> =
 ];
 
 function lastUserMessageID(messages: ReturnType<ReturnType<typeof useSync>["messages"]>) {
-  return messages.toReversed().find((message) => message.info.role === "user")?.info.id;
+  return messages.slice().reverse().find((message) => message.info.role === "user")?.info.id;
 }
 
 export function ReviewPanel(props: ReviewPanelProps) {

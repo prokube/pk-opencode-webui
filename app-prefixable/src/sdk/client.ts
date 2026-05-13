@@ -62,7 +62,6 @@ export function createOpencodeClient(config?: Config & { directory?: string }) {
     },
   })
 
-  return Object.assign(sdk, {
-    vcs: Object.assign(sdk.vcs, { diff }),
-  })
+  Object.assign(sdk.vcs, { diff })
+  return sdk
 }
