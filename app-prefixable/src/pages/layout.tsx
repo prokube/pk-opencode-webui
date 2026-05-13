@@ -886,7 +886,7 @@ export function Layout(props: ParentProps) {
     };
     schedule();
     onCleanup(() => {
-      if (timer) clearTimeout(timer);
+      if (timer !== undefined) clearTimeout(timer);
     });
   });
 
