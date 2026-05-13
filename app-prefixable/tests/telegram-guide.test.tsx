@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { TELEGRAM_GUIDE_COMMANDS, TELEGRAM_GUIDE_REQUIRED_KEYS, TELEGRAM_GUIDE_SECTIONS, TELEGRAM_GUIDE_TITLE, TELEGRAM_READINESS_CHECKS } from "../src/components/telegram-setup-guide"
+import { TELEGRAM_GUIDE_COMMANDS, TELEGRAM_GUIDE_REQUIRED_KEYS, TELEGRAM_GUIDE_SECTIONS, TELEGRAM_GUIDE_TITLE, TELEGRAM_READINESS_CHECKS } from "../src/components/telegram-setup-guide-constants"
 import { SETTINGS_BASE_TABS } from "../src/pages/settings-tabs"
 
 describe("Telegram setup guide UI", () => {
