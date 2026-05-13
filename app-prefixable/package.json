@@ -19,13 +19,13 @@
     "@thisbeyond/solid-dnd": "0.7.5",
     "@xterm/addon-fit": "0.11.0",
     "@xterm/xterm": "6.0.0",
-    "diff": "^7.0.0",
-    "dompurify": "^3.3.1",
+    "diff": "^9.0.0",
+    "dompurify": "^3.4.3",
     "fuzzysort": "^3.1.0",
     "lucide-solid": "0.563.0",
     "marked": "17.0.1",
     "shiki": "^3.4.2",
-    "solid-js": "1.9.10",
+    "solid-js": "1.9.12",
     "tinykeys": "^3.0.0"
   },
   "devDependencies": {
@@ -35,7 +35,7 @@
     "esbuild": "0.25.5",
     "esbuild-plugin-solid": "0.6.0",
     "eslint": "^10.0.0",
-    "postcss": "^8.5.6",
+    "postcss": "^8.5.14",
     "tailwindcss": "^3.4.17",
     "typescript": "5.8.2",
     "typescript-eslint": "^8.0.0"
