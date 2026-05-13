@@ -11,7 +11,7 @@ type SyncEvent = {
   properties: Record<string, unknown>
 }
 
-type MessageWithParts = {
+export type MessageWithParts = {
   info: Message
   parts: Part[]
 }
@@ -56,6 +56,40 @@ function sortParts(parts: Part[]): Part[] {
   const withId = parts.filter((p) => !!p?.id).sort((a, b) => cmp(a.id, b.id))
   const withoutId = parts.filter((p) => !p?.id)
   return [...withId, ...withoutId]
+}
+
+export function mergePartUpdate(parts: Part[] | undefined, part: Part) {
+  if (!parts) return sortParts([part])
+  const idx = parts.findIndex((p) => p.id === part.id)
+  if (idx === -1) return sortParts([...parts, part])
+  return sortParts(parts.map((p, i) => (i === idx ? part : p)))
+}
+
+export function applyPartDelta(part: Part, field: string, delta: string) {
+  const value = (part as unknown as Record<string, unknown>)[field]
+  if (value !== undefined && typeof value !== "string") return part
+  return { ...part, [field]: `${value ?? ""}${delta}` } as Part
+}
+
+export function mergeMessageUpdate(
+  messages: MessageWithParts[] | undefined,
+  info: Message,
+  knownParts?: Part[],
+  eventParts?: Part[],
+) {
+  const current = messages ?? []
+  const match = binarySearch(current, info.id, (m) => m.info.id)
+  const parts = eventParts ? sortParts(eventParts) : knownParts ? sortParts(knownParts) : match.found ? current[match.index].parts : []
+  const next = { info, parts }
+
+  if (match.found) return current.map((m, i) => (i === match.index ? next : m))
+  const result = [...current]
+  result.splice(match.index, 0, next)
+  return result
+}
+
+function eventInfo<T>(props: Record<string, unknown>) {
+  return (props.info ?? props) as T
 }
 
 function errorText(err: unknown) {
@@ -161,7 +195,7 @@ export function SyncProvider(props: ParentProps) {
 
     // Session events
     if (event.type === "session.created") {
-      const session = props as unknown as Session
+      const session = eventInfo<Session>(props)
       if (!session?.id) return
       const target = session.time?.archived ? "archivedSession" : "session"
       setStore(
@@ -174,7 +208,7 @@ export function SyncProvider(props: ParentProps) {
     }
 
     if (event.type === "session.updated") {
-      const session = props as unknown as Session
+      const session = eventInfo<Session>(props)
       if (!session?.id) return
       const wasArchived = binarySearch(store.archivedSession, session.id, (s) => s.id).found
       const isArchived = !!session.time?.archived
@@ -226,7 +260,7 @@ export function SyncProvider(props: ParentProps) {
     }
 
     if (event.type === "session.deleted") {
-      const session = props as unknown as Session
+      const session = eventInfo<Session>(props)
       if (!session?.id) return
       // Remove from both lists
       setStore(
@@ -252,12 +286,7 @@ export function SyncProvider(props: ParentProps) {
       if (!part?.sessionID || !part?.messageID) return
 
       // Update or insert the part
-      setStore("part", part.messageID, (existing: Part[] | undefined) => {
-        if (!existing) return sortParts([part])
-        const idx = existing.findIndex((p) => p.id === part.id)
-        if (idx === -1) return sortParts([...existing, part])
-        return existing.map((p, i) => (i === idx ? part : p))
-      })
+      setStore("part", part.messageID, (existing: Part[] | undefined) => mergePartUpdate(existing, part))
 
       // Update parts in existing messages only - don't synthesize messages from parts
       setStore("message", part.sessionID, (msgs: MessageWithParts[]) => {
@@ -269,11 +298,32 @@ export function SyncProvider(props: ParentProps) {
         // Update existing message parts
         return msgs.map((m, i) => {
           if (i !== msgIdx) return m
-          const partIdx = m.parts.findIndex((p) => p.id === part.id)
-          const newParts = partIdx === -1 ? [...m.parts, part] : m.parts.map((p, pi) => (pi === partIdx ? part : p))
-          return { ...m, parts: newParts }
+          return { ...m, parts: mergePartUpdate(m.parts, part) }
         })
       })
+    }
+
+    if (event.type === "message.part.delta") {
+      const delta = props as { sessionID?: string; messageID?: string; partID?: string; field?: string; delta?: string }
+      if (!delta.sessionID || !delta.messageID || !delta.partID || !delta.field || delta.delta === undefined) return
+      const field = delta.field
+      const text = delta.delta
+
+      if (store.part[delta.messageID]) {
+        setStore("part", delta.messageID, (existing: Part[]) =>
+          existing.map((p) => (p.id === delta.partID ? applyPartDelta(p, field, text) : p)),
+        )
+      }
+
+      if (store.message[delta.sessionID]) {
+        setStore("message", delta.sessionID, (messages: MessageWithParts[]) => messages.map((m) => {
+          if (m.info.id !== delta.messageID) return m
+          return {
+            ...m,
+            parts: m.parts.map((p) => (p.id === delta.partID ? applyPartDelta(p, field, text) : p)),
+          }
+        }))
+      }
     }
 
     // Message created event
@@ -298,19 +348,13 @@ export function SyncProvider(props: ParentProps) {
     // Message updated event
     if (event.type === "message.updated") {
       const msgProps = props as { info?: Message; parts?: Part[] }
-      const info = msgProps.info
+      const info = eventInfo<Message>(props)
       const parts = msgProps.parts
       if (!info?.sessionID) return
 
-      setStore("message", info.sessionID, (existing: MessageWithParts[]) => {
-        if (!existing || existing.length === 0) return existing
-        return existing.map((m) => {
-          if (m.info.id !== info.id) return m
-          // Merge info and optionally update parts if provided
-          const updatedParts = parts ? sortParts(parts) : m.parts
-          return { info, parts: updatedParts }
-        })
-      })
+      setStore("message", info.sessionID, (existing: MessageWithParts[] | undefined) =>
+        mergeMessageUpdate(existing, info, store.part[info.id], parts),
+      )
 
       // Also update parts store if parts were provided
       if (parts && info.id) {
