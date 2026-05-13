@@ -78,6 +78,8 @@ export function MessageTimeline(props: {
 }) {
   let containerRef: HTMLDivElement | undefined
   let endRef: HTMLDivElement | undefined
+  let programmaticScroll = false
+  let touchY: number | undefined
 
   // Shared clock signal for relative timestamps — one timer for all turns
   const [now, setNow] = createSignal(Date.now())
@@ -164,15 +166,34 @@ export function MessageTimeline(props: {
   // Handle scroll
   function handleScroll() {
     const nearBottom = isNearBottom()
+    if (programmaticScroll && userScrolledUp()) return
     setUserScrolledUp(!nearBottom)
     props.onScroll?.(nearBottom)
+  }
+
+  function handleWheel(event: WheelEvent) {
+    if (event.deltaY < 0) setUserScrolledUp(true)
+  }
+
+  function handleTouchStart(event: TouchEvent) {
+    touchY = event.touches[0]?.clientY
+  }
+
+  function handleTouchMove(event: TouchEvent) {
+    const y = event.touches[0]?.clientY
+    if (touchY !== undefined && y !== undefined && y > touchY) setUserScrolledUp(true)
+    touchY = y
   }
 
   // Scroll to bottom
   function scrollToBottom(force = false) {
     if (userScrolledUp() && !force) return
     requestAnimationFrame(() => {
-      endRef?.scrollIntoView({ behavior: "smooth" })
+      programmaticScroll = true
+      endRef?.scrollIntoView({ behavior: "auto" })
+      requestAnimationFrame(() => {
+        programmaticScroll = false
+      })
     })
   }
 
@@ -222,6 +243,9 @@ export function MessageTimeline(props: {
     <div
       ref={containerRef}
       onScroll={handleScroll}
+      onWheel={handleWheel}
+      onTouchStart={handleTouchStart}
+      onTouchMove={handleTouchMove}
       class="flex-1 overflow-y-auto p-6"
       style={{ background: "var(--background-stronger)" }}
     >
