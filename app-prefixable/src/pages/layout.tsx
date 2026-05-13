@@ -12,7 +12,7 @@ import {
 import { A, useLocation, useNavigate, useParams } from "@solidjs/router";
 import { useBasePath } from "../context/base-path";
 import { useSDK } from "../context/sdk";
-import { useEvents } from "../context/events";
+import { sessionStatusEvent, useEvents } from "../context/events";
 import { useProviders } from "../context/providers";
 import { useTerminal } from "../context/terminal";
 import { useLayout, SIDEBAR_MIN_WIDTH, SIDEBAR_MAX_WIDTH } from "../context/layout";
@@ -1770,10 +1770,10 @@ export function Layout(props: ParentProps) {
   onMount(() => {
     const alarmUnsub = events.subscribe((event) => {
       // Track busy→idle transitions for all sessions
-      if (event.type === "session.status") {
-        const props = event.properties as { sessionID?: string; status?: { type?: string } } | undefined;
-        const sid = props?.sessionID;
-        const type = props?.status?.type;
+      const statusEvent = sessionStatusEvent(event);
+      if (statusEvent) {
+        const sid = statusEvent.sessionID;
+        const type = statusEvent.status.type;
         if (!sid || !type) return;
 
         if (type === "busy" || type === "retry") {

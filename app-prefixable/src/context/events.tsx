@@ -7,6 +7,19 @@ import { createSSEParser } from "../utils/sse"
 
 type EventHandler = (event: Event) => void
 
+type SessionStatusEvent = {
+  sessionID: string
+  status: SessionStatus
+}
+
+export function sessionStatusEvent(event: { type: string; properties?: unknown }): SessionStatusEvent | undefined {
+  const props = event.properties as { sessionID?: string; status?: SessionStatus } | undefined
+  if (!props?.sessionID) return undefined
+  if (event.type === "session.status" && props.status) return { sessionID: props.sessionID, status: props.status }
+  if (event.type === "session.idle") return { sessionID: props.sessionID, status: { type: "idle" } }
+  return undefined
+}
+
 interface EventContextValue {
   subscribe: (handler: EventHandler) => () => void
   status: Record<string, SessionStatus>
@@ -41,12 +54,10 @@ export function EventProvider(props: ParentProps) {
       console.log("[Events] Received:", event.type, event.properties)
 
       // Update session status
-      if (event.type === "session.status") {
-        const props = event.properties
-        if (props?.sessionID && props?.status) {
-          sseSeenStatuses.add(props.sessionID as string)
-          setStatus(props.sessionID, props.status)
-        }
+      const statusEvent = sessionStatusEvent(event)
+      if (statusEvent) {
+        sseSeenStatuses.add(statusEvent.sessionID)
+        setStatus(statusEvent.sessionID, statusEvent.status)
       }
 
       // Track pending questions

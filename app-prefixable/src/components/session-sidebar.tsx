@@ -135,8 +135,8 @@ export function SessionSidebar(props: SessionSidebarProps) {
       }
       // Reload messages when assistant message completes (for token updates)
       if (event.type === "message.updated") {
-        const props = event.properties as { sessionID?: string }
-        if (props.sessionID === id) {
+        const eventProps = event.properties as { sessionID?: string; info?: { sessionID?: string } }
+        if ((eventProps.info?.sessionID ?? eventProps.sessionID) === id) {
           loadMessages(id)
         }
       }
