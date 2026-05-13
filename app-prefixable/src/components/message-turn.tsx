@@ -912,6 +912,16 @@ export function MessageTurn(props: {
               const tools = hasTools(message)
               const meta = () => message.parts.filter((part) => isAgentPart(part) || isSnapshotPart(part) || isRetryPart(part) || isPatchPart(part) || isCompactionPart(part))
               const subtasks = () => message.parts.filter(isSubtaskPart)
+              const messageTime = createMemo(() => {
+                const created = message.time?.created
+                if (created == null) return undefined
+                return formatRelativeTime(created, props.now())
+              })
+              const messageTitle = createMemo(() => {
+                const created = message.time?.created
+                if (created == null) return undefined
+                return formatAbsoluteTime(created)
+              })
 
               return (
                 <div class="flex gap-3">
@@ -922,8 +932,15 @@ export function MessageTurn(props: {
                     <Bot class="w-3 h-3" style={{ color: "var(--text-strong)" }} />
                   </div>
                   <div class="flex-1 min-w-0">
-                    <div class="text-xs font-medium mb-1" style={{ color: "var(--text-weak)" }}>
-                      ASSISTANT
+                    <div class="flex items-center gap-2 text-xs font-medium mb-1" style={{ color: "var(--text-weak)" }}>
+                      <span>ASSISTANT</span>
+                      <Show when={messageTime()}>
+                        {(time) => (
+                          <span class="font-normal" title={messageTitle()}>
+                            {time()}
+                          </span>
+                        )}
+                      </Show>
                     </div>
                     {/* Error display */}
                     <Show when={message.error}>
@@ -986,8 +1003,11 @@ export function MessageTurn(props: {
                 <Bot class="w-3 h-3" style={{ color: "var(--text-strong)" }} />
               </div>
               <div class="flex-1 min-w-0">
-                <div class="text-xs font-medium mb-1" style={{ color: "var(--text-weak)" }}>
-                  ASSISTANT
+                <div class="flex items-center gap-2 text-xs font-medium mb-1" style={{ color: "var(--text-weak)" }}>
+                  <span>ASSISTANT</span>
+                  <Show when={relativeTime()}>
+                    {(time) => <span class="font-normal">{time()}</span>}
+                  </Show>
                 </div>
                 <div class="text-sm" style={{ color: "var(--text-weak)" }}>
                   Waiting for response...
