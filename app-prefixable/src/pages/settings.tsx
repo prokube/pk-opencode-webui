@@ -599,7 +599,7 @@ Add your project-specific instructions here.
         method: result.method,
         browserHostname: window.location.hostname,
       })) {
-        setError(`${providerName} browser authentication redirects to localhost and is only supported when this UI runs on your local machine. Use API key authentication or a headless/code method instead.`)
+        setError(`${providerName} browser authentication redirects to a loopback address (localhost/127.0.0.1/::1) and is only supported when this UI runs on your local machine. Use API key authentication or a headless/code method instead.`)
         return
       }
 
