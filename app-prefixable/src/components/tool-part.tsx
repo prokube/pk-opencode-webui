@@ -11,6 +11,14 @@ import { useSDK } from "../context/sdk";
 // Use the SDK's ToolPart type
 type ToolPart = SDKToolPart;
 
+type ApplyPatchFile = {
+  path: string;
+  movePath?: string;
+  type?: string;
+  patch?: string;
+  deletions?: number;
+};
+
 // Limit how many tool part expansion states we keep to avoid unbounded growth.
 const MAX_EXPANDED_STATES = 1000;
 
@@ -136,6 +144,51 @@ function formatInput(input: unknown): string {
   } catch {
     return String(input);
   }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+function getApplyPatchFiles(metadata: Record<string, unknown> | undefined) {
+  const files = metadata?.files;
+  if (!Array.isArray(files)) return [];
+
+  return files.flatMap((file): ApplyPatchFile[] => {
+    if (!isRecord(file)) return [];
+
+    const path =
+      typeof file.relativePath === "string"
+        ? file.relativePath
+        : typeof file.filePath === "string"
+          ? file.filePath
+          : "";
+    const patch = typeof file.patch === "string" ? file.patch : undefined;
+    const deletions =
+      typeof file.deletions === "number" ? file.deletions : undefined;
+
+    if (!path || (!patch && deletions === undefined)) return [];
+
+    return [
+      {
+        path,
+        movePath: typeof file.movePath === "string" ? file.movePath : undefined,
+        type: typeof file.type === "string" ? file.type : undefined,
+        patch,
+        deletions,
+      },
+    ];
+  });
+}
+
+function getApplyPatchFileTitle(file: ApplyPatchFile) {
+  if (file.type === "create" || file.type === "add" || file.type === "added")
+    return `Created ${file.path}`;
+  if (file.type === "delete" || file.type === "deleted")
+    return `Deleted ${file.path}`;
+  if (file.type === "move" || file.type === "rename" || file.type === "renamed")
+    return `Moved ${file.path}${file.movePath ? ` -> ${file.movePath}` : ""}`;
+  return `Patched ${file.path}`;
 }
 
 // Get language from file extension for syntax highlighting
@@ -449,7 +502,18 @@ export function ToolPartDisplay(props: { part: ToolPart }) {
   const metadata = () => getMetadata(state());
   const isFileChange = () =>
     props.part.tool === "edit" || props.part.tool === "write";
-  const hasDiff = () => isFileChange() && metadata()?.diff;
+  const diff = () => {
+    const value = metadata()?.diff;
+    if (typeof value === "string" && value.length > 0) return value;
+    return undefined;
+  };
+  const isApplyPatch = () => props.part.tool === "apply_patch";
+  const applyPatchFiles = createMemo(() => getApplyPatchFiles(metadata()));
+  const hasApplyPatchFiles = () =>
+    isApplyPatch() && applyPatchFiles().length > 0;
+  const hasDiff = () =>
+    ((isFileChange() || isApplyPatch()) && diff() !== undefined) ||
+    hasApplyPatchFiles();
   // Can expand if has output OR has diff
   const canExpand = () => hasOutput(state()) || hasDiff();
   const title = () => getTitle(state()) || props.part.tool;
@@ -538,15 +602,58 @@ export function ToolPartDisplay(props: { part: ToolPart }) {
       </button>
 
       {/* Diff display for edit tools - controlled by expanded state */}
-      <Show when={expanded() && hasDiff()}>
+      <Show when={expanded() && isFileChange() && diff()}>
         <div
           class="px-3 py-2"
           style={{ "border-top": "1px solid var(--border-base)" }}
         >
-          <ContentDiff
-            diff={metadata()?.diff as string}
-            lang={getLangFromPath(filePath())}
-          />
+          <ContentDiff diff={diff() ?? ""} lang={getLangFromPath(filePath())} />
+        </div>
+      </Show>
+
+      {/* Diff display for apply_patch tools - controlled by expanded state */}
+      <Show when={expanded() && hasApplyPatchFiles()}>
+        <div
+          class="px-3 py-2 space-y-3"
+          style={{ "border-top": "1px solid var(--border-base)" }}
+        >
+          <For each={applyPatchFiles()}>
+            {(file) => (
+              <div>
+                <div
+                  class="text-xs font-mono mb-2"
+                  style={{ color: "var(--text-weak)" }}
+                >
+                  {getApplyPatchFileTitle(file)}
+                </div>
+                <Show
+                  when={file.patch}
+                  fallback={
+                    <div class="text-xs" style={{ color: "var(--text-base)" }}>
+                      {file.deletions ?? 0} lines deleted
+                    </div>
+                  }
+                >
+                  {(patch) => (
+                    <ContentDiff
+                      diff={patch()}
+                      lang={getLangFromPath(file.movePath ?? file.path)}
+                    />
+                  )}
+                </Show>
+              </div>
+            )}
+          </For>
+        </div>
+      </Show>
+
+      {/* Combined apply_patch diff fallback when per-file metadata is absent */}
+      <Show when={expanded() && isApplyPatch() && !hasApplyPatchFiles() && diff()}>
+        <div
+          class="px-3 py-2"
+          style={{ "border-top": "1px solid var(--border-base)" }}
+        >
+          <ContentDiff diff={diff() ?? ""} lang="text" />
         </div>
       </Show>
 
