@@ -51,7 +51,6 @@ interface SyncContextValue {
 const SyncContext = createContext<SyncContextValue>()
 
 const cmp = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0)
-const appendablePartFields = new Set(["text"])
 
 function sortParts(parts: Part[]): Part[] {
   const withId = parts.filter((p) => !!p?.id).sort((a, b) => cmp(a.id, b.id))
@@ -67,10 +66,9 @@ export function mergePartUpdate(parts: Part[] | undefined, part: Part) {
 }
 
 export function applyPartDelta(part: Part, field: string, delta: string) {
-  if (!appendablePartFields.has(field)) return part
-  const value = (part as unknown as Record<string, unknown>)[field]
-  if (value !== undefined && typeof value !== "string") return part
-  return { ...part, [field]: `${value ?? ""}${delta}` } as Part
+  if (field !== "text") return part
+  if (!("text" in part)) return part
+  return { ...part, text: `${part.text ?? ""}${delta}` }
 }
 
 export function mergeMessageUpdate(
