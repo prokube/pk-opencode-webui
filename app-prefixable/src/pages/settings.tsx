@@ -36,6 +36,8 @@ export function Settings() {
   const [selectedProvider, setSelectedProvider] = createSignal<string | null>(null)
   const [apiKey, setApiKey] = createSignal("")
   const [connecting, setConnecting] = createSignal(false)
+  const [disconnecting, setDisconnecting] = createSignal<string | null>(null)
+  const [providerToDisconnect, setProviderToDisconnect] = createSignal<string | null>(null)
   const [error, setError] = createSignal<string | null>(null)
   const [success, setSuccess] = createSignal<string | null>(null)
   // Initialize tab from URL hash, default to "providers"
@@ -583,6 +585,27 @@ Add your project-specific instructions here.
     }
   }
 
+  async function confirmProviderDisconnect() {
+    if (disconnecting()) return
+    const providerID = providerToDisconnect()
+    if (!providerID) return
+    setProviderToDisconnect(null)
+    setDisconnecting(providerID)
+    setError(null)
+    setSuccess(null)
+
+    const ok = await providers.disconnectProvider(providerID)
+
+    setDisconnecting(null)
+
+    if (ok) {
+      setSuccess(`Disconnected ${getProviderDisplayName(providerID)}.`)
+      if (selectedProvider() === providerID) setSelectedProvider(null)
+      return
+    }
+    setError(`Failed to disconnect ${getProviderDisplayName(providerID)}.`)
+  }
+
   async function handleOAuthStart(providerID: string, methodIndex: number) {
     setError(null)
     setSuccess(null)
@@ -1049,24 +1072,58 @@ Add your project-specific instructions here.
                   <Show when={!providers.loading && providers.connected.length > 0}>
                     <div class="space-y-2">
                       <For each={providers.connected}>
-                        {(providerID) => (
-                          <div
-                            class="flex items-center justify-between p-3 rounded-md"
-                            style={{ background: "var(--surface-inset)" }}
-                          >
-                            <div class="flex items-center gap-3">
-                              <div class="w-6 h-6 rounded flex items-center justify-center" style={{ background: "var(--surface-strong)" }}>
-                                <Check class="w-3 h-3" style={{ color: "var(--icon-success-base)" }} />
+                        {(providerID) => {
+                          const busy = () => disconnecting() === providerID
+                          return (
+                            <div
+                              class="flex items-center justify-between p-3 rounded-md"
+                              style={{ background: "var(--surface-inset)" }}
+                            >
+                              <div class="flex items-center gap-3">
+                                <div class="w-6 h-6 rounded flex items-center justify-center" style={{ background: "var(--surface-strong)" }}>
+                                  <Check class="w-3 h-3" style={{ color: "var(--icon-success-base)" }} />
+                                </div>
+                                <span class="text-sm font-medium" style={{ color: "var(--text-strong)" }}>
+                                  {getProviderDisplayName(providerID)}
+                                </span>
                               </div>
-                              <span class="text-sm font-medium" style={{ color: "var(--text-strong)" }}>
-                                {getProviderDisplayName(providerID)}
-                              </span>
+                              <div class="flex items-center gap-2">
+                                <span class="text-xs" style={{ color: "var(--text-weak)" }}>
+                                  Connected
+                                </span>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setSelectedProvider(providerID)
+                                    setProviderSearch("")
+                                    setApiKey("")
+                                    setError(null)
+                                    setSuccess(null)
+                                  }}
+                                  class="p-1.5 rounded transition-colors"
+                                  style={{ color: "var(--icon-weak)" }}
+                                  title={`Reconfigure ${getProviderDisplayName(providerID)}`}
+                                  aria-label={`Reconfigure ${getProviderDisplayName(providerID)}`}
+                                >
+                                  <Pencil class="w-4 h-4" />
+                                </button>
+                                <button
+                                  type="button"
+                                  disabled={!!disconnecting()}
+                                  onClick={() => setProviderToDisconnect(providerID)}
+                                  class="p-1.5 rounded transition-colors disabled:opacity-50"
+                                  style={{ color: "var(--interactive-critical)" }}
+                                  title={`Disconnect ${getProviderDisplayName(providerID)}`}
+                                  aria-label={`Disconnect ${getProviderDisplayName(providerID)}`}
+                                >
+                                  <Show when={busy()} fallback={<Trash2 class="w-4 h-4" />}>
+                                    <Spinner class="w-4 h-4" />
+                                  </Show>
+                                </button>
+                              </div>
                             </div>
-                            <span class="text-xs" style={{ color: "var(--text-weak)" }}>
-                              Connected
-                            </span>
-                          </div>
-                        )}
+                          )
+                        }}
                       </For>
                     </div>
                   </Show>
@@ -1344,7 +1401,7 @@ Add your project-specific instructions here.
                     <Show when={selectedProvider() && !oauthPending()}>
                       <div class="space-y-3">
                         <label class="block text-sm font-medium" style={{ color: "var(--text-base)" }}>
-                          Connect {getProviderDisplayName(selectedProvider()!)}
+                          {providers.connected.includes(selectedProvider()!) ? "Reconfigure" : "Connect"} {getProviderDisplayName(selectedProvider()!)}
                         </label>
 
                         {/* Show auth method buttons */}
@@ -1374,7 +1431,7 @@ Add your project-specific instructions here.
                                   color: "white",
                                 }}
                               >
-                                <Show when={connecting()} fallback="Connect with API Key">
+                                <Show when={connecting()} fallback={providers.connected.includes(selectedProvider()!) ? "Save API Key" : "Connect with API Key"}>
                                   <Spinner class="w-4 h-4" />
                                   Connecting...
                                 </Show>
@@ -1418,7 +1475,7 @@ Add your project-specific instructions here.
                                           color: "white",
                                         }}
                                       >
-                                        <Show when={connecting()} fallback="Connect">
+                                        <Show when={connecting()} fallback={providers.connected.includes(selectedProvider()!) ? "Save" : "Connect"}>
                                           <Spinner class="w-4 h-4" />
                                           Connecting...
                                         </Show>
@@ -2628,6 +2685,18 @@ Add your project-specific instructions here.
       <Show when={showMCPAddDialog()}>
         <MCPAddDialog onClose={() => setShowMCPAddDialog(false)} onBack={() => setShowMCPAddDialog(false)} />
       </Show>
+
+      {/* Provider Disconnect Confirmation */}
+      <ConfirmDialog
+        open={!!providerToDisconnect()}
+        title="Disconnect Provider"
+        message={`Are you sure you want to disconnect ${getProviderDisplayName(providerToDisconnect() ?? "this provider")}?`}
+        confirmLabel="Disconnect"
+        variant="danger"
+        confirmDisabled={!!disconnecting()}
+        onConfirm={confirmProviderDisconnect}
+        onCancel={() => setProviderToDisconnect(null)}
+      />
 
       {/* MCP Delete Confirmation */}
       <ConfirmDialog

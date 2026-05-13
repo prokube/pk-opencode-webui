@@ -123,6 +123,7 @@ interface ProviderContextValue {
   }
   refetch: () => void
   connectProvider: (providerID: string, apiKey: string) => Promise<boolean>
+  disconnectProvider: (providerID: string) => Promise<boolean>
   startOAuth: (providerID: string, methodIndex: number) => Promise<OAuthAuthorization | undefined>
   completeOAuth: (providerID: string, methodIndex: number, code?: string) => Promise<boolean>
 }
@@ -447,6 +448,19 @@ export function ProviderProvider(props: ParentProps) {
     }
   }
 
+  async function disconnectProvider(providerID: string): Promise<boolean> {
+    try {
+      await client.auth.remove({ providerID })
+      // Dispose instance to reload provider state, then refresh
+      await client.instance.dispose()
+      await refetchProviders()
+      return true
+    } catch (e) {
+      console.error("Failed to disconnect provider:", e)
+      return false
+    }
+  }
+
   async function startOAuth(providerID: string, methodIndex: number): Promise<OAuthAuthorization | undefined> {
     try {
       const res = await client.provider.oauth.authorize({
@@ -526,6 +540,7 @@ export function ProviderProvider(props: ParentProps) {
     },
     refetch,
     connectProvider,
+    disconnectProvider,
     startOAuth,
     completeOAuth,
   }
