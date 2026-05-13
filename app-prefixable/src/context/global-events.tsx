@@ -44,6 +44,7 @@ const GlobalEventsContext = createContext<GlobalEventsContextValue>()
 export function GlobalEventsProvider(props: ParentProps & {
   projects: () => { worktree: string }[]
   activeDirectory: () => string | undefined
+  pathname: () => string
 }) {
   const { authHeaders, serverUrl, activeServer } = useServer()
 
@@ -278,7 +279,7 @@ export function GlobalEventsProvider(props: ParentProps & {
         parser.push("")
 
         throw new Error("SSE stream ended")
-      } catch (err) {
+      } catch {
         if (controller.signal.aborted) return
         if (disposed) return
         disconnectDirectory(dir)
@@ -458,11 +459,18 @@ export function GlobalEventsProvider(props: ParentProps & {
   // Active project is excluded — it has its own EventProvider.
   // Remote servers are skipped — local projects don't exist on remote servers.
   createEffect(on(
-    () => ({ dirs: props.projects().map((p) => p.worktree), active: props.activeDirectory(), isRemote: !activeServer().isDefault }),
+    () => ({
+      dirs: props.projects().map((p) => p.worktree),
+      active: props.activeDirectory(),
+      isRemote: !activeServer().isDefault,
+      isSettings: props.pathname().endsWith("/settings"),
+    }),
     (current) => {
       // When a remote server is active, disconnect all global event connections
       // since local projects don't exist on the remote server.
-      if (current.isRemote) {
+      // Also suspend these background connections on settings routes to avoid
+      // opening one SSE stream per saved project while the user edits settings.
+      if (current.isRemote || current.isSettings) {
         for (const dir of [...connections.keys()]) {
           disconnectDirectory(dir)
         }

@@ -878,14 +878,16 @@ export function Layout(props: ParentProps) {
   const [now, setNow] = createSignal(new Date());
 
   onMount(() => {
-    const timer = { id: 0 as ReturnType<typeof setTimeout> };
+    let timer: ReturnType<typeof setTimeout> | undefined;
     const schedule = () => {
       const next = new Date();
       next.setHours(24, 0, 0, 0);
-      timer.id = setTimeout(() => { setNow(new Date()); schedule(); }, next.getTime() - Date.now());
+      timer = setTimeout(() => { setNow(new Date()); schedule(); }, next.getTime() - Date.now());
     };
     schedule();
-    onCleanup(() => clearTimeout(timer.id));
+    onCleanup(() => {
+      if (timer) clearTimeout(timer);
+    });
   });
 
   const pinnedSessions = createMemo(() => {

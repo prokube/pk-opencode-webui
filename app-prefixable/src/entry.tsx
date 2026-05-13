@@ -11,8 +11,10 @@ if (!root) {
   throw new Error("Root element not found")
 }
 
+const mount = root
+
 // Clear the loading text first
-root.innerHTML = ""
+mount.innerHTML = ""
 
 async function start() {
   const cleanup = await preventLegacyServiceWorkerCaching().catch((e) => {
@@ -27,17 +29,17 @@ async function start() {
   }
 
   console.log("[OpenCode] Rendering...")
-  render(() => <App />, root)
+  render(() => <App />, mount)
   console.log("[OpenCode] Rendered successfully")
-  console.log("[OpenCode] Root innerHTML:", root.innerHTML.slice(0, 200))
+  console.log("[OpenCode] Root innerHTML:", mount.innerHTML.slice(0, 200))
 }
 
 start().catch((e) => {
   console.error("[OpenCode] Render error:", e)
-  root.innerHTML = ""
+  mount.innerHTML = ""
   const message = document.createElement("div")
   message.style.color = "red"
   message.style.padding = "20px"
   message.textContent = `Error: ${e instanceof Error && e.message.trim() ? e.message : String(e)}`
-  root.appendChild(message)
+  mount.appendChild(message)
 })

@@ -40,6 +40,10 @@ export function ThemeProvider(props: ParentProps) {
   const query = typeof window !== "undefined" && typeof window.matchMedia === "function"
     ? window.matchMedia("(prefers-color-scheme: dark)")
     : undefined
+  const legacyQuery = query as (MediaQueryList & {
+    addListener?: (listener: (event: MediaQueryListEvent) => void) => void
+    removeListener?: (listener: (event: MediaQueryListEvent) => void) => void
+  }) | undefined
 
   const [systemDark, setSystemDark] = createSignal(query?.matches ?? false)
 
@@ -48,9 +52,9 @@ export function ThemeProvider(props: ParentProps) {
     if ("addEventListener" in query) {
       query.addEventListener("change", handler)
       onCleanup(() => query.removeEventListener("change", handler))
-    } else if ("addListener" in query) {
-      query.addListener(handler)
-      onCleanup(() => query.removeListener(handler))
+    } else if (legacyQuery?.addListener && legacyQuery.removeListener) {
+      legacyQuery.addListener(handler)
+      onCleanup(() => legacyQuery.removeListener?.(handler))
     }
   }
 
