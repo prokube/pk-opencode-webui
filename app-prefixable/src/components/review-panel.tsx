@@ -9,7 +9,7 @@ import {
 import * as Diff from "diff";
 import type { FileDiff, FileNode } from "../sdk/client";
 import { useSDK } from "../context/sdk";
-import { useEvents } from "../context/events";
+import { sessionStatusEvent, useEvents } from "../context/events";
 import { useLayout } from "../context/layout";
 
 import { FileTree } from "./file-tree";
@@ -132,12 +132,9 @@ export function ReviewPanel(props: ReviewPanelProps) {
         }
       }
       // Reload on session status idle to catch completed changes
-      if (event.type === "session.status") {
-        const eventProps = event.properties as {
-          sessionID?: string;
-          status?: { type: string };
-        };
-        if (eventProps.sessionID === id && eventProps.status?.type === "idle") {
+      const statusEvent = sessionStatusEvent(event);
+      if (statusEvent) {
+        if (statusEvent.sessionID === id && statusEvent.status.type === "idle") {
           loadDiffs();
         }
       }

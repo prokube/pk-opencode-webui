@@ -15,7 +15,7 @@ import { useParams, useNavigate } from "@solidjs/router";
 import { Button } from "../components/ui/button";
 import { Spinner } from "../components/ui/spinner";
 import { useSDK } from "../context/sdk";
-import { useEvents } from "../context/events";
+import { sessionStatusEvent, useEvents } from "../context/events";
 import { useSync } from "../context/sync";
 import { useProviders } from "../context/providers";
 import { useMCP } from "../context/mcp";
@@ -1495,12 +1495,9 @@ export function Session() {
         }
 
         // Handle status changes
-        if (event.type === "session.status") {
-          const props = event.properties as {
-            sessionID: string;
-            status: { type: string };
-          };
-          if (props.sessionID === id && props.status.type === "idle") {
+        const statusEvent = sessionStatusEvent(event);
+        if (statusEvent) {
+          if (statusEvent.sessionID === id && statusEvent.status.type === "idle") {
             console.log("[Session] Status idle");
             // Only clear optimistic message if no pending text or it was already matched
             if (!pendingUserMessageText()) {
@@ -1511,7 +1508,7 @@ export function Session() {
             // Reset local processing tracker (notifications now handled globally in Layout)
             wasProcessing.value = false;
             setProcessing(false);
-          } else if (props.sessionID === id) {
+          } else if (statusEvent.sessionID === id) {
             wasProcessing.value = true;
             setProcessing(true);
           }
