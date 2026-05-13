@@ -1003,11 +1003,8 @@ export function MessageTurn(props: {
                 <Bot class="w-3 h-3" style={{ color: "var(--text-strong)" }} />
               </div>
               <div class="flex-1 min-w-0">
-                <div class="flex items-center gap-2 text-xs font-medium mb-1" style={{ color: "var(--text-weak)" }}>
-                  <span>ASSISTANT</span>
-                  <Show when={relativeTime()}>
-                    {(time) => <span class="font-normal">{time()}</span>}
-                  </Show>
+                <div class="text-xs font-medium mb-1" style={{ color: "var(--text-weak)" }}>
+                  ASSISTANT
                 </div>
                 <div class="text-sm" style={{ color: "var(--text-weak)" }}>
                   Waiting for response...
