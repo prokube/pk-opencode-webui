@@ -127,15 +127,15 @@ export async function handleProxyRequest(path: string, req: Request): Promise<Re
         return new Response(response.body, { status: response.status, headers: corsHeaders })
       }
 
-      const headers = new Headers(corsHeaders)
-      headers.set("Content-Type", "text/event-stream")
-      headers.set("Cache-Control", "no-cache")
-      headers.set("Connection", "keep-alive")
-      headers.set("X-Accel-Buffering", "no")
+      const sseHeaders = new Headers(corsHeaders)
+      sseHeaders.set("Content-Type", "text/event-stream")
+      sseHeaders.set("Cache-Control", "no-cache")
+      sseHeaders.set("Connection", "keep-alive")
+      sseHeaders.set("X-Accel-Buffering", "no")
 
       return new Response(response.body, {
         status: response.status,
-        headers,
+        headers: sseHeaders,
       })
     }
 
