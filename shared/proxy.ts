@@ -115,7 +115,11 @@ export async function handleProxyRequest(path: string, req: Request): Promise<Re
       body: req.method !== "GET" && req.method !== "HEAD" ? req.body : undefined,
     })
 
-    const corsHeaders = corsOrigin ? { "Access-Control-Allow-Origin": corsOrigin, Vary: "Origin" } : {}
+    const corsHeaders = new Headers()
+    if (corsOrigin) {
+      corsHeaders.set("Access-Control-Allow-Origin", corsOrigin)
+      corsHeaders.set("Vary", "Origin")
+    }
 
     if (isSSE) {
       if (!response.ok) {
@@ -123,15 +127,15 @@ export async function handleProxyRequest(path: string, req: Request): Promise<Re
         return new Response(response.body, { status: response.status, headers: corsHeaders })
       }
 
+      const sseHeaders = new Headers(corsHeaders)
+      sseHeaders.set("Content-Type", "text/event-stream")
+      sseHeaders.set("Cache-Control", "no-cache")
+      sseHeaders.set("Connection", "keep-alive")
+      sseHeaders.set("X-Accel-Buffering", "no")
+
       return new Response(response.body, {
         status: response.status,
-        headers: {
-          ...corsHeaders,
-          "Content-Type": "text/event-stream",
-          "Cache-Control": "no-cache",
-          "Connection": "keep-alive",
-          "X-Accel-Buffering": "no",
-        },
+        headers: sseHeaders,
       })
     }
 

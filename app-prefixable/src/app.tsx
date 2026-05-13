@@ -1,5 +1,5 @@
-import { Router, Route, Navigate, useParams } from "@solidjs/router"
-import { createSignal, onMount, onCleanup, For } from "solid-js"
+import { Router, Route, useNavigate, useParams } from "@solidjs/router"
+import { createEffect, createSignal, onMount, onCleanup, For, type Accessor } from "solid-js"
 import { BasePathProvider, useBasePath } from "./context/base-path"
 import { ServerProvider, useServer } from "./context/server"
 import { BrandingProvider } from "./context/branding"
@@ -24,7 +24,7 @@ function getLastSessionHref(encodedDir: string): string {
     const last = typeof window !== "undefined"
       ? window.localStorage.getItem(`opencode.lastSession.${dir}`)
       : null
-    if (!last || last.includes("..") || /[\/\\]/.test(last)) return "session"
+    if (!last || last.includes("..") || /[/\\]/.test(last)) return "session"
     return `session/${last}`
   } catch {
     return "session"
@@ -33,15 +33,19 @@ function getLastSessionHref(encodedDir: string): string {
 
 function DirectoryIndex() {
   const params = useParams<{ dir: string }>()
-  return <Navigate href={getLastSessionHref(params.dir)} replace />
+  const navigate = useNavigate()
+  createEffect(() => navigate(getLastSessionHref(params.dir), { replace: true }))
+  return null
 }
 
 function SessionIndex() {
   const params = useParams<{ dir: string }>()
+  const navigate = useNavigate()
   const href = getLastSessionHref(params.dir)
   if (href === "session") return <Session />
   const id = href.replace(/^session\//, "")
-  return <Navigate href={id} replace />
+  createEffect(() => navigate(id, { replace: true }))
+  return null
 }
 
 function AppRoutes() {
@@ -71,16 +75,21 @@ function AppRoutes() {
  * Reads the active directory from window.location (outside Router context).
  * Re-evaluates on popstate and on history.pushState/history.replaceState navigation.
  */
-function useActiveDirectory() {
+function useRouteState() {
   const [dir, setDir] = createSignal<string | undefined>(
     typeof window === "undefined" ? undefined : deriveDirectoryFromPathname(),
   )
+  const [pathname, setPathname] = createSignal(
+    typeof window === "undefined" ? "" : window.location.pathname,
+  )
 
   onMount(() => {
-    // Ensure correct value once mounted (covers SSR hydration)
-    setDir(deriveDirectoryFromPathname())
+    function update() {
+      setDir(deriveDirectoryFromPathname())
+      setPathname(window.location.pathname)
+    }
 
-    function update() { setDir(deriveDirectoryFromPathname()) }
+    update()
 
     // Patch pushState/replaceState to detect SolidJS Router navigations
     // instead of polling with setInterval
@@ -97,7 +106,10 @@ function useActiveDirectory() {
     })
   })
 
-  return dir
+  return {
+    activeDirectory: dir,
+    pathname,
+  }
 }
 
 function useProjectsList() {
@@ -129,7 +141,11 @@ function useProjectsList() {
   return projects
 }
 
-function AppWithServer(props: { projects: () => Project[]; activeDirectory: () => string | undefined }) {
+function AppWithServer(props: {
+  projects: () => Project[]
+  activeDirectory: Accessor<string | undefined>
+  pathname: Accessor<string>
+}) {
   const { serverUrl, activeServerKey } = useServer()
 
   // Key by server config to force full remount when switching or editing servers
@@ -141,7 +157,11 @@ function AppWithServer(props: { projects: () => Project[]; activeDirectory: () =
             <BrandingProvider>
               <RecentProjectsProvider>
                 <SavedPromptsProvider directory={props.activeDirectory}>
-                  <GlobalEventsProvider projects={props.projects} activeDirectory={props.activeDirectory}>
+                  <GlobalEventsProvider
+                    projects={props.projects}
+                    activeDirectory={props.activeDirectory}
+                    pathname={props.pathname}
+                  >
                     <CommandProvider>
                       <AppRoutes />
                     </CommandProvider>
@@ -158,11 +178,15 @@ function AppWithServer(props: { projects: () => Project[]; activeDirectory: () =
 
 export function App() {
   const projects = useProjectsList()
-  const activeDirectory = useActiveDirectory()
+  const route = useRouteState()
 
   return (
     <ServerProvider>
-      <AppWithServer projects={projects} activeDirectory={activeDirectory} />
+      <AppWithServer
+        projects={projects}
+        activeDirectory={route.activeDirectory}
+        pathname={route.pathname}
+      />
     </ServerProvider>
   )
 }
