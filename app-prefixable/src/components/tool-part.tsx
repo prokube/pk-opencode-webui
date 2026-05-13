@@ -146,6 +146,60 @@ function formatInput(input: unknown): string {
   }
 }
 
+function formatSummaryValue(value: unknown): string | undefined {
+  if (typeof value === "string") return value.trim() || undefined;
+  if (typeof value === "number" || typeof value === "boolean")
+    return String(value);
+  if (!Array.isArray(value)) return undefined;
+
+  const items = value
+    .flatMap((item) => formatSummaryValue(item) ?? [])
+    .slice(0, 3);
+  if (items.length === 0) return undefined;
+  return items.join(", ");
+}
+
+function truncateSummary(value: string): string {
+  if (value.length <= 180) return value;
+  return `${value.slice(0, 177)}...`;
+}
+
+function getInvocationSummary(tool: string, state: ToolState): string | undefined {
+  const status = getStatus(state);
+  if (status !== "running" && status !== "pending") return undefined;
+
+  const input = getInput(state);
+  if (!input) return undefined;
+
+  if (tool === "bash") {
+    const command = formatSummaryValue(input.command);
+    return command ? truncateSummary(command) : undefined;
+  }
+
+  const keys = [
+    "filePath",
+    "path",
+    "pattern",
+    "url",
+    "description",
+    "task",
+    "prompt",
+    "query",
+  ];
+  const parts = keys.flatMap((key) => {
+    const value = formatSummaryValue(input[key]);
+    return value ? [`${key}: ${value}`] : [];
+  });
+  if (parts.length > 0) return truncateSummary(parts.slice(0, 2).join(" · "));
+
+  const fallback = Object.entries(input).flatMap(([key, value]) => {
+    const text = formatSummaryValue(value);
+    return text ? [`${key}: ${text}`] : [];
+  });
+  if (fallback.length === 0) return undefined;
+  return truncateSummary(fallback.slice(0, 2).join(" · "));
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
@@ -286,6 +340,7 @@ function TaskToolDisplay(props: { part: ToolPart }) {
   const status = () => getStatus(state());
   const metadata = () => getMetadata(state());
   const title = () => getTitle(state()) || "Delegating work";
+  const summary = () => getInvocationSummary(props.part.tool, state());
   const childId = () => getChildSessionId(state());
 
   // Get child session messages to show tool usage
@@ -354,12 +409,25 @@ function TaskToolDisplay(props: { part: ToolPart }) {
         />
 
         {/* Title */}
-        <span
-          class="font-mono text-sm flex-1 truncate"
-          style={{ color: "var(--text-strong)" }}
-        >
-          {title()}
-        </span>
+        <div class="flex-1 min-w-0">
+          <div
+            class="font-mono text-sm truncate"
+            style={{ color: "var(--text-strong)" }}
+          >
+            {title()}
+          </div>
+          <Show when={summary()}>
+            {(text) => (
+              <div
+                class="font-mono text-xs truncate mt-0.5"
+                style={{ color: "var(--text-weak)" }}
+                title={text()}
+              >
+                {text()}
+              </div>
+            )}
+          </Show>
+        </div>
 
         {/* Status indicator */}
         <span
@@ -517,6 +585,7 @@ export function ToolPartDisplay(props: { part: ToolPart }) {
   // Can expand if has output OR has diff
   const canExpand = () => hasOutput(state()) || hasDiff();
   const title = () => getTitle(state()) || props.part.tool;
+  const summary = () => getInvocationSummary(props.part.tool, state());
   const filePath = () =>
     (getInput(state()) as { filePath?: string })?.filePath || "";
 
@@ -572,12 +641,25 @@ export function ToolPartDisplay(props: { part: ToolPart }) {
         </svg>
 
         {/* Tool name/title */}
-        <span
-          class="font-mono text-sm flex-1 truncate"
-          style={{ color: "var(--text-strong)" }}
-        >
-          {title()}
-        </span>
+        <div class="flex-1 min-w-0">
+          <div
+            class="font-mono text-sm truncate"
+            style={{ color: "var(--text-strong)" }}
+          >
+            {title()}
+          </div>
+          <Show when={summary()}>
+            {(text) => (
+              <div
+                class="font-mono text-xs truncate mt-0.5"
+                style={{ color: "var(--text-weak)" }}
+                title={text()}
+              >
+                {text()}
+              </div>
+            )}
+          </Show>
+        </div>
 
         {/* Status indicator */}
         <span
