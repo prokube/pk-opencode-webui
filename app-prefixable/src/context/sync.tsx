@@ -71,6 +71,62 @@ export function applyPartDelta(part: Part, field: string, delta: string) {
   return { ...part, text: `${part.text ?? ""}${delta}` }
 }
 
+function toolRank(part: Extract<Part, { type: "tool" }>) {
+  if (part.state.status === "pending") return 0
+  if (part.state.status === "running") return 1
+  return 2
+}
+
+function toolTime(part: Extract<Part, { type: "tool" }>) {
+  if (part.state.status === "pending") return 0
+  if (part.state.status === "running") return part.state.time.start
+  return part.state.time.end
+}
+
+function mergeSyncedPart(existing: Part, synced: Part) {
+  if (existing.type !== synced.type) return synced
+  if (existing.type !== "tool" || synced.type !== "tool") return existing
+
+  const existingRank = toolRank(existing)
+  const syncedRank = toolRank(synced)
+  if (syncedRank > existingRank) return synced
+  if (existingRank > syncedRank) return existing
+
+  return toolTime(synced) > toolTime(existing) ? synced : existing
+}
+
+function mergeSyncedMessage(existing: MessageWithParts, synced: MessageWithParts) {
+  const parts = synced.parts.map((part) => {
+    const current = existing.parts.find((p) => p.id === part.id)
+    if (!current) return part
+    return mergeSyncedPart(current, part)
+  })
+
+  for (const part of existing.parts) {
+    if (parts.find((p) => p.id === part.id)) continue
+    parts.push(part)
+  }
+
+  return { info: synced.info, parts: sortParts(parts) }
+}
+
+export function mergeSessionMessages(existing: MessageWithParts[] | undefined, synced: MessageWithParts[]) {
+  if (!existing || existing.length === 0) return synced
+
+  const merged = synced.map((msg) => {
+    const current = existing.find((m) => m.info.id === msg.info.id)
+    if (!current) return msg
+    return mergeSyncedMessage(current, msg)
+  })
+
+  for (const msg of existing) {
+    if (merged.find((m) => m.info.id === msg.info.id)) continue
+    merged.push(msg)
+  }
+
+  return merged.sort((a, b) => cmp(a.info.id, b.info.id))
+}
+
 function messageUpdateParts(
   messages: MessageWithParts[],
   index: number | undefined,
@@ -458,26 +514,7 @@ export function SyncProvider(props: ParentProps) {
               .filter((m): m is MessageWithParts => !!m?.info?.id)
               .sort((a, b) => cmp(a.info.id, b.info.id))
 
-            setStore("message", sessionID, (existing: MessageWithParts[]) => {
-              if (!existing || existing.length === 0) return synced
-
-              // Merge: use existing message if it has more recent parts
-              const merged = synced.map((s) => {
-                const e = existing.find((m) => m.info.id === s.info.id)
-                if (!e) return s
-                // Keep existing if it has more parts (SSE updates arrived)
-                return e.parts.length >= s.parts.length ? e : s
-              })
-
-              // Add any messages from existing that aren't in synced (new SSE messages)
-              for (const e of existing) {
-                if (!merged.find((m) => m.info.id === e.info.id)) {
-                  merged.push(e)
-                }
-              }
-
-              return merged.sort((a, b) => cmp(a.info.id, b.info.id))
-            })
+            setStore("message", sessionID, (existing: MessageWithParts[]) => mergeSessionMessages(existing, synced))
 
             // Update parts
             const msgs = store.message[sessionID] ?? []
