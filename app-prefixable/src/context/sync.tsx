@@ -71,6 +71,18 @@ export function applyPartDelta(part: Part, field: string, delta: string) {
   return { ...part, text: `${part.text ?? ""}${delta}` }
 }
 
+function messageUpdateParts(
+  messages: MessageWithParts[],
+  index: number | undefined,
+  knownParts?: Part[],
+  eventParts?: Part[],
+) {
+  if (eventParts) return sortParts(eventParts)
+  if (knownParts) return sortParts(knownParts)
+  if (index !== undefined) return messages[index].parts
+  return []
+}
+
 export function mergeMessageUpdate(
   messages: MessageWithParts[] | undefined,
   info: Message,
@@ -79,7 +91,7 @@ export function mergeMessageUpdate(
 ) {
   const current = messages ?? []
   const match = binarySearch(current, info.id, (m) => m.info.id)
-  const parts = eventParts ? sortParts(eventParts) : knownParts ? sortParts(knownParts) : match.found ? current[match.index].parts : []
+  const parts = messageUpdateParts(current, match.found ? match.index : undefined, knownParts, eventParts)
   const next = { info, parts }
 
   if (match.found) return current.map((m, i) => (i === match.index ? next : m))
