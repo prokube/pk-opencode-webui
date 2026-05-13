@@ -7,7 +7,7 @@ import {
   For,
 } from "solid-js";
 import * as Diff from "diff";
-import type { FileDiff, FileNode } from "../sdk/client";
+import type { FileDiff, FileNode, VcsFileDiff } from "../sdk/client";
 import { useSDK } from "../context/sdk";
 import { sessionStatusEvent, useEvents } from "../context/events";
 import { useLayout, type ReviewMode } from "../context/layout";
@@ -42,6 +42,8 @@ interface ReviewPanelProps {
   sessionId: string;
 }
 
+type ReviewDiff = FileDiff | VcsFileDiff;
+
 const REVIEW_MODES: Array<{ value: ReviewMode; label: string; title: string }> = [
   { value: "session", label: "Session", title: "Show session changes" },
   { value: "git", label: "Git", title: "Show uncommitted changes" },
@@ -59,7 +61,7 @@ export function ReviewPanel(props: ReviewPanelProps) {
   const layout = useLayout();
   const sync = useSync();
 
-  const [diffs, setDiffs] = createSignal<FileDiff[]>([]);
+  const [diffs, setDiffs] = createSignal<ReviewDiff[]>([]);
   const [selected, setSelected] = createSignal<string | null>(null);
   const [loading, setLoading] = createSignal(false);
   const [tab, setTab] = createSignal<"changes" | "all">("changes");
@@ -73,10 +75,23 @@ export function ReviewPanel(props: ReviewPanelProps) {
   const isGitMode = createMemo(() => mode() === "git" || mode() === "branch");
   const lastMessageID = createMemo(() => lastUserMessageID(sync.messages(props.sessionId)));
 
+  function errorText(error: unknown) {
+    if (!error) return "";
+    if (error instanceof Error) return error.message;
+    if (typeof error === "string") return error;
+    if (typeof error !== "object") return String(error);
+
+    const obj = error as Record<string, unknown>;
+    const data = obj.data && typeof obj.data === "object"
+      ? obj.data as Record<string, unknown>
+      : undefined;
+    return [obj.message, obj.error, obj.detail, data?.message]
+      .filter((item) => typeof item === "string")
+      .join(" ");
+  }
+
   function isNotGitRepoError(error: unknown) {
-    if (!error) return false;
-    const text = typeof error === "string" ? error : JSON.stringify(error);
-    return /not a git repository|not a repository|outside repository/i.test(text);
+    return /not a git repository|not a repository|outside repository/i.test(errorText(error));
   }
 
   async function checkGitRepo(current: number) {
@@ -93,7 +108,7 @@ export function ReviewPanel(props: ReviewPanelProps) {
     setIsGitRepo(null);
   }
 
-  function setFiles(files: FileDiff[]) {
+  function setFiles(files: ReviewDiff[]) {
     setDiffs(files);
     const filesByPath = files.map((d) => d.file);
     const sel = selected();
@@ -108,11 +123,13 @@ export function ReviewPanel(props: ReviewPanelProps) {
     try {
       const res = currentMode === "git" || currentMode === "branch"
         ? await client.vcs.diff({ directory, mode: currentMode }, { throwOnError: false })
-        : await client.session.diff({
-          sessionID: props.sessionId,
-          directory,
-          messageID: currentMode === "turn" ? lastMessageID() : undefined,
-        }, { throwOnError: false });
+        : currentMode === "turn" && !lastMessageID()
+          ? { data: [] as ReviewDiff[], error: undefined }
+          : await client.session.diff({
+            sessionID: props.sessionId,
+            directory,
+            messageID: currentMode === "turn" ? lastMessageID() : undefined,
+          }, { throwOnError: false });
       // Only update state if this is still the latest request
       if (current !== version) return;
       if (res.data) {
@@ -189,6 +206,7 @@ export function ReviewPanel(props: ReviewPanelProps) {
   const patch = createMemo(() => {
     const diff = selectedDiff();
     if (!diff) return "";
+    if ("patch" in diff) return diff.patch;
     return createPatch(diff.file, diff.before, diff.after);
   });
 
