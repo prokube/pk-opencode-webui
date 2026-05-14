@@ -12,6 +12,7 @@ import { extractTextContent } from "../utils/message"
 // Number of turns to render initially and on each "load more"
 const TURNS_PER_BATCH = 10
 const INITIAL_TURNS = 5
+const NEAR_BOTTOM_PX = 10
 
 // Compute turn-level timing from user and assistant message timestamps
 function computeTurnTime(user: DisplayMessage, assistants: DisplayMessage[]): Turn["time"] {
@@ -158,7 +159,7 @@ export function MessageTimeline(props: {
   function isNearBottom(): boolean {
     if (!containerRef) return true
     const { scrollTop, scrollHeight, clientHeight } = containerRef
-    return scrollHeight - scrollTop - clientHeight < 100
+    return scrollHeight - scrollTop - clientHeight < NEAR_BOTTOM_PX
   }
 
   // Handle scroll
@@ -360,7 +361,7 @@ export function FlatMessageList(props: { messages: DisplayMessage[]; processing:
   function isNearBottom(): boolean {
     if (!containerRef) return true
     const { scrollTop, scrollHeight, clientHeight } = containerRef
-    return scrollHeight - scrollTop - clientHeight < 100
+    return scrollHeight - scrollTop - clientHeight < NEAR_BOTTOM_PX
   }
 
   function handleScroll() {
