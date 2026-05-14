@@ -80,11 +80,10 @@ export function MessageTimeline(props: {
 }) {
   let containerRef: HTMLDivElement | undefined
   let endRef: HTMLDivElement | undefined
-  let touchY: number | undefined
+  let touchStartY: number | undefined
   // These flags mirror DOM scroll intent and do not drive rendering directly.
   const scroll = {
-    manualLock: false,
-    lastTop: undefined as number | undefined,
+    lastTop: 0,
   }
 
   // Shared clock signal for relative timestamps — one timer for all turns
@@ -170,18 +169,15 @@ export function MessageTimeline(props: {
   }
 
   function engageManualScrollLock() {
-    scroll.manualLock = true
+    if (containerRef) {
+      scroll.lastTop = containerRef.scrollTop
+      containerRef.scrollTop = containerRef.scrollTop
+    }
     setUserScrolledUp(true)
   }
 
   function releaseManualScrollLock() {
-    scroll.manualLock = false
     setUserScrolledUp(false)
-  }
-
-  function canScrollUp(): boolean {
-    if (!containerRef) return false
-    return containerRef.scrollHeight > containerRef.clientHeight && containerRef.scrollTop > 0
   }
 
   // Handle scroll
@@ -189,15 +185,13 @@ export function MessageTimeline(props: {
     const nearBottom = isNearBottom()
     const top = containerRef?.scrollTop ?? 0
     const previous = scroll.lastTop
-    const scrollingUp = previous !== undefined && top < previous
-    const scrollingDown = previous !== undefined && top > previous
+    const scrollingUp = top < previous
+    const scrollingDown = top > previous
     scroll.lastTop = top
 
     if (scrollingUp) {
       engageManualScrollLock()
-    } else if (!scroll.manualLock) {
-      setUserScrolledUp(false)
-    } else if (nearBottom && scrollingDown) {
+    } else if (userScrolledUp() && nearBottom && scrollingDown) {
       releaseManualScrollLock()
     }
 
@@ -206,25 +200,24 @@ export function MessageTimeline(props: {
 
   function handleWheel(event: WheelEvent) {
     const page = containerRef?.clientHeight ?? 1
-    const unit = event.deltaMode === WheelEvent.DOM_DELTA_LINE ? 16 : page
-    const delta = event.deltaMode === WheelEvent.DOM_DELTA_PIXEL ? event.deltaY : event.deltaY * unit
-    if (delta < -WHEEL_SCROLL_INTENT_THRESHOLD && canScrollUp()) engageManualScrollLock()
+    const unit = event.deltaMode === 1 ? 16 : page
+    const delta = event.deltaMode === 0 ? event.deltaY : event.deltaY * unit
+    if (delta < -WHEEL_SCROLL_INTENT_THRESHOLD) engageManualScrollLock()
   }
 
   function handleTouchStart(event: TouchEvent) {
-    touchY = event.touches[0]?.clientY
+    touchStartY = event.touches[0]?.clientY
   }
 
   function handleTouchMove(event: TouchEvent) {
     const y = event.touches[0]?.clientY
-    if (touchY !== undefined && y !== undefined && y - touchY > TOUCH_SCROLL_INTENT_THRESHOLD && canScrollUp()) {
+    if (touchStartY !== undefined && y !== undefined && y - touchStartY > TOUCH_SCROLL_INTENT_THRESHOLD) {
       engageManualScrollLock()
     }
-    touchY = y
   }
 
   function handleTouchEnd() {
-    touchY = undefined
+    touchStartY = undefined
   }
 
   // Scroll to bottom
