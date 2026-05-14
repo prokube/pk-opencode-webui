@@ -172,7 +172,8 @@ export function MessageTimeline(props: {
   function scrollToBottom(force = false) {
     if (userScrolledUp() && !force) return
     requestAnimationFrame(() => {
-      endRef?.scrollIntoView({ behavior: "smooth" })
+      if (!containerRef) return
+      containerRef.scrollTop = containerRef.scrollHeight
     })
   }
 
@@ -369,7 +370,8 @@ export function FlatMessageList(props: { messages: DisplayMessage[]; processing:
   function scrollToBottom(force = false) {
     if (userScrolledUp() && !force) return
     requestAnimationFrame(() => {
-      endRef?.scrollIntoView({ behavior: "smooth" })
+      if (!containerRef) return
+      containerRef.scrollTop = containerRef.scrollHeight
     })
   }
 
