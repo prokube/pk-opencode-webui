@@ -81,10 +81,8 @@ export function MessageTimeline(props: {
   let containerRef: HTMLDivElement | undefined
   let endRef: HTMLDivElement | undefined
   let touchY: number | undefined
-  // These flags mirror DOM scroll state and do not drive rendering directly.
+  // These flags mirror DOM scroll intent and do not drive rendering directly.
   const scroll = {
-    programmatic: false,
-    timer: undefined as number | undefined,
     manualLock: false,
     lastTop: undefined as number | undefined,
   }
@@ -97,7 +95,6 @@ export function MessageTimeline(props: {
   })
   onCleanup(() => {
     if (tick !== undefined) clearInterval(tick)
-    if (scroll.timer !== undefined) clearTimeout(scroll.timer)
   })
 
   // Track which turns are expanded
@@ -144,9 +141,7 @@ export function MessageTimeline(props: {
     // Restore scroll position after DOM update
     requestAnimationFrame(() => {
       if (containerRef) {
-        beginProgrammaticScroll()
         containerRef.scrollTop = containerRef.scrollHeight - scrollBottom
-        scheduleProgrammaticScrollEnd()
       }
     })
   }
@@ -174,26 +169,7 @@ export function MessageTimeline(props: {
     return scrollHeight - scrollTop - clientHeight < 100
   }
 
-  function clearProgrammaticScroll() {
-    scroll.programmatic = false
-    if (scroll.timer !== undefined) clearTimeout(scroll.timer)
-    scroll.timer = undefined
-  }
-
-  function scheduleProgrammaticScrollEnd() {
-    if (scroll.timer !== undefined) clearTimeout(scroll.timer)
-    scroll.timer = window.setTimeout(() => {
-      clearProgrammaticScroll()
-    }, 2_000)
-  }
-
-  function beginProgrammaticScroll() {
-    scroll.programmatic = true
-    scheduleProgrammaticScrollEnd()
-  }
-
   function engageManualScrollLock() {
-    clearProgrammaticScroll()
     scroll.manualLock = true
     setUserScrolledUp(true)
   }
@@ -219,9 +195,6 @@ export function MessageTimeline(props: {
 
     if (scrollingUp) {
       engageManualScrollLock()
-    } else if (scroll.programmatic) {
-      if (nearBottom) clearProgrammaticScroll()
-      else scheduleProgrammaticScrollEnd()
     } else if (!scroll.manualLock) {
       setUserScrolledUp(false)
     } else if (nearBottom && scrollingDown) {
@@ -258,14 +231,9 @@ export function MessageTimeline(props: {
   function scrollToBottom(force = false) {
     if (userScrolledUp() && !force) return
     if (force) releaseManualScrollLock()
-    beginProgrammaticScroll()
     requestAnimationFrame(() => {
-      if (userScrolledUp() && !force) {
-        clearProgrammaticScroll()
-        return
-      }
+      if (userScrolledUp() && !force) return
       endRef?.scrollIntoView({ behavior: "smooth" })
-      scheduleProgrammaticScrollEnd()
     })
   }
 
