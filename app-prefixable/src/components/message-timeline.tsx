@@ -12,7 +12,8 @@ import { extractTextContent } from "../utils/message"
 // Number of turns to render initially and on each "load more"
 const TURNS_PER_BATCH = 10
 const INITIAL_TURNS = 5
-const SCROLL_INTENT_THRESHOLD = 4
+const WHEEL_SCROLL_INTENT_THRESHOLD = 4
+const TOUCH_SCROLL_INTENT_THRESHOLD = 12
 
 // Compute turn-level timing from user and assistant message timestamps
 function computeTurnTime(user: DisplayMessage, assistants: DisplayMessage[]): Turn["time"] {
@@ -216,16 +217,14 @@ export function MessageTimeline(props: {
     const scrollingDown = previous !== undefined && top > previous
     scroll.lastTop = top
 
-    if (scroll.programmatic) {
+    if (scrollingUp) {
+      engageManualScrollLock()
+    } else if (scroll.programmatic) {
       if (nearBottom) clearProgrammaticScroll()
       else scheduleProgrammaticScrollEnd()
-    } else if (scrollingUp) {
-      engageManualScrollLock()
-    } else if (!nearBottom) {
-      engageManualScrollLock()
     } else if (!scroll.manualLock) {
       setUserScrolledUp(false)
-    } else if (scrollingDown) {
+    } else if (nearBottom && scrollingDown) {
       releaseManualScrollLock()
     }
 
@@ -236,7 +235,7 @@ export function MessageTimeline(props: {
     const page = containerRef?.clientHeight ?? 1
     const unit = event.deltaMode === WheelEvent.DOM_DELTA_LINE ? 16 : page
     const delta = event.deltaMode === WheelEvent.DOM_DELTA_PIXEL ? event.deltaY : event.deltaY * unit
-    if (delta < -SCROLL_INTENT_THRESHOLD && canScrollUp()) engageManualScrollLock()
+    if (delta < -WHEEL_SCROLL_INTENT_THRESHOLD && canScrollUp()) engageManualScrollLock()
   }
 
   function handleTouchStart(event: TouchEvent) {
@@ -245,7 +244,7 @@ export function MessageTimeline(props: {
 
   function handleTouchMove(event: TouchEvent) {
     const y = event.touches[0]?.clientY
-    if (touchY !== undefined && y !== undefined && y - touchY > SCROLL_INTENT_THRESHOLD && canScrollUp()) {
+    if (touchY !== undefined && y !== undefined && y - touchY > TOUCH_SCROLL_INTENT_THRESHOLD && canScrollUp()) {
       engageManualScrollLock()
     }
     touchY = y
