@@ -159,7 +159,7 @@ export function MessageTimeline(props: {
   function isNearBottom(): boolean {
     if (!containerRef) return true
     const { scrollTop, scrollHeight, clientHeight } = containerRef
-    return scrollHeight - scrollTop - clientHeight < NEAR_BOTTOM_PX
+    return scrollHeight - scrollTop - clientHeight <= NEAR_BOTTOM_PX
   }
 
   // Handle scroll
@@ -361,7 +361,7 @@ export function FlatMessageList(props: { messages: DisplayMessage[]; processing:
   function isNearBottom(): boolean {
     if (!containerRef) return true
     const { scrollTop, scrollHeight, clientHeight } = containerRef
-    return scrollHeight - scrollTop - clientHeight < NEAR_BOTTOM_PX
+    return scrollHeight - scrollTop - clientHeight <= NEAR_BOTTOM_PX
   }
 
   function handleScroll() {
