@@ -14,6 +14,7 @@ const TURNS_PER_BATCH = 10
 const INITIAL_TURNS = 5
 const WHEEL_SCROLL_INTENT_THRESHOLD = 4
 const TOUCH_SCROLL_INTENT_THRESHOLD = 12
+const WHEEL_LINE_HEIGHT = 16
 
 // Compute turn-level timing from user and assistant message timestamps
 function computeTurnTime(user: DisplayMessage, assistants: DisplayMessage[]): Turn["time"] {
@@ -81,10 +82,8 @@ export function MessageTimeline(props: {
   let containerRef: HTMLDivElement | undefined
   let endRef: HTMLDivElement | undefined
   let touchStartY: number | undefined
-  // These flags mirror DOM scroll intent and do not drive rendering directly.
-  const scroll = {
-    lastTop: 0,
-  }
+  let lastTop = 0
+  let userScrollingDown = false
 
   // Shared clock signal for relative timestamps — one timer for all turns
   const [now, setNow] = createSignal(Date.now())
@@ -170,8 +169,9 @@ export function MessageTimeline(props: {
 
   function engageManualScrollLock() {
     if (containerRef) {
-      scroll.lastTop = containerRef.scrollTop
-      containerRef.scrollTop = containerRef.scrollTop
+      lastTop = containerRef.scrollTop
+      // Cancel any in-flight smooth scroll so it cannot clear the manual override.
+      containerRef.scrollTo({ top: containerRef.scrollTop, behavior: "auto" })
     }
     setUserScrolledUp(true)
   }
@@ -184,25 +184,41 @@ export function MessageTimeline(props: {
   function handleScroll() {
     const nearBottom = isNearBottom()
     const top = containerRef?.scrollTop ?? 0
-    const previous = scroll.lastTop
+    const previous = lastTop
     const scrollingUp = top < previous
     const scrollingDown = top > previous
-    scroll.lastTop = top
+    lastTop = top
 
     if (scrollingUp) {
       engageManualScrollLock()
-    } else if (userScrolledUp() && nearBottom && scrollingDown) {
+    } else if (userScrolledUp() && nearBottom && scrollingDown && userScrollingDown) {
       releaseManualScrollLock()
     }
 
+    userScrollingDown = false
     props.onScroll?.(nearBottom)
   }
 
   function handleWheel(event: WheelEvent) {
-    const page = containerRef?.clientHeight ?? 1
-    const unit = event.deltaMode === 1 ? 16 : page
-    const delta = event.deltaMode === 0 ? event.deltaY : event.deltaY * unit
+    const delta = normalizedWheelDelta(event)
     if (delta < -WHEEL_SCROLL_INTENT_THRESHOLD) engageManualScrollLock()
+    if (delta > WHEEL_SCROLL_INTENT_THRESHOLD) userScrollingDown = true
+  }
+
+  function normalizedWheelDelta(event: WheelEvent): number {
+    if (event.deltaMode === 1) return event.deltaY * WHEEL_LINE_HEIGHT
+    if (event.deltaMode === 2) return event.deltaY * (containerRef?.clientHeight ?? 1)
+    return event.deltaY
+  }
+
+  function handleKeyDown(event: KeyboardEvent) {
+    if (["ArrowUp", "PageUp", "Home"].includes(event.key) || (event.key === " " && event.shiftKey)) {
+      engageManualScrollLock()
+      return
+    }
+    if (["ArrowDown", "PageDown", "End"].includes(event.key) || (event.key === " " && !event.shiftKey)) {
+      userScrollingDown = true
+    }
   }
 
   function handleTouchStart(event: TouchEvent) {
@@ -213,6 +229,9 @@ export function MessageTimeline(props: {
     const y = event.touches[0]?.clientY
     if (touchStartY !== undefined && y !== undefined && y - touchStartY > TOUCH_SCROLL_INTENT_THRESHOLD) {
       engageManualScrollLock()
+    }
+    if (touchStartY !== undefined && y !== undefined && touchStartY - y > TOUCH_SCROLL_INTENT_THRESHOLD) {
+      userScrollingDown = true
     }
   }
 
@@ -225,6 +244,7 @@ export function MessageTimeline(props: {
     if (userScrolledUp() && !force) return
     if (force) releaseManualScrollLock()
     requestAnimationFrame(() => {
+      // The user may scroll up before this frame runs; respect that late intent.
       if (userScrolledUp() && !force) return
       endRef?.scrollIntoView({ behavior: "smooth" })
     })
@@ -241,7 +261,7 @@ export function MessageTimeline(props: {
 
   // Scroll to bottom on mount
   onMount(() => {
-    scroll.lastTop = containerRef?.scrollTop
+    lastTop = containerRef?.scrollTop ?? 0
     setTimeout(() => scrollToBottom(true), 100)
   })
 
@@ -278,6 +298,7 @@ export function MessageTimeline(props: {
       ref={containerRef}
       onScroll={handleScroll}
       onWheel={handleWheel}
+      onKeyDown={handleKeyDown}
       onTouchStart={handleTouchStart}
       onTouchMove={handleTouchMove}
       onTouchEnd={handleTouchEnd}
