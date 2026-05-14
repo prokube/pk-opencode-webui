@@ -14,7 +14,8 @@ const TURNS_PER_BATCH = 10
 const INITIAL_TURNS = 5
 const WHEEL_SCROLL_INTENT_THRESHOLD = 4
 const TOUCH_SCROLL_INTENT_THRESHOLD = 12
-const WHEEL_LINE_HEIGHT = 16
+const WHEEL_LINE_HEIGHT = 32
+const USER_SCROLL_INTENT_MS = 500
 
 // Compute turn-level timing from user and assistant message timestamps
 function computeTurnTime(user: DisplayMessage, assistants: DisplayMessage[]): Turn["time"] {
@@ -81,18 +82,24 @@ export function MessageTimeline(props: {
 }) {
   let containerRef: HTMLDivElement | undefined
   let endRef: HTMLDivElement | undefined
-  let touchStartY: number | undefined
+  let touchId: number | undefined
+  let touchY: number | undefined
+  let touchDelta = 0
   let lastTop = 0
-  let userScrollingDown = false
+  let userScrollingUpUntil = 0
+  let userScrollingDownUntil = 0
+  let smoothScrollActive = false
 
   // Shared clock signal for relative timestamps — one timer for all turns
   const [now, setNow] = createSignal(Date.now())
   let tick: number | undefined
   onMount(() => {
     tick = window.setInterval(() => setNow(Date.now()), 30_000)
+    window.addEventListener("keydown", handleKeyDown)
   })
   onCleanup(() => {
     if (tick !== undefined) clearInterval(tick)
+    window.removeEventListener("keydown", handleKeyDown)
   })
 
   // Track which turns are expanded
@@ -168,10 +175,11 @@ export function MessageTimeline(props: {
   }
 
   function engageManualScrollLock() {
-    if (containerRef) {
+    if (containerRef && smoothScrollActive) {
       lastTop = containerRef.scrollTop
       // Cancel any in-flight smooth scroll so it cannot clear the manual override.
       containerRef.scrollTo({ top: containerRef.scrollTop, behavior: "auto" })
+      smoothScrollActive = false
     }
     setUserScrolledUp(true)
   }
@@ -187,22 +195,27 @@ export function MessageTimeline(props: {
     const previous = lastTop
     const scrollingUp = top < previous
     const scrollingDown = top > previous
+    const now = Date.now()
     lastTop = top
 
-    if (scrollingUp) {
+    if (nearBottom) smoothScrollActive = false
+
+    if (scrollingUp && now < userScrollingUpUntil) {
       engageManualScrollLock()
-    } else if (userScrolledUp() && nearBottom && scrollingDown && userScrollingDown) {
+    } else if (userScrolledUp() && nearBottom && scrollingDown && now < userScrollingDownUntil) {
       releaseManualScrollLock()
     }
-
-    userScrollingDown = false
     props.onScroll?.(nearBottom)
   }
 
   function handleWheel(event: WheelEvent) {
     const delta = normalizedWheelDelta(event)
-    if (delta < -WHEEL_SCROLL_INTENT_THRESHOLD) engageManualScrollLock()
-    if (delta > WHEEL_SCROLL_INTENT_THRESHOLD) userScrollingDown = true
+    const now = Date.now()
+    if (delta < -WHEEL_SCROLL_INTENT_THRESHOLD) {
+      userScrollingUpUntil = now + USER_SCROLL_INTENT_MS
+      engageManualScrollLock()
+    }
+    if (delta > WHEEL_SCROLL_INTENT_THRESHOLD) userScrollingDownUntil = now + USER_SCROLL_INTENT_MS
   }
 
   function normalizedWheelDelta(event: WheelEvent): number {
@@ -212,31 +225,53 @@ export function MessageTimeline(props: {
   }
 
   function handleKeyDown(event: KeyboardEvent) {
+    const target = event.target
+    if (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement || target instanceof HTMLSelectElement) return
+    if (target instanceof HTMLElement && target.isContentEditable) return
+
+    const now = Date.now()
     if (["ArrowUp", "PageUp", "Home"].includes(event.key) || (event.key === " " && event.shiftKey)) {
+      userScrollingUpUntil = now + USER_SCROLL_INTENT_MS
       engageManualScrollLock()
       return
     }
     if (["ArrowDown", "PageDown", "End"].includes(event.key) || (event.key === " " && !event.shiftKey)) {
-      userScrollingDown = true
+      userScrollingDownUntil = now + USER_SCROLL_INTENT_MS
     }
   }
 
   function handleTouchStart(event: TouchEvent) {
-    touchStartY = event.touches[0]?.clientY
+    if (touchId !== undefined) return
+    const touch = event.touches[0]
+    touchId = touch?.identifier
+    touchY = touch?.clientY
+    touchDelta = 0
   }
 
   function handleTouchMove(event: TouchEvent) {
-    const y = event.touches[0]?.clientY
-    if (touchStartY !== undefined && y !== undefined && y - touchStartY > TOUCH_SCROLL_INTENT_THRESHOLD) {
+    const touch = [...event.touches].find((item) => item.identifier === touchId)
+    const y = touch?.clientY
+    if (touchY === undefined || y === undefined) return
+
+    touchDelta += y - touchY
+    touchY = y
+
+    if (touchDelta > TOUCH_SCROLL_INTENT_THRESHOLD) {
+      userScrollingUpUntil = Date.now() + USER_SCROLL_INTENT_MS
       engageManualScrollLock()
+      touchDelta = 0
     }
-    if (touchStartY !== undefined && y !== undefined && touchStartY - y > TOUCH_SCROLL_INTENT_THRESHOLD) {
-      userScrollingDown = true
+    if (touchDelta < -TOUCH_SCROLL_INTENT_THRESHOLD) {
+      userScrollingDownUntil = Date.now() + USER_SCROLL_INTENT_MS
+      touchDelta = 0
     }
   }
 
-  function handleTouchEnd() {
-    touchStartY = undefined
+  function handleTouchEnd(event: TouchEvent) {
+    if (event.touches.length > 0) return
+    touchId = undefined
+    touchY = undefined
+    touchDelta = 0
   }
 
   // Scroll to bottom
@@ -246,6 +281,7 @@ export function MessageTimeline(props: {
     requestAnimationFrame(() => {
       // The user may scroll up before this frame runs; respect that late intent.
       if (userScrolledUp() && !force) return
+      smoothScrollActive = true
       endRef?.scrollIntoView({ behavior: "smooth" })
     })
   }
