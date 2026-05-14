@@ -26,6 +26,9 @@ import type { Config, PermissionActionConfig } from "../sdk/client"
 
 const TELEGRAM_ALARM_FIELD = "telegramAlarmChannelEnabled"
 
+// Connected via environment or built-in defaults, not removable by auth.remove.
+const NON_REMOVABLE_PROVIDER_IDS = new Set(["amazon-bedrock", "opencode"])
+
 export function Settings() {
   const providers = useProviders()
   const mcp = useMCP()
@@ -589,6 +592,10 @@ Add your project-specific instructions here.
     if (disconnecting()) return
     const providerID = providerToDisconnect()
     if (!providerID) return
+    if (NON_REMOVABLE_PROVIDER_IDS.has(providerID)) {
+      setProviderToDisconnect(null)
+      return
+    }
     setProviderToDisconnect(null)
     setDisconnecting(providerID)
     setError(null)
@@ -1074,6 +1081,10 @@ Add your project-specific instructions here.
                       <For each={providers.connected}>
                         {(providerID) => {
                           const busy = () => disconnecting() === providerID
+                          const nonRemovable = () => NON_REMOVABLE_PROVIDER_IDS.has(providerID)
+                          const disconnectLabel = () => nonRemovable()
+                            ? `${getProviderDisplayName(providerID)} is managed by environment or built-in configuration and cannot be disconnected from the UI`
+                            : `Disconnect ${getProviderDisplayName(providerID)}`
                           return (
                             <div
                               class="flex items-center justify-between p-3 rounded-md"
@@ -1109,12 +1120,15 @@ Add your project-specific instructions here.
                                 </button>
                                 <button
                                   type="button"
-                                  disabled={!!disconnecting()}
-                                  onClick={() => setProviderToDisconnect(providerID)}
+                                  disabled={!!disconnecting() || nonRemovable()}
+                                  onClick={() => {
+                                    if (nonRemovable()) return
+                                    setProviderToDisconnect(providerID)
+                                  }}
                                   class="p-1.5 rounded transition-colors disabled:opacity-50"
-                                  style={{ color: "var(--interactive-critical)" }}
-                                  title={`Disconnect ${getProviderDisplayName(providerID)}`}
-                                  aria-label={`Disconnect ${getProviderDisplayName(providerID)}`}
+                                  style={{ color: nonRemovable() ? "var(--icon-weak)" : "var(--interactive-critical)" }}
+                                  title={disconnectLabel()}
+                                  aria-label={disconnectLabel()}
                                 >
                                   <Show when={busy()} fallback={<Trash2 class="w-4 h-4" />}>
                                     <Spinner class="w-4 h-4" />
