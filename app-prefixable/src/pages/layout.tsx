@@ -1610,7 +1610,10 @@ export function Layout(props: ParentProps) {
       }
     });
 
-    onCleanup(unsub);
+    onCleanup(() => {
+      unsub();
+      if (sessionsTimer !== undefined) clearTimeout(sessionsTimer);
+    });
   });
 
   onMount(() => {
