@@ -1,4 +1,4 @@
-import { createContext, useContext, onCleanup, batch, type ParentProps } from "solid-js"
+import { createContext, useContext, createSignal, onCleanup, batch, type ParentProps } from "solid-js"
 import { createStore, reconcile, produce } from "solid-js/store"
 import type { Session, Message, Part, Provider } from "../sdk/client"
 import { useSDK } from "./sdk"
@@ -41,6 +41,7 @@ interface SyncContextValue {
   messages: (sessionID: string) => MessageWithParts[]
   parts: (messageID: string) => Part[]
   providers: () => ProviderData
+  sseUnhealthy: () => boolean
   session: {
     sync: (sessionID: string) => Promise<void>
     get: (sessionID: string) => Session | undefined
@@ -193,10 +194,12 @@ export function SyncProvider(props: ParentProps) {
   })
 
   const inflight = new Map<string, Promise<void>>()
+  const [sseUnhealthy, setSseUnhealthy] = createSignal(false)
 
   // Connect to SSE endpoint using fetch (supports custom headers unlike EventSource)
   let abortController: AbortController | null = null
   let reconnectTimer: ReturnType<typeof setTimeout> | null = null
+  let reconnectDelay = 3000
 
   async function connect() {
     if (abortController) return
@@ -207,6 +210,8 @@ export function SyncProvider(props: ParentProps) {
 
     abortController = new AbortController()
     const signal = abortController.signal
+
+    let connectedAt = 0
 
     try {
       const response = await fetch(eventUrl, {
@@ -219,6 +224,8 @@ export function SyncProvider(props: ParentProps) {
       }
 
       console.log("[Sync] Connected, bootstrapping...")
+      connectedAt = Date.now()
+      setSseUnhealthy(false)
       if (!store.ready) bootstrap()
 
       const reader = response.body.getReader()
@@ -246,13 +253,15 @@ export function SyncProvider(props: ParentProps) {
     } catch (err) {
       if (signal.aborted) return
       console.error("[Sync] Connection error, reconnecting...", err)
+      setSseUnhealthy(true)
       abortController = null
+      reconnectDelay = connectedAt && Date.now() - connectedAt > 10_000 ? 3000 : Math.min(reconnectDelay * 2, 30_000)
 
       if (!reconnectTimer) {
         reconnectTimer = setTimeout(() => {
           reconnectTimer = null
           connect()
-        }, 3000)
+        }, reconnectDelay)
       }
     }
   }
@@ -563,6 +572,7 @@ export function SyncProvider(props: ParentProps) {
     messages: (sessionID: string) => store.message[sessionID] ?? [],
     parts: (messageID: string) => store.part[messageID] ?? [],
     providers: () => store.provider,
+    sseUnhealthy,
     session: {
       sync: syncSession,
       get: (sessionID: string) => {

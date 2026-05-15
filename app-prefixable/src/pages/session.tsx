@@ -787,6 +787,40 @@ export function Session() {
   });
 
   createEffect(() => {
+    const id = sessionId();
+    if (!id || !processing() || !sync.sseUnhealthy()) return;
+
+    const state = { pending: false, stopped: false };
+    const poll = () => {
+      if (state.pending || state.stopped) return;
+      state.pending = true;
+      sync.session.sync(id)
+        .then(() => client.session.status({ directory }))
+        .then((res) => {
+          if (state.stopped || sessionId() !== id) return;
+          const status = res.data?.[id]?.type;
+          if (status === "idle") {
+            setOptimisticMessage(null);
+            setPendingUserMessageText(null);
+            wasProcessing.value = false;
+            setProcessing(false);
+          }
+        })
+        .catch((err) => console.warn("[Session] SSE fallback poll failed:", err))
+        .finally(() => {
+          state.pending = false;
+        });
+    };
+
+    poll();
+    const interval = setInterval(poll, 2000);
+    onCleanup(() => {
+      state.stopped = true;
+      clearInterval(interval);
+    });
+  });
+
+  createEffect(() => {
     const blocked = followupAutoPaused();
     if (!blocked) return;
     if (followups().some((item) => item.id === blocked)) return;

@@ -41,6 +41,7 @@ export function EventProvider(props: ParentProps) {
   // Connect to SSE endpoint using fetch (supports custom headers unlike EventSource)
   let abortController: AbortController | null = null
   let reconnectTimer: ReturnType<typeof setTimeout> | null = null
+  let reconnectDelay = 3000
 
   function processEvent(rawData: string) {
     try {
@@ -97,6 +98,8 @@ export function EventProvider(props: ParentProps) {
     abortController = new AbortController()
     const signal = abortController.signal
 
+    let connectedAt = 0
+
     try {
       const response = await fetch(eventUrl, {
         headers: { ...authHeaders(), Accept: "text/event-stream" },
@@ -108,6 +111,7 @@ export function EventProvider(props: ParentProps) {
       }
 
       console.log("[Events] Connected")
+      connectedAt = Date.now()
 
       const reader = response.body.getReader()
       const decoder = new TextDecoder()
@@ -129,12 +133,13 @@ export function EventProvider(props: ParentProps) {
       if (signal.aborted) return // Intentional disconnect
       console.error("[Events] Connection error, reconnecting...", err)
       abortController = null
+      reconnectDelay = connectedAt && Date.now() - connectedAt > 10_000 ? 3000 : Math.min(reconnectDelay * 2, 30_000)
 
       if (!reconnectTimer) {
         reconnectTimer = setTimeout(() => {
           reconnectTimer = null
           connect()
-        }, 3000)
+        }, reconnectDelay)
       }
     }
   }
