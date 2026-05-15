@@ -2043,6 +2043,7 @@ export function Layout(props: ParentProps) {
     client.session.delete({ sessionID: session.id })
       .then(() => {
         setConfirmDeleteSession(null);
+        setSessions(prev => prev.filter(s => s.id !== session.id));
         cleanupNotifyState(session.id, session.directory);
         unpinSession(session.id);
         if (isActive(session.id)) {
