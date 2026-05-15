@@ -117,6 +117,16 @@ describe("sync event helpers", () => {
     })
   })
 
+  test("session sync advances stale text parts from snapshots", () => {
+    const existing = [message(user("msg_1"), [text("part_1", "msg_1", "hel")])]
+    const synced = [message(user("msg_1"), [text("part_1", "msg_1", "hello")])]
+
+    expect(mergeSessionMessages(existing, synced)[0].parts[0]).toMatchObject({
+      type: "text",
+      text: "hello",
+    })
+  })
+
   test("session sync preserves SSE-only messages and parts", () => {
     const existing = [message(user("msg_1"), [text("part_1", "msg_1"), text("part_2", "msg_1")]), message(user("msg_2"), [])]
     const synced = [message(user("msg_1"), [text("part_1", "msg_1")])]

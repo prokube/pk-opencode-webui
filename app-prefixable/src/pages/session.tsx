@@ -800,6 +800,8 @@ export function Session() {
         .then((res) => {
           if (state.stopped || sessionId() !== id) return;
           const status = res?.data?.[id]?.type;
+          const polled = res?.data?.[id];
+          if (polled) events.setSessionStatus(id, polled);
           if (status === "idle") {
             setOptimisticMessage(null);
             setPendingUserMessageText(null);

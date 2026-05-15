@@ -26,6 +26,7 @@ interface EventContextValue {
   statusReady: () => boolean
   pendingQuestions: Record<string, QuestionRequest | undefined>
   dismissQuestion: (sessionID: string, requestID: string) => void
+  setSessionStatus: (sessionID: string, status: SessionStatus) => void
 }
 
 const EventContext = createContext<EventContextValue>()
@@ -206,7 +207,7 @@ export function EventProvider(props: ParentProps) {
     }))
   }
 
-  return <EventContext.Provider value={{ subscribe, status, statusReady, pendingQuestions, dismissQuestion }}>{props.children}</EventContext.Provider>
+  return <EventContext.Provider value={{ subscribe, status, statusReady, pendingQuestions, dismissQuestion, setSessionStatus: setStatus }}>{props.children}</EventContext.Provider>
 }
 
 export function useEvents() {

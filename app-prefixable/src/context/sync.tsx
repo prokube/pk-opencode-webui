@@ -86,7 +86,7 @@ function toolTime(part: Extract<Part, { type: "tool" }>) {
 
 function mergeSyncedPart(existing: Part, synced: Part) {
   if (existing.type !== synced.type) return synced
-  if (existing.type !== "tool" || synced.type !== "tool") return existing
+  if (existing.type !== "tool" || synced.type !== "tool") return synced
 
   const existingRank = toolRank(existing)
   const syncedRank = toolRank(synced)
