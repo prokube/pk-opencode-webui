@@ -1584,9 +1584,16 @@ export function Layout(props: ParentProps) {
   onMount(() => {
     loadSessions();
 
+    let sessionsTimer: number | undefined;
     const unsub = events.subscribe((event) => {
       if (event.type === "server.connected") {
-        loadSessions();
+        // Debounce to avoid duplicate fetch when server.connected fires
+        // immediately after mount's loadSessions() call
+        if (sessionsTimer !== undefined) clearTimeout(sessionsTimer);
+        sessionsTimer = window.setTimeout(() => {
+          sessionsTimer = undefined;
+          loadSessions();
+        }, 500);
         return;
       }
       if (
