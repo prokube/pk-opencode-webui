@@ -1,9 +1,9 @@
-import { createContext, useContext, onCleanup, batch, type ParentProps } from "solid-js"
+import { createContext, useContext, createSignal, onCleanup, batch, type ParentProps } from "solid-js"
 import { createStore, reconcile, produce } from "solid-js/store"
 import type { Session, Message, Part, Provider } from "../sdk/client"
 import { useSDK } from "./sdk"
 import { useServer } from "./server"
-import { createSSEParser } from "../utils/sse"
+import { createSSEParser, nextSSEReconnectDelay } from "../utils/sse"
 
 // Event type - looser than SDK type to handle all events
 type SyncEvent = {
@@ -41,8 +41,9 @@ interface SyncContextValue {
   messages: (sessionID: string) => MessageWithParts[]
   parts: (messageID: string) => Part[]
   providers: () => ProviderData
+  sseUnhealthy: () => boolean
   session: {
-    sync: (sessionID: string) => Promise<void>
+    sync: (sessionID: string) => Promise<boolean>
     get: (sessionID: string) => Session | undefined
   }
   refresh: () => Promise<void>
@@ -83,9 +84,16 @@ function toolTime(part: Extract<Part, { type: "tool" }>) {
   return part.state.time.end
 }
 
+function mergeTextLikePart(existing: Extract<Part, { text: string }>, synced: Extract<Part, { text: string }>) {
+  if ((existing.text ?? "").length > (synced.text ?? "").length) return existing
+  return synced
+}
+
 function mergeSyncedPart(existing: Part, synced: Part) {
   if (existing.type !== synced.type) return synced
-  if (existing.type !== "tool" || synced.type !== "tool") return existing
+  if (existing.type === "text" && synced.type === "text") return mergeTextLikePart(existing, synced)
+  if (existing.type === "reasoning" && synced.type === "reasoning") return mergeTextLikePart(existing, synced)
+  if (existing.type !== "tool" || synced.type !== "tool") return synced
 
   const existingRank = toolRank(existing)
   const syncedRank = toolRank(synced)
@@ -192,11 +200,13 @@ export function SyncProvider(props: ParentProps) {
     provider: { all: [], connected: [], default: {} },
   })
 
-  const inflight = new Map<string, Promise<void>>()
+  const inflight = new Map<string, Promise<boolean>>()
+  const [sseUnhealthy, setSseUnhealthy] = createSignal(false)
 
   // Connect to SSE endpoint using fetch (supports custom headers unlike EventSource)
   let abortController: AbortController | null = null
   let reconnectTimer: ReturnType<typeof setTimeout> | null = null
+  let reconnectDelay = 3000
 
   async function connect() {
     if (abortController) return
@@ -207,6 +217,8 @@ export function SyncProvider(props: ParentProps) {
 
     abortController = new AbortController()
     const signal = abortController.signal
+
+    let connectedAt = 0
 
     try {
       const response = await fetch(eventUrl, {
@@ -219,6 +231,8 @@ export function SyncProvider(props: ParentProps) {
       }
 
       console.log("[Sync] Connected, bootstrapping...")
+      connectedAt = Date.now()
+      setSseUnhealthy(false)
       if (!store.ready) bootstrap()
 
       const reader = response.body.getReader()
@@ -246,13 +260,15 @@ export function SyncProvider(props: ParentProps) {
     } catch (err) {
       if (signal.aborted) return
       console.error("[Sync] Connection error, reconnecting...", err)
+      setSseUnhealthy(true)
       abortController = null
+      reconnectDelay = nextSSEReconnectDelay(connectedAt, Date.now(), reconnectDelay)
 
       if (!reconnectTimer) {
         reconnectTimer = setTimeout(() => {
           reconnectTimer = null
           connect()
-        }, 3000)
+        }, reconnectDelay)
       }
     }
   }
@@ -525,8 +541,10 @@ export function SyncProvider(props: ParentProps) {
             }
           }
         })
+        return true
       } catch (err) {
         console.error("[Sync] Failed to sync session:", sessionID, err)
+        return false
       }
     })()
 
@@ -563,6 +581,7 @@ export function SyncProvider(props: ParentProps) {
     messages: (sessionID: string) => store.message[sessionID] ?? [],
     parts: (messageID: string) => store.part[messageID] ?? [],
     providers: () => store.provider,
+    sseUnhealthy,
     session: {
       sync: syncSession,
       get: (sessionID: string) => {

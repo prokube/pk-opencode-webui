@@ -3,7 +3,7 @@ import { createStore, produce } from "solid-js/store"
 import type { Event, SessionStatus, QuestionRequest } from "../sdk/client"
 import { useSDK } from "./sdk"
 import { useServer } from "./server"
-import { createSSEParser } from "../utils/sse"
+import { createSSEParser, nextSSEReconnectDelay } from "../utils/sse"
 
 type EventHandler = (event: Event) => void
 
@@ -26,6 +26,7 @@ interface EventContextValue {
   statusReady: () => boolean
   pendingQuestions: Record<string, QuestionRequest | undefined>
   dismissQuestion: (sessionID: string, requestID: string) => void
+  setSessionStatus: (sessionID: string, status: SessionStatus) => void
 }
 
 const EventContext = createContext<EventContextValue>()
@@ -41,6 +42,7 @@ export function EventProvider(props: ParentProps) {
   // Connect to SSE endpoint using fetch (supports custom headers unlike EventSource)
   let abortController: AbortController | null = null
   let reconnectTimer: ReturnType<typeof setTimeout> | null = null
+  let reconnectDelay = 3000
 
   function processEvent(rawData: string) {
     try {
@@ -97,6 +99,8 @@ export function EventProvider(props: ParentProps) {
     abortController = new AbortController()
     const signal = abortController.signal
 
+    let connectedAt = 0
+
     try {
       const response = await fetch(eventUrl, {
         headers: { ...authHeaders(), Accept: "text/event-stream" },
@@ -108,6 +112,7 @@ export function EventProvider(props: ParentProps) {
       }
 
       console.log("[Events] Connected")
+      connectedAt = Date.now()
 
       const reader = response.body.getReader()
       const decoder = new TextDecoder()
@@ -129,12 +134,13 @@ export function EventProvider(props: ParentProps) {
       if (signal.aborted) return // Intentional disconnect
       console.error("[Events] Connection error, reconnecting...", err)
       abortController = null
+      reconnectDelay = nextSSEReconnectDelay(connectedAt, Date.now(), reconnectDelay)
 
       if (!reconnectTimer) {
         reconnectTimer = setTimeout(() => {
           reconnectTimer = null
           connect()
-        }, 3000)
+        }, reconnectDelay)
       }
     }
   }
@@ -201,7 +207,7 @@ export function EventProvider(props: ParentProps) {
     }))
   }
 
-  return <EventContext.Provider value={{ subscribe, status, statusReady, pendingQuestions, dismissQuestion }}>{props.children}</EventContext.Provider>
+  return <EventContext.Provider value={{ subscribe, status, statusReady, pendingQuestions, dismissQuestion, setSessionStatus: setStatus }}>{props.children}</EventContext.Provider>
 }
 
 export function useEvents() {

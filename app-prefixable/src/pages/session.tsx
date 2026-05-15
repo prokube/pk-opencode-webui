@@ -750,7 +750,8 @@ export function Session() {
       // Use sync context to load session data - no local state needed
       setLoadingHistory(true);
       setProcessing(false); // Reset processing state for new session
-      sync.session.sync(id).then(() => {
+      sync.session.sync(id).then((synced) => {
+        if (!synced) return;
         setLoadingHistory(false);
         // Initialize per-session model from existing messages if not already set
         if (!providers.getSessionModel(id)) {
@@ -784,6 +785,42 @@ export function Session() {
     if (type === "idle") {
       setProcessing(false);
     }
+  });
+
+  createEffect(() => {
+    const id = sessionId();
+    if (!id || !processing() || !sync.sseUnhealthy()) return;
+
+    const state = { pending: false, stopped: false };
+    const poll = () => {
+      if (state.pending || state.stopped) return;
+      state.pending = true;
+      sync.session.sync(id)
+        .then((synced) => synced ? client.session.status({ directory }) : undefined)
+        .then((res) => {
+          if (state.stopped || sessionId() !== id) return;
+          const status = res?.data?.[id]?.type;
+          const polled = res?.data?.[id];
+          if (polled) events.setSessionStatus(id, polled);
+          if (status === "idle") {
+            setOptimisticMessage(null);
+            setPendingUserMessageText(null);
+            wasProcessing.value = false;
+            setProcessing(false);
+          }
+        })
+        .catch((err) => console.warn("[Session] SSE fallback poll failed:", err))
+        .finally(() => {
+          state.pending = false;
+        });
+    };
+
+    poll();
+    const interval = setInterval(poll, 2000);
+    onCleanup(() => {
+      state.stopped = true;
+      clearInterval(interval);
+    });
   });
 
   createEffect(() => {
@@ -1401,8 +1438,8 @@ export function Session() {
   createEffect(() => {
     const id = params.id;
     if (!id) return;
-    // loadingHistory() stays true when sync.session.sync() rejects,
-    // so this effect only fires after a successful sync — not on transient failures.
+    // loadingHistory() stays true when sync.session.sync() fails,
+    // so this effect only fires after a successful sync, not on transient failures.
     if (loadingHistory()) return;
     const found = sync.session.get(id);
     // Non-archived session exists — keep it

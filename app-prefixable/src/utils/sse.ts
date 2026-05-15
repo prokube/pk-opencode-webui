@@ -7,6 +7,11 @@
 
 export type SSECallback = (data: string) => void
 
+export function nextSSEReconnectDelay(connectedAt: number, now: number, current: number) {
+  if (connectedAt && now - connectedAt > 10_000) return 3000
+  return Math.min(current * 2, 30_000)
+}
+
 /**
  * Creates a stateful SSE line parser. Feed it chunks from a ReadableStream
  * and it will invoke `onData` with the concatenated data payload for each
