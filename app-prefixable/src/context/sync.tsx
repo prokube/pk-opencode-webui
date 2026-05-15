@@ -84,8 +84,15 @@ function toolTime(part: Extract<Part, { type: "tool" }>) {
   return part.state.time.end
 }
 
+function mergeTextLikePart(existing: Extract<Part, { text: string }>, synced: Extract<Part, { text: string }>) {
+  if ((existing.text ?? "").length > (synced.text ?? "").length) return existing
+  return synced
+}
+
 function mergeSyncedPart(existing: Part, synced: Part) {
   if (existing.type !== synced.type) return synced
+  if (existing.type === "text" && synced.type === "text") return mergeTextLikePart(existing, synced)
+  if (existing.type === "reasoning" && synced.type === "reasoning") return mergeTextLikePart(existing, synced)
   if (existing.type !== "tool" || synced.type !== "tool") return synced
 
   const existingRank = toolRank(existing)
