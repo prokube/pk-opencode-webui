@@ -782,7 +782,8 @@ export function Session() {
       setProcessing(true);
       return;
     }
-    if (type === "idle") {
+    // Any non-busy status (including idle or unknown) means not processing
+    if (type) {
       setProcessing(false);
     }
   });
@@ -821,6 +822,26 @@ export function Session() {
       state.stopped = true;
       clearInterval(interval);
     });
+  });
+
+  // Watchdog: if processing stays true for 60s without resolution, re-fetch status
+  createEffect(() => {
+    const id = sessionId();
+    if (!id || !processing()) return;
+    const timer = setTimeout(() => {
+      if (!processing() || sessionId() !== id) return;
+      client.session.status({ directory })
+        .then((res) => {
+          const polled = (res.data ?? {})[id];
+          if (!polled || sessionId() !== id) return;
+          events.setSessionStatus(id, polled);
+          if (polled.type !== "busy" && polled.type !== "retry") {
+            setProcessing(false);
+          }
+        })
+        .catch((err) => console.warn("[Session] Watchdog poll failed:", err));
+    }, 60_000);
+    onCleanup(() => clearTimeout(timer));
   });
 
   createEffect(() => {
