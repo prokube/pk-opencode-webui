@@ -1164,7 +1164,10 @@ export function Layout(props: ParentProps) {
     return "Session bootstrap failed. Check API connectivity and retry.";
   }
 
+  let lastSessionsLoadAt = 0;
+
   async function loadSessions() {
+    lastSessionsLoadAt = Date.now();
     try {
       const res = await client.session.list({ roots: true });
       const data = res.data;
@@ -1587,8 +1590,7 @@ export function Layout(props: ParentProps) {
     let sessionsTimer: number | undefined;
     const unsub = events.subscribe((event) => {
       if (event.type === "server.connected") {
-        // Debounce to avoid duplicate fetch when server.connected fires
-        // immediately after mount's loadSessions() call
+        if (Date.now() - lastSessionsLoadAt < 5000) return;
         if (sessionsTimer !== undefined) clearTimeout(sessionsTimer);
         sessionsTimer = window.setTimeout(() => {
           sessionsTimer = undefined;
