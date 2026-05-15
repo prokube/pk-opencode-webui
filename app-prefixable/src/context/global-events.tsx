@@ -282,7 +282,9 @@ export function GlobalEventsProvider(props: ParentProps & {
       } catch {
         if (controller.signal.aborted) return
         if (disposed) return
-        disconnectDirectory(dir)
+        const old = connections.get(dir)
+        if (old) old.controller.abort()
+        connections.delete(dir)
         const reconnectTimer = setTimeout(() => {
           reconnectTimers.delete(dir)
           if (disposed) return
@@ -292,7 +294,9 @@ export function GlobalEventsProvider(props: ParentProps & {
           const wanted = props.projects().some((p) => p.worktree === dir)
           if (wanted && dir !== active) {
             connectToDirectory(dir)
+            return
           }
+          disconnectDirectory(dir)
         }, 5000)
         reconnectTimers.set(dir, reconnectTimer)
       }
