@@ -1582,8 +1582,6 @@ export function Layout(props: ParentProps) {
   });
 
   onMount(() => {
-    loadSessions();
-
     const unsub = events.subscribe((event) => {
       if (event.type === "server.connected") {
         loadSessions();
