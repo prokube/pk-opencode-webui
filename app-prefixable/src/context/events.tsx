@@ -114,6 +114,23 @@ export function EventProvider(props: ParentProps) {
       console.log("[Events] Connected")
       connectedAt = Date.now()
 
+      // Clear seen-sets on reconnect so the HTTP re-seed below picks up real status
+      sseSeenStatuses.clear()
+      sseAskedQuestions.clear()
+      sseClearedRequests.clear()
+
+      // Re-seed session statuses from HTTP after reconnect
+      if (directory) {
+        client.session.status({ directory })
+          .then((res) => {
+            const statuses = (res.data ?? {}) as Record<string, SessionStatus>
+            for (const [sessionID, s] of Object.entries(statuses)) {
+              if (!sseSeenStatuses.has(sessionID)) setStatus(sessionID, s)
+            }
+          })
+          .catch((err) => console.error("[Events] Failed to re-seed statuses:", err))
+      }
+
       const reader = response.body.getReader()
       const decoder = new TextDecoder()
       const parser = createSSEParser((data) => processEvent(data))
