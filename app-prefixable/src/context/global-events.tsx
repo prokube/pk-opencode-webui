@@ -294,7 +294,9 @@ export function GlobalEventsProvider(props: ParentProps & {
           const wanted = props.projects().some((p) => p.worktree === dir)
           if (wanted && dir !== active) {
             connectToDirectory(dir)
+            return
           }
+          disconnectDirectory(dir)
         }, 5000)
         reconnectTimers.set(dir, reconnectTimer)
       }
