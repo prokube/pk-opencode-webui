@@ -1585,6 +1585,10 @@ export function Layout(props: ParentProps) {
     loadSessions();
 
     const unsub = events.subscribe((event) => {
+      if (event.type === "server.connected") {
+        loadSessions();
+        return;
+      }
       if (
         event.type === "session.created" ||
         event.type === "session.updated" ||
