@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test"
 import { applyPartDelta, mergeMessageUpdate, mergePartUpdate, mergeSessionMessages } from "../src/context/sync"
 import type { MessageWithParts } from "../src/context/sync"
 import type { Message, Part } from "../src/sdk/client"
+import { nextSSEReconnectDelay } from "../src/utils/sse"
 
 const user = (id: string, sessionID = "ses_1"): Message => ({
   id,
@@ -124,5 +125,16 @@ describe("sync event helpers", () => {
 
     expect(merged.map((m) => m.info.id)).toEqual(["msg_1", "msg_2"])
     expect(merged[0].parts.map((p) => p.id)).toEqual(["part_1", "part_2"])
+  })
+
+  test("immediate SSE close backs off reconnects", () => {
+    expect(nextSSEReconnectDelay(Date.now(), Date.now(), 3000)).toBe(6000)
+    expect(nextSSEReconnectDelay(Date.now(), Date.now(), 30_000)).toBe(30_000)
+  })
+
+  test("long-lived SSE resets reconnect delay", () => {
+    const connectedAt = Date.now() - 11_000
+
+    expect(nextSSEReconnectDelay(connectedAt, Date.now(), 30_000)).toBe(3000)
   })
 })

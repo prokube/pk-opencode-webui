@@ -795,10 +795,10 @@ export function Session() {
       if (state.pending || state.stopped) return;
       state.pending = true;
       sync.session.sync(id)
-        .then(() => client.session.status({ directory }))
+        .then((synced) => synced ? client.session.status({ directory }) : undefined)
         .then((res) => {
           if (state.stopped || sessionId() !== id) return;
-          const status = res.data?.[id]?.type;
+          const status = res?.data?.[id]?.type;
           if (status === "idle") {
             setOptimisticMessage(null);
             setPendingUserMessageText(null);

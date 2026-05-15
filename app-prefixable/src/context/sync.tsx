@@ -3,7 +3,7 @@ import { createStore, reconcile, produce } from "solid-js/store"
 import type { Session, Message, Part, Provider } from "../sdk/client"
 import { useSDK } from "./sdk"
 import { useServer } from "./server"
-import { createSSEParser } from "../utils/sse"
+import { createSSEParser, nextSSEReconnectDelay } from "../utils/sse"
 
 // Event type - looser than SDK type to handle all events
 type SyncEvent = {
@@ -43,7 +43,7 @@ interface SyncContextValue {
   providers: () => ProviderData
   sseUnhealthy: () => boolean
   session: {
-    sync: (sessionID: string) => Promise<void>
+    sync: (sessionID: string) => Promise<boolean>
     get: (sessionID: string) => Session | undefined
   }
   refresh: () => Promise<void>
@@ -193,7 +193,7 @@ export function SyncProvider(props: ParentProps) {
     provider: { all: [], connected: [], default: {} },
   })
 
-  const inflight = new Map<string, Promise<void>>()
+  const inflight = new Map<string, Promise<boolean>>()
   const [sseUnhealthy, setSseUnhealthy] = createSignal(false)
 
   // Connect to SSE endpoint using fetch (supports custom headers unlike EventSource)
@@ -255,7 +255,7 @@ export function SyncProvider(props: ParentProps) {
       console.error("[Sync] Connection error, reconnecting...", err)
       setSseUnhealthy(true)
       abortController = null
-      reconnectDelay = connectedAt && Date.now() - connectedAt > 10_000 ? 3000 : Math.min(reconnectDelay * 2, 30_000)
+      reconnectDelay = nextSSEReconnectDelay(connectedAt, Date.now(), reconnectDelay)
 
       if (!reconnectTimer) {
         reconnectTimer = setTimeout(() => {
@@ -534,8 +534,10 @@ export function SyncProvider(props: ParentProps) {
             }
           }
         })
+        return true
       } catch (err) {
         console.error("[Sync] Failed to sync session:", sessionID, err)
+        return false
       }
     })()
 

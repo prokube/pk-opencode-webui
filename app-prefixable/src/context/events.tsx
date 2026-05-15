@@ -3,7 +3,7 @@ import { createStore, produce } from "solid-js/store"
 import type { Event, SessionStatus, QuestionRequest } from "../sdk/client"
 import { useSDK } from "./sdk"
 import { useServer } from "./server"
-import { createSSEParser } from "../utils/sse"
+import { createSSEParser, nextSSEReconnectDelay } from "../utils/sse"
 
 type EventHandler = (event: Event) => void
 
@@ -133,7 +133,7 @@ export function EventProvider(props: ParentProps) {
       if (signal.aborted) return // Intentional disconnect
       console.error("[Events] Connection error, reconnecting...", err)
       abortController = null
-      reconnectDelay = connectedAt && Date.now() - connectedAt > 10_000 ? 3000 : Math.min(reconnectDelay * 2, 30_000)
+      reconnectDelay = nextSSEReconnectDelay(connectedAt, Date.now(), reconnectDelay)
 
       if (!reconnectTimer) {
         reconnectTimer = setTimeout(() => {

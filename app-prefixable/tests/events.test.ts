@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import { sessionStatusEvent } from "../src/context/events"
+import { nextSSEReconnectDelay } from "../src/utils/sse"
 
 describe("sessionStatusEvent", () => {
   test("normalizes session.status events", () => {
@@ -18,5 +19,10 @@ describe("sessionStatusEvent", () => {
 
   test("ignores unrelated events", () => {
     expect(sessionStatusEvent({ type: "message.updated", properties: {} })).toBeUndefined()
+  })
+
+  test("immediate SSE close backs off reconnects", () => {
+    expect(nextSSEReconnectDelay(Date.now(), Date.now(), 3000)).toBe(6000)
+    expect(nextSSEReconnectDelay(Date.now(), Date.now(), 30_000)).toBe(30_000)
   })
 })
