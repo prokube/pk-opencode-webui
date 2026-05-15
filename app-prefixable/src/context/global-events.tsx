@@ -282,6 +282,8 @@ export function GlobalEventsProvider(props: ParentProps & {
       } catch {
         if (controller.signal.aborted) return
         if (disposed) return
+        const old = connections.get(dir)
+        if (old) old.controller.abort()
         connections.delete(dir)
         const reconnectTimer = setTimeout(() => {
           reconnectTimers.delete(dir)
