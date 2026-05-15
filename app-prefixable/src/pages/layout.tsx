@@ -1164,7 +1164,10 @@ export function Layout(props: ParentProps) {
     return "Session bootstrap failed. Check API connectivity and retry.";
   }
 
+  let lastSessionsLoadAt = 0;
+
   async function loadSessions() {
+    lastSessionsLoadAt = Date.now();
     try {
       const res = await client.session.list({ roots: true });
       const data = res.data;
@@ -1584,7 +1587,17 @@ export function Layout(props: ParentProps) {
   onMount(() => {
     loadSessions();
 
+    let sessionsTimer: number | undefined;
     const unsub = events.subscribe((event) => {
+      if (event.type === "server.connected") {
+        if (Date.now() - lastSessionsLoadAt < 5000) return;
+        if (sessionsTimer !== undefined) clearTimeout(sessionsTimer);
+        sessionsTimer = window.setTimeout(() => {
+          sessionsTimer = undefined;
+          loadSessions();
+        }, 500);
+        return;
+      }
       if (
         event.type === "session.created" ||
         event.type === "session.updated" ||
@@ -1597,7 +1610,10 @@ export function Layout(props: ParentProps) {
       }
     });
 
-    onCleanup(unsub);
+    onCleanup(() => {
+      unsub();
+      if (sessionsTimer !== undefined) clearTimeout(sessionsTimer);
+    });
   });
 
   onMount(() => {
