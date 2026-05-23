@@ -796,14 +796,14 @@ export function Session() {
     const poll = () => {
       if (state.pending || state.stopped) return;
       state.pending = true;
-      sync.session.sync(id)
-        .then((synced) => synced ? client.session.status({ directory }) : undefined)
+      client.session.status({ directory })
         .then((res) => {
           if (state.stopped || sessionId() !== id) return;
-          const status = res?.data?.[id]?.type;
-          const polled = res?.data?.[id];
+          const polled = res.data?.[id];
+          const status = polled?.type;
           if (polled) events.setSessionStatus(id, polled);
           if (status === "idle") {
+            if (sync.sseUnhealthy()) void sync.session.sync(id);
             setOptimisticMessage(null);
             setPendingUserMessageText(null);
             wasProcessing.value = false;
