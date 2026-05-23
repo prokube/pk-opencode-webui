@@ -804,7 +804,7 @@ export function Session() {
           const polled = res.data?.[id];
           const status = polled?.type;
           if (polled) events.setSessionStatus(id, polled);
-          if (status === "idle") {
+          if (status !== "busy" && status !== "retry") {
             setOptimisticMessage(null);
             setPendingUserMessageText(null);
             wasProcessing.value = false;
@@ -834,12 +834,13 @@ export function Session() {
     if (!id || !processing()) return;
     const timer = setTimeout(() => {
       if (!processing() || sessionId() !== id) return;
-      client.session.status({ directory })
+      const dir = directory || base64Decode(params.dir);
+      client.session.status({ directory: dir })
         .then((res) => {
           const polled = (res.data ?? {})[id];
-          if (!polled || sessionId() !== id) return;
-          events.setSessionStatus(id, polled);
-          if (polled.type !== "busy" && polled.type !== "retry") {
+          if (sessionId() !== id) return;
+          if (polled) events.setSessionStatus(id, polled);
+          if (!polled || (polled.type !== "busy" && polled.type !== "retry")) {
             setProcessing(false);
           }
         })
