@@ -257,6 +257,13 @@ export function Session() {
     return msgs.slice(0, revertIndex);
   }
 
+  function assistantFinished(id: string) {
+    const msgs = visibleSyncMessages(id);
+    const last = msgs[msgs.length - 1]?.info;
+    if (last?.role !== "assistant") return false;
+    return last.time.completed !== undefined || !!last.error || !!last.finish;
+  }
+
   // Viewport-aware maximum matching the CSS max-height on the textarea
   function maxInputHeight() {
     return Math.max(200, window.innerHeight - 200);
@@ -794,6 +801,12 @@ export function Session() {
 
     const dir = directory || base64Decode(params.dir);
     const state = { pending: false, stopped: false, interval: undefined as ReturnType<typeof setInterval> | undefined };
+    const finish = () => {
+      setOptimisticMessage(null);
+      setPendingUserMessageText(null);
+      wasProcessing.value = false;
+      setProcessing(false);
+    };
     const poll = () => {
       if (state.pending || state.stopped) return;
       state.pending = true;
@@ -805,10 +818,14 @@ export function Session() {
           const status = polled?.type;
           if (polled) events.setSessionStatus(id, polled);
           if (status !== "busy" && status !== "retry") {
-            setOptimisticMessage(null);
-            setPendingUserMessageText(null);
-            wasProcessing.value = false;
-            setProcessing(false);
+            if (polled) {
+              finish();
+              return;
+            }
+            sync.session.sync(id).then((synced) => {
+              if (state.stopped || sessionId() !== id || !synced) return;
+              if (assistantFinished(id)) finish();
+            });
           }
         })
         .catch((err) => console.warn("[Session] SSE fallback poll failed:", err))
@@ -840,9 +857,15 @@ export function Session() {
           const polled = (res.data ?? {})[id];
           if (sessionId() !== id) return;
           if (polled) events.setSessionStatus(id, polled);
-          if (!polled || (polled.type !== "busy" && polled.type !== "retry")) {
+          if (polled && polled.type !== "busy" && polled.type !== "retry") {
             setProcessing(false);
+            return;
           }
+          if (polled) return;
+          sync.session.sync(id).then((synced) => {
+            if (sessionId() !== id || !synced) return;
+            if (assistantFinished(id)) setProcessing(false);
+          });
         })
         .catch((err) => console.warn("[Session] Watchdog poll failed:", err));
     }, 60_000);
