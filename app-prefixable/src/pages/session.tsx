@@ -790,7 +790,7 @@ export function Session() {
 
   createEffect(() => {
     const id = sessionId();
-    if (!id || !processing() || !sync.sseUnhealthy()) return;
+    if (!id || !processing()) return;
 
     const state = { pending: false, stopped: false };
     const poll = () => {
