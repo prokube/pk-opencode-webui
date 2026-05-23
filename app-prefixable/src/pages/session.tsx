@@ -257,6 +257,13 @@ export function Session() {
     return msgs.slice(0, revertIndex);
   }
 
+  function assistantFinished(id: string) {
+    const msgs = visibleSyncMessages(id);
+    const last = msgs[msgs.length - 1]?.info;
+    if (last?.role !== "assistant") return false;
+    return last.time.completed != null || !!last.error || !!last.finish;
+  }
+
   // Viewport-aware maximum matching the CSS max-height on the textarea
   function maxInputHeight() {
     return Math.max(200, window.innerHeight - 200);
@@ -701,6 +708,13 @@ export function Session() {
   // Track whether the agent was genuinely processing (not initial load)
   const wasProcessing = { value: false };
 
+  function finishProcessing() {
+    setOptimisticMessage(null);
+    setPendingUserMessageText(null);
+    wasProcessing.value = false;
+    setProcessing(false);
+  }
+
   // Keep sessionId in sync with URL params and sync session data.
   // Track the composite dir+id key so the effect fires on directory changes too,
   // preventing drafts from leaking across projects when id stays undefined.
@@ -790,37 +804,45 @@ export function Session() {
 
   createEffect(() => {
     const id = sessionId();
-    if (!id || !processing() || !sync.sseUnhealthy()) return;
+    if (!id || !processing()) return;
 
-    const state = { pending: false, stopped: false };
+    const dir = directory || base64Decode(params.dir);
+    const state = { pending: false, stopped: false, interval: undefined as ReturnType<typeof setInterval> | undefined };
     const poll = () => {
       if (state.pending || state.stopped) return;
       state.pending = true;
-      sync.session.sync(id)
-        .then((synced) => synced ? client.session.status({ directory }) : undefined)
+      if (sync.sseUnhealthy()) void sync.session.sync(id);
+      client.session.status({ directory: dir })
         .then((res) => {
           if (state.stopped || sessionId() !== id) return;
-          const status = res?.data?.[id]?.type;
-          const polled = res?.data?.[id];
+          const polled = res.data?.[id];
+          const status = polled?.type;
           if (polled) events.setSessionStatus(id, polled);
-          if (status === "idle") {
-            setOptimisticMessage(null);
-            setPendingUserMessageText(null);
-            wasProcessing.value = false;
-            setProcessing(false);
+          if (status !== "busy" && status !== "retry") {
+            if (polled) {
+              finishProcessing();
+              return;
+            }
+            sync.session.sync(id).then((synced) => {
+              if (state.stopped || sessionId() !== id || !synced) return;
+              if (assistantFinished(id)) finishProcessing();
+            });
           }
         })
-        .catch((err) => console.warn("[Session] SSE fallback poll failed:", err))
+        .catch((err) => console.warn("[Session] Status poll failed:", err))
         .finally(() => {
           state.pending = false;
         });
     };
 
-    poll();
-    const interval = setInterval(poll, 2000);
+    const timer = setTimeout(() => {
+      poll();
+      state.interval = setInterval(poll, 5000);
+    }, 5000);
     onCleanup(() => {
       state.stopped = true;
-      clearInterval(interval);
+      clearTimeout(timer);
+      if (state.interval) clearInterval(state.interval);
     });
   });
 
@@ -830,14 +852,21 @@ export function Session() {
     if (!id || !processing()) return;
     const timer = setTimeout(() => {
       if (!processing() || sessionId() !== id) return;
-      client.session.status({ directory })
+      const dir = directory || base64Decode(params.dir);
+      client.session.status({ directory: dir })
         .then((res) => {
           const polled = (res.data ?? {})[id];
-          if (!polled || sessionId() !== id) return;
-          events.setSessionStatus(id, polled);
-          if (polled.type !== "busy" && polled.type !== "retry") {
-            setProcessing(false);
+          if (sessionId() !== id) return;
+          if (polled) events.setSessionStatus(id, polled);
+          if (polled && polled.type !== "busy" && polled.type !== "retry") {
+            finishProcessing();
+            return;
           }
+          if (polled) return;
+          sync.session.sync(id).then((synced) => {
+            if (sessionId() !== id || !synced) return;
+            if (assistantFinished(id)) finishProcessing();
+          });
         })
         .catch((err) => console.warn("[Session] Watchdog poll failed:", err));
     }, 60_000);
