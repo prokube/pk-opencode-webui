@@ -261,7 +261,7 @@ export function Session() {
     const msgs = visibleSyncMessages(id);
     const last = msgs[msgs.length - 1]?.info;
     if (last?.role !== "assistant") return false;
-    return last.time.completed !== undefined || !!last.error || !!last.finish;
+    return last.time.completed != null || !!last.error || !!last.finish;
   }
 
   // Viewport-aware maximum matching the CSS max-height on the textarea
@@ -708,6 +708,13 @@ export function Session() {
   // Track whether the agent was genuinely processing (not initial load)
   const wasProcessing = { value: false };
 
+  function finishProcessing() {
+    setOptimisticMessage(null);
+    setPendingUserMessageText(null);
+    wasProcessing.value = false;
+    setProcessing(false);
+  }
+
   // Keep sessionId in sync with URL params and sync session data.
   // Track the composite dir+id key so the effect fires on directory changes too,
   // preventing drafts from leaking across projects when id stays undefined.
@@ -801,12 +808,6 @@ export function Session() {
 
     const dir = directory || base64Decode(params.dir);
     const state = { pending: false, stopped: false, interval: undefined as ReturnType<typeof setInterval> | undefined };
-    const finish = () => {
-      setOptimisticMessage(null);
-      setPendingUserMessageText(null);
-      wasProcessing.value = false;
-      setProcessing(false);
-    };
     const poll = () => {
       if (state.pending || state.stopped) return;
       state.pending = true;
@@ -819,16 +820,16 @@ export function Session() {
           if (polled) events.setSessionStatus(id, polled);
           if (status !== "busy" && status !== "retry") {
             if (polled) {
-              finish();
+              finishProcessing();
               return;
             }
             sync.session.sync(id).then((synced) => {
               if (state.stopped || sessionId() !== id || !synced) return;
-              if (assistantFinished(id)) finish();
+              if (assistantFinished(id)) finishProcessing();
             });
           }
         })
-        .catch((err) => console.warn("[Session] SSE fallback poll failed:", err))
+        .catch((err) => console.warn("[Session] Status poll failed:", err))
         .finally(() => {
           state.pending = false;
         });
@@ -858,13 +859,13 @@ export function Session() {
           if (sessionId() !== id) return;
           if (polled) events.setSessionStatus(id, polled);
           if (polled && polled.type !== "busy" && polled.type !== "retry") {
-            setProcessing(false);
+            finishProcessing();
             return;
           }
           if (polled) return;
           sync.session.sync(id).then((synced) => {
             if (sessionId() !== id || !synced) return;
-            if (assistantFinished(id)) setProcessing(false);
+            if (assistantFinished(id)) finishProcessing();
           });
         })
         .catch((err) => console.warn("[Session] Watchdog poll failed:", err));
