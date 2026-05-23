@@ -792,18 +792,19 @@ export function Session() {
     const id = sessionId();
     if (!id || !processing()) return;
 
-    const state = { pending: false, stopped: false };
+    const dir = directory || base64Decode(params.dir);
+    const state = { pending: false, stopped: false, interval: undefined as ReturnType<typeof setInterval> | undefined };
     const poll = () => {
       if (state.pending || state.stopped) return;
       state.pending = true;
-      client.session.status({ directory })
+      if (sync.sseUnhealthy()) void sync.session.sync(id);
+      client.session.status({ directory: dir })
         .then((res) => {
           if (state.stopped || sessionId() !== id) return;
           const polled = res.data?.[id];
           const status = polled?.type;
           if (polled) events.setSessionStatus(id, polled);
           if (status === "idle") {
-            if (sync.sseUnhealthy()) void sync.session.sync(id);
             setOptimisticMessage(null);
             setPendingUserMessageText(null);
             wasProcessing.value = false;
@@ -816,11 +817,14 @@ export function Session() {
         });
     };
 
-    poll();
-    const interval = setInterval(poll, 2000);
+    const timer = setTimeout(() => {
+      poll();
+      state.interval = setInterval(poll, 5000);
+    }, 5000);
     onCleanup(() => {
       state.stopped = true;
-      clearInterval(interval);
+      clearTimeout(timer);
+      if (state.interval) clearInterval(state.interval);
     });
   });
 
