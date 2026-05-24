@@ -66,6 +66,7 @@ export function GlobalEventsProvider(props: ParentProps & {
   // missed/renamed completion event cannot leave the project badge spinning.
   const statusPollTimers = new Map<string, ReturnType<typeof setInterval>>()
   const statusPollPending = new Set<string>()
+  const statusVersions = new Map<string, Map<string, number>>()
 
   // Per-directory tracking sets for deduplication
   const perDir = new Map<string, {
@@ -92,6 +93,16 @@ export function GlobalEventsProvider(props: ParentProps & {
     }
     perDir.set(dir, tracking)
     return tracking
+  }
+
+  function statusVersion(dir: string, sid: string) {
+    return statusVersions.get(dir)?.get(sid) ?? 0
+  }
+
+  function bumpStatusVersion(dir: string, sid: string) {
+    const versions = statusVersions.get(dir) ?? new Map<string, number>()
+    versions.set(sid, (versions.get(sid) ?? 0) + 1)
+    statusVersions.set(dir, versions)
   }
 
   function recalcAlerts(dir: string) {
@@ -266,6 +277,7 @@ export function GlobalEventsProvider(props: ParentProps & {
         if (!sid || !type) return
         if (tracking.subAgents.has(sid)) return
         if (tracking.rootSessions && !tracking.rootSessions.has(sid)) return
+        bumpStatusVersion(dir, sid)
 
         if (type === "busy" || type === "retry") {
           tracking.busySessions.add(sid)
@@ -359,6 +371,7 @@ export function GlobalEventsProvider(props: ParentProps & {
       permReseedTimers.delete(dir)
     }
     stopStatusPoll(dir)
+    statusVersions.delete(dir)
     perDir.delete(dir)
     setAlerts(produce((draft) => { delete draft[dir] }))
   }
@@ -483,7 +496,8 @@ export function GlobalEventsProvider(props: ParentProps & {
   function seedStatuses(dir: string, roots: Set<string> | null) {
     const tracking = perDir.get(dir)
     if (!tracking) return  // disconnected: do not recreate tracking while seeding
-    const before = new Set(tracking.busySessions)
+    const before = new Map<string, number>()
+    for (const sid of tracking.busySessions) before.set(sid, statusVersion(dir, sid))
     return fetch(`${serverUrl()}/session/status?directory=${encodeURIComponent(dir)}`, { headers: authHeaders() })
       .then((r) => r.json())
       .then((data) => {
@@ -495,6 +509,7 @@ export function GlobalEventsProvider(props: ParentProps & {
         }
         tracking.busySessions.clear()
         for (const [sid, s] of Object.entries(statuses)) {
+          if (before.has(sid) && statusVersion(dir, sid) !== before.get(sid)) continue
           if (!tracking.subAgents.has(sid) && (roots === null || roots.has(sid)) && (s?.type === "busy" || s?.type === "retry")) {
             tracking.busySessions.add(sid)
           }
@@ -534,6 +549,7 @@ export function GlobalEventsProvider(props: ParentProps & {
         for (const [, timer] of statusPollTimers) clearInterval(timer)
         statusPollTimers.clear()
         statusPollPending.clear()
+        statusVersions.clear()
         return
       }
 
@@ -575,6 +591,7 @@ export function GlobalEventsProvider(props: ParentProps & {
     }
     statusPollTimers.clear()
     statusPollPending.clear()
+    statusVersions.clear()
   })
 
   function badge(directory: string) {
