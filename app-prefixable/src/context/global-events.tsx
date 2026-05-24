@@ -65,7 +65,7 @@ export function GlobalEventsProvider(props: ParentProps & {
   // While a project is marked busy, periodically reconcile with REST so a
   // missed/renamed completion event cannot leave the project badge spinning.
   const statusPollTimers = new Map<string, ReturnType<typeof setInterval>>()
-  const statusPollPending = new Set<string>()
+  const statusPollPending = new Map<string, symbol>()
   const statusVersions = new Map<string, Map<string, number>>()
   const generations = new Map<string, number>()
 
@@ -128,6 +128,7 @@ export function GlobalEventsProvider(props: ParentProps & {
     if (!timer) return
     clearInterval(timer)
     statusPollTimers.delete(dir)
+    statusPollPending.delete(dir)
   }
 
   function ensureStatusPoll(dir: string) {
@@ -147,9 +148,12 @@ export function GlobalEventsProvider(props: ParentProps & {
         return
       }
       if (statusPollPending.has(dir)) return
-      statusPollPending.add(dir)
+      const token = Symbol()
+      statusPollPending.set(dir, token)
       Promise.resolve(seedStatuses(dir, tracking.rootSessions, generations.get(dir) ?? 0))
-        .finally(() => statusPollPending.delete(dir))
+        .finally(() => {
+          if (statusPollPending.get(dir) === token) statusPollPending.delete(dir)
+        })
     }, 5000))
   }
 
