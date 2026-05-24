@@ -67,6 +67,7 @@ export function GlobalEventsProvider(props: ParentProps & {
   const statusPollTimers = new Map<string, ReturnType<typeof setInterval>>()
   const statusPollPending = new Set<string>()
   const statusVersions = new Map<string, Map<string, number>>()
+  const generations = new Map<string, number>()
 
   // Per-directory tracking sets for deduplication
   const perDir = new Map<string, {
@@ -147,7 +148,7 @@ export function GlobalEventsProvider(props: ParentProps & {
       }
       if (statusPollPending.has(dir)) return
       statusPollPending.add(dir)
-      Promise.resolve(seedStatuses(dir, tracking.rootSessions))
+      Promise.resolve(seedStatuses(dir, tracking.rootSessions, generations.get(dir) ?? 0))
         .finally(() => statusPollPending.delete(dir))
     }, 5000))
   }
@@ -167,6 +168,8 @@ export function GlobalEventsProvider(props: ParentProps & {
     const dirParam = `?directory=${encodeURIComponent(dir)}`
     const url = `${serverUrl()}/event${dirParam}`
     const controller = new AbortController()
+    const generation = (generations.get(dir) ?? 0) + 1
+    generations.set(dir, generation)
 
     connections.set(dir, { controller })
 
@@ -312,7 +315,7 @@ export function GlobalEventsProvider(props: ParentProps & {
         // Seed runs concurrently so events arriving during seed are captured
         // under the MAX_BUFFER cap instead of accumulating unbounded in the
         // network buffer.
-        seedDirectory(dir).then(() => {
+        seedDirectory(dir, generation).then(() => {
           const conn = connections.get(dir)
           if (!conn || conn.controller !== controller) return
           seeded = true
@@ -407,13 +410,14 @@ export function GlobalEventsProvider(props: ParentProps & {
   // Seed permission/question/status state from REST for a directory.
   // First fetches root session IDs, then seeds only root sessions.
   // Returns a promise that resolves when all seeds complete (or fail).
-  async function seedDirectory(dir: string) {
+  async function seedDirectory(dir: string, generation = generations.get(dir) ?? 0) {
     // Ensure tracking exists before any async work so the perDir.has(dir)
     // guards in seed functions correctly detect disconnection (rather than
     // failing because the entry was never created).
     const tracking = getTracking(dir)
     const roots = await fetchRootSessionIds(dir)
     if (!perDir.has(dir)) return  // disconnected while fetching
+    if ((generations.get(dir) ?? 0) !== generation) return
 
     // Store root session IDs so SSE handlers can filter pre-existing
     // sub-agents that we never saw a session.created event for.
@@ -429,6 +433,7 @@ export function GlobalEventsProvider(props: ParentProps & {
         })
         .then((data) => {
           if (!data || !perDir.has(dir)) return
+          if ((generations.get(dir) ?? 0) !== generation) return
           const all = Array.isArray(data) ? data : (data?.data ?? [])
           for (const s of all) {
             if (s?.parentID && s?.id) tracking.subAgents.add(s.id as string)
@@ -440,7 +445,7 @@ export function GlobalEventsProvider(props: ParentProps & {
     await Promise.allSettled([
       seedPermissions(dir, roots),
       seedQuestions(dir, roots),
-      seedStatuses(dir, roots),
+      seedStatuses(dir, roots, generation),
     ])
   }
 
@@ -494,7 +499,7 @@ export function GlobalEventsProvider(props: ParentProps & {
       .catch((e) => console.warn("[GlobalEvents] Failed to seed questions for", dir, e))
   }
 
-  function seedStatuses(dir: string, roots: Set<string> | null) {
+  function seedStatuses(dir: string, roots: Set<string> | null, generation = generations.get(dir) ?? 0) {
     const tracking = perDir.get(dir)
     if (!tracking) return  // disconnected: do not recreate tracking while seeding
     const before = new Map(statusVersions.get(dir) ?? [])
@@ -505,6 +510,7 @@ export function GlobalEventsProvider(props: ParentProps & {
       .then((r) => r.json())
       .then((data) => {
         if (!perDir.has(dir)) return  // disconnected while fetching
+        if ((generations.get(dir) ?? 0) !== generation) return
         const statuses = (data?.data ?? data ?? {}) as Record<string, { type?: string }>
         const added = new Set<string>()
         for (const sid of tracking.busySessions) {
@@ -553,6 +559,7 @@ export function GlobalEventsProvider(props: ParentProps & {
         statusPollTimers.clear()
         statusPollPending.clear()
         statusVersions.clear()
+        generations.clear()
         return
       }
 
@@ -595,6 +602,7 @@ export function GlobalEventsProvider(props: ParentProps & {
     statusPollTimers.clear()
     statusPollPending.clear()
     statusVersions.clear()
+    generations.clear()
   })
 
   function badge(directory: string) {
