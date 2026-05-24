@@ -120,6 +120,10 @@ export function GlobalEventsProvider(props: ParentProps & {
   function ensureStatusPoll(dir: string) {
     if (statusPollTimers.has(dir)) return
     statusPollTimers.set(dir, setInterval(() => {
+      if (disposed) {
+        stopStatusPoll(dir)
+        return
+      }
       const tracking = perDir.get(dir)
       if (!tracking || tracking.busySessions.size === 0) {
         stopStatusPoll(dir)
@@ -510,6 +514,8 @@ export function GlobalEventsProvider(props: ParentProps & {
         reconnectTimers.clear()
         for (const [, timer] of permReseedTimers) clearTimeout(timer)
         permReseedTimers.clear()
+        for (const [, timer] of statusPollTimers) clearInterval(timer)
+        statusPollTimers.clear()
         return
       }
 
@@ -546,6 +552,10 @@ export function GlobalEventsProvider(props: ParentProps & {
       clearTimeout(timer)
     }
     permReseedTimers.clear()
+    for (const [, timer] of statusPollTimers) {
+      clearInterval(timer)
+    }
+    statusPollTimers.clear()
   })
 
   function badge(directory: string) {
