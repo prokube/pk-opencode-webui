@@ -62,6 +62,10 @@ export function GlobalEventsProvider(props: ParentProps & {
   // events from spawning overlapping fetch requests that race each other
   const permReseedTimers = new Map<string, ReturnType<typeof setTimeout>>()
 
+  // While a project is marked busy, periodically reconcile with REST so a
+  // missed/renamed completion event cannot leave the project badge spinning.
+  const statusPollTimers = new Map<string, ReturnType<typeof setInterval>>()
+
   // Per-directory tracking sets for deduplication
   const perDir = new Map<string, {
     permissionSessions: Set<string>
@@ -104,6 +108,25 @@ export function GlobalEventsProvider(props: ParentProps & {
       busy: tracking.busySessions.size,
       totalSessions: allSessions.size,
     })
+  }
+
+  function stopStatusPoll(dir: string) {
+    const timer = statusPollTimers.get(dir)
+    if (!timer) return
+    clearInterval(timer)
+    statusPollTimers.delete(dir)
+  }
+
+  function ensureStatusPoll(dir: string) {
+    if (statusPollTimers.has(dir)) return
+    statusPollTimers.set(dir, setInterval(() => {
+      const tracking = perDir.get(dir)
+      if (!tracking || tracking.busySessions.size === 0) {
+        stopStatusPoll(dir)
+        return
+      }
+      seedStatuses(dir, tracking.rootSessions)
+    }, 5000))
   }
 
   function connectToDirectory(dir: string) {
@@ -223,18 +246,19 @@ export function GlobalEventsProvider(props: ParentProps & {
         return
       }
 
-      if (event.type === "session.status") {
+      if (event.type === "session.status" || event.type === "session.idle") {
         const props = event.properties as { sessionID?: string; status?: { type?: string } }
         const sid = props?.sessionID
-        const type = props?.status?.type
+        const type = event.type === "session.idle" ? "idle" : props?.status?.type
         if (!sid || !type) return
         if (tracking.subAgents.has(sid)) return
         if (tracking.rootSessions && !tracking.rootSessions.has(sid)) return
 
         if (type === "busy" || type === "retry") {
           tracking.busySessions.add(sid)
+          ensureStatusPoll(dir)
         }
-        if (type === "idle") {
+        if (type !== "busy" && type !== "retry") {
           tracking.busySessions.delete(sid)
         }
         recalcAlerts(dir)
@@ -319,6 +343,7 @@ export function GlobalEventsProvider(props: ParentProps & {
       clearTimeout(reseed)
       permReseedTimers.delete(dir)
     }
+    stopStatusPoll(dir)
     perDir.delete(dir)
     setAlerts(produce((draft) => { delete draft[dir] }))
   }
@@ -454,6 +479,8 @@ export function GlobalEventsProvider(props: ParentProps & {
             tracking.busySessions.add(sid)
           }
         }
+        if (tracking.busySessions.size > 0) ensureStatusPoll(dir)
+        if (tracking.busySessions.size === 0) stopStatusPoll(dir)
         recalcAlerts(dir)
       })
       .catch((e) => console.warn("[GlobalEvents] Failed to seed statuses for", dir, e))
