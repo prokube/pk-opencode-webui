@@ -505,7 +505,7 @@ export function GlobalEventsProvider(props: ParentProps & {
         const statuses = (data?.data ?? data ?? {}) as Record<string, { type?: string }>
         const added = new Set<string>()
         for (const sid of tracking.busySessions) {
-          if (!before.has(sid) && !tracking.subAgents.has(sid)) added.add(sid)
+          if ((!before.has(sid) || statusVersion(dir, sid) !== before.get(sid)) && !tracking.subAgents.has(sid)) added.add(sid)
         }
         tracking.busySessions.clear()
         for (const [sid, s] of Object.entries(statuses)) {
