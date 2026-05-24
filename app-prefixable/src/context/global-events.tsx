@@ -127,7 +127,6 @@ export function GlobalEventsProvider(props: ParentProps & {
     if (!timer) return
     clearInterval(timer)
     statusPollTimers.delete(dir)
-    statusPollPending.delete(dir)
   }
 
   function ensureStatusPoll(dir: string) {
@@ -201,6 +200,7 @@ export function GlobalEventsProvider(props: ParentProps & {
         if (info?.id && info?.parentID) {
           const sid = info.id
           tracking.subAgents.add(sid)
+          bumpStatusVersion(dir, sid)
           let changed = false
           if (tracking.permissionSessions.delete(sid)) changed = true
           if (tracking.questionSessions.delete(sid)) changed = true
@@ -218,6 +218,7 @@ export function GlobalEventsProvider(props: ParentProps & {
         const sid = info?.id
         if (sid) {
           tracking.subAgents.delete(sid)
+          bumpStatusVersion(dir, sid)
           let changed = false
           if (tracking.permissionSessions.delete(sid)) changed = true
           if (tracking.questionSessions.delete(sid)) changed = true
