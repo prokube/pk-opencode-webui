@@ -62,6 +62,13 @@ export function GlobalEventsProvider(props: ParentProps & {
   // events from spawning overlapping fetch requests that race each other
   const permReseedTimers = new Map<string, ReturnType<typeof setTimeout>>()
 
+  // While a project is marked busy, periodically reconcile with REST so a
+  // missed/renamed completion event cannot leave the project badge spinning.
+  const statusPollTimers = new Map<string, ReturnType<typeof setInterval>>()
+  const statusPollPending = new Map<string, symbol>()
+  const statusVersions = new Map<string, Map<string, number>>()
+  const generations = new Map<string, number>()
+
   // Per-directory tracking sets for deduplication
   const perDir = new Map<string, {
     permissionSessions: Set<string>
@@ -89,6 +96,16 @@ export function GlobalEventsProvider(props: ParentProps & {
     return tracking
   }
 
+  function statusVersion(dir: string, sid: string) {
+    return statusVersions.get(dir)?.get(sid) ?? 0
+  }
+
+  function bumpStatusVersion(dir: string, sid: string) {
+    const versions = statusVersions.get(dir) ?? new Map<string, number>()
+    versions.set(sid, (versions.get(sid) ?? 0) + 1)
+    statusVersions.set(dir, versions)
+  }
+
   function recalcAlerts(dir: string) {
     const tracking = perDir.get(dir)
     if (!tracking) return
@@ -106,6 +123,40 @@ export function GlobalEventsProvider(props: ParentProps & {
     })
   }
 
+  function stopStatusPoll(dir: string) {
+    const timer = statusPollTimers.get(dir)
+    if (!timer) return
+    clearInterval(timer)
+    statusPollTimers.delete(dir)
+    statusPollPending.delete(dir)
+  }
+
+  function ensureStatusPoll(dir: string) {
+    if (statusPollTimers.has(dir)) return
+    statusPollTimers.set(dir, setInterval(() => {
+      if (disposed) {
+        stopStatusPoll(dir)
+        return
+      }
+      const tracking = perDir.get(dir)
+      if (!tracking || tracking.busySessions.size === 0) {
+        stopStatusPoll(dir)
+        return
+      }
+      if (!connections.has(dir)) {
+        stopStatusPoll(dir)
+        return
+      }
+      if (statusPollPending.has(dir)) return
+      const token = Symbol()
+      statusPollPending.set(dir, token)
+      Promise.resolve(seedStatuses(dir, tracking.rootSessions, generations.get(dir) ?? 0))
+        .finally(() => {
+          if (statusPollPending.get(dir) === token) statusPollPending.delete(dir)
+        })
+    }, 5000))
+  }
+
   function connectToDirectory(dir: string) {
     if (connections.has(dir)) return
     // Don't connect when a remote server is active
@@ -121,6 +172,8 @@ export function GlobalEventsProvider(props: ParentProps & {
     const dirParam = `?directory=${encodeURIComponent(dir)}`
     const url = `${serverUrl()}/event${dirParam}`
     const controller = new AbortController()
+    const generation = (generations.get(dir) ?? 0) + 1
+    generations.set(dir, generation)
 
     connections.set(dir, { controller })
 
@@ -154,6 +207,7 @@ export function GlobalEventsProvider(props: ParentProps & {
         if (info?.id && info?.parentID) {
           const sid = info.id
           tracking.subAgents.add(sid)
+          bumpStatusVersion(dir, sid)
           let changed = false
           if (tracking.permissionSessions.delete(sid)) changed = true
           if (tracking.questionSessions.delete(sid)) changed = true
@@ -171,6 +225,7 @@ export function GlobalEventsProvider(props: ParentProps & {
         const sid = info?.id
         if (sid) {
           tracking.subAgents.delete(sid)
+          bumpStatusVersion(dir, sid)
           let changed = false
           if (tracking.permissionSessions.delete(sid)) changed = true
           if (tracking.questionSessions.delete(sid)) changed = true
@@ -223,20 +278,23 @@ export function GlobalEventsProvider(props: ParentProps & {
         return
       }
 
-      if (event.type === "session.status") {
+      if (event.type === "session.status" || event.type === "session.idle") {
         const props = event.properties as { sessionID?: string; status?: { type?: string } }
         const sid = props?.sessionID
-        const type = props?.status?.type
+        const type = event.type === "session.idle" ? "idle" : props?.status?.type
         if (!sid || !type) return
         if (tracking.subAgents.has(sid)) return
         if (tracking.rootSessions && !tracking.rootSessions.has(sid)) return
+        bumpStatusVersion(dir, sid)
 
         if (type === "busy" || type === "retry") {
           tracking.busySessions.add(sid)
+          ensureStatusPoll(dir)
         }
-        if (type === "idle") {
+        if (type !== "busy" && type !== "retry") {
           tracking.busySessions.delete(sid)
         }
+        if (tracking.busySessions.size === 0) stopStatusPoll(dir)
         recalcAlerts(dir)
       }
     }
@@ -261,7 +319,7 @@ export function GlobalEventsProvider(props: ParentProps & {
         // Seed runs concurrently so events arriving during seed are captured
         // under the MAX_BUFFER cap instead of accumulating unbounded in the
         // network buffer.
-        seedDirectory(dir).then(() => {
+        seedDirectory(dir, generation).then(() => {
           const conn = connections.get(dir)
           if (!conn || conn.controller !== controller) return
           seeded = true
@@ -285,6 +343,7 @@ export function GlobalEventsProvider(props: ParentProps & {
         const old = connections.get(dir)
         if (old) old.controller.abort()
         connections.delete(dir)
+        stopStatusPoll(dir)
         const reconnectTimer = setTimeout(() => {
           reconnectTimers.delete(dir)
           if (disposed) return
@@ -319,6 +378,8 @@ export function GlobalEventsProvider(props: ParentProps & {
       clearTimeout(reseed)
       permReseedTimers.delete(dir)
     }
+    stopStatusPoll(dir)
+    statusVersions.delete(dir)
     perDir.delete(dir)
     setAlerts(produce((draft) => { delete draft[dir] }))
   }
@@ -353,13 +414,14 @@ export function GlobalEventsProvider(props: ParentProps & {
   // Seed permission/question/status state from REST for a directory.
   // First fetches root session IDs, then seeds only root sessions.
   // Returns a promise that resolves when all seeds complete (or fail).
-  async function seedDirectory(dir: string) {
+  async function seedDirectory(dir: string, generation = generations.get(dir) ?? 0) {
     // Ensure tracking exists before any async work so the perDir.has(dir)
     // guards in seed functions correctly detect disconnection (rather than
     // failing because the entry was never created).
     const tracking = getTracking(dir)
     const roots = await fetchRootSessionIds(dir)
     if (!perDir.has(dir)) return  // disconnected while fetching
+    if ((generations.get(dir) ?? 0) !== generation) return
 
     // Store root session IDs so SSE handlers can filter pre-existing
     // sub-agents that we never saw a session.created event for.
@@ -375,6 +437,7 @@ export function GlobalEventsProvider(props: ParentProps & {
         })
         .then((data) => {
           if (!data || !perDir.has(dir)) return
+          if ((generations.get(dir) ?? 0) !== generation) return
           const all = Array.isArray(data) ? data : (data?.data ?? [])
           for (const s of all) {
             if (s?.parentID && s?.id) tracking.subAgents.add(s.id as string)
@@ -386,7 +449,7 @@ export function GlobalEventsProvider(props: ParentProps & {
     await Promise.allSettled([
       seedPermissions(dir, roots),
       seedQuestions(dir, roots),
-      seedStatuses(dir, roots),
+      seedStatuses(dir, roots, generation),
     ])
   }
 
@@ -440,20 +503,33 @@ export function GlobalEventsProvider(props: ParentProps & {
       .catch((e) => console.warn("[GlobalEvents] Failed to seed questions for", dir, e))
   }
 
-  function seedStatuses(dir: string, roots: Set<string> | null) {
+  function seedStatuses(dir: string, roots: Set<string> | null, generation = generations.get(dir) ?? 0) {
     const tracking = perDir.get(dir)
     if (!tracking) return  // disconnected: do not recreate tracking while seeding
+    const before = new Map(statusVersions.get(dir) ?? [])
+    for (const sid of tracking.busySessions) {
+      if (!before.has(sid)) before.set(sid, 0)
+    }
     return fetch(`${serverUrl()}/session/status?directory=${encodeURIComponent(dir)}`, { headers: authHeaders() })
       .then((r) => r.json())
       .then((data) => {
         if (!perDir.has(dir)) return  // disconnected while fetching
+        if ((generations.get(dir) ?? 0) !== generation) return
         const statuses = (data?.data ?? data ?? {}) as Record<string, { type?: string }>
+        const added = new Set<string>()
+        for (const sid of tracking.busySessions) {
+          if ((!before.has(sid) || statusVersion(dir, sid) !== before.get(sid)) && !tracking.subAgents.has(sid)) added.add(sid)
+        }
         tracking.busySessions.clear()
         for (const [sid, s] of Object.entries(statuses)) {
+          if (statusVersion(dir, sid) !== (before.get(sid) ?? 0)) continue
           if (!tracking.subAgents.has(sid) && (roots === null || roots.has(sid)) && (s?.type === "busy" || s?.type === "retry")) {
             tracking.busySessions.add(sid)
           }
         }
+        for (const sid of added) tracking.busySessions.add(sid)
+        if (tracking.busySessions.size > 0) ensureStatusPoll(dir)
+        if (tracking.busySessions.size === 0) stopStatusPoll(dir)
         recalcAlerts(dir)
       })
       .catch((e) => console.warn("[GlobalEvents] Failed to seed statuses for", dir, e))
@@ -483,6 +559,11 @@ export function GlobalEventsProvider(props: ParentProps & {
         reconnectTimers.clear()
         for (const [, timer] of permReseedTimers) clearTimeout(timer)
         permReseedTimers.clear()
+        for (const [, timer] of statusPollTimers) clearInterval(timer)
+        statusPollTimers.clear()
+        statusPollPending.clear()
+        statusVersions.clear()
+        generations.clear()
         return
       }
 
@@ -519,6 +600,13 @@ export function GlobalEventsProvider(props: ParentProps & {
       clearTimeout(timer)
     }
     permReseedTimers.clear()
+    for (const [, timer] of statusPollTimers) {
+      clearInterval(timer)
+    }
+    statusPollTimers.clear()
+    statusPollPending.clear()
+    statusVersions.clear()
+    generations.clear()
   })
 
   function badge(directory: string) {
