@@ -65,6 +65,7 @@ export function GlobalEventsProvider(props: ParentProps & {
   // While a project is marked busy, periodically reconcile with REST so a
   // missed/renamed completion event cannot leave the project badge spinning.
   const statusPollTimers = new Map<string, ReturnType<typeof setInterval>>()
+  const statusPollPending = new Set<string>()
 
   // Per-directory tracking sets for deduplication
   const perDir = new Map<string, {
@@ -115,6 +116,7 @@ export function GlobalEventsProvider(props: ParentProps & {
     if (!timer) return
     clearInterval(timer)
     statusPollTimers.delete(dir)
+    statusPollPending.delete(dir)
   }
 
   function ensureStatusPoll(dir: string) {
@@ -129,7 +131,10 @@ export function GlobalEventsProvider(props: ParentProps & {
         stopStatusPoll(dir)
         return
       }
-      seedStatuses(dir, tracking.rootSessions)
+      if (statusPollPending.has(dir)) return
+      statusPollPending.add(dir)
+      Promise.resolve(seedStatuses(dir, tracking.rootSessions))
+        .finally(() => statusPollPending.delete(dir))
     }, 5000))
   }
 
@@ -265,6 +270,7 @@ export function GlobalEventsProvider(props: ParentProps & {
         if (type !== "busy" && type !== "retry") {
           tracking.busySessions.delete(sid)
         }
+        if (tracking.busySessions.size === 0) stopStatusPoll(dir)
         recalcAlerts(dir)
       }
     }
@@ -516,6 +522,7 @@ export function GlobalEventsProvider(props: ParentProps & {
         permReseedTimers.clear()
         for (const [, timer] of statusPollTimers) clearInterval(timer)
         statusPollTimers.clear()
+        statusPollPending.clear()
         return
       }
 
@@ -556,6 +563,7 @@ export function GlobalEventsProvider(props: ParentProps & {
       clearInterval(timer)
     }
     statusPollTimers.clear()
+    statusPollPending.clear()
   })
 
   function badge(directory: string) {
