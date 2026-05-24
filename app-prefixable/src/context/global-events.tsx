@@ -131,6 +131,10 @@ export function GlobalEventsProvider(props: ParentProps & {
         stopStatusPoll(dir)
         return
       }
+      if (!connections.has(dir)) {
+        stopStatusPoll(dir)
+        return
+      }
       if (statusPollPending.has(dir)) return
       statusPollPending.add(dir)
       Promise.resolve(seedStatuses(dir, tracking.rootSessions))
@@ -319,6 +323,7 @@ export function GlobalEventsProvider(props: ParentProps & {
         const old = connections.get(dir)
         if (old) old.controller.abort()
         connections.delete(dir)
+        stopStatusPoll(dir)
         const reconnectTimer = setTimeout(() => {
           reconnectTimers.delete(dir)
           if (disposed) return
@@ -478,17 +483,23 @@ export function GlobalEventsProvider(props: ParentProps & {
   function seedStatuses(dir: string, roots: Set<string> | null) {
     const tracking = perDir.get(dir)
     if (!tracking) return  // disconnected: do not recreate tracking while seeding
+    const before = new Set(tracking.busySessions)
     return fetch(`${serverUrl()}/session/status?directory=${encodeURIComponent(dir)}`, { headers: authHeaders() })
       .then((r) => r.json())
       .then((data) => {
         if (!perDir.has(dir)) return  // disconnected while fetching
         const statuses = (data?.data ?? data ?? {}) as Record<string, { type?: string }>
+        const added = new Set<string>()
+        for (const sid of tracking.busySessions) {
+          if (!before.has(sid) && !tracking.subAgents.has(sid)) added.add(sid)
+        }
         tracking.busySessions.clear()
         for (const [sid, s] of Object.entries(statuses)) {
           if (!tracking.subAgents.has(sid) && (roots === null || roots.has(sid)) && (s?.type === "busy" || s?.type === "retry")) {
             tracking.busySessions.add(sid)
           }
         }
+        for (const sid of added) tracking.busySessions.add(sid)
         if (tracking.busySessions.size > 0) ensureStatusPoll(dir)
         if (tracking.busySessions.size === 0) stopStatusPoll(dir)
         recalcAlerts(dir)
