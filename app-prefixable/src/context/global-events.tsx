@@ -497,8 +497,10 @@ export function GlobalEventsProvider(props: ParentProps & {
   function seedStatuses(dir: string, roots: Set<string> | null) {
     const tracking = perDir.get(dir)
     if (!tracking) return  // disconnected: do not recreate tracking while seeding
-    const before = new Map<string, number>()
-    for (const sid of tracking.busySessions) before.set(sid, statusVersion(dir, sid))
+    const before = new Map(statusVersions.get(dir) ?? [])
+    for (const sid of tracking.busySessions) {
+      if (!before.has(sid)) before.set(sid, 0)
+    }
     return fetch(`${serverUrl()}/session/status?directory=${encodeURIComponent(dir)}`, { headers: authHeaders() })
       .then((r) => r.json())
       .then((data) => {
@@ -510,7 +512,7 @@ export function GlobalEventsProvider(props: ParentProps & {
         }
         tracking.busySessions.clear()
         for (const [sid, s] of Object.entries(statuses)) {
-          if (before.has(sid) && statusVersion(dir, sid) !== before.get(sid)) continue
+          if (statusVersion(dir, sid) !== (before.get(sid) ?? 0)) continue
           if (!tracking.subAgents.has(sid) && (roots === null || roots.has(sid)) && (s?.type === "busy" || s?.type === "retry")) {
             tracking.busySessions.add(sid)
           }
