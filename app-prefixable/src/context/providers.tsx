@@ -441,7 +441,7 @@ export function ProviderProvider(props: ParentProps) {
       const connected = await providerConnected(providerID)
       // Dispose instance to reload provider state, then refresh
       await reloadProviders()
-      return connected ?? providerData()?.connected.includes(providerID) ?? false
+      return connected === true || providerData()?.connected.includes(providerID) === true
     } catch (e) {
       console.error("Failed to connect provider:", e)
       return (await providerConnected(providerID)) === true
@@ -454,7 +454,7 @@ export function ProviderProvider(props: ParentProps) {
       const connected = await providerConnected(providerID)
       // Dispose instance to reload provider state, then refresh
       await reloadProviders()
-      return connected === false || !providerData()?.connected.includes(providerID)
+      return connected === false || providerData()?.connected.includes(providerID) === false
     } catch (e) {
       console.error("Failed to disconnect provider:", e)
       return (await providerConnected(providerID)) === false
@@ -500,7 +500,7 @@ export function ProviderProvider(props: ParentProps) {
       const connected = await providerConnected(providerID)
       // Dispose instance to reload provider state, then refresh
       await reloadProviders()
-      return connected ?? providerData()?.connected.includes(providerID) ?? false
+      return connected === true || providerData()?.connected.includes(providerID) === true
     } catch (e) {
       console.error("Failed to complete OAuth:", e)
       return (await providerConnected(providerID)) === true
