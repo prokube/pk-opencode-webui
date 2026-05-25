@@ -621,7 +621,7 @@ Add your project-specific instructions here.
     const providerName = getProviderDisplayName(providerID)
 
     if (method && oauthMethodUnsupported(providerID, method.label)) {
-      setError(`${providerName} browser authentication uses a local callback and is not supported in Kubeflow notebooks. Use ChatGPT Pro/Plus (headless) or API key authentication instead.`)
+      setError(`${providerName} browser authentication uses a localhost callback and is only supported when this UI runs on your local machine. Use API key authentication or a headless/code method instead.`)
       return
     }
 
