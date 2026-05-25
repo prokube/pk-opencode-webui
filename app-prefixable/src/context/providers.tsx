@@ -226,7 +226,7 @@ export function ProviderProvider(props: ParentProps) {
   })
 
   // Fetch providers
-  const [providerData, { refetch: refetchProviders }] = createResource(async () => {
+  const [providerData, { mutate: setProviderData, refetch: refetchProviders }] = createResource(async () => {
     try {
       const res = await client.provider.list()
       const data = res.data as ProviderListData | undefined
@@ -491,12 +491,27 @@ export function ProviderProvider(props: ParentProps) {
 
   async function waitProviderConnected(providerID: string, expected: boolean) {
     await client.instance.dispose()
-    for (const delay of [0, 250, 500, 1000, 1500]) {
+    for (const delay of [0, 500, 1000, 2000, 3000, 5000, 8000]) {
       if (delay > 0) await new Promise((resolve) => setTimeout(resolve, delay))
       const connected = (await refetchProviders())?.connected.includes(providerID)
-      if (connected === expected) return connected
+      if (connected === expected) {
+        updateProviderConnected(providerID, expected)
+        return connected
+      }
     }
     return undefined
+  }
+
+  function updateProviderConnected(providerID: string, connected: boolean) {
+    setProviderData((data) => {
+      if (!data) return data
+      if (connected && data.connected.includes(providerID)) return data
+      if (!connected && !data.connected.includes(providerID)) return data
+      return {
+        ...data,
+        connected: connected ? [...data.connected, providerID] : data.connected.filter((id) => id !== providerID),
+      }
+    })
   }
 
   async function startOAuth(providerID: string, methodIndex: number): Promise<OAuthAuthorization | undefined> {
@@ -521,7 +536,7 @@ export function ProviderProvider(props: ParentProps) {
       })
     } catch (e) {
       console.error("Failed to complete OAuth:", e)
-      return (await providerConnected(providerID)) === true
+      return (await waitProviderConnected(providerID, true)) === true
     }
 
     try {
@@ -530,6 +545,7 @@ export function ProviderProvider(props: ParentProps) {
     } catch (e) {
       console.error("Completed OAuth, but failed to reload provider state:", e)
     }
+    updateProviderConnected(providerID, true)
     return true
   }
 
