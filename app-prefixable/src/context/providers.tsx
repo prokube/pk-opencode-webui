@@ -438,27 +438,43 @@ export function ProviderProvider(props: ParentProps) {
         providerID,
         auth: { type: "api", key: apiKey },
       })
+      const connected = await providerConnected(providerID)
       // Dispose instance to reload provider state, then refresh
-      await client.instance.dispose()
-      await refetchProviders()
-      return true
+      await reloadProviders()
+      return connected ?? providerData()?.connected.includes(providerID) ?? false
     } catch (e) {
       console.error("Failed to connect provider:", e)
-      return false
+      return (await providerConnected(providerID)) === true
     }
   }
 
   async function disconnectProvider(providerID: string): Promise<boolean> {
     try {
       await client.auth.remove({ providerID })
+      const connected = await providerConnected(providerID)
       // Dispose instance to reload provider state, then refresh
-      await client.instance.dispose()
-      await refetchProviders()
-      return true
+      await reloadProviders()
+      return connected === false || !providerData()?.connected.includes(providerID)
     } catch (e) {
       console.error("Failed to disconnect provider:", e)
-      return false
+      return (await providerConnected(providerID)) === false
     }
+  }
+
+  async function providerConnected(providerID: string) {
+    try {
+      const res = await client.provider.list()
+      const data = res.data as ProviderListData | undefined
+      return data?.connected.includes(providerID)
+    } catch (e) {
+      console.error("Failed to check provider connection:", e)
+      return undefined
+    }
+  }
+
+  async function reloadProviders() {
+    await client.instance.dispose()
+    await refetchProviders()
   }
 
   async function startOAuth(providerID: string, methodIndex: number): Promise<OAuthAuthorization | undefined> {
@@ -481,13 +497,13 @@ export function ProviderProvider(props: ParentProps) {
         method: methodIndex,
         code,
       })
+      const connected = await providerConnected(providerID)
       // Dispose instance to reload provider state, then refresh
-      await client.instance.dispose()
-      await refetchProviders()
-      return true
+      await reloadProviders()
+      return connected ?? providerData()?.connected.includes(providerID) ?? false
     } catch (e) {
       console.error("Failed to complete OAuth:", e)
-      return false
+      return (await providerConnected(providerID)) === true
     }
   }
 
