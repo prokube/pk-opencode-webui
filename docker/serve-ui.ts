@@ -125,6 +125,25 @@ async function openAIBrowserOAuthMethods() {
   return blockedOpenAIMethods
 }
 
+function shouldDisposeAfterAuthMutation(path: string, req: Request, response: Response) {
+  if (!response.ok) return false
+  if (!POST_AUTH_METHODS.has(req.method)) return false
+  if (/^\/auth\/[^/]+$/.test(path)) return true
+  return /^\/provider\/[^/]+\/oauth\/callback$/.test(path)
+}
+
+const POST_AUTH_METHODS = new Set(["POST", "DELETE"])
+
+async function disposeInstanceAfterAuthMutation(path: string, req: Request, response: Response) {
+  if (!shouldDisposeAfterAuthMutation(path, req, response)) return
+  const dispose = new URL("/instance/dispose", API_URL)
+  const res = await fetch(dispose.toString(), { method: "POST" }).catch((e) => {
+    console.error("[Proxy] Failed to dispose instance after auth mutation:", e)
+    return undefined
+  })
+  if (res && !res.ok) console.error("[Proxy] Failed to dispose instance after auth mutation:", res.status, res.statusText)
+}
+
 const server = Bun.serve<{ path: string; search: string }>({
   port: PORT,
   hostname: "0.0.0.0",
@@ -248,6 +267,7 @@ const server = Bun.serve<{ path: string; search: string }>({
           headers,
           body,
         })
+        await disposeInstanceAfterAuthMutation(path, req, response)
         return withNoStoreHeaders(normalizeProxiedResponse(response))
       } catch (e) {
         console.error("[Proxy] API error:", e)
