@@ -44,6 +44,7 @@ const validatedBasePath = validateBasePath(BASE_PATH)
 const basePathWithoutTrailing = validatedBasePath.endsWith("/") ? validatedBasePath.slice(0, -1) : validatedBasePath
 const basePathWithTrailing = validatedBasePath.endsWith("/") ? validatedBasePath : validatedBasePath + "/"
 const isNotebookBasePath = /^\/notebook\//.test(basePathWithTrailing)
+const OPENAI_BROWSER_OAUTH_UNSUPPORTED_MESSAGE = "OpenAI browser authentication uses a localhost callback and is not supported in notebooks. Use headless/code or API key authentication instead."
 
 // MIME types for static files
 const mimeTypes: Record<string, string> = {
@@ -72,6 +73,7 @@ function isPtyWebSocket(path: string): boolean {
 
 // Track last non-polling activity for Kubeflow idle culling
 let lastActivity = Date.now()
+let blockedOpenAIMethods: Promise<Set<number>> | undefined
 
 // Store for backend WebSocket connections (keyed by client WebSocket)
 const backendConnections = new WeakMap<object, WebSocket>()
@@ -94,14 +96,33 @@ async function rejectUnsupportedAuth(path: string, req: Request) {
   if (path !== "/provider/openai/oauth/authorize") return undefined
 
   const body = await req.clone().json().catch(() => null) as { method?: unknown } | null
-  if (body?.method !== 0) return undefined
+  if (typeof body?.method !== "number") return undefined
+  const blocked = await openAIBrowserOAuthMethods()
+  if (!blocked.has(body.method)) return undefined
 
   return withNoStoreHeaders(new Response(JSON.stringify({
-    error: "OpenAI browser authentication uses a localhost callback and is not supported in notebooks. Use headless/code or API key authentication instead.",
+    error: OPENAI_BROWSER_OAUTH_UNSUPPORTED_MESSAGE,
   }), {
     status: 400,
     headers: { "Content-Type": "application/json" },
   }))
+}
+
+async function openAIBrowserOAuthMethods() {
+  blockedOpenAIMethods ??= fetch(new URL("/provider/auth", API_URL).toString())
+    .then((res) => res.ok ? res.json() : undefined)
+    .then((data) => {
+      const methods = Array.isArray(data?.openai) ? data.openai : []
+      return new Set<number>(methods.flatMap((method: { type?: string; label?: string }, index: number) => {
+        if (method.type !== "oauth") return []
+        return /\b(browser|local)\b/i.test(method.label ?? "") ? [index] : []
+      }))
+    })
+    .catch((e) => {
+      console.error("[Proxy] Failed to fetch OpenAI auth methods:", e)
+      return new Set<number>()
+    })
+  return blockedOpenAIMethods
 }
 
 const server = Bun.serve<{ path: string; search: string }>({
