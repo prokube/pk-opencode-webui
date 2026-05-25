@@ -617,12 +617,18 @@ Add your project-specific instructions here.
     setError(null)
     setSuccess(null)
 
+    const method = providers.authMethods[providerID]?.[methodIndex]
+    const providerName = getProviderDisplayName(providerID)
+
+    if (method && oauthMethodUnsupported(providerID, method.label)) {
+      setError(`${providerName} browser authentication uses a local callback and is not supported in Kubeflow notebooks. Use ChatGPT Pro/Plus (headless) or API key authentication instead.`)
+      return
+    }
+
     const result = await providers.startOAuth(providerID, methodIndex)
 
     if (result) {
       const code = extractProviderAuthCode(result.instructions)
-
-      const providerName = getProviderDisplayName(providerID)
 
       if (browserOAuthUnsupported({
         authUrl: result.url,
@@ -683,7 +689,7 @@ Add your project-specific instructions here.
   }
 
   function oauthMethodUnsupported(providerID: string, label: string) {
-    return providerOAuthMethodUnsupported({ providerID, label, browserHostname: window.location.hostname })
+    return providerOAuthMethodUnsupported({ providerID, label, browserHostname: window.location.hostname, basePath: basePath.basePath })
   }
 
   async function handleOAuthComplete() {
