@@ -438,30 +438,38 @@ export function ProviderProvider(props: ParentProps) {
         providerID,
         auth: { type: "api", key: apiKey },
       })
-      const connected = await providerConnected(providerID)
-      // Dispose instance to reload provider state, then refresh
-      await reloadProviders()
-      return connected === true || providerData()?.connected.includes(providerID) === true
     } catch (e) {
       console.error("Failed to connect provider:", e)
       return (await providerConnected(providerID)) === true
     }
+
+    try {
+      const connected = await reloadProviderConnected(providerID)
+      if (connected !== undefined) return connected
+    } catch (e) {
+      console.error("Connected provider, but failed to reload provider state:", e)
+    }
+    return (await providerConnected(providerID)) === true
   }
 
   async function disconnectProvider(providerID: string): Promise<boolean> {
     try {
       await client.auth.remove({ providerID })
-      const connected = await providerConnected(providerID)
-      // Dispose instance to reload provider state, then refresh
-      await reloadProviders()
-      return connected === false || providerData()?.connected.includes(providerID) === false
     } catch (e) {
       console.error("Failed to disconnect provider:", e)
       return (await providerConnected(providerID)) === false
     }
+
+    try {
+      const connected = await reloadProviderConnected(providerID)
+      if (connected !== undefined) return connected === false
+    } catch (e) {
+      console.error("Disconnected provider, but failed to reload provider state:", e)
+    }
+    return (await providerConnected(providerID)) === false
   }
 
-  async function providerConnected(providerID: string) {
+  async function providerConnected(providerID: string): Promise<boolean | undefined> {
     try {
       const res = await client.provider.list()
       const data = res.data as ProviderListData | undefined
@@ -474,7 +482,11 @@ export function ProviderProvider(props: ParentProps) {
 
   async function reloadProviders() {
     await client.instance.dispose()
-    await refetchProviders()
+    return await refetchProviders()
+  }
+
+  async function reloadProviderConnected(providerID: string) {
+    return (await reloadProviders())?.connected.includes(providerID)
   }
 
   async function startOAuth(providerID: string, methodIndex: number): Promise<OAuthAuthorization | undefined> {
@@ -497,14 +509,18 @@ export function ProviderProvider(props: ParentProps) {
         method: methodIndex,
         code,
       })
-      const connected = await providerConnected(providerID)
-      // Dispose instance to reload provider state, then refresh
-      await reloadProviders()
-      return connected === true || providerData()?.connected.includes(providerID) === true
     } catch (e) {
       console.error("Failed to complete OAuth:", e)
       return (await providerConnected(providerID)) === true
     }
+
+    try {
+      const connected = await reloadProviderConnected(providerID)
+      if (connected !== undefined) return connected
+    } catch (e) {
+      console.error("Completed OAuth, but failed to reload provider state:", e)
+    }
+    return (await providerConnected(providerID)) === true
   }
 
   function refetch() {
