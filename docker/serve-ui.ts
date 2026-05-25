@@ -43,6 +43,7 @@ function validateBasePath(path: string): string {
 const validatedBasePath = validateBasePath(BASE_PATH)
 const basePathWithoutTrailing = validatedBasePath.endsWith("/") ? validatedBasePath.slice(0, -1) : validatedBasePath
 const basePathWithTrailing = validatedBasePath.endsWith("/") ? validatedBasePath : validatedBasePath + "/"
+const isNotebookBasePath = /^\/notebook\//.test(basePathWithTrailing)
 
 // MIME types for static files
 const mimeTypes: Record<string, string> = {
@@ -85,6 +86,22 @@ function withNoStoreHeaders(response: Response) {
     statusText: response.statusText,
     headers,
   })
+}
+
+async function rejectUnsupportedAuth(path: string, req: Request) {
+  if (!isNotebookBasePath) return undefined
+  if (req.method !== "POST") return undefined
+  if (path !== "/provider/openai/oauth/authorize") return undefined
+
+  const body = await req.clone().json().catch(() => null) as { method?: unknown } | null
+  if (body?.method !== 0) return undefined
+
+  return withNoStoreHeaders(new Response(JSON.stringify({
+    error: "OpenAI browser authentication uses a localhost callback and is not supported in notebooks. Use headless/code or API key authentication instead.",
+  }), {
+    status: 400,
+    headers: { "Content-Type": "application/json" },
+  }))
 }
 
 const server = Bun.serve<{ path: string; search: string }>({
@@ -200,6 +217,9 @@ const server = Bun.serve<{ path: string; search: string }>({
 
       // Regular API requests
       console.log("[Proxy] API:", req.method, path)
+      const rejected = await rejectUnsupportedAuth(path, req)
+      if (rejected) return rejected
+
       try {
         const body = req.method === "GET" || req.method === "HEAD" ? undefined : req.body
         const response = await fetch(target.toString(), {
