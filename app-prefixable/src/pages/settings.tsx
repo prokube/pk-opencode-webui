@@ -1358,7 +1358,7 @@ Add your project-specific instructions here.
                         </div>
 
                         {/* Provider grid - max height with scroll */}
-                        <div class="grid grid-cols-2 gap-2 max-h-64 overflow-y-auto">
+                        <div class={`grid grid-cols-2 gap-2 overflow-y-auto pr-1 ${selectedProvider() ? "max-h-36" : "max-h-64"}`}>
                           <For each={filteredProviders()}>
                             {(provider) => (
                               <button
@@ -1397,6 +1397,12 @@ Add your project-specific instructions here.
                             )}
                           </For>
                         </div>
+
+                        <Show when={filteredProviders().length > (selectedProvider() ? 4 : 8)}>
+                          <p class="mt-2 text-xs" style={{ color: "var(--text-weak)" }}>
+                            Scroll this provider list for more options. Connection methods appear below the selected provider.
+                          </p>
+                        </Show>
 
                         <Show when={filteredProviders().length === 0 && providerSearch()}>
                           <p class="text-sm text-center py-4" style={{ color: "var(--text-weak)" }}>

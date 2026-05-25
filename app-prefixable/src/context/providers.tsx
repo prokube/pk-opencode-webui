@@ -444,7 +444,7 @@ export function ProviderProvider(props: ParentProps) {
     }
 
     try {
-      const connected = await reloadProviderConnected(providerID)
+      const connected = await waitProviderConnected(providerID, true)
       if (connected !== undefined) return connected
     } catch (e) {
       console.error("Connected provider, but failed to reload provider state:", e)
@@ -461,7 +461,7 @@ export function ProviderProvider(props: ParentProps) {
     }
 
     try {
-      const connected = await reloadProviderConnected(providerID)
+      const connected = await waitProviderConnected(providerID, false)
       if (connected !== undefined) return connected === false
     } catch (e) {
       console.error("Disconnected provider, but failed to reload provider state:", e)
@@ -487,6 +487,16 @@ export function ProviderProvider(props: ParentProps) {
 
   async function reloadProviderConnected(providerID: string) {
     return (await reloadProviders())?.connected.includes(providerID)
+  }
+
+  async function waitProviderConnected(providerID: string, expected: boolean) {
+    await client.instance.dispose()
+    for (const delay of [0, 250, 500, 1000, 1500]) {
+      if (delay > 0) await new Promise((resolve) => setTimeout(resolve, delay))
+      const connected = (await refetchProviders())?.connected.includes(providerID)
+      if (connected === expected) return connected
+    }
+    return undefined
   }
 
   async function startOAuth(providerID: string, methodIndex: number): Promise<OAuthAuthorization | undefined> {
@@ -515,12 +525,12 @@ export function ProviderProvider(props: ParentProps) {
     }
 
     try {
-      const connected = await reloadProviderConnected(providerID)
+      const connected = await waitProviderConnected(providerID, true)
       if (connected !== undefined) return connected
     } catch (e) {
       console.error("Completed OAuth, but failed to reload provider state:", e)
     }
-    return (await providerConnected(providerID)) === true
+    return true
   }
 
   function refetch() {
