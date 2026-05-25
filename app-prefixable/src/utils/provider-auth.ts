@@ -3,6 +3,8 @@ export function isLocalBrowserHost(hostname: string) {
   return host === "localhost" || host === "127.0.0.1" || host === "0.0.0.0" || host === "::1" || host === "[::1]"
 }
 
+export const OPENAI_BROWSER_OAUTH_UNSUPPORTED_MESSAGE = "Browser authentication uses a localhost callback and is not supported when this UI is served through a notebook proxy. Use API key authentication or a headless/code method instead."
+
 export function isNotebookBasePath(basePath: string) {
   return /^\/notebook\//.test(basePath)
 }

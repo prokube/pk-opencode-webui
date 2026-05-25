@@ -20,7 +20,7 @@ import { SETTINGS_BASE_TABS } from "./settings-tabs"
 import { TelegramSettings } from "../components/telegram-settings"
 import { invalidateTelegramSourceIdCache, writeFile } from "../utils/extended-api"
 import { ALARM_CHANNELS_STORAGE_KEY, readAlarmChannels, writeAlarmChannels, type AlarmChannels } from "../utils/notify"
-import { browserOAuthUnsupported, extractProviderAuthCode, providerOAuthMethodUnsupported } from "../utils/provider-auth"
+import { OPENAI_BROWSER_OAUTH_UNSUPPORTED_MESSAGE, browserOAuthUnsupported, extractProviderAuthCode, providerOAuthMethodUnsupported } from "../utils/provider-auth"
 import type { TelegramHealthResponse, TelegramSettingsResponse } from "../utils/telegram-settings"
 import type { Config, PermissionActionConfig } from "../sdk/client"
 
@@ -621,7 +621,7 @@ Add your project-specific instructions here.
     const providerName = getProviderDisplayName(providerID)
 
     if (method && oauthMethodUnsupported(providerID, method.label)) {
-      setError(`${providerName} browser authentication uses a localhost callback and is only supported when this UI runs on your local machine. Use API key authentication or a headless/code method instead.`)
+      setError(`${providerName}: ${OPENAI_BROWSER_OAUTH_UNSUPPORTED_MESSAGE}`)
       return
     }
 
@@ -1522,7 +1522,7 @@ Add your project-specific instructions here.
                                     </button>
                                     <Show when={oauthMethodUnsupported(selectedProvider()!, method.label)}>
                                       <p class="text-xs" style={{ color: "var(--text-weak)" }}>
-                                        Browser authentication uses a localhost callback and is only supported when this UI runs on your local machine. Use API key authentication or a headless/code method in notebooks.
+                                        {OPENAI_BROWSER_OAUTH_UNSUPPORTED_MESSAGE}
                                       </p>
                                     </Show>
                                   </div>
