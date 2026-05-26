@@ -48,6 +48,42 @@ function withNoStoreHeaders(response: Response) {
   })
 }
 
+function stripHopByHopHeaders(headers: Headers) {
+  const connection = headers.get("connection")
+  if (connection) {
+    for (const name of connection.split(",")) {
+      const trimmed = name.trim()
+      if (trimmed) headers.delete(trimmed)
+    }
+  }
+
+  for (const name of [
+    "connection",
+    "content-length",
+    "host",
+    "keep-alive",
+    "proxy-authenticate",
+    "proxy-authorization",
+    "te",
+    "trailer",
+    "transfer-encoding",
+    "upgrade",
+  ]) {
+    headers.delete(name)
+  }
+}
+
+function normalizeDevProxiedResponse(response: Response) {
+  const normalized = normalizeProxiedResponse(response)
+  const headers = new Headers(normalized.headers)
+  stripHopByHopHeaders(headers)
+  return new Response(normalized.body, {
+    status: normalized.status,
+    statusText: normalized.statusText,
+    headers,
+  })
+}
+
 const server = Bun.serve<{ target: string }>({
   port: PORT,
   idleTimeout: 0, // Disable timeout for SSE connections
@@ -94,6 +130,7 @@ const server = Bun.serve<{ target: string }>({
     if (isApiPath(strippedPath)) {
       const target = new URL(strippedPath + url.search, API_URL)
       const headers = new Headers(req.headers)
+      stripHopByHopHeaders(headers)
 
       // SSE requests - just pass through the response body directly
       if (strippedPath.startsWith("/event")) {
@@ -102,6 +139,7 @@ const server = Bun.serve<{ target: string }>({
           const response = await fetch(target.toString(), {
             method: req.method,
             headers,
+            signal: req.signal,
           })
 
           if (!response.ok) {
@@ -140,8 +178,9 @@ const server = Bun.serve<{ target: string }>({
           method: req.method,
           headers,
           body,
+          signal: req.signal,
         })
-        return withNoStoreHeaders(normalizeProxiedResponse(response))
+        return withNoStoreHeaders(normalizeDevProxiedResponse(response))
       } catch (e) {
         console.error("[Proxy] API error:", e)
         return withNoStoreHeaders(new Response("API proxy error", { status: 502 }))

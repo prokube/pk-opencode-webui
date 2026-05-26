@@ -10,6 +10,8 @@ import { createStore, produce } from "solid-js/store"
 import { useServer } from "./server"
 import { createSSEParser } from "../utils/sse"
 
+const MAX_GLOBAL_EVENT_CONNECTIONS = 16
+
 /**
  * Alert priority: permission (highest) > question > busy
  */
@@ -155,6 +157,12 @@ export function GlobalEventsProvider(props: ParentProps & {
           if (statusPollPending.get(dir) === token) statusPollPending.delete(dir)
         })
     }, 5000))
+  }
+
+  function wantedDirectories(dirs: string[], active: string | undefined) {
+    const wanted = new Set(dirs.slice(0, MAX_GLOBAL_EVENT_CONNECTIONS + 1))
+    if (active) wanted.delete(active)
+    return new Set([...wanted].slice(0, MAX_GLOBAL_EVENT_CONNECTIONS))
   }
 
   function connectToDirectory(dir: string) {
@@ -349,9 +357,8 @@ export function GlobalEventsProvider(props: ParentProps & {
           if (disposed) return
           // Don't reconnect when a remote server is active — local projects don't exist there
           if (!activeServer().isDefault) return
-          const active = props.activeDirectory()
-          const wanted = props.projects().some((p) => p.worktree === dir)
-          if (wanted && dir !== active) {
+          const wanted = wantedDirectories(props.projects().map((p) => p.worktree), props.activeDirectory())
+          if (wanted.has(dir)) {
             connectToDirectory(dir)
             return
           }
@@ -567,18 +574,22 @@ export function GlobalEventsProvider(props: ParentProps & {
         return
       }
 
-      const wanted = new Set(current.dirs)
-      if (current.active) wanted.delete(current.active)
+      const limitedWanted = wantedDirectories(current.dirs, current.active)
+
+      for (const [dir] of [...reconnectTimers]) {
+        if (limitedWanted.has(dir)) continue
+        disconnectDirectory(dir)
+      }
 
       // Disconnect directories we no longer need (including newly-active project)
       for (const dir of [...connections.keys()]) {
-        if (!wanted.has(dir)) {
+        if (!limitedWanted.has(dir)) {
           disconnectDirectory(dir)
         }
       }
 
       // Connect to new inactive directories
-      for (const dir of wanted) {
+      for (const dir of limitedWanted) {
         if (!connections.has(dir)) {
           connectToDirectory(dir)
         }
