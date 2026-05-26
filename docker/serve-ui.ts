@@ -110,7 +110,10 @@ async function rejectUnsupportedAuth(path: string, req: Request) {
 
 async function openAIBrowserOAuthMethods() {
   blockedOpenAIMethods ??= fetch(new URL("/provider/auth", API_URL).toString())
-    .then((res) => res.ok ? res.json() : undefined)
+    .then((res) => {
+      if (res.ok) return res.json()
+      throw new Error(`OpenAI auth methods request failed: ${res.status} ${res.statusText}`)
+    })
     .then((data) => {
       const methods = Array.isArray(data?.openai) ? data.openai : []
       return new Set<number>(methods.flatMap((method: { type?: string; label?: string }, index: number) => {
@@ -120,6 +123,7 @@ async function openAIBrowserOAuthMethods() {
     })
     .catch((e) => {
       console.error("[Proxy] Failed to fetch OpenAI auth methods:", e)
+      blockedOpenAIMethods = undefined
       return new Set<number>()
     })
   return blockedOpenAIMethods
