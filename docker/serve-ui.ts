@@ -284,13 +284,13 @@ const server = Bun.serve<{ path: string; search: string }>({
       const ext = path.split(".").pop()?.toLowerCase() || ""
       const contentType = mimeTypes[ext] || "application/octet-stream"
 
+      const cacheControl = ext === "js" || ext === "css" || ext === "map"
+        ? "no-cache"
+        : "public, max-age=31536000, immutable"
       return new Response(file, {
         headers: {
           "Content-Type": contentType,
-          // Cache static assets
-          ...(ext !== "html" && {
-            "Cache-Control": "public, max-age=31536000, immutable",
-          }),
+          ...(ext !== "html" && { "Cache-Control": cacheControl }),
         },
       })
     }
