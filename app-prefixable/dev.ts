@@ -48,6 +48,31 @@ function withNoStoreHeaders(response: Response) {
   })
 }
 
+function stripHopByHopHeaders(headers: Headers) {
+  const connection = headers.get("connection")
+  if (connection) {
+    for (const name of connection.split(",")) {
+      const trimmed = name.trim()
+      if (trimmed) headers.delete(trimmed)
+    }
+  }
+
+  for (const name of [
+    "connection",
+    "content-length",
+    "host",
+    "keep-alive",
+    "proxy-authenticate",
+    "proxy-authorization",
+    "te",
+    "trailer",
+    "transfer-encoding",
+    "upgrade",
+  ]) {
+    headers.delete(name)
+  }
+}
+
 const server = Bun.serve<{ target: string }>({
   port: PORT,
   idleTimeout: 0, // Disable timeout for SSE connections
@@ -94,9 +119,7 @@ const server = Bun.serve<{ target: string }>({
     if (isApiPath(strippedPath)) {
       const target = new URL(strippedPath + url.search, API_URL)
       const headers = new Headers(req.headers)
-      headers.delete("host")
-      headers.delete("connection")
-      headers.delete("content-length")
+      stripHopByHopHeaders(headers)
 
       // SSE requests - just pass through the response body directly
       if (strippedPath.startsWith("/event")) {
