@@ -576,10 +576,9 @@ export function GlobalEventsProvider(props: ParentProps & {
 
       const limitedWanted = wantedDirectories(current.dirs, current.active)
 
-      for (const [dir, timer] of reconnectTimers) {
+      for (const [dir] of [...reconnectTimers]) {
         if (limitedWanted.has(dir)) continue
-        clearTimeout(timer)
-        reconnectTimers.delete(dir)
+        disconnectDirectory(dir)
       }
 
       // Disconnect directories we no longer need (including newly-active project)
