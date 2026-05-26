@@ -131,12 +131,12 @@ async function openAIBrowserOAuthMethods() {
 
 function shouldDisposeAfterAuthMutation(path: string, req: Request, response: Response) {
   if (!response.ok) return false
-  if (!POST_AUTH_METHODS.has(req.method)) return false
+  if (!AUTH_MUTATION_METHODS.has(req.method)) return false
   if (/^\/auth\/[^/]+$/.test(path)) return true
   return /^\/provider\/[^/]+\/oauth\/callback$/.test(path)
 }
 
-const POST_AUTH_METHODS = new Set(["POST", "DELETE"])
+const AUTH_MUTATION_METHODS = new Set(["POST", "PUT", "DELETE"])
 
 async function disposeInstanceAfterAuthMutation(path: string, req: Request, response: Response) {
   if (!shouldDisposeAfterAuthMutation(path, req, response)) return
