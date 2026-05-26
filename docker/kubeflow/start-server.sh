@@ -47,7 +47,7 @@ API_PID=$!
 # Wait for API to be ready
 echo "Waiting for API server to start..."
 for i in {1..30}; do
-    if curl -s http://127.0.0.1:4096/health > /dev/null 2>&1; then
+    if curl -sf --max-time 2 http://127.0.0.1:4096/session/status > /dev/null 2>&1; then
         echo "API server is ready!"
         break
     fi
