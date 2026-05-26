@@ -94,6 +94,9 @@ const server = Bun.serve<{ target: string }>({
     if (isApiPath(strippedPath)) {
       const target = new URL(strippedPath + url.search, API_URL)
       const headers = new Headers(req.headers)
+      headers.delete("host")
+      headers.delete("connection")
+      headers.delete("content-length")
 
       // SSE requests - just pass through the response body directly
       if (strippedPath.startsWith("/event")) {
@@ -102,6 +105,7 @@ const server = Bun.serve<{ target: string }>({
           const response = await fetch(target.toString(), {
             method: req.method,
             headers,
+            signal: req.signal,
           })
 
           if (!response.ok) {
@@ -140,6 +144,7 @@ const server = Bun.serve<{ target: string }>({
           method: req.method,
           headers,
           body,
+          signal: req.signal,
         })
         return withNoStoreHeaders(normalizeProxiedResponse(response))
       } catch (e) {

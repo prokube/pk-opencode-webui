@@ -10,6 +10,8 @@ import { createStore, produce } from "solid-js/store"
 import { useServer } from "./server"
 import { createSSEParser } from "../utils/sse"
 
+const MAX_GLOBAL_EVENT_CONNECTIONS = 16
+
 /**
  * Alert priority: permission (highest) > question > busy
  */
@@ -567,18 +569,20 @@ export function GlobalEventsProvider(props: ParentProps & {
         return
       }
 
-      const wanted = new Set(current.dirs)
+      const wanted = new Set(current.dirs.slice(0, MAX_GLOBAL_EVENT_CONNECTIONS + 1))
       if (current.active) wanted.delete(current.active)
+
+      const limitedWanted = new Set([...wanted].slice(0, MAX_GLOBAL_EVENT_CONNECTIONS))
 
       // Disconnect directories we no longer need (including newly-active project)
       for (const dir of [...connections.keys()]) {
-        if (!wanted.has(dir)) {
+        if (!limitedWanted.has(dir)) {
           disconnectDirectory(dir)
         }
       }
 
       // Connect to new inactive directories
-      for (const dir of wanted) {
+      for (const dir of limitedWanted) {
         if (!connections.has(dir)) {
           connectToDirectory(dir)
         }
