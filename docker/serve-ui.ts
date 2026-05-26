@@ -43,6 +43,8 @@ function validateBasePath(path: string): string {
 const validatedBasePath = validateBasePath(BASE_PATH)
 const basePathWithoutTrailing = validatedBasePath.endsWith("/") ? validatedBasePath.slice(0, -1) : validatedBasePath
 const basePathWithTrailing = validatedBasePath.endsWith("/") ? validatedBasePath : validatedBasePath + "/"
+const isNotebookBasePath = /^\/notebook\//.test(basePathWithTrailing)
+const OPENAI_BROWSER_OAUTH_UNSUPPORTED_MESSAGE = "OpenAI browser authentication uses a localhost callback and is not supported in notebooks. Use headless/code or API key authentication instead."
 
 // MIME types for static files
 const mimeTypes: Record<string, string> = {
@@ -71,6 +73,7 @@ function isPtyWebSocket(path: string): boolean {
 
 // Track last non-polling activity for Kubeflow idle culling
 let lastActivity = Date.now()
+let blockedOpenAIMethods: Promise<Set<number>> | undefined
 
 // Store for backend WebSocket connections (keyed by client WebSocket)
 const backendConnections = new WeakMap<object, WebSocket>()
@@ -85,6 +88,64 @@ function withNoStoreHeaders(response: Response) {
     statusText: response.statusText,
     headers,
   })
+}
+
+async function rejectUnsupportedAuth(path: string, req: Request) {
+  if (!isNotebookBasePath) return undefined
+  if (req.method !== "POST") return undefined
+  if (path !== "/provider/openai/oauth/authorize") return undefined
+
+  const body = await req.clone().json().catch(() => null) as { method?: unknown } | null
+  if (typeof body?.method !== "number") return undefined
+  const blocked = await openAIBrowserOAuthMethods()
+  if (!blocked.has(body.method)) return undefined
+
+  return withNoStoreHeaders(new Response(JSON.stringify({
+    error: OPENAI_BROWSER_OAUTH_UNSUPPORTED_MESSAGE,
+  }), {
+    status: 400,
+    headers: { "Content-Type": "application/json" },
+  }))
+}
+
+async function openAIBrowserOAuthMethods() {
+  blockedOpenAIMethods ??= fetch(new URL("/provider/auth", API_URL).toString())
+    .then((res) => {
+      if (res.ok) return res.json()
+      throw new Error(`OpenAI auth methods request failed: ${res.status} ${res.statusText}`)
+    })
+    .then((data) => {
+      const methods = Array.isArray(data?.openai) ? data.openai : []
+      return new Set<number>(methods.flatMap((method: { type?: string; label?: string }, index: number) => {
+        if (method.type !== "oauth") return []
+        return /\b(browser|local)\b/i.test(method.label ?? "") ? [index] : []
+      }))
+    })
+    .catch((e) => {
+      console.error("[Proxy] Failed to fetch OpenAI auth methods:", e)
+      blockedOpenAIMethods = undefined
+      return new Set<number>()
+    })
+  return blockedOpenAIMethods
+}
+
+function shouldDisposeAfterAuthMutation(path: string, req: Request, response: Response) {
+  if (!response.ok) return false
+  if (!AUTH_MUTATION_METHODS.has(req.method)) return false
+  if (/^\/auth\/[^/]+$/.test(path)) return true
+  return /^\/provider\/[^/]+\/oauth\/callback$/.test(path)
+}
+
+const AUTH_MUTATION_METHODS = new Set(["POST", "PUT", "DELETE"])
+
+async function disposeInstanceAfterAuthMutation(path: string, req: Request, response: Response) {
+  if (!shouldDisposeAfterAuthMutation(path, req, response)) return
+  const dispose = new URL("/instance/dispose", API_URL)
+  const res = await fetch(dispose.toString(), { method: "POST" }).catch((e) => {
+    console.error("[Proxy] Failed to dispose instance after auth mutation:", e)
+    return undefined
+  })
+  if (res && !res.ok) console.error("[Proxy] Failed to dispose instance after auth mutation:", res.status, res.statusText)
 }
 
 const server = Bun.serve<{ path: string; search: string }>({
@@ -200,6 +261,9 @@ const server = Bun.serve<{ path: string; search: string }>({
 
       // Regular API requests
       console.log("[Proxy] API:", req.method, path)
+      const rejected = await rejectUnsupportedAuth(path, req)
+      if (rejected) return rejected
+
       try {
         const body = req.method === "GET" || req.method === "HEAD" ? undefined : req.body
         const response = await fetch(target.toString(), {
@@ -207,6 +271,7 @@ const server = Bun.serve<{ path: string; search: string }>({
           headers,
           body,
         })
+        await disposeInstanceAfterAuthMutation(path, req, response)
         return withNoStoreHeaders(normalizeProxiedResponse(response))
       } catch (e) {
         console.error("[Proxy] API error:", e)
@@ -223,13 +288,13 @@ const server = Bun.serve<{ path: string; search: string }>({
       const ext = path.split(".").pop()?.toLowerCase() || ""
       const contentType = mimeTypes[ext] || "application/octet-stream"
 
+      const cacheControl = ext === "js" || ext === "css" || ext === "map"
+        ? "no-cache"
+        : "public, max-age=31536000, immutable"
       return new Response(file, {
         headers: {
           "Content-Type": contentType,
-          // Cache static assets
-          ...(ext !== "html" && {
-            "Cache-Control": "public, max-age=31536000, immutable",
-          }),
+          ...(ext !== "html" && { "Cache-Control": cacheControl }),
         },
       })
     }

@@ -3,6 +3,12 @@ export function isLocalBrowserHost(hostname: string) {
   return host === "localhost" || host === "127.0.0.1" || host === "0.0.0.0" || host === "::1" || host === "[::1]"
 }
 
+export const OPENAI_BROWSER_OAUTH_UNSUPPORTED_MESSAGE = "Browser authentication uses a localhost callback and is not supported from remote or notebook-proxied UIs. Use API key authentication or a headless/code method instead."
+
+export function isNotebookBasePath(basePath: string) {
+  return /^\/notebook\//.test(basePath)
+}
+
 function urlHasLoopbackTarget(value: string): boolean {
   try {
     const url = new URL(value)
@@ -22,8 +28,8 @@ export function browserOAuthUnsupported(input: { authUrl: string; method: "auto"
   return urlHasLoopbackTarget(input.authUrl)
 }
 
-export function providerOAuthMethodUnsupported(input: { providerID: string; label: string; browserHostname: string }) {
-  if (isLocalBrowserHost(input.browserHostname)) return false
+export function providerOAuthMethodUnsupported(input: { providerID: string; label: string; browserHostname: string; basePath?: string }) {
+  if (isLocalBrowserHost(input.browserHostname) && !isNotebookBasePath(input.basePath ?? "")) return false
   if (input.providerID !== "openai") return false
   return /\b(browser|local)\b/i.test(input.label)
 }

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { browserOAuthUnsupported, extractProviderAuthCode, isLocalBrowserHost, providerOAuthMethodUnsupported } from "../src/utils/provider-auth"
+import { browserOAuthUnsupported, extractProviderAuthCode, isLocalBrowserHost, isNotebookBasePath, providerOAuthMethodUnsupported } from "../src/utils/provider-auth"
 
 describe("provider auth helpers", () => {
   test("extracts GitHub-style device codes", () => {
@@ -19,6 +19,11 @@ describe("provider auth helpers", () => {
     expect(isLocalBrowserHost("127.0.0.1")).toBe(true)
     expect(isLocalBrowserHost("0.0.0.0")).toBe(true)
     expect(isLocalBrowserHost("notebook.example.com")).toBe(false)
+  })
+
+  test("detects notebook base paths", () => {
+    expect(isNotebookBasePath("/notebook/admin/opencode-admin-5386")).toBe(true)
+    expect(isNotebookBasePath("/")).toBe(false)
   })
 
   test("blocks remote browser OAuth that redirects to loopback", () => {
@@ -42,5 +47,14 @@ describe("provider auth helpers", () => {
 
   test("keeps OpenAI headless methods available on remote hosts", () => {
     expect(providerOAuthMethodUnsupported({ providerID: "openai", label: "Headless login", browserHostname: "notebook.example.com" })).toBe(false)
+  })
+
+  test("marks OpenAI browser methods unsupported on notebook prefixes", () => {
+    expect(providerOAuthMethodUnsupported({
+      providerID: "openai",
+      label: "ChatGPT Pro/Plus (browser)",
+      browserHostname: "localhost",
+      basePath: "/notebook/admin/opencode-admin-5386",
+    })).toBe(true)
   })
 })

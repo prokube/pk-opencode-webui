@@ -20,7 +20,7 @@ import { SETTINGS_BASE_TABS } from "./settings-tabs"
 import { TelegramSettings } from "../components/telegram-settings"
 import { invalidateTelegramSourceIdCache, writeFile } from "../utils/extended-api"
 import { ALARM_CHANNELS_STORAGE_KEY, readAlarmChannels, writeAlarmChannels, type AlarmChannels } from "../utils/notify"
-import { browserOAuthUnsupported, extractProviderAuthCode, providerOAuthMethodUnsupported } from "../utils/provider-auth"
+import { OPENAI_BROWSER_OAUTH_UNSUPPORTED_MESSAGE, browserOAuthUnsupported, extractProviderAuthCode, providerOAuthMethodUnsupported } from "../utils/provider-auth"
 import type { TelegramHealthResponse, TelegramSettingsResponse } from "../utils/telegram-settings"
 import type { Config, PermissionActionConfig } from "../sdk/client"
 
@@ -617,12 +617,18 @@ Add your project-specific instructions here.
     setError(null)
     setSuccess(null)
 
+    const method = providers.authMethods[providerID]?.[methodIndex]
+    const providerName = getProviderDisplayName(providerID)
+
+    if (method && oauthMethodUnsupported(providerID, method.label)) {
+      setError(`${providerName}: ${OPENAI_BROWSER_OAUTH_UNSUPPORTED_MESSAGE}`)
+      return
+    }
+
     const result = await providers.startOAuth(providerID, methodIndex)
 
     if (result) {
       const code = extractProviderAuthCode(result.instructions)
-
-      const providerName = getProviderDisplayName(providerID)
 
       if (browserOAuthUnsupported({
         authUrl: result.url,
@@ -683,7 +689,7 @@ Add your project-specific instructions here.
   }
 
   function oauthMethodUnsupported(providerID: string, label: string) {
-    return providerOAuthMethodUnsupported({ providerID, label, browserHostname: window.location.hostname })
+    return providerOAuthMethodUnsupported({ providerID, label, browserHostname: window.location.hostname, basePath: basePath.basePath })
   }
 
   async function handleOAuthComplete() {
@@ -1352,7 +1358,7 @@ Add your project-specific instructions here.
                         </div>
 
                         {/* Provider grid - max height with scroll */}
-                        <div class="grid grid-cols-2 gap-2 max-h-64 overflow-y-auto">
+                        <div class={`grid grid-cols-2 gap-2 overflow-y-auto pr-1 ${selectedProvider() ? "max-h-36" : "max-h-64"}`}>
                           <For each={filteredProviders()}>
                             {(provider) => (
                               <button
@@ -1391,6 +1397,12 @@ Add your project-specific instructions here.
                             )}
                           </For>
                         </div>
+
+                        <Show when={filteredProviders().length > (selectedProvider() ? 4 : 8)}>
+                          <p class="mt-2 text-xs" style={{ color: "var(--text-weak)" }}>
+                            Scroll this provider list for more options. Connection methods appear below the selected provider.
+                          </p>
+                        </Show>
 
                         <Show when={filteredProviders().length === 0 && providerSearch()}>
                           <p class="text-sm text-center py-4" style={{ color: "var(--text-weak)" }}>
@@ -1516,7 +1528,7 @@ Add your project-specific instructions here.
                                     </button>
                                     <Show when={oauthMethodUnsupported(selectedProvider()!, method.label)}>
                                       <p class="text-xs" style={{ color: "var(--text-weak)" }}>
-                                        Browser authentication uses a localhost callback and is only supported when this UI runs on your local machine. Use API key authentication or a headless/code method in notebooks.
+                                        {OPENAI_BROWSER_OAUTH_UNSUPPORTED_MESSAGE}
                                       </p>
                                     </Show>
                                   </div>
