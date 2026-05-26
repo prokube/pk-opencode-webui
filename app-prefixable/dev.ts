@@ -73,6 +73,17 @@ function stripHopByHopHeaders(headers: Headers) {
   }
 }
 
+function normalizeDevProxiedResponse(response: Response) {
+  const normalized = normalizeProxiedResponse(response)
+  const headers = new Headers(normalized.headers)
+  stripHopByHopHeaders(headers)
+  return new Response(normalized.body, {
+    status: normalized.status,
+    statusText: normalized.statusText,
+    headers,
+  })
+}
+
 const server = Bun.serve<{ target: string }>({
   port: PORT,
   idleTimeout: 0, // Disable timeout for SSE connections
@@ -169,7 +180,7 @@ const server = Bun.serve<{ target: string }>({
           body,
           signal: req.signal,
         })
-        return withNoStoreHeaders(normalizeProxiedResponse(response))
+        return withNoStoreHeaders(normalizeDevProxiedResponse(response))
       } catch (e) {
         console.error("[Proxy] API error:", e)
         return withNoStoreHeaders(new Response("API proxy error", { status: 502 }))

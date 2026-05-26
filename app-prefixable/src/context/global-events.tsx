@@ -159,6 +159,12 @@ export function GlobalEventsProvider(props: ParentProps & {
     }, 5000))
   }
 
+  function wantedDirectories(dirs: string[], active: string | undefined) {
+    const wanted = new Set(dirs.slice(0, MAX_GLOBAL_EVENT_CONNECTIONS + 1))
+    if (active) wanted.delete(active)
+    return new Set([...wanted].slice(0, MAX_GLOBAL_EVENT_CONNECTIONS))
+  }
+
   function connectToDirectory(dir: string) {
     if (connections.has(dir)) return
     // Don't connect when a remote server is active
@@ -351,9 +357,8 @@ export function GlobalEventsProvider(props: ParentProps & {
           if (disposed) return
           // Don't reconnect when a remote server is active — local projects don't exist there
           if (!activeServer().isDefault) return
-          const active = props.activeDirectory()
-          const wanted = props.projects().some((p) => p.worktree === dir)
-          if (wanted && dir !== active) {
+          const wanted = wantedDirectories(props.projects().map((p) => p.worktree), props.activeDirectory())
+          if (wanted.has(dir)) {
             connectToDirectory(dir)
             return
           }
@@ -569,10 +574,13 @@ export function GlobalEventsProvider(props: ParentProps & {
         return
       }
 
-      const wanted = new Set(current.dirs.slice(0, MAX_GLOBAL_EVENT_CONNECTIONS + 1))
-      if (current.active) wanted.delete(current.active)
+      const limitedWanted = wantedDirectories(current.dirs, current.active)
 
-      const limitedWanted = new Set([...wanted].slice(0, MAX_GLOBAL_EVENT_CONNECTIONS))
+      for (const [dir, timer] of reconnectTimers) {
+        if (limitedWanted.has(dir)) continue
+        clearTimeout(timer)
+        reconnectTimers.delete(dir)
+      }
 
       // Disconnect directories we no longer need (including newly-active project)
       for (const dir of [...connections.keys()]) {
