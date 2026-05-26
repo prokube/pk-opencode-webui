@@ -52,7 +52,7 @@ for i in {1..30}; do
         break
     fi
     if [ $i -eq 30 ]; then
-        echo "ERROR: API server failed to start within 30 seconds"
+        echo "ERROR: API server failed to start within the allotted time"
         exit 1
     fi
     sleep 1
