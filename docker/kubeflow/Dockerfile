@@ -24,24 +24,33 @@ RUN bun run build
 # -----------------------------------------------------------------------------
 # Stage 2: Runtime
 # -----------------------------------------------------------------------------
-FROM alpine:3.21
+FROM debian:bookworm-slim
 
 # Install system packages
-RUN apk add --no-cache \
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
     bash \
-    git \
-    github-cli \
+    build-essential \
+    ca-certificates \
     curl \
-    openssh-client \
-    neovim \
     fzf \
-    ripgrep \
+    git \
+    gh \
+    gzip \
     htop \
+    jq \
     less \
+    neovim \
+    openssh-client \
+    pkg-config \
+    python3 \
+    python3-pip \
+    ripgrep \
+    tar \
     tree \
-    libstdc++ \
-    gcompat \
-    shadow
+    unzip \
+    xz-utils && \
+    rm -rf /var/lib/apt/lists/*
 
 # Install Bun
 ARG BUN_VERSION=1.1.42
@@ -67,8 +76,8 @@ RUN case $(uname -m) in \
     curl -L "https://github.com/just-containers/s6-overlay/releases/download/v${S6_OVERLAY_VERSION}/s6-overlay-${ARCH}.tar.xz" | tar -xJvf - -C /
 
 # Create jovyan user with UID 1000 (Kubeflow standard)
-RUN addgroup -g 1000 jovyan && \
-    adduser -u 1000 -G jovyan -h /home/jovyan -s /bin/bash -D jovyan
+RUN groupadd --gid 1000 jovyan && \
+    useradd --uid 1000 --gid jovyan --home-dir /home/jovyan --shell /bin/bash --create-home jovyan
 
 # Create directories (including s6 runtime directory for rootless mode)
 # /run must be writable by jovyan for s6-overlay's preinit writability test
@@ -125,9 +134,6 @@ RUN chmod -R 755 /etc/services.d/opencode /etc/services.d/telegram-bridge /etc/c
 # Remove all SUID/SGID bits from the image (required for restricted Pod Security Standards)
 # This ensures no privilege escalation paths exist (covers /bin/su, /bin/mount, etc.)
 RUN find / -type f \( -perm -4000 -o -perm -2000 \) -exec chmod ug-s {} \; 2>/dev/null || true
-
-# Set up gcompat for glibc compatibility (needed for OpenCode/Bun)
-ENV LD_PRELOAD=/lib/libgcompat.so.0
 
 # Configure s6 for rootless operation (required for Kubernetes Pod Security Standards)
 ENV S6_READ_ONLY_ROOT=1 \
