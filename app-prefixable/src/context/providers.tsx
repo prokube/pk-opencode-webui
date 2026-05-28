@@ -131,7 +131,7 @@ interface ProviderContextValue {
 const ProviderContext = createContext<ProviderContextValue>()
 
 export function ProviderProvider(props: ParentProps) {
-  const { client, directory } = useSDK()
+  const { client, global: globalClient, directory } = useSDK()
   const cfg = useConfig()
   const storageKey = modelsStorageKey(directory)
   const variantKey = variantsStorageKey(directory)
@@ -225,20 +225,36 @@ export function ProviderProvider(props: ParentProps) {
     }
   })
 
+  function normalizeProviderData(data: ProviderListData) {
+    const all = data.all.map((provider) => ({
+      ...provider,
+      models: Object.fromEntries(
+        Object.entries(provider.models).map(([k, m]) => [k, { ...m, providerID: provider.id }])
+      ),
+    }))
+    return { ...data, all }
+  }
+
   // Fetch providers
   const [providerData, { mutate: setProviderData, refetch: refetchProviders }] = createResource(async () => {
     try {
       const res = await client.provider.list()
       const data = res.data as ProviderListData | undefined
       if (!data) return undefined
-      // Inject providerID into each model since the SDK response doesn't include it
-      const all = data.all.map((provider) => ({
-        ...provider,
-        models: Object.fromEntries(
-          Object.entries(provider.models).map(([k, m]) => [k, { ...m, providerID: provider.id }])
-        ),
-      }))
-      return { ...data, all }
+
+      if (directory) {
+        const globalRes = await globalClient.provider.list()
+        const globalData = globalRes.data as ProviderListData | undefined
+        const stale = (globalData?.connected ?? []).some((id) => !data.connected.includes(id))
+        if (stale) {
+          await client.instance.dispose()
+          const refreshed = await client.provider.list()
+          const refreshedData = refreshed.data as ProviderListData | undefined
+          if (refreshedData) return normalizeProviderData(refreshedData)
+        }
+      }
+
+      return normalizeProviderData(data)
     } catch (e) {
       console.error("Failed to fetch providers:", e)
       return undefined
