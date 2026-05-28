@@ -243,14 +243,18 @@ export function ProviderProvider(props: ParentProps) {
       if (!data) return undefined
 
       if (directory) {
-        const globalRes = await globalClient.provider.list()
-        const globalData = globalRes.data as ProviderListData | undefined
-        const stale = (globalData?.connected ?? []).some((id) => !data.connected.includes(id))
-        if (stale) {
-          await client.instance.dispose()
-          const refreshed = await client.provider.list()
-          const refreshedData = refreshed.data as ProviderListData | undefined
-          if (refreshedData) return normalizeProviderData(refreshedData)
+        try {
+          const globalRes = await globalClient.provider.list()
+          const globalData = globalRes.data as ProviderListData | undefined
+          const stale = (globalData?.connected ?? []).some((id) => !data.connected.includes(id))
+          if (stale) {
+            await client.instance.dispose()
+            const refreshed = await client.provider.list()
+            const refreshedData = refreshed.data as ProviderListData | undefined
+            if (refreshedData) return normalizeProviderData(refreshedData)
+          }
+        } catch (e) {
+          console.warn("Failed to refresh stale directory provider state:", e)
         }
       }
 
