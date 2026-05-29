@@ -6,6 +6,38 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.9.2] - 2026-05-29
+
+### Fixed
+- Restore session and thinking-state recovery after dropped SSE connections (#425, #429, #431, #433)
+- Keep project busy badges accurate after reconnects, stale status seeds, and deleted sessions (#436)
+- Stabilize provider authentication, OpenAI notebook auth handling, and provider refresh after auth changes (#437, #438)
+- Prevent UI startup and session-load hangs with API health-check timeouts and proxy connection cleanup (#441, #442)
+- Refresh stale directory-scoped provider state when global provider credentials become available (#443)
+- Optimistically remove deleted sessions from the sidebar (#428)
+
+### Changed
+- Update OpenCode CLI used by the Kubeflow image and session completion polling (#434, #435)
+- Switch the notebook image to a Debian base (#440)
+
+## [0.9.1] - 2026-05-14
+
+### Added
+- Add Telegram bridge service, settings, setup guide, commands, notifications, inline controls, multi-source support, and session alarm routing (#252, #256, #257, #265, #269, #272, #282, #286, #287, #288, #290, #293, #300, #304, #312, #318, #321, #329, #330, #332, #337, #347, #354, #375)
+- Add follow-up queue controls, auto-send mode, reorder support, and drag-and-drop reordering (#275, #298, #352, #377)
+- Add model metadata hover popup, model variant picker, grouped/collapsible model picker options, and provider disconnect actions (#270, #313, #349, #390, #406)
+- Render additional message parts including agent, snapshot, retry, patch, compaction, and subtask delegation cards (#306, #308, #336)
+- Add auto-accept permissions toggle and review panel diff modes (#307, #412)
+- Show active tool details in the message stream (#414)
+
+### Fixed
+- Preserve terminal sessions, saved prompt behavior, Telegram runtime state, prompt delivery, and Telegram alert routing across session changes and reconnects (#253, #258, #259, #274, #292, #305, #358, #365)
+- Stabilize chat sync, SSE noise, streaming autoscroll, tool invocation summaries, and tool state refresh during sync (#401, #410, #411, #416, #419, #421)
+- Improve OpenAI auth in remote UI, provider disconnect handling, MCP URL guidance, and Kubeflow OpenCode CLI pinning (#403, #409, #423, #395)
+- Harden proxy decoding, stale Workbox bootstrap, worktree lifecycle events, and session creation edge cases (#361, #373, #310, #271)
+- Restore markdown code block copy affordances and apply_patch diff rendering (#360, #371, #389, #408)
+- Update frontend audit dependencies and test/runtime compatibility (#405, #398, #399)
+
 ## [0.9.0] - 2026-04-10
 
 ### Added
