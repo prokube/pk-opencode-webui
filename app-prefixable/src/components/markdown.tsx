@@ -130,6 +130,10 @@ export function Markdown(props: MarkdownProps) {
     if (state.timer !== undefined) return
     const elapsed = Date.now() - state.last
     const delay = state.last === 0 || elapsed >= renderInterval ? 0 : renderInterval - elapsed
+    if (delay === 0) {
+      render(value)
+      return
+    }
     state.timer = window.setTimeout(() => {
       state.timer = undefined
       render(state.queued)

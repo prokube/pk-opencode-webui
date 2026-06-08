@@ -291,7 +291,7 @@ export function MessageTimeline(props: {
               }}
             >
               <ChevronUp class="w-4 h-4" />
-              <span>Load {Math.min(TURNS_PER_BATCH, turns().length - renderCount())} earlier turns</span>
+              <span>Load {Math.min(TURNS_PER_BATCH, turnRefs().length - renderCount())} earlier turns</span>
             </button>
           </div>
         </Show>
@@ -330,7 +330,7 @@ export function MessageTimeline(props: {
         </Show>
 
         {/* Empty state */}
-        <Show when={turns().length === 0 && !props.processing}>
+        <Show when={turnRefs().length === 0 && !props.processing}>
           <div class="flex flex-col items-center justify-center h-full text-center py-12">
             <div
               class="w-16 h-16 rounded-full flex items-center justify-center mb-4"
