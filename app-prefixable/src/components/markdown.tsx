@@ -1,4 +1,4 @@
-import { createMemo } from "solid-js"
+import { createEffect, createSignal, onCleanup } from "solid-js"
 import type { JSX } from "solid-js"
 import { marked } from "marked"
 import DOMPurify from "dompurify"
@@ -24,6 +24,7 @@ function sanitize(html: string) {
 }
 
 const resetDelay = 2000
+const renderInterval = 120
 
 function escapeHtml(value: string) {
   return value
@@ -99,10 +100,47 @@ interface MarkdownProps {
 }
 
 export function Markdown(props: MarkdownProps) {
-  const html = createMemo(() => {
-    if (!props.content) return ""
-    const raw = marked.parse(props.content, { async: false, renderer }) as string
-    return sanitize(raw)
+  const [html, setHtml] = createSignal("")
+  const state: {
+    timer: number | undefined
+    last: number
+    queued: string
+    rendered: string
+  } = {
+    timer: undefined,
+    last: 0,
+    queued: "",
+    rendered: "",
+  }
+
+  function render(value: string) {
+    state.last = Date.now()
+    state.rendered = value
+    if (!value) {
+      setHtml("")
+      return
+    }
+    const raw = marked.parse(value, { async: false, renderer }) as string
+    setHtml(sanitize(raw))
+  }
+
+  function schedule(value: string) {
+    state.queued = value
+    if (value === state.rendered) return
+    if (state.timer !== undefined) return
+    const elapsed = Date.now() - state.last
+    const delay = state.last === 0 || elapsed >= renderInterval ? 0 : renderInterval - elapsed
+    state.timer = window.setTimeout(() => {
+      state.timer = undefined
+      render(state.queued)
+      if (state.queued !== state.rendered) schedule(state.queued)
+    }, delay)
+  }
+
+  createEffect(() => schedule(props.content))
+
+  onCleanup(() => {
+    if (state.timer !== undefined) clearTimeout(state.timer)
   })
 
   const onClick: JSX.EventHandler<HTMLDivElement, MouseEvent> = (event) => {
