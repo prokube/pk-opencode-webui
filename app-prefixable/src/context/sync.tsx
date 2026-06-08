@@ -11,6 +11,8 @@ type SyncEvent = {
   properties: Record<string, unknown>
 }
 
+type SyncEventHandler = (event: SyncEvent) => void
+
 export type MessageWithParts = {
   info: Message
   parts: Part[]
@@ -42,6 +44,7 @@ interface SyncContextValue {
   parts: (messageID: string) => Part[]
   providers: () => ProviderData
   sseUnhealthy: () => boolean
+  subscribe: (handler: SyncEventHandler) => () => void
   session: {
     sync: (sessionID: string) => Promise<boolean>
     get: (sessionID: string) => Session | undefined
@@ -201,6 +204,7 @@ export function SyncProvider(props: ParentProps) {
   })
 
   const inflight = new Map<string, Promise<boolean>>()
+  const handlers = new Set<SyncEventHandler>()
   const [sseUnhealthy, setSseUnhealthy] = createSignal(false)
 
   // Connect to SSE endpoint using fetch (supports custom headers unlike EventSource)
@@ -274,7 +278,6 @@ export function SyncProvider(props: ParentProps) {
   }
 
   function handleEvent(event: SyncEvent) {
-    console.log("[Sync] Event:", event.type)
     const props = event.properties
 
     // Session events
@@ -453,6 +456,15 @@ export function SyncProvider(props: ParentProps) {
         setStore("provider", data)
       }
     }
+
+    for (const handler of handlers) {
+      handler(event)
+    }
+  }
+
+  function subscribe(handler: SyncEventHandler) {
+    handlers.add(handler)
+    return () => handlers.delete(handler)
   }
 
   async function bootstrap() {
@@ -582,6 +594,7 @@ export function SyncProvider(props: ParentProps) {
     parts: (messageID: string) => store.part[messageID] ?? [],
     providers: () => store.provider,
     sseUnhealthy,
+    subscribe,
     session: {
       sync: syncSession,
       get: (sessionID: string) => {
