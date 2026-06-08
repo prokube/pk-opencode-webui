@@ -1,4 +1,4 @@
-import { createContext, useContext, createSignal, onCleanup, onMount, type ParentProps } from "solid-js"
+import { createContext, useContext, createEffect, createSignal, onCleanup, onMount, type ParentProps } from "solid-js"
 import { createStore, produce } from "solid-js/store"
 import type { Event, SessionStatus, QuestionRequest } from "../sdk/client"
 import { useSDK } from "./sdk"
@@ -83,12 +83,15 @@ export function EventProvider(props: ParentProps) {
   const sseAskedQuestions = new Set<string>()
   const sseClearedRequests = new Set<string>()
   const sseSeenStatuses = new Set<string>()
+  let statusSeeded = false
 
   function seedStatus() {
     if (!directory) {
       setStatusReady(true)
       return
     }
+    if (statusSeeded) return
+    statusSeeded = true
     client.session.status({ directory })
       .then((res) => {
         const statuses = (res.data ?? {}) as Record<string, SessionStatus>
@@ -99,6 +102,10 @@ export function EventProvider(props: ParentProps) {
       })
       .catch((err) => console.error("[Events] Failed to load statuses:", err))
   }
+
+  createEffect(() => {
+    if (sync.sseUnhealthy()) statusSeeded = false
+  })
 
   const unsubSync = sync.subscribe((event) => {
     if (event.type === "server.connected") {
