@@ -5,6 +5,7 @@ import { base64Encode } from "../utils/path"
 import { useServer } from "../context/server"
 import { SDKProvider } from "../context/sdk"
 import { EventProvider } from "../context/events"
+import { SyncProvider } from "../context/sync"
 import { ProviderProvider } from "../context/providers"
 import { MCPProvider } from "../context/mcp"
 import { ConfigProvider } from "../context/config"
@@ -137,10 +138,11 @@ export function HomeLayout(props: ParentProps) {
 
   return (
     <SDKProvider>
-      <EventProvider>
-        <ConfigProvider>
-          <ProviderProvider>
-            <MCPProvider>
+      <SyncProvider>
+        <EventProvider>
+          <ConfigProvider>
+            <ProviderProvider>
+              <MCPProvider>
             <div class="flex h-screen" style={{ background: "var(--background-stronger)" }}>
               {/* Project Dialog */}
               <ProjectDialog
@@ -317,10 +319,11 @@ export function HomeLayout(props: ParentProps) {
                 </Show>
               </div>
             </div>
-            </MCPProvider>
-          </ProviderProvider>
-        </ConfigProvider>
-      </EventProvider>
+              </MCPProvider>
+            </ProviderProvider>
+          </ConfigProvider>
+        </EventProvider>
+      </SyncProvider>
     </SDKProvider>
   )
 }

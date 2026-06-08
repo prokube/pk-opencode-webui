@@ -1,9 +1,8 @@
-import { createContext, useContext, createSignal, onCleanup, onMount, type ParentProps } from "solid-js"
+import { createContext, useContext, createEffect, createSignal, onCleanup, onMount, type ParentProps } from "solid-js"
 import { createStore, produce } from "solid-js/store"
 import type { Event, SessionStatus, QuestionRequest } from "../sdk/client"
 import { useSDK } from "./sdk"
-import { useServer } from "./server"
-import { createSSEParser, nextSSEReconnectDelay } from "../utils/sse"
+import { useSync } from "./sync"
 
 type EventHandler = (event: Event) => void
 
@@ -32,28 +31,15 @@ interface EventContextValue {
 const EventContext = createContext<EventContextValue>()
 
 export function EventProvider(props: ParentProps) {
-  const { client, directory, url: sdkUrl } = useSDK()
-  const { authHeaders } = useServer()
+  const { client, directory } = useSDK()
+  const sync = useSync()
   const handlers = new Set<EventHandler>()
   const [status, setStatus] = createStore<Record<string, SessionStatus>>({})
   const [statusReady, setStatusReady] = createSignal(false)
   const [pendingQuestions, setPendingQuestions] = createStore<Record<string, QuestionRequest | undefined>>({})
 
-  // Connect to SSE endpoint using fetch (supports custom headers unlike EventSource)
-  let abortController: AbortController | null = null
-  let reconnectTimer: ReturnType<typeof setTimeout> | null = null
-  let reconnectDelay = 3000
-
-  function processEvent(rawData: string) {
-    try {
-      const data = JSON.parse(rawData)
-      // Handle both formats: direct event or wrapped in payload
-      const event = (data?.payload ?? data) as Event
-      if (!event || !event.type) {
-        console.warn("[Events] Received event without type:", data)
-        return
-      }
-      console.log("[Events] Received:", event.type, event.properties)
+  function processEvent(event: Event) {
+    if (!event || !event.type) return
 
       // Update session status
       const statusEvent = sessionStatusEvent(event)
@@ -84,82 +70,6 @@ export function EventProvider(props: ParentProps) {
       for (const handler of handlers) {
         handler(event)
       }
-    } catch (err) {
-      console.error("[Events] Parse error:", err)
-    }
-  }
-
-  async function connect() {
-    if (abortController) return
-
-    const dirParam = directory ? `?directory=${encodeURIComponent(directory)}` : ""
-    const eventUrl = `${sdkUrl}/event${dirParam}`
-    console.log("[Events] Connecting to SSE:", eventUrl)
-
-    abortController = new AbortController()
-    const signal = abortController.signal
-
-    let connectedAt = 0
-
-    try {
-      const response = await fetch(eventUrl, {
-        headers: { ...authHeaders(), Accept: "text/event-stream" },
-        signal,
-      })
-
-      if (!response.ok || !response.body) {
-        throw new Error(`SSE connection failed: ${response.status}`)
-      }
-
-      console.log("[Events] Connected")
-      connectedAt = Date.now()
-
-      // Clear seen-sets on reconnect so the HTTP re-seed below picks up real status
-      sseSeenStatuses.clear()
-      sseAskedQuestions.clear()
-      sseClearedRequests.clear()
-
-      // Re-seed session statuses from HTTP after reconnect
-      if (directory) {
-        client.session.status({ directory })
-          .then((res) => {
-            const statuses = (res.data ?? {}) as Record<string, SessionStatus>
-            for (const [sessionID, s] of Object.entries(statuses)) {
-              if (!sseSeenStatuses.has(sessionID)) setStatus(sessionID, s)
-            }
-          })
-          .catch((err) => console.error("[Events] Failed to re-seed statuses:", err))
-      }
-
-      const reader = response.body.getReader()
-      const decoder = new TextDecoder()
-      const parser = createSSEParser((data) => processEvent(data))
-
-      while (true) {
-        const { done, value } = await reader.read()
-        if (done) break
-        parser.push(decoder.decode(value, { stream: true }))
-      }
-
-      // Flush decoder and SSE parser (trailing CR, final event boundary)
-      parser.push(decoder.decode())
-      parser.push("")
-
-      // Stream ended normally, reconnect
-      throw new Error("SSE stream ended")
-    } catch (err) {
-      if (signal.aborted) return // Intentional disconnect
-      console.error("[Events] Connection error, reconnecting...", err)
-      abortController = null
-      reconnectDelay = nextSSEReconnectDelay(connectedAt, Date.now(), reconnectDelay)
-
-      if (!reconnectTimer) {
-        reconnectTimer = setTimeout(() => {
-          reconnectTimer = null
-          connect()
-        }, reconnectDelay)
-      }
-    }
   }
 
   // Connect SSE and seed initial state concurrently. SSE is connected first so
@@ -173,9 +83,41 @@ export function EventProvider(props: ParentProps) {
   const sseAskedQuestions = new Set<string>()
   const sseClearedRequests = new Set<string>()
   const sseSeenStatuses = new Set<string>()
+  let statusSeeded = false
+
+  function seedStatus() {
+    if (!directory) {
+      setStatusReady(true)
+      return
+    }
+    if (statusSeeded) return
+    statusSeeded = true
+    client.session.status({ directory })
+      .then((res) => {
+        const statuses = (res.data ?? {}) as Record<string, SessionStatus>
+        for (const [sessionID, s] of Object.entries(statuses)) {
+          if (!sseSeenStatuses.has(sessionID)) setStatus(sessionID, s)
+        }
+        setStatusReady(true)
+      })
+      .catch((err) => console.error("[Events] Failed to load statuses:", err))
+  }
+
+  createEffect(() => {
+    if (sync.sseUnhealthy()) statusSeeded = false
+  })
+
+  const unsubSync = sync.subscribe((event) => {
+    if (event.type === "server.connected") {
+      sseSeenStatuses.clear()
+      sseAskedQuestions.clear()
+      sseClearedRequests.clear()
+      seedStatus()
+    }
+    processEvent(event as Event)
+  })
 
   onMount(() => {
-    connect()
     if (!directory) {
       setStatusReady(true)
       return
@@ -192,21 +134,11 @@ export function EventProvider(props: ParentProps) {
         }
       })
       .catch((err) => console.error("[Events] Failed to load questions:", err))
-    client.session.status({ directory })
-      .then((res) => {
-        const statuses = (res.data ?? {}) as Record<string, SessionStatus>
-        for (const [sessionID, s] of Object.entries(statuses)) {
-          if (!sseSeenStatuses.has(sessionID)) setStatus(sessionID, s)
-        }
-        setStatusReady(true)
-      })
-      .catch((err) => console.error("[Events] Failed to load statuses:", err))
+    seedStatus()
   })
 
   onCleanup(() => {
-    abortController?.abort()
-    abortController = null
-    if (reconnectTimer) clearTimeout(reconnectTimer)
+    unsubSync()
   })
 
   function subscribe(handler: EventHandler) {
