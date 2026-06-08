@@ -14,6 +14,12 @@ const TURNS_PER_BATCH = 10
 const INITIAL_TURNS = 5
 const NEAR_BOTTOM_PX = 10
 
+type TurnRef = {
+  id: string
+  userId: string
+  assistantIds: string[]
+}
+
 // Compute turn-level timing from user and assistant message timestamps
 function computeTurnTime(user: DisplayMessage, assistants: DisplayMessage[]): Turn["time"] {
   const started = user.time?.created
@@ -29,38 +35,26 @@ function computeTurnTime(user: DisplayMessage, assistants: DisplayMessage[]): Tu
   return { started, completed, duration }
 }
 
-// Convert flat message list to turns (user + assistant groupings)
-function messagesToTurns(messages: DisplayMessage[]): Turn[] {
-  const turns: Turn[] = []
-  let current: Turn | null = null
+function messagesToTurnRefs(messages: DisplayMessage[]): TurnRef[] {
+  const turns: TurnRef[] = []
+  let current: TurnRef | null = null
 
   for (const msg of messages) {
     if (msg.role === "user") {
-      // Start a new turn
-      if (current) {
-        current.time = computeTurnTime(current.userMessage, current.assistantMessages)
-        turns.push(current)
-      }
+      if (current) turns.push(current)
       current = {
         id: msg.id,
-        userMessage: msg,
-        assistantMessages: [],
+        userId: msg.id,
+        assistantIds: [],
       }
     } else if (msg.role === "assistant" && current) {
-      // Add to current turn
-      current.assistantMessages.push(msg)
+      current.assistantIds.push(msg.id)
     } else if (msg.role === "assistant" && !current) {
-      // Handle assistant messages before first user message
       console.warn("MessageTimeline: Dropping assistant message before first user message", msg.id)
     }
   }
 
-  // Don't forget the last turn
-  if (current) {
-    current.time = computeTurnTime(current.userMessage, current.assistantMessages)
-    turns.push(current)
-  }
-
+  if (current) turns.push(current)
   return turns
 }
 
@@ -69,6 +63,12 @@ function hasVisibleContent(message: DisplayMessage): boolean {
   if (message.role === "user") return true
   if (message.parts.some((p) => p.type === "tool")) return true
   return extractTextContent(message.parts).trim().length > 0
+}
+
+function hasStructuredContent(message: DisplayMessage): boolean {
+  if (message.error) return true
+  if (message.role === "user") return true
+  return message.parts.some((p) => p.type === "tool" || p.type === "text" || p.type === "reasoning")
 }
 
 function timelineStructure(messages: DisplayMessage[]) {
@@ -106,39 +106,62 @@ export function MessageTimeline(props: {
   const [prevTurnIds, setPrevTurnIds] = createSignal<Set<string>>(new Set())
   const structure = createMemo(() => timelineStructure(props.messages))
 
-  // Convert messages to turns
-  const turns = createMemo(() => {
-    structure()
-    const filtered = props.messages.filter(hasVisibleContent)
-    return messagesToTurns(filtered)
+  const messageById = createMemo(() => {
+    const map = new Map<string, DisplayMessage>()
+    for (const msg of props.messages) map.set(msg.id, msg)
+    return map
   })
 
+  // Convert messages to turn references only when structure changes.
+  const turnRefs = createMemo(() => {
+    structure()
+    const filtered = untrack(() => props.messages).filter(hasStructuredContent)
+    return messagesToTurnRefs(filtered)
+  })
+
+  function resolveTurn(ref: TurnRef): Turn | undefined {
+    const map = messageById()
+    const user = map.get(ref.userId)
+    if (!user) return undefined
+    const assistants = ref.assistantIds.flatMap((id) => map.get(id) ?? [])
+    return {
+      id: ref.id,
+      userMessage: user,
+      assistantMessages: assistants,
+      time: computeTurnTime(user, assistants),
+    }
+  }
+
   // Calculate which turns to render (from the end, most recent first in render order)
-  const renderedTurns = createMemo(() => {
-    const all = turns()
+  const renderedTurnRefs = createMemo(() => {
+    const all = turnRefs()
     const count = Math.min(renderCount(), all.length)
-    // Take from the end (most recent), but return in chronological order
     return all.slice(Math.max(0, all.length - count))
   })
 
+  const renderedTurns = createMemo(() => {
+    return renderedTurnRefs().flatMap((ref) => resolveTurn(ref) ?? [])
+  })
+
   // Check if there are more turns to load
-  const hasMore = createMemo(() => renderCount() < turns().length)
+  const hasMore = createMemo(() => renderCount() < turnRefs().length)
 
   // Get the last turn (for showing streaming content)
   const lastTurn = createMemo(() => {
-    const all = turns()
-    return all.length > 0 ? all[all.length - 1] : null
+    const all = turnRefs()
+    const ref = all[all.length - 1]
+    return ref ? resolveTurn(ref) ?? null : null
   })
 
   // Load more earlier turns with scroll anchoring
   function loadMore() {
     if (!containerRef) {
-      setRenderCount((prev) => Math.min(prev + TURNS_PER_BATCH, turns().length))
+      setRenderCount((prev) => Math.min(prev + TURNS_PER_BATCH, turnRefs().length))
       return
     }
     // Save scroll position relative to bottom before loading
     const scrollBottom = containerRef.scrollHeight - containerRef.scrollTop
-    setRenderCount((prev) => Math.min(prev + TURNS_PER_BATCH, turns().length))
+    setRenderCount((prev) => Math.min(prev + TURNS_PER_BATCH, turnRefs().length))
     // Restore scroll position after DOM update
     requestAnimationFrame(() => {
       if (containerRef) {
@@ -202,7 +225,7 @@ export function MessageTimeline(props: {
 
   // Reset render count when session changes (detect by comparing turn IDs)
   createEffect(() => {
-    const currentTurns = turns()
+    const currentTurns = turnRefs()
     const currentIds = new Set(currentTurns.map((t) => t.id))
     const prevIds = untrack(() => prevTurnIds())
 

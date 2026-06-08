@@ -458,7 +458,11 @@ export function SyncProvider(props: ParentProps) {
     }
 
     for (const handler of handlers) {
-      handler(event)
+      try {
+        handler(event)
+      } catch (err) {
+        console.error("[Sync] Event subscriber failed:", err)
+      }
     }
   }
 
