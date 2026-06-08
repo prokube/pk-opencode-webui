@@ -71,6 +71,12 @@ function hasVisibleContent(message: DisplayMessage): boolean {
   return extractTextContent(message.parts).trim().length > 0
 }
 
+function timelineStructure(messages: DisplayMessage[]) {
+  return messages
+    .map((msg) => `${msg.id}:${msg.role}:${msg.error ? 1 : 0}:${msg.parts.map((p) => p.type).join(",")}`)
+    .join("|")
+}
+
 export function MessageTimeline(props: {
   messages: DisplayMessage[]
   processing: boolean
@@ -98,9 +104,11 @@ export function MessageTimeline(props: {
   const [userScrolledUp, setUserScrolledUp] = createSignal(false)
   // Track previous turn IDs for session switch detection
   const [prevTurnIds, setPrevTurnIds] = createSignal<Set<string>>(new Set())
+  const structure = createMemo(() => timelineStructure(props.messages))
 
   // Convert messages to turns
   const turns = createMemo(() => {
+    structure()
     const filtered = props.messages.filter(hasVisibleContent)
     return messagesToTurns(filtered)
   })
