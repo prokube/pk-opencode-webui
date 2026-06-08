@@ -123,7 +123,11 @@ export function MessageTimeline(props: {
     const map = messageById()
     const user = map.get(ref.userId)
     if (!user) return undefined
-    const assistants = ref.assistantIds.flatMap((id) => map.get(id) ?? [])
+    const assistants = ref.assistantIds.flatMap((id) => {
+      const msg = map.get(id)
+      if (!msg) return []
+      return hasVisibleContent(msg) ? [msg] : []
+    })
     return {
       id: ref.id,
       userMessage: user,
