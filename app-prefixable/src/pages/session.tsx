@@ -275,8 +275,7 @@ export function Session() {
         return msg.info.role === "assistant" ? msg.info.error : undefined;
       },
       get time() {
-        if (msg.info.role === "assistant") return { created: msg.info.time.created, completed: msg.info.time.completed };
-        return { created: msg.info.time.created };
+        return msg.info.time;
       },
       get modelID() {
         return msg.info.role === "assistant" ? msg.info.modelID : undefined;

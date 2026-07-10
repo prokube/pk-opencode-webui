@@ -144,7 +144,7 @@ export function MessageTimeline(props: {
     const messages = props.messages
     const structure = messageStructure(messages)
     if (prev && sameTimelineStructure(prev.structure, structure)) {
-      return { structure, refs: prev.refs }
+      return prev
     }
     return { structure, refs: messagesToTurnRefs(messages.filter(hasStructuredContent)) }
   })
