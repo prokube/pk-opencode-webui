@@ -257,6 +257,42 @@ export function Session() {
     return msgs.slice(0, revertIndex);
   }
 
+  function displayMessage(msg: ReturnType<typeof sync.messages>[number]) {
+    const cached = displayMessageCache.get(msg.info.id);
+    if (cached?.source === msg) return cached.display;
+
+    const display = {
+      get id() {
+        return msg.info.id;
+      },
+      get role() {
+        return msg.info.role;
+      },
+      get parts() {
+        return msg.parts;
+      },
+      get error() {
+        return msg.info.role === "assistant" ? msg.info.error : undefined;
+      },
+      get time() {
+        if (msg.info.role === "assistant") return { created: msg.info.time.created, completed: msg.info.time.completed };
+        return { created: msg.info.time.created };
+      },
+      get modelID() {
+        return msg.info.role === "assistant" ? msg.info.modelID : undefined;
+      },
+      get providerID() {
+        return msg.info.role === "assistant" ? msg.info.providerID : undefined;
+      },
+      get tokens() {
+        return msg.info.role === "assistant" ? msg.info.tokens : undefined;
+      },
+    } satisfies DisplayMessage;
+
+    displayMessageCache.set(msg.info.id, { source: msg, display });
+    return display;
+  }
+
   function assistantFinished(id: string) {
     const msgs = visibleSyncMessages(id);
     const last = msgs[msgs.length - 1]?.info;
@@ -354,6 +390,7 @@ export function Session() {
   const [pendingUserMessageText, setPendingUserMessageText] = createSignal<
     string | null
   >(null);
+  const displayMessageCache = new Map<string, { source: ReturnType<typeof sync.messages>[number]; display: DisplayMessage }>();
 
   const pendingPermissions = createMemo(() => permission.pendingForSession(sessionId() ?? ""));
   const inputBlocked = createMemo(() => !!pendingQuestion() || pendingPermissions().length > 0);
@@ -944,27 +981,12 @@ export function Session() {
   const syncMessages = createMemo(() => {
     const id = sessionId();
     if (!id) return [];
-    return visibleSyncMessages(id).map((msg) => {
-      const info = msg.info;
-      if (info.role === "assistant") {
-        return {
-          id: info.id,
-          role: info.role,
-          parts: msg.parts,
-          error: info.error,
-          time: { created: info.time.created, completed: info.time.completed },
-          modelID: info.modelID,
-          providerID: info.providerID,
-          tokens: info.tokens,
-        };
-      }
-      return {
-        id: info.id,
-        role: info.role,
-        parts: msg.parts,
-        time: { created: info.time.created },
-      };
-    });
+    const result = visibleSyncMessages(id).map(displayMessage);
+    const visible = new Set(result.map((msg) => msg.id));
+    for (const key of displayMessageCache.keys()) {
+      if (!visible.has(key)) displayMessageCache.delete(key);
+    }
+    return result;
   });
 
   // Includes optimistic message if present and not yet in sync

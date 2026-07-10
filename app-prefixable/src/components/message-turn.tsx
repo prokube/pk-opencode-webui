@@ -908,10 +908,10 @@ export function MessageTurn(props: {
           {/* Assistant messages */}
           <For each={props.turn.assistantMessages}>
             {(message) => {
-              const text = extractTextContent(message.parts).trim()
-              const tools = hasTools(message)
-              const meta = () => message.parts.filter((part) => isAgentPart(part) || isSnapshotPart(part) || isRetryPart(part) || isPatchPart(part) || isCompactionPart(part))
-              const subtasks = () => message.parts.filter(isSubtaskPart)
+              const text = createMemo(() => extractTextContent(message.parts).trim())
+              const tools = createMemo(() => hasTools(message))
+              const meta = createMemo(() => message.parts.filter((part) => isAgentPart(part) || isSnapshotPart(part) || isRetryPart(part) || isPatchPart(part) || isCompactionPart(part)))
+              const subtasks = createMemo(() => message.parts.filter(isSubtaskPart))
               const messageTime = createMemo(() => {
                 const created = message.time?.created
                 if (created == null) return undefined
@@ -954,8 +954,8 @@ export function MessageTurn(props: {
                       )}
                     </Show>
                     {/* Text content */}
-                    <Show when={text}>
-                      <Markdown content={text} class="text-sm" />
+                    <Show when={text()}>
+                      {(content) => <Markdown content={content()} class="text-sm" />}
                     </Show>
                     {/* Agent, snapshot, retry, patch, and compaction parts */}
                     <Show when={meta().length > 0}>
@@ -982,7 +982,7 @@ export function MessageTurn(props: {
                       </div>
                     </Show>
                     {/* Tool calls */}
-                    <Show when={tools}>
+                    <Show when={tools()}>
                       <div class="mt-2">
                         <MessageParts parts={message.parts} />
                       </div>

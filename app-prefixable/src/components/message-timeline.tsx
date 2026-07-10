@@ -20,6 +20,18 @@ type TurnRef = {
   assistantIds: string[]
 }
 
+type MessageStructure = {
+  id: string
+  role: DisplayMessage["role"]
+  error: boolean
+  parts: string[]
+}
+
+type TurnRefState = {
+  structure: MessageStructure[]
+  refs: TurnRef[]
+}
+
 // Compute turn-level timing from user and assistant message timestamps
 function computeTurnTime(user: DisplayMessage, assistants: DisplayMessage[]): Turn["time"] {
   const started = user.time?.created
@@ -71,10 +83,30 @@ function hasStructuredContent(message: DisplayMessage): boolean {
   return message.parts.some((p) => p.type === "tool" || p.type === "text" || p.type === "reasoning")
 }
 
-function timelineStructure(messages: DisplayMessage[]) {
-  return messages
-    .map((msg) => `${msg.id}:${msg.role}:${msg.error ? 1 : 0}:${msg.parts.map((p) => p.type).join(",")}`)
-    .join("|")
+function messageStructure(messages: DisplayMessage[]) {
+  return messages.map((msg) => ({
+    id: msg.id,
+    role: msg.role,
+    error: !!msg.error,
+    parts: msg.parts.map((part) => part.type),
+  }))
+}
+
+function sameTimelineStructure(prev: MessageStructure[], next: MessageStructure[]) {
+  if (prev.length !== next.length) return false
+
+  for (let i = 0; i < next.length; i++) {
+    const a = prev[i]
+    const b = next[i]
+    if (a.id !== b.id || a.role !== b.role || a.error !== b.error) return false
+    if (a.parts.length !== b.parts.length) return false
+
+    for (let j = 0; j < b.parts.length; j++) {
+      if (a.parts[j] !== b.parts[j]) return false
+    }
+  }
+
+  return true
 }
 
 export function MessageTimeline(props: {
@@ -104,7 +136,6 @@ export function MessageTimeline(props: {
   const [userScrolledUp, setUserScrolledUp] = createSignal(false)
   // Track previous turn IDs for session switch detection
   const [prevTurnIds, setPrevTurnIds] = createSignal<Set<string>>(new Set())
-  const structure = createMemo(() => timelineStructure(props.messages))
 
   const messageById = createMemo(() => {
     const map = new Map<string, DisplayMessage>()
@@ -113,11 +144,16 @@ export function MessageTimeline(props: {
   })
 
   // Convert messages to turn references only when structure changes.
-  const turnRefs = createMemo(() => {
-    structure()
-    const filtered = untrack(() => props.messages).filter(hasStructuredContent)
-    return messagesToTurnRefs(filtered)
+  const turnRefState = createMemo<TurnRefState>((prev) => {
+    const messages = props.messages
+    const structure = messageStructure(messages)
+    if (prev && sameTimelineStructure(prev.structure, structure)) {
+      return { structure, refs: prev.refs }
+    }
+    return { structure, refs: messagesToTurnRefs(messages.filter(hasStructuredContent)) }
   })
+
+  const turnRefs = () => turnRefState().refs
 
   function resolveTurn(ref: TurnRef): Turn | undefined {
     const map = messageById()
