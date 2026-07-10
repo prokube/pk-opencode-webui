@@ -24,7 +24,7 @@ type MessageStructure = {
   id: string
   role: DisplayMessage["role"]
   error: boolean
-  parts: string[]
+  partCount: number
 }
 
 type TurnRefState = {
@@ -88,7 +88,7 @@ function messageStructure(messages: DisplayMessage[]) {
     id: msg.id,
     role: msg.role,
     error: !!msg.error,
-    parts: msg.parts.map((part) => part.type),
+    partCount: msg.parts.length,
   }))
 }
 
@@ -99,11 +99,7 @@ function sameTimelineStructure(prev: MessageStructure[], next: MessageStructure[
     const a = prev[i]
     const b = next[i]
     if (a.id !== b.id || a.role !== b.role || a.error !== b.error) return false
-    if (a.parts.length !== b.parts.length) return false
-
-    for (let j = 0; j < b.parts.length; j++) {
-      if (a.parts[j] !== b.parts[j]) return false
-    }
+    if (a.partCount !== b.partCount) return false
   }
 
   return true
