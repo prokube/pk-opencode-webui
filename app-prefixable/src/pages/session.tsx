@@ -825,7 +825,9 @@ export function Session() {
             }
             sync.session.sync(id).then((synced) => {
               if (state.stopped || sessionId() !== id || !synced) return;
-              if (assistantFinished(id)) finishProcessing();
+              finishProcessing();
+              if (assistantFinished(id)) return;
+              setError("Session stopped before the assistant responded. Verify the selected model and retry.");
             });
           }
         })
@@ -865,7 +867,9 @@ export function Session() {
           if (polled) return;
           sync.session.sync(id).then((synced) => {
             if (sessionId() !== id || !synced) return;
-            if (assistantFinished(id)) finishProcessing();
+            finishProcessing();
+            if (assistantFinished(id)) return;
+            setError("Session stopped before the assistant responded. Verify the selected model and retry.");
           });
         })
         .catch((err) => console.warn("[Session] Watchdog poll failed:", err));

@@ -294,6 +294,19 @@ export function ProviderProvider(props: ParentProps) {
     const targetProvider = hasValidConfigModel ? parsedProvider : FALLBACK_PROVIDER
     const targetModel = hasValidConfigModel ? parsedModel : FALLBACK_MODEL
 
+    const stale = Object.entries(store.modelsByAgent)
+      .filter(([, model]) => {
+        const provider = data.all.find((p) => p.id === model.providerID)
+        return !data.connected.includes(model.providerID) || !provider?.models[model.modelID]
+      })
+      .map(([agent]) => agent)
+    if (stale.length > 0) {
+      setStore("modelsByAgent", produce((models) => {
+        for (const agent of stale) delete models[agent]
+      }))
+      return
+    }
+
     // Only auto-set model when there is no existing selection for this agent
     // (localStorage or previous user choice). This prevents overriding user selections.
     if (!store.modelsByAgent[defaultAgent]) {

@@ -1,6 +1,6 @@
 import { createContext, useContext, createSignal, onCleanup, batch, type ParentProps } from "solid-js"
 import { createStore, reconcile, produce } from "solid-js/store"
-import type { Session, Message, Part, Provider } from "../sdk/client"
+import type { Session, Message, Part } from "../sdk/client"
 import { useSDK } from "./sdk"
 import { useServer } from "./server"
 import { createSSEParser, nextSSEReconnectDelay } from "../utils/sse"
@@ -18,12 +18,6 @@ export type MessageWithParts = {
   parts: Part[]
 }
 
-type ProviderData = {
-  all: Provider[]
-  connected: string[]
-  default: Record<string, string>
-}
-
 type SyncStore = {
   ready: boolean
   error: string | null
@@ -31,7 +25,6 @@ type SyncStore = {
   archivedSession: Session[]
   message: Record<string, MessageWithParts[]>
   part: Record<string, Part[]>
-  provider: ProviderData
 }
 
 interface SyncContextValue {
@@ -42,7 +35,6 @@ interface SyncContextValue {
   archivedSessions: () => Session[]
   messages: (sessionID: string) => MessageWithParts[]
   parts: (messageID: string) => Part[]
-  providers: () => ProviderData
   sseUnhealthy: () => boolean
   subscribe: (handler: SyncEventHandler) => () => void
   session: {
@@ -200,7 +192,6 @@ export function SyncProvider(props: ParentProps) {
     archivedSession: [],
     message: {},
     part: {},
-    provider: { all: [], connected: [], default: {} },
   })
 
   const inflight = new Map<string, Promise<boolean>>()
@@ -449,14 +440,6 @@ export function SyncProvider(props: ParentProps) {
       }
     }
 
-    // Provider events
-    if (event.type === "provider.updated") {
-      const data = props as unknown as ProviderData
-      if (data) {
-        setStore("provider", data)
-      }
-    }
-
     for (const handler of handlers) {
       try {
         handler(event)
@@ -474,7 +457,7 @@ export function SyncProvider(props: ParentProps) {
   async function bootstrap() {
     setStore("error", null)
     try {
-      const [sessionsRes, providersRes] = await Promise.all([client.session.list(), client.provider.list()])
+      const sessionsRes = await client.session.list()
 
       batch(() => {
         const rawSessions = sessionsRes.data ?? []
@@ -483,10 +466,6 @@ export function SyncProvider(props: ParentProps) {
         const archived = valid.filter((s) => !!s.time?.archived).sort((a, b) => cmp(a.id, b.id))
         setStore("session", reconcile(sessions, { key: "id" }))
         setStore("archivedSession", reconcile(archived, { key: "id" }))
-
-        if (providersRes.data) {
-          setStore("provider", providersRes.data as unknown as ProviderData)
-        }
 
         setStore("ready", true)
       })
@@ -596,7 +575,6 @@ export function SyncProvider(props: ParentProps) {
     archivedSessions: () => store.archivedSession,
     messages: (sessionID: string) => store.message[sessionID] ?? [],
     parts: (messageID: string) => store.part[messageID] ?? [],
-    providers: () => store.provider,
     sseUnhealthy,
     subscribe,
     session: {
