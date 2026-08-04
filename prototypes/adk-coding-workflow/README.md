@@ -125,6 +125,24 @@ bun run typecheck
 The unit suite uses fake GitHub, OpenCode, and process boundaries. It does not
 contact GitHub, clone repositories, start OpenCode, or create pull requests.
 
+## Deploy The Plan Worker
+
+The prototype includes a pinned worker image and an Argo `WorkflowTemplate` for
+read-only `plan` runs. The template uses gVisor and a dedicated service account
+with only the Argo executor permissions required in its namespace.
+
+```bash
+make build
+make push
+make deploy KUBECONFIG=~/.kube/solid-crocodile.yaml NAMESPACE=experiments
+```
+
+Private repositories require a Secret named `adk-coding-workflow-github` with a
+`token` key. Use a dedicated read-only bot token; do not expose a personal token
+to the worker. Submit `deploy/smoke-workflow.yaml` with `make smoke` after the
+Secret exists. The template intentionally exposes only `plan`; `execute` and
+`publish` require an isolated OpenCode runtime and stronger production controls.
+
 ## Prototype Limitations
 
 - There is no webhook server, periodic ready-issue reconciler, or review-event
