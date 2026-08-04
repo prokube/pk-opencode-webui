@@ -1,10 +1,8 @@
 import type { GitHubService } from "./github"
 import type { OpenCodeService } from "./opencode"
-import type { RunStore } from "./store"
 import type { WorkspaceService } from "./workspace"
 import {
   evaluateEligibility,
-  issueRunKey,
   validateRepository,
   type RunPhase,
   type WorkflowRequest,
@@ -13,7 +11,6 @@ import {
 
 export class CodingWorkflow {
   constructor(
-    private readonly store: RunStore,
     private readonly github: GitHubService,
     private readonly workspaces: WorkspaceService,
     private readonly opencode: OpenCodeService,
@@ -22,25 +19,15 @@ export class CodingWorkflow {
 
   async run(request: WorkflowRequest): Promise<WorkflowResult> {
     const repository = validateRepository(request.repository)
-    const record = this.store.createRun({
-      runKey: issueRunKey(repository, request.issueNumber),
-      repository,
-      issueNumber: request.issueNumber,
-      mode: request.mode,
-    })
-    const heartbeat = setInterval(() => this.store.heartbeat(record.runId), 60_000)
-    heartbeat.unref()
+    const runId = crypto.randomUUID()
     const result = (phase: RunPhase, summary: string, extra: Partial<WorkflowResult> = {}): WorkflowResult => {
-      const next = { runId: record.runId, phase, summary, ...extra }
-      this.store.updateRun(record.runId, next)
-      return next
+      return { runId, phase, summary, ...extra }
     }
 
     try {
       const issue = await this.github.getIssue(repository, request.issueNumber)
       const eligibility = evaluateEligibility(issue)
       if (!eligibility.eligible) return result("blocked", eligibility.reason)
-      result("eligible", "Issue is eligible for implementation")
 
       if (request.mode === "plan") {
         return result("completed", `Plan validated for ${repository}#${issue.number}`)
@@ -53,26 +40,16 @@ export class CodingWorkflow {
         if (existing) return result("blocked", `An open pull request already exists: ${existing}`, {
           pullRequestUrl: existing,
         })
-        await this.github.claimIssue(repository, issue, request.botLogin, record.runId)
-        result("claimed", `Claimed ${repository}#${issue.number}`)
+        await this.github.claimIssue(repository, issue, request.botLogin, runId)
       }
 
       const workspace = await this.workspaces.prepare({
         repository,
         issueNumber: issue.number,
-        runId: record.runId,
+        runId,
         baseBranch: request.baseBranch,
         workspaceRoot: request.workspaceRoot,
         token: this.token,
-      })
-      result("prepared", "Prepared isolated Git worktree", {
-        branch: workspace.branch,
-        workspace: workspace.worktree,
-      })
-
-      result("implementing", "OpenCode is implementing the issue", {
-        branch: workspace.branch,
-        workspace: workspace.worktree,
       })
       const implementation = await this.opencode.implement({
         issue,
@@ -101,12 +78,6 @@ export class CodingWorkflow {
         })
       }
 
-      result("validating", "Running deterministic validation", {
-        branch: workspace.branch,
-        workspace: workspace.worktree,
-        sessionId: implementation.sessionId,
-        changedFiles,
-      })
       await this.workspaces.validate(workspace.worktree, request.validationCommands)
 
       if (request.mode === "execute") {
@@ -118,12 +89,6 @@ export class CodingWorkflow {
         })
       }
 
-      result("publishing", "Publishing branch and pull request", {
-        branch: workspace.branch,
-        workspace: workspace.worktree,
-        sessionId: implementation.sessionId,
-        changedFiles,
-      })
       await this.workspaces.commitAndPush({
         worktree: workspace.worktree,
         branch: workspace.branch,
@@ -148,9 +113,6 @@ export class CodingWorkflow {
       })
     } catch (error) {
       return result("failed", error instanceof Error ? error.message : String(error))
-    } finally {
-      clearInterval(heartbeat)
-      this.store.release(record.runId)
     }
   }
 }

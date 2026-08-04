@@ -48,14 +48,6 @@ export type WorkflowResult = {
   changedFiles?: string[]
 }
 
-export type RunRecord = WorkflowResult & {
-  repository: string
-  issueNumber: number
-  mode: RunMode
-  createdAt: string
-  updatedAt: string
-}
-
 export type Eligibility =
   | { eligible: true }
   | { eligible: false; reason: string }
@@ -83,10 +75,6 @@ export function validateRepository(value: string): string {
 
 export function branchForIssue(issueNumber: number): string {
   return `feature/issue-${issueNumber}`
-}
-
-export function issueRunKey(repository: string, issueNumber: number): string {
-  return `${validateRepository(repository)}#${issueNumber}`
 }
 
 export function reviewRunKey(repository: string, pullRequest: number, cycle: number): string {

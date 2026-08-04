@@ -3,7 +3,6 @@ import { describe, expect, test } from "bun:test"
 import {
   branchForIssue,
   evaluateEligibility,
-  issueRunKey,
   reviewRunKey,
   validateRepository,
   type Issue,
@@ -48,7 +47,6 @@ describe("issue eligibility", () => {
 describe("stable workflow identifiers", () => {
   test("creates issue branches and correlation keys", () => {
     expect(branchForIssue(42)).toBe("feature/issue-42")
-    expect(issueRunKey("prokube/pkui", 42)).toBe("prokube/pkui#42")
     expect(reviewRunKey("prokube/pkui", 99, 2)).toBe("prokube/pkui!99/remediation-2")
   })
 

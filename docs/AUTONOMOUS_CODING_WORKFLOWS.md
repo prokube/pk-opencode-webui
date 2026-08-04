@@ -56,7 +56,7 @@ approval points.
 The workflow controller owns operations whose outcome must be reproducible:
 
 - GitHub event validation and issue eligibility checks
-- issue claims, leases, labels, and assignments
+- issue claims, labels, assignments, and Argo synchronization
 - repository checkout and branch selection
 - credentials and secret projection
 - test invocation and timeout policy
@@ -135,7 +135,7 @@ It is responsible for:
 - repository and organization allowlists
 - trusted-actor and command authorization
 - issue dependency and assignment checks
-- durable deduplication and leases
+- idempotent workflow submission and per-issue Argo synchronization
 - workflow submission and correlation
 - reconciliation after missed events or controller restarts
 - mapping issues, pull requests, branches, comments, and workflow runs
@@ -338,21 +338,24 @@ An issue is eligible only when:
 - it has neither `in-progress` nor `needs-discussion`
 - it has no assignee
 - it has no open native blockers
-- no active workflow lease exists
+- no active GitHub claim or Argo workflow exists for the issue
 - no open pull request already closes it
 - the repository is allowlisted and has an automation policy
 
 ### Claim
 
-The dispatcher creates a durable lease, then updates GitHub:
+The dispatcher submits a suspended, deterministically named Argo Workflow under
+a per-issue synchronization key, then updates GitHub:
 
 - remove `ready`
 - add `in-progress`
 - assign the bot
 - comment with the workflow-run link
 
-If GitHub mutation fails, the dispatcher reconciles or releases the lease. A
-label is useful status, but it is not the sole lock.
+It resumes the workflow only after the claim succeeds. If GitHub mutation fails,
+the dispatcher terminates or reconciles the suspended workflow. GitHub remains
+the durable issue-state authority; Argo synchronization prevents concurrent
+workers from executing the same issue.
 
 ### Prepare
 
@@ -518,23 +521,19 @@ model.
 
 ## State And Idempotency
 
-The workflow control plane needs durable records beyond GitHub labels and Argo
-status. At minimum it stores:
+The initial control plane does not need a separate workflow database. GitHub is
+the durable source of truth for issue lifecycle state through labels,
+assignment, marker comments, deterministic branches, and linked pull requests.
+Argo is the durable source of truth for execution state, attempts, timestamps,
+outputs, and synchronization.
 
-- repository and issue number
-- event delivery IDs and processed comment IDs
-- claim lease and lease expiry
-- workflow and attempt IDs
-- base and head commit SHAs
-- branch and pull-request number
-- OpenCode session identifiers
-- current phase and structured result
-- remediation count
-- artifact references and retention deadline
-
-The dispatcher reconciles this state with GitHub and Argo after restart. Every
-external mutation uses an idempotency key or checks existing state before
-creating another branch, comment, workflow, or pull request.
+The dispatcher correlates them with deterministic workflow names and labels
+containing the repository and issue number. It reconciles GitHub and Argo after
+restart, deduplicates webhook deliveries against existing workflow names and
+marker comments, and checks existing state before creating another branch,
+comment, workflow, or pull request. Artifact references and OpenCode session IDs
+belong in Argo outputs and GitHub workflow comments until product requirements
+justify a separate query store.
 
 ## Observability And Operations
 
@@ -546,7 +545,7 @@ Operators need:
 - links between issue, workflow, OpenCode session, commit, pull request, and
   review runs
 - cancellation and safe retry controls
-- alerts for stuck leases, repeated failures, credential errors, and cleanup
+- alerts for stuck workflows, repeated failures, credential errors, and cleanup
   failures
 - retention controls for source workspaces, logs, diffs, and session data
 
@@ -583,11 +582,12 @@ modes:
 - `publish` additionally claims the issue, commits, pushes, and creates an
   unmerged pull request
 
-The prototype uses SQLite for local run records and leases and drives the
-workflow through an ADK `BaseAgent`. It is intentionally a local validation of
-the control-flow boundaries, not a production service. Webhooks, review
-remediation, distributed leases, Kubernetes isolation, durable ADK sessions,
-and Argo execution remain later phases.
+The prototype uses GitHub issues, branches, and pull requests as its durable
+publish state and drives the workflow through an ADK `BaseAgent`. Run results
+remain in memory. It is intentionally a local validation of the control-flow
+boundaries, not a production service. Webhooks, review remediation, Argo
+synchronization, Kubernetes isolation, durable ADK sessions, and Argo execution
+remain later phases.
 
 ### Phase 0: Verify foundations
 
@@ -612,7 +612,7 @@ and Argo execution remain later phases.
 ### Phase 2: Automatic ready-issue processing
 
 - Add webhook handling and periodic reconciliation.
-- Implement dependency checks, claims, leases, and deduplication.
+- Implement dependency checks, claims, Argo synchronization, and deduplication.
 - Add issue status comments and workflow links.
 - Limit initial concurrency to one active issue per repository.
 
@@ -668,7 +668,8 @@ The proof of concept is not complete until it covers:
 
 1. Should the workflow control plane be a new repository and service, or begin
    inside `pk-opencode` for the proof of concept?
-2. Which persistent store should hold workflow correlation and leases?
+2. What GitHub marker-comment and Argo-label schema should correlate workflow
+   attempts without a separate datastore?
 3. Should coding-workflow artifacts use a dedicated MinIO bucket or another
    artifact store?
 4. Should the first coding workers use gVisor pods or the `pk-sandbox` control

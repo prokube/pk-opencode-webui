@@ -5,12 +5,10 @@ import { runModes, type RunMode, type WorkflowRequest } from "./domain"
 import { GitHubClient } from "./github"
 import { OpenCodeClient } from "./opencode"
 import { BunProcessRunner } from "./process"
-import { RunStore } from "./store"
 import { CodingWorkflow } from "./workflow"
 import { WorkspaceService } from "./workspace"
 
 type CliOptions = WorkflowRequest & {
-  database: string
   opencodeUrl: string
 }
 
@@ -45,7 +43,6 @@ export function parseArgs(argv: string[]): CliOptions {
     workspaceRoot: resolve(values.get("--workspace-root")?.at(-1) ?? ".data/workspaces"),
     validationCommands,
     botLogin: values.get("--bot-login")?.at(-1),
-    database: resolve(values.get("--database")?.at(-1) ?? ".data/coding-workflow.sqlite"),
     opencodeUrl: values.get("--opencode-url")?.at(-1) ?? "http://127.0.0.1:4096",
   }
 }
@@ -53,22 +50,16 @@ export function parseArgs(argv: string[]): CliOptions {
 export async function main(argv = Bun.argv.slice(2)): Promise<number> {
   const options = parseArgs(argv)
   const token = process.env.GH_TOKEN
-  const store = new RunStore(options.database)
-  try {
-    const runner = new BunProcessRunner()
-    const workflow = new CodingWorkflow(
-      store,
-      new GitHubClient(token),
-      new WorkspaceService(runner),
-      new OpenCodeClient(options.opencodeUrl),
-      token,
-    )
-    const result = await runWithAdk(workflow, options)
-    console.log(JSON.stringify(result, null, 2))
-    return result.phase === "completed" ? 0 : 1
-  } finally {
-    store.close()
-  }
+  const runner = new BunProcessRunner()
+  const workflow = new CodingWorkflow(
+    new GitHubClient(token),
+    new WorkspaceService(runner),
+    new OpenCodeClient(options.opencodeUrl),
+    token,
+  )
+  const result = await runWithAdk(workflow, options)
+  console.log(JSON.stringify(result, null, 2))
+  return result.phase === "completed" ? 0 : 1
 }
 
 if (import.meta.main) {

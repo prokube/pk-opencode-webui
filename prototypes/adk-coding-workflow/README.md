@@ -14,7 +14,8 @@ or clone a repository unless a more permissive mode is explicitly selected.
 - Fetch an issue, comments, labels, assignees, and native blockers from GitHub.
 - Accept only open, unassigned `ready` issues without `in-progress`,
   `needs-discussion`, or open blockers.
-- Store local run history and active issue leases in SQLite.
+- Track publish state through GitHub labels, assignment, comments, branches, and
+  pull requests.
 - Clone through an environment-backed Git credential helper without putting the
   token in command arguments or the remote URL.
 - Create an isolated Git worktree and `feature/issue-N` branch.
@@ -25,7 +26,7 @@ or clone a repository unless a more permissive mode is explicitly selected.
 - Run explicit validation commands without GitHub token environment variables.
 - Refuse to publish common credential and private-key paths.
 - Commit, push, and create a normal unmerged pull request in `publish` mode.
-- Generate stable issue and review-remediation correlation keys.
+- Generate stable review-remediation correlation keys.
 
 ## Modes
 
@@ -68,8 +69,8 @@ GH_TOKEN=<bot-token> bun run src/cli.ts \
   --issue 3523
 ```
 
-`plan` is the default mode. It validates eligibility and writes only the local
-SQLite run record under `.data/`.
+`plan` is the default mode. It validates eligibility without writing local or
+GitHub state.
 
 ## Execute Without Publishing
 
@@ -110,7 +111,6 @@ to continue when an open pull request or remote issue branch already exists.
 ```text
 --base <branch>             Base branch, default: main
 --workspace-root <path>     Run workspaces, default: .data/workspaces
---database <path>           SQLite database, default: .data/coding-workflow.sqlite
 --opencode-url <url>        OpenCode server, default: http://127.0.0.1:4096
 --validate <command>        Repeatable validation command
 ```
@@ -129,9 +129,11 @@ contact GitHub, clone repositories, start OpenCode, or create pull requests.
 
 - There is no webhook server, periodic ready-issue reconciler, or review-event
   processing yet.
-- SQLite leases protect only processes sharing the same database file. Active
-  runs heartbeat locally; stale leases expire two hours after their last update.
-- ADK sessions are in memory; durable domain run records are in SQLite.
+- ADK sessions and run results are in memory. GitHub is the durable source of
+  truth for publish state.
+- The local prototype assumes one dispatcher. GitHub label updates are not an
+  atomic lock, so concurrent workers could duplicate work before deterministic
+  branch and pull-request checks stop duplicate publication.
 - The OpenCode server and repository commands run on the local machine rather
   than in gVisor, `pk-sandbox`, or an Argo Workflow.
 - OpenCode tool permissions and removed GitHub token variables do not constitute
@@ -152,5 +154,5 @@ an image; remove the overrides when upstream dependency ranges include the fixed
 versions directly.
 
 These limitations are deliberate. The next useful increment is a single
-containerized `execute` run in gVisor, followed by webhook/lease reconciliation
-and review-remediation support.
+containerized `execute` run in gVisor, followed by webhook reconciliation, Argo
+synchronization, and review-remediation support.

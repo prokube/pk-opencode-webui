@@ -8,7 +8,6 @@ import type { Issue, WorkflowRequest } from "../src/domain"
 import type { GitHubService } from "../src/github"
 import type { OpenCodeService } from "../src/opencode"
 import type { ProcessResult, ProcessRunner } from "../src/process"
-import { RunStore } from "../src/store"
 import { CodingWorkflow } from "../src/workflow"
 import { WorkspaceService } from "../src/workspace"
 
@@ -76,7 +75,6 @@ const request = (root: string, mode: WorkflowRequest["mode"]): WorkflowRequest =
 describe("CodingWorkflow through ADK", () => {
   test("plan mode validates eligibility without claiming or running OpenCode", async () => {
     const root = mkdtempSync(join(tmpdir(), "adk-plan-"))
-    const store = new RunStore(":memory:")
     const github = new FakeGitHub()
     let calls = 0
     const opencode: OpenCodeService = {
@@ -86,20 +84,18 @@ describe("CodingWorkflow through ADK", () => {
       },
     }
     try {
-      const workflow = new CodingWorkflow(store, github, new WorkspaceService(new FakeRunner()), opencode)
+      const workflow = new CodingWorkflow(github, new WorkspaceService(new FakeRunner()), opencode)
       const result = await runWithAdk(workflow, request(root, "plan"))
       expect(result.phase).toBe("completed")
       expect(github.claims).toBe(0)
       expect(calls).toBe(0)
     } finally {
-      store.close()
       rmSync(root, { recursive: true, force: true })
     }
   })
 
   test("execute mode runs OpenCode and validation without publishing", async () => {
     const root = mkdtempSync(join(tmpdir(), "adk-execute-"))
-    const store = new RunStore(":memory:")
     const github = new FakeGitHub()
     const opencode: OpenCodeService = {
       async implement() {
@@ -107,7 +103,7 @@ describe("CodingWorkflow through ADK", () => {
       },
     }
     try {
-      const workflow = new CodingWorkflow(store, github, new WorkspaceService(new FakeRunner()), opencode)
+      const workflow = new CodingWorkflow(github, new WorkspaceService(new FakeRunner()), opencode)
       const result = await runWithAdk(workflow, request(root, "execute"))
       expect(result).toMatchObject({
         phase: "completed",
@@ -118,14 +114,12 @@ describe("CodingWorkflow through ADK", () => {
       expect(github.claims).toBe(0)
       expect(github.pullRequests).toBe(0)
     } finally {
-      store.close()
       rmSync(root, { recursive: true, force: true })
     }
   })
 
   test("publish mode claims and creates a PR only after implementation", async () => {
     const root = mkdtempSync(join(tmpdir(), "adk-publish-"))
-    const store = new RunStore(":memory:")
     const github = new FakeGitHub()
     const opencode: OpenCodeService = {
       async implement() {
@@ -133,20 +127,18 @@ describe("CodingWorkflow through ADK", () => {
       },
     }
     try {
-      const workflow = new CodingWorkflow(store, github, new WorkspaceService(new FakeRunner()), opencode, "secret-token")
+      const workflow = new CodingWorkflow(github, new WorkspaceService(new FakeRunner()), opencode, "secret-token")
       const result = await runWithAdk(workflow, request(root, "publish"))
       expect(result.pullRequestUrl).toBe("https://github.com/prokube/example/pull/1")
       expect(github.claims).toBe(1)
       expect(github.pullRequests).toBe(1)
     } finally {
-      store.close()
       rmSync(root, { recursive: true, force: true })
     }
   })
 
   test("publish mode does not duplicate an existing pull request", async () => {
     const root = mkdtempSync(join(tmpdir(), "adk-existing-pr-"))
-    const store = new RunStore(":memory:")
     const github = new FakeGitHub()
     github.existingPullRequest = "https://github.com/prokube/example/pull/7"
     let calls = 0
@@ -157,7 +149,7 @@ describe("CodingWorkflow through ADK", () => {
       },
     }
     try {
-      const workflow = new CodingWorkflow(store, github, new WorkspaceService(new FakeRunner()), opencode, "secret-token")
+      const workflow = new CodingWorkflow(github, new WorkspaceService(new FakeRunner()), opencode, "secret-token")
       const result = await runWithAdk(workflow, request(root, "publish"))
       expect(result).toMatchObject({
         phase: "blocked",
@@ -166,7 +158,6 @@ describe("CodingWorkflow through ADK", () => {
       expect(github.claims).toBe(0)
       expect(calls).toBe(0)
     } finally {
-      store.close()
       rmSync(root, { recursive: true, force: true })
     }
   })
