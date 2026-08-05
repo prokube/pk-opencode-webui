@@ -221,6 +221,9 @@ ${feedback}
 Read and follow all repository instruction files before editing. Implement only
 this issue and add or update tests. Do not run shell commands; deterministic
 validation runs after your session.
+Write robust tests with unique semantic selectors scoped to the relevant
+component. Do not use unscoped getByRole or getByText queries when the rendered
+dialog can contain repeated code, key, header, or example text.
 Do not commit, push, create a pull request, change GitHub state, or access
 credentials. Leave the completed changes in the worktree. Choose the smallest
 correct approach that follows existing repository patterns.

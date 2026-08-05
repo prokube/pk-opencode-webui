@@ -34,6 +34,10 @@ class FakeGitHub implements GitHubService {
     return readyIssue
   }
 
+  async getAuthenticatedLogin(): Promise<string> {
+    return "prokube-bot"
+  }
+
   async claimIssue(): Promise<void> {
     this.claims += 1
   }
@@ -56,6 +60,10 @@ class FakeRunner implements ProcessRunner {
   private staged = false
 
   async run(command: string[]): Promise<ProcessResult> {
+    if (command.includes("--show-current")) return { exitCode: 0, stdout: "feature/issue-42\n", stderr: "" }
+    if (command.includes("get-url")) {
+      return { exitCode: 0, stdout: "https://github.com/prokube/example.git\n", stderr: "" }
+    }
     if (command.includes("rev-parse")) return { exitCode: 0, stdout: "base-head\n", stderr: "" }
     if (command[0] === "git" && command[1] === "add") this.staged = true
     if (command.includes("--cached")) {
@@ -240,6 +248,54 @@ describe("CodingWorkflow through ADK", () => {
       expect(result.pullRequestUrl).toBe("https://github.com/prokube/example/pull/1")
       expect(github.claims).toBe(1)
       expect(github.pullRequests).toBe(1)
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test("finalize mode publishes the already validated worktree without OpenCode", async () => {
+    const root = mkdtempSync(join(tmpdir(), "adk-finalize-"))
+    const github = new FakeGitHub()
+    class VerifiedWorkspaceService extends WorkspaceService {
+      override async verifyAttestation() {
+        return {
+          workspace: {
+            root: join(root, "validated-run"),
+            source: join(root, "validated-run", "source"),
+            worktree: join(root, "validated-run", "worktree"),
+            branch: "feature/issue-42",
+            baseHead: "base-head",
+          },
+          changedFiles: ["src/prototype.ts"],
+        }
+      }
+    }
+    let calls = 0
+    const opencode: OpenCodeService = {
+      async implement() {
+        calls += 1
+        return { status: "completed", sessionId: "unexpected" }
+      },
+    }
+    try {
+      const workflow = new CodingWorkflow(
+        github,
+        new VerifiedWorkspaceService(new FakeRunner()),
+        opencode,
+        "secret-token",
+        () => "validated-run",
+      )
+      const result = await runWithAdk(workflow, request(root, "finalize"))
+      expect(result).toMatchObject({
+        phase: "completed",
+        summary: "Validated pull request created",
+        branch: "feature/issue-42",
+        pullRequestUrl: "https://github.com/prokube/example/pull/1",
+      })
+      expect(calls).toBe(0)
+      expect(github.claims).toBe(1)
+      expect(github.pullRequests).toBe(1)
+      expect(github.pullRequestChecks).toBe(2)
     } finally {
       rmSync(root, { recursive: true, force: true })
     }

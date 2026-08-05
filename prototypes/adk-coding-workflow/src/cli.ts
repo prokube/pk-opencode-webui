@@ -11,6 +11,7 @@ import { WorkspaceService } from "./workspace"
 
 type CliOptions = WorkflowRequest & {
   opencodeUrl: string
+  validatedPatchSha?: string
 }
 
 export function parseArgs(argv: string[]): CliOptions {
@@ -45,6 +46,7 @@ export function parseArgs(argv: string[]): CliOptions {
     validationCommands,
     botLogin: values.get("--bot-login")?.at(-1),
     opencodeUrl: values.get("--opencode-url")?.at(-1) ?? "http://127.0.0.1:4096",
+    validatedPatchSha: values.get("--validated-patch-sha")?.at(-1),
   }
 }
 
@@ -53,9 +55,22 @@ export async function main(argv = Bun.argv.slice(2)): Promise<number> {
   const token = process.env.GH_TOKEN
   const runner = new BunProcessRunner()
   const workspaces = new WorkspaceService(runner)
+  const runId = process.env.PK_WORKFLOW_RUN_ID
+  if (options.mode === "attest") {
+    if (!runId) throw new Error("PK_WORKFLOW_RUN_ID is required in attest mode")
+    if (!options.validatedPatchSha) throw new Error("--validated-patch-sha is required in attest mode")
+    const attestation = await workspaces.createAttestation({
+      issueNumber: options.issueNumber,
+      runId,
+      workspaceRoot: options.workspaceRoot,
+      expectedPatchSha256: options.validatedPatchSha,
+    })
+    await Bun.write(join(options.workspaceRoot, runId, "validation.json"), `${JSON.stringify(attestation, null, 2)}\n`)
+    console.log(JSON.stringify(attestation, null, 2))
+    return 0
+  }
   const providerID = process.env.OPENCODE_PROVIDER_ID
   const modelID = process.env.OPENCODE_MODEL_ID
-  const runId = process.env.PK_WORKFLOW_RUN_ID
   if (Boolean(providerID) !== Boolean(modelID)) {
     throw new Error("OPENCODE_PROVIDER_ID and OPENCODE_MODEL_ID must be configured together")
   }
@@ -71,7 +86,12 @@ export async function main(argv = Bun.argv.slice(2)): Promise<number> {
   if (outputDir) {
     mkdirSync(outputDir, { recursive: true })
     await Bun.write(join(outputDir, "result.json"), `${JSON.stringify(result, null, 2)}\n`)
-    if (["completed", "validating"].includes(result.phase) && result.workspace && result.changedFiles) {
+    if (
+      !["finalize", "publish"].includes(options.mode)
+      && ["completed", "validating"].includes(result.phase)
+      && result.workspace
+      && result.changedFiles
+    ) {
       await Bun.write(join(outputDir, "changes.patch"), await workspaces.createPatch(result.workspace, result.changedFiles))
     }
   }

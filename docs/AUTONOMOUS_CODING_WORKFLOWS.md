@@ -573,14 +573,16 @@ and environment values remain in the `prokube` repository.
 
 ### Current prototype
 
-The repository contains an initial TypeScript ADK prototype with four explicit
-modes:
+The repository contains an initial TypeScript ADK prototype with six explicit
+modes, including two internal handoff modes:
 
 - `plan` validates issue eligibility without mutating GitHub or a repository
 - `implement` prepares and edits a worktree while deferring validation to a
   credential-isolated Argo step
 - `execute` prepares an isolated worktree, invokes OpenCode, and runs validation
   without publishing
+- `attest` binds the validated patch digest to the retained worktree
+- `finalize` publishes only that attested worktree without invoking OpenCode
 - `publish` additionally claims the issue, commits, pushes, and creates an
   unmerged pull request
 
@@ -591,12 +593,14 @@ to the deterministic worker and the model-scoped Agent Gateway key to an
 OpenCode sidecar, retains the workspace on a workflow-owned PVC, and permits one
 validation-remediation cycle for local execution. The credential-isolated Argo
 path copies a read-only worktree into validation scratch space and fails closed
-for manual retry when validation fails. User-code containers do not mount a
+when validation fails. An opt-in post-validation path passes the validated patch
+digest through a deterministic attestation pod to a credential-isolated
+publisher, which creates an unmerged PR. User-code containers do not mount a
 Kubernetes service-account token; only Argo's executor containers receive the
 narrowly scoped token required to report task results. It remains a constrained
 proof of concept rather than a production service. Webhooks, per-issue Argo
-synchronization, automated Argo remediation, durable ADK sessions, publishing,
-and review remediation remain later phases.
+synchronization, automated validation remediation, durable ADK sessions, and
+review remediation remain later phases.
 
 ### Phase 0: Verify foundations
 

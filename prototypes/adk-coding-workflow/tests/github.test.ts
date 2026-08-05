@@ -34,7 +34,8 @@ describe("GitHubClient", () => {
     })
     servers.push(server)
     const client = new GitHubClient("token", `http://127.0.0.1:${server.port}`)
-    await expect(client.getIssue("prokube/example", 42)).rejects.toThrow("dependencies/blocked_by failed (404)")
+    await expect(client.getIssue("prokube/example", 42))
+      .rejects.toThrow("dependencies/blocked_by?per_page=100&page=1 failed (404)")
   })
 
   test("finds pull requests that close the issue on another branch", async () => {
@@ -84,5 +85,58 @@ describe("GitHubClient", () => {
     const client = new GitHubClient("token", `http://127.0.0.1:${server.port}`)
     expect(await client.findOpenPullRequest("prokube/example", "feature/issue-42", 42))
       .toBe("https://github.com/prokube/example/pull/101")
+  })
+
+  test("treats a completed claim by the same run as idempotent", async () => {
+    let mutations = 0
+    const server = Bun.serve({
+      port: 0,
+      fetch(request) {
+        const url = new URL(request.url)
+        if (request.method !== "GET") {
+          mutations += 1
+          return new Response(null, { status: 204 })
+        }
+        if (url.pathname === "/repos/prokube/example/issues/42") {
+          return Response.json({
+            number: 42,
+            title: "Issue",
+            body: "Body",
+            state: "open",
+            html_url: "https://example.test/issues/42",
+            labels: [{ name: "in-progress" }],
+            assignees: [{ login: "prokube-bot" }],
+          })
+        }
+        if (url.pathname === "/repos/prokube/example/issues/42/comments") {
+          if (url.searchParams.get("page") === "1") {
+            return Response.json(Array.from({ length: 100 }, (_, index) => ({
+              user: { login: `reviewer-${index}` },
+              body: "Unrelated comment",
+            })))
+          }
+          return Response.json([{
+            user: { login: "prokube-bot" },
+            body: "Coding workflow `run-42` claimed this issue.",
+          }])
+        }
+        if (url.pathname === "/repos/prokube/example/issues/42/dependencies/blocked_by") return Response.json([])
+        return new Response("Not found", { status: 404 })
+      },
+    })
+    servers.push(server)
+    const client = new GitHubClient("token", `http://127.0.0.1:${server.port}`)
+    await client.claimIssue("prokube/example", {
+      number: 42,
+      title: "Issue",
+      body: "Body",
+      state: "open",
+      labels: ["ready"],
+      assignees: [],
+      comments: [],
+      openBlockers: [],
+      url: "https://example.test/issues/42",
+    }, "prokube-bot", "run-42")
+    expect(mutations).toBe(0)
   })
 })

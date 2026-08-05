@@ -68,7 +68,7 @@ spec:
           - name: issue
           - name: base
       container:
-        image: europe-west3-docker.pkg.dev/prokube-internal/prokube-customer/adk-coding-workflow:prototype-cg-20260805-122114
+        image: europe-west3-docker.pkg.dev/prokube-internal/prokube-customer/adk-coding-workflow:prototype-cg-20260805-151607
         imagePullPolicy: IfNotPresent
         command: ["bun", "/app/src/cli.ts"]
         args:
@@ -122,8 +122,8 @@ spec:
     annotations:
       sidecar.istio.io/inject: "false"
   podGC:
-    strategy: OnWorkflowCompletion
-    deleteDelayDuration: 30m
+    strategy: OnPodCompletion
+    deleteDelayDuration: 10s
   volumeClaimGC:
     strategy: OnWorkflowDeletion
   volumeClaimTemplates:
@@ -140,11 +140,14 @@ spec:
   arguments:
     parameters:
       - name: issue
+      - name: publish
+        value: "false"
   templates:
     - name: execute
       inputs:
         parameters:
           - name: issue
+          - name: publish
       steps:
         - - name: implement
             template: implement
@@ -154,6 +157,22 @@ spec:
                   value: "{{inputs.parameters.issue}}"
         - - name: validate
             template: validate
+        - - name: attest
+            template: attest
+            when: "{{inputs.parameters.publish}} == true"
+            arguments:
+              parameters:
+                - name: issue
+                  value: "{{inputs.parameters.issue}}"
+                - name: validated-patch-sha
+                  value: "{{steps.validate.outputs.parameters.patch-sha256}}"
+        - - name: publish
+            template: publish
+            when: "{{inputs.parameters.publish}} == true"
+            arguments:
+              parameters:
+                - name: issue
+                  value: "{{inputs.parameters.issue}}"
     - name: implement
       inputs:
         parameters:
@@ -167,7 +186,7 @@ spec:
           emptyDir:
             sizeLimit: 1Gi
       container:
-        image: europe-west3-docker.pkg.dev/prokube-internal/prokube-customer/adk-coding-workflow:prototype-cg-20260805-122114
+        image: europe-west3-docker.pkg.dev/prokube-internal/prokube-customer/adk-coding-workflow:prototype-cg-20260805-151607
         imagePullPolicy: IfNotPresent
         command: ["bun", "/app/src/cli.ts"]
         args:
@@ -202,7 +221,7 @@ spec:
             mountPath: /workspace
         resources:
           requests:
-            cpu: 100m
+            cpu: 25m
             memory: 256Mi
           limits:
             cpu: "2"
@@ -219,7 +238,7 @@ spec:
             type: RuntimeDefault
       sidecars:
         - name: opencode
-          image: europe-west3-docker.pkg.dev/prokube-internal/prokube-customer/adk-coding-workflow:prototype-cg-20260805-122114
+          image: europe-west3-docker.pkg.dev/prokube-internal/prokube-customer/adk-coding-workflow:prototype-cg-20260805-151607
           imagePullPolicy: IfNotPresent
           command: ["opencode"]
           args: ["serve", "--pure", "--hostname", "127.0.0.1", "--port", "4096"]
@@ -251,7 +270,7 @@ spec:
               mountPath: /tmp
           resources:
             requests:
-              cpu: 100m
+              cpu: 25m
               memory: 256Mi
             limits:
               cpu: "2"
@@ -268,6 +287,11 @@ spec:
               type: RuntimeDefault
     - name: validate
       automountServiceAccountToken: false
+      outputs:
+        parameters:
+          - name: patch-sha256
+            valueFrom:
+              path: /var/run/argo/outputs/patch.sha256
       volumes:
         - name: validation-work
           emptyDir:
@@ -276,19 +300,22 @@ spec:
           emptyDir:
             sizeLimit: 1Gi
       container:
-        image: europe-west3-docker.pkg.dev/prokube-internal/prokube-customer/adk-coding-workflow:prototype-cg-20260805-122114
+        image: europe-west3-docker.pkg.dev/prokube-internal/prokube-customer/adk-coding-workflow:prototype-cg-20260805-151607
         imagePullPolicy: IfNotPresent
         command: ["bash", "-c"]
         args:
           - >-
-            cp -a /workspace/.data/workspaces/{{workflow.name}}/worktree /validation/worktree &&
+            git clone --no-hardlinks /workspace/.data/workspaces/{{workflow.name}}/source /validation/worktree &&
+            git -C /validation/worktree apply --binary /workspace/.workflow-output/changes.patch &&
             mkdir -p /validation/home &&
             export HOME=/validation/home &&
             cd /validation/worktree/frontend &&
             git diff --exit-code HEAD -- package.json package-lock.json &&
             npm ci --ignore-scripts &&
             ./node_modules/.bin/tsc --noEmit &&
-            ./node_modules/.bin/vitest run src/modules/ai-gateway/__tests__/KeyCreationModals.test.tsx
+            ./node_modules/.bin/vitest run src/modules/ai-gateway/__tests__/KeyCreationModals.test.tsx &&
+            mkdir -p /var/run/argo/outputs &&
+            sha256sum /workspace/.workflow-output/changes.patch | cut -d ' ' -f 1 > /var/run/argo/outputs/patch.sha256
         volumeMounts:
           - name: workspace
             mountPath: /workspace
@@ -304,6 +331,123 @@ spec:
           limits:
             cpu: "2"
             memory: 2Gi
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop: ["ALL"]
+          readOnlyRootFilesystem: true
+          runAsNonRoot: true
+          runAsUser: 1000
+          runAsGroup: 1000
+          seccompProfile:
+            type: RuntimeDefault
+    - name: attest
+      inputs:
+        parameters:
+          - name: issue
+          - name: validated-patch-sha
+      automountServiceAccountToken: false
+      volumes:
+        - name: attest-tmp
+          emptyDir:
+            sizeLimit: 1Gi
+      container:
+        image: europe-west3-docker.pkg.dev/prokube-internal/prokube-customer/adk-coding-workflow:prototype-cg-20260805-151607
+        imagePullPolicy: IfNotPresent
+        command: ["bun", "/app/src/cli.ts"]
+        args:
+          - --repository
+          - prokube/pkui
+          - --issue
+          - "{{inputs.parameters.issue}}"
+          - --mode
+          - attest
+          - --workspace-root
+          - /workspace/.data/workspaces
+          - --validated-patch-sha
+          - "{{inputs.parameters.validated-patch-sha}}"
+        env:
+          - name: HOME
+            value: /tmp
+          - name: PK_WORKFLOW_RUN_ID
+            value: "{{workflow.name}}"
+        volumeMounts:
+          - name: workspace
+            mountPath: /workspace
+          - name: attest-tmp
+            mountPath: /tmp
+        resources:
+          requests:
+            cpu: 100m
+            memory: 256Mi
+          limits:
+            cpu: "1"
+            memory: 1Gi
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop: ["ALL"]
+          readOnlyRootFilesystem: true
+          runAsNonRoot: true
+          runAsUser: 1000
+          runAsGroup: 1000
+          seccompProfile:
+            type: RuntimeDefault
+    - name: publish
+      retryStrategy:
+        limit: "2"
+        retryPolicy: Always
+        backoff:
+          duration: 5s
+          factor: 2
+          maxDuration: 30s
+      inputs:
+        parameters:
+          - name: issue
+      automountServiceAccountToken: false
+      volumes:
+        - name: publish-tmp
+          emptyDir:
+            sizeLimit: 1Gi
+      container:
+        image: europe-west3-docker.pkg.dev/prokube-internal/prokube-customer/adk-coding-workflow:prototype-cg-20260805-151607
+        imagePullPolicy: IfNotPresent
+        command: ["bun", "/app/src/cli.ts"]
+        args:
+          - --repository
+          - prokube/pkui
+          - --issue
+          - "{{inputs.parameters.issue}}"
+          - --base
+          - main
+          - --mode
+          - finalize
+          - --workspace-root
+          - /workspace/.data/workspaces
+        env:
+          - name: HOME
+            value: /tmp
+          - name: GH_TOKEN
+            valueFrom:
+              secretKeyRef:
+                name: adk-coding-workflow-github
+                key: token
+          - name: PK_WORKFLOW_RUN_ID
+            value: "{{workflow.name}}"
+          - name: PK_WORKFLOW_OUTPUT_DIR
+            value: /workspace/.workflow-output
+        volumeMounts:
+          - name: workspace
+            mountPath: /workspace
+          - name: publish-tmp
+            mountPath: /tmp
+        resources:
+          requests:
+            cpu: 100m
+            memory: 256Mi
+          limits:
+            cpu: "1"
+            memory: 1Gi
         securityContext:
           allowPrivilegeEscalation: false
           capabilities:

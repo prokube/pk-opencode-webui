@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test"
 
-import { OpenCodeClient, sessionPermissions } from "../src/opencode"
+import { implementationPrompt, OpenCodeClient, sessionPermissions } from "../src/opencode"
 
 const servers: Array<ReturnType<typeof Bun.serve>> = []
 
@@ -26,6 +26,12 @@ const input = {
 }
 
 describe("OpenCodeClient", () => {
+  test("requires unambiguous semantic selectors in generated tests", () => {
+    const prompt = implementationPrompt(input)
+    expect(prompt).toContain("unique semantic selectors")
+    expect(prompt).toContain("Do not use unscoped getByRole or getByText")
+  })
+
   test("uses the OpenCode permission ruleset and recognizes absent idle status", async () => {
     let createBody: Record<string, unknown> | undefined
     let promptBody: Record<string, unknown> | undefined

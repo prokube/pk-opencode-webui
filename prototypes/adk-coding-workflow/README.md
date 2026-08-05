@@ -129,8 +129,9 @@ contact GitHub, clone repositories, start OpenCode, or create pull requests.
 ## Deploy The Workers
 
 The prototype includes pinned Argo `WorkflowTemplate` resources for read-only
-`plan` and non-publishing `execute` runs. Both use gVisor and a dedicated service
-account with only the Argo executor permissions required in the namespace.
+`plan`, non-publishing `execute`, and opt-in publishing runs. All use gVisor and
+a dedicated service account with only the Argo executor permissions required in
+the namespace.
 
 ```bash
 make build
@@ -139,21 +140,26 @@ make deploy KUBECONFIG=~/.kube/solid-crocodile.yaml NAMESPACE=demo
 ```
 
 Private repositories require a Secret named `adk-coding-workflow-github` with a
-`token` key. Use a dedicated read-only bot token; do not expose a personal token
-to the deterministic worker. Submit `deploy/smoke-workflow.yaml` with `make
-smoke`, or `deploy/execute-smoke-workflow.yaml` with `make smoke-execute`, after
-the Secret exists.
+`token` key. Execute-only runs need read access; publishing requires a dedicated
+bot token with issue, content, and pull-request write access. Submit
+`deploy/smoke-workflow.yaml` with `make smoke`,
+`deploy/execute-smoke-workflow.yaml` with `make smoke-execute`, or the explicit
+`deploy/publish-workflow.yaml` with `make publish-issue` after the Secret exists.
 
 The `execute` template uses internal `implement` mode with OpenCode 1.18.10 as a
 loopback-only sidecar and the demo workspace's model-scoped Agent Gateway key.
 OpenCode does not receive the GitHub token. A subsequent Argo pod performs the
 fixed validation command without GitHub, model, or Kubernetes credentials. The
 Argo `init` and `wait` containers alone receive the narrowly scoped executor
-service-account token. Validation copies a read-only worktree into scratch
-space, so generated tests cannot overwrite retained results or patches.
+service-account token. Validation reconstructs `HEAD + changes.patch` in scratch
+space, so ignored files cannot affect tests and generated code cannot overwrite
+retained results or patches.
 Workspaces, structured results, and bounded patch files are retained on a
 workflow-owned PVC until the Workflow is deleted or its one-day TTL expires.
-`publish` remains undeployed because it needs stronger production controls.
+Publishing hashes the validated patch, attests the unchanged PVC worktree, then
+runs a model-free finalizer that claims the issue, commits and pushes the fixed
+branch, and creates a normal unmerged pull request. The finalizer retries under
+the same workflow identity and recognizes completed claims, pushes, and PRs.
 
 ## Prototype Limitations
 
@@ -170,9 +176,9 @@ workflow-owned PVC until the Workflow is deleted or its one-day TTL expires.
 - The execute pod has no dedicated egress policy yet.
 - OpenCode tool permissions and removed GitHub token variables do not constitute
   production process or filesystem isolation.
-- The publisher rejects pre-staged files, local HEAD changes, existing pull
-  requests, and existing remote branches, but does not recover GitHub labels
-  after every partial failure.
+- The publisher rejects changed validation attestations, unexpected remotes,
+  divergent branches, sensitive paths, and duplicate pull requests. Claim
+  mutations are idempotent for retries under the same retained Workflow.
 - Execute PVCs follow the Workflow's one-day TTL and are deleted with it.
 - Local validation commands are operator-provided shell commands and must be
   reviewed; the deployed execute command is fixed in the template.

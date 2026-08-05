@@ -12,6 +12,7 @@ type GitHubIssue = {
 
 export interface GitHubService {
   getIssue(repository: string, issueNumber: number): Promise<Issue>
+  getAuthenticatedLogin(): Promise<string>
   findOpenPullRequest(repository: string, branch: string, issueNumber: number): Promise<string | undefined>
   claimIssue(repository: string, issue: Issue, botLogin: string, runId: string): Promise<void>
   createPullRequest(input: {
@@ -32,12 +33,22 @@ export class GitHubClient implements GitHubService {
 
   async getIssue(repository: string, issueNumber: number): Promise<Issue> {
     const issue = await this.request<GitHubIssue>(`/repos/${repository}/issues/${issueNumber}`)
-    const comments = await this.request<Array<{ user: { login: string }; body: string }>>(
-      `/repos/${repository}/issues/${issueNumber}/comments?per_page=100`,
-    )
-    const blockers = await this.request<Array<{ number: number; title: string; state: string }>>(
-      `/repos/${repository}/issues/${issueNumber}/dependencies/blocked_by`,
-    )
+    const comments: Array<{ user: { login: string }; body: string }> = []
+    for (let page = 1; ; page += 1) {
+      const batch = await this.request<Array<{ user: { login: string }; body: string }>>(
+        `/repos/${repository}/issues/${issueNumber}/comments?per_page=100&page=${page}`,
+      )
+      comments.push(...batch)
+      if (batch.length < 100) break
+    }
+    const blockers: Array<{ number: number; title: string; state: string }> = []
+    for (let page = 1; ; page += 1) {
+      const batch = await this.request<Array<{ number: number; title: string; state: string }>>(
+        `/repos/${repository}/issues/${issueNumber}/dependencies/blocked_by?per_page=100&page=${page}`,
+      )
+      blockers.push(...batch)
+      if (batch.length < 100) break
+    }
     return {
       number: issue.number,
       title: issue.title,
@@ -54,21 +65,38 @@ export class GitHubClient implements GitHubService {
     }
   }
 
+  async getAuthenticatedLogin(): Promise<string> {
+    this.requireToken()
+    const user = await this.request<{ login?: string }>("/user")
+    if (!user.login) throw new Error("GitHub did not return an authenticated login")
+    return user.login
+  }
+
   async claimIssue(repository: string, issue: Issue, botLogin: string, runId: string): Promise<void> {
     this.requireToken()
     const current = await this.getIssue(repository, issue.number)
-    const eligibility = evaluateEligibility(current)
-    if (!eligibility.eligible) throw new Error(`Issue changed before claim: ${eligibility.reason}`)
-    await this.request(`/repos/${repository}/issues/${issue.number}/labels`, {
-      method: "POST",
-      body: { labels: ["in-progress"] },
-    })
-    await this.request(`/repos/${repository}/issues/${issue.number}/assignees`, {
-      method: "POST",
-      body: { assignees: [botLogin] },
-    })
-    await this.request(`/repos/${repository}/issues/${issue.number}/labels/ready`, { method: "DELETE" })
-    await this.comment(repository, issue.number, `Coding workflow \`${runId}\` claimed this issue.`)
+    const marker = `Coding workflow \`${runId}\` claimed this issue.`
+    const hasMarker = current.comments.some((comment) => comment.author === botLogin && comment.body.includes(marker))
+    if (!hasMarker) {
+      const eligibility = evaluateEligibility(current)
+      if (!eligibility.eligible) throw new Error(`Issue changed before claim: ${eligibility.reason}`)
+      await this.comment(repository, issue.number, marker)
+    }
+    if (!current.labels.includes("in-progress")) {
+      await this.request(`/repos/${repository}/issues/${issue.number}/labels`, {
+        method: "POST",
+        body: { labels: ["in-progress"] },
+      })
+    }
+    if (!current.assignees.includes(botLogin)) {
+      await this.request(`/repos/${repository}/issues/${issue.number}/assignees`, {
+        method: "POST",
+        body: { assignees: [botLogin] },
+      })
+    }
+    if (current.labels.includes("ready")) {
+      await this.request(`/repos/${repository}/issues/${issue.number}/labels/ready`, { method: "DELETE" })
+    }
   }
 
   async findOpenPullRequest(repository: string, branch: string, issueNumber: number): Promise<string | undefined> {

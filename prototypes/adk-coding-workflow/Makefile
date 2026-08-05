@@ -1,9 +1,9 @@
 IMAGE ?= europe-west3-docker.pkg.dev/prokube-internal/prokube-customer/adk-coding-workflow
-TAG ?= prototype-cg-20260805-122114
+TAG ?= prototype-cg-20260805-151607
 KUBECONFIG ?= $(HOME)/.kube/solid-crocodile.yaml
 NAMESPACE ?= experiments
 
-.PHONY: build push deploy smoke smoke-execute test
+.PHONY: build push deploy smoke smoke-execute publish-issue test
 
 build:
 	docker build --platform linux/amd64 -t $(IMAGE):$(TAG) .
@@ -19,6 +19,9 @@ smoke:
 
 smoke-execute:
 	kubectl --kubeconfig "$(KUBECONFIG)" create -n "$(NAMESPACE)" -f deploy/execute-smoke-workflow.yaml
+
+publish-issue:
+	kubectl --kubeconfig "$(KUBECONFIG)" create -n "$(NAMESPACE)" -f deploy/publish-workflow.yaml
 
 test:
 	bun test
