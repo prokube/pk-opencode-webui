@@ -69,7 +69,10 @@ export async function requireSuccess(
 ): Promise<ProcessResult> {
   const result = await runner.run(command, options)
   if (result.exitCode !== 0) {
-    throw new Error(`Command failed (${result.exitCode}): ${command.join(" ")}\n${result.stderr.slice(0, 1000)}`)
+    const stderr = result.stderr.length > 2_000
+      ? `${result.stderr.slice(0, 1_000)}\n... output truncated ...\n${result.stderr.slice(-1_000)}`
+      : result.stderr
+    throw new Error(`Command failed (${result.exitCode}): ${command.join(" ")}\n${stderr}`)
   }
   return result
 }

@@ -12,6 +12,7 @@ export interface OpenCodeService {
     repository: string
     worktree: string
     validationCommands: string[]
+    validationFeedback?: string
   }): Promise<OpenCodeResult>
 }
 
@@ -20,6 +21,7 @@ export class OpenCodeClient implements OpenCodeService {
     private readonly baseUrl: string,
     private readonly timeoutMs = 30 * 60_000,
     private readonly pollMs = 1_000,
+    private readonly model?: { providerID: string; modelID: string },
   ) {}
 
   async implement(input: {
@@ -27,7 +29,9 @@ export class OpenCodeClient implements OpenCodeService {
     repository: string
     worktree: string
     validationCommands: string[]
+    validationFeedback?: string
   }): Promise<OpenCodeResult> {
+    await this.waitUntilReady()
     const session = await this.request<{ id: string }>("/session", {
       method: "POST",
       directory: input.worktree,
@@ -41,6 +45,7 @@ export class OpenCodeClient implements OpenCodeService {
       directory: input.worktree,
       body: {
         agent: "build",
+        ...(this.model ? { model: this.model } : {}),
         parts: [{ type: "text", text: implementationPrompt(input) }],
       },
     })
@@ -85,6 +90,16 @@ export class OpenCodeClient implements OpenCodeService {
     }
     await this.abort(session.id, input.worktree)
     throw new Error(`OpenCode session ${session.id} exceeded ${this.timeoutMs}ms`)
+  }
+
+  private async waitUntilReady(): Promise<void> {
+    const deadline = Date.now() + 60_000
+    while (Date.now() < deadline) {
+      const health = await this.request<{ healthy?: boolean }>("/global/health").catch(() => undefined)
+      if (health?.healthy) return
+      await Bun.sleep(this.pollMs)
+    }
+    throw new Error("OpenCode server did not become ready within 60000ms")
   }
 
   private async pendingQuestion(sessionId: string, directory: string): Promise<string | undefined> {
@@ -176,6 +191,7 @@ export function implementationPrompt(input: {
   issue: Issue
   repository: string
   validationCommands: string[]
+  validationFeedback?: string
 }): string {
   const comments = input.issue.comments.length
     ? input.issue.comments.map((comment) => `@${comment.author}: ${comment.body}`).join("\n\n")
@@ -183,6 +199,9 @@ export function implementationPrompt(input: {
   const validation = input.validationCommands.length
     ? input.validationCommands.map((command) => `- ${command}`).join("\n")
     : "- Follow the repository's documented focused checks."
+  const feedback = input.validationFeedback
+    ? `\nPrevious deterministic validation failed. Fix this exact failure:\n${input.validationFeedback}\n`
+    : ""
   return `You are implementing one assigned GitHub issue in an isolated worktree.
 
 Repository: ${input.repository}
@@ -197,10 +216,13 @@ ${comments}
 
 Required validation:
 ${validation}
+${feedback}
 
 Read and follow all repository instruction files before editing. Implement only
-this issue, add or update tests, and run focused validation where practical.
+this issue and add or update tests. Do not run shell commands; deterministic
+validation runs after your session.
 Do not commit, push, create a pull request, change GitHub state, or access
-credentials. Leave the completed changes in the worktree. If a product or design
-decision is genuinely required, ask one precise question rather than guessing.`
+credentials. Leave the completed changes in the worktree. Choose the smallest
+correct approach that follows existing repository patterns.
+Ask a question only when a missing fact makes implementation impossible.`
 }

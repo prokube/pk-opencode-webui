@@ -1,0 +1,14 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Workflow
+metadata:
+  generateName: adk-coding-workflow-execute-smoke-
+  labels:
+    app.kubernetes.io/name: adk-coding-workflow
+    app.kubernetes.io/component: execute-smoke-test
+spec:
+  workflowTemplateRef:
+    name: adk-coding-workflow-execute
+  arguments:
+    parameters:
+      - name: issue
+        value: "3522"

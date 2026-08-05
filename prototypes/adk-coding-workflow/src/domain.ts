@@ -1,4 +1,4 @@
-export const runModes = ["plan", "execute", "publish"] as const
+export const runModes = ["plan", "implement", "execute", "publish"] as const
 export type RunMode = (typeof runModes)[number]
 
 export const runPhases = [

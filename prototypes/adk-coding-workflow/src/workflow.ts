@@ -15,11 +15,12 @@ export class CodingWorkflow {
     private readonly workspaces: WorkspaceService,
     private readonly opencode: OpenCodeService,
     private readonly token?: string,
+    private readonly createRunId: () => string = () => crypto.randomUUID(),
   ) {}
 
   async run(request: WorkflowRequest): Promise<WorkflowResult> {
     const repository = validateRepository(request.repository)
-    const runId = crypto.randomUUID()
+    const runId = this.createRunId()
     const result = (phase: RunPhase, summary: string, extra: Partial<WorkflowResult> = {}): WorkflowResult => {
       return { runId, phase, summary, ...extra }
     }
@@ -51,12 +52,13 @@ export class CodingWorkflow {
         workspaceRoot: request.workspaceRoot,
         token: this.token,
       })
-      const implementation = await this.opencode.implement({
+      const implementationInput = {
         issue,
         repository,
         worktree: workspace.worktree,
         validationCommands: request.validationCommands,
-      })
+      }
+      const implementation = await this.opencode.implement(implementationInput)
       if (implementation.status === "blocked") {
         if (request.mode === "publish") {
           await this.github.comment(repository, issue.number, `Workflow blocked: ${implementation.question}`)
@@ -68,7 +70,8 @@ export class CodingWorkflow {
         })
       }
 
-      const changedFiles = await this.workspaces.changedFiles(workspace.worktree, workspace.baseHead)
+      let sessionId = implementation.sessionId
+      let changedFiles = await this.workspaces.changedFiles(workspace.worktree, workspace.baseHead)
       if (!changedFiles.length) {
         return result("blocked", "OpenCode completed without changing files", {
           branch: workspace.branch,
@@ -78,13 +81,47 @@ export class CodingWorkflow {
         })
       }
 
-      await this.workspaces.validate(workspace.worktree, request.validationCommands)
+      if (request.mode === "implement") {
+        return result("validating", "Implementation completed pending deterministic validation", {
+          branch: workspace.branch,
+          workspace: workspace.worktree,
+          sessionId,
+          changedFiles,
+        })
+      }
+
+      try {
+        await this.workspaces.validate(workspace.worktree, request.validationCommands)
+      } catch (error) {
+        const validationFeedback = error instanceof Error ? error.message : String(error)
+        const remediation = await this.opencode.implement({ ...implementationInput, validationFeedback })
+        if (remediation.status === "blocked") {
+          return result("blocked", remediation.question ?? "OpenCode requested guidance during remediation", {
+            branch: workspace.branch,
+            workspace: workspace.worktree,
+            sessionId: remediation.sessionId,
+            changedFiles,
+          })
+        }
+        sessionId = remediation.sessionId
+        changedFiles = await this.workspaces.changedFiles(workspace.worktree, workspace.baseHead)
+        await this.workspaces.validate(workspace.worktree, request.validationCommands)
+      }
+      changedFiles = await this.workspaces.changedFiles(workspace.worktree, workspace.baseHead)
+      if (!changedFiles.length) {
+        return result("blocked", "Validation or remediation removed all implementation changes", {
+          branch: workspace.branch,
+          workspace: workspace.worktree,
+          sessionId,
+          changedFiles,
+        })
+      }
 
       if (request.mode === "execute") {
         return result("completed", "Implementation and validation completed without publishing", {
           branch: workspace.branch,
           workspace: workspace.worktree,
-          sessionId: implementation.sessionId,
+          sessionId,
           changedFiles,
         })
       }
@@ -97,6 +134,14 @@ export class CodingWorkflow {
         token: this.token!,
         baseHead: workspace.baseHead,
       })
+      const existing = await this.github.findOpenPullRequest(repository, workspace.branch, issue.number)
+      if (existing) return result("blocked", `An open pull request already exists: ${existing}`, {
+        branch: workspace.branch,
+        workspace: workspace.worktree,
+        sessionId,
+        pullRequestUrl: existing,
+        changedFiles,
+      })
       const pullRequestUrl = await this.github.createPullRequest({
         repository,
         issue,
@@ -107,7 +152,7 @@ export class CodingWorkflow {
       return result("completed", "Pull request created", {
         branch: workspace.branch,
         workspace: workspace.worktree,
-        sessionId: implementation.sessionId,
+        sessionId,
         pullRequestUrl,
         changedFiles,
       })

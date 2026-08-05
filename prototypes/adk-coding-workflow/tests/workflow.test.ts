@@ -26,7 +26,9 @@ const readyIssue: Issue = {
 class FakeGitHub implements GitHubService {
   claims = 0
   pullRequests = 0
+  pullRequestChecks = 0
   existingPullRequest?: string
+  existingPullRequests?: Array<string | undefined>
 
   async getIssue(): Promise<Issue> {
     return readyIssue
@@ -37,6 +39,8 @@ class FakeGitHub implements GitHubService {
   }
 
   async findOpenPullRequest(): Promise<string | undefined> {
+    this.pullRequestChecks += 1
+    if (this.existingPullRequests) return this.existingPullRequests.shift()
     return this.existingPullRequest
   }
 
@@ -118,6 +122,110 @@ describe("CodingWorkflow through ADK", () => {
     }
   })
 
+  test("implement mode leaves deterministic validation to a separate step", async () => {
+    class NoValidationRunner extends FakeRunner {
+      validations = 0
+
+      override async run(command: string[]): Promise<ProcessResult> {
+        if (command[0] === "bash") this.validations += 1
+        return super.run(command)
+      }
+    }
+
+    const root = mkdtempSync(join(tmpdir(), "adk-implement-"))
+    const github = new FakeGitHub()
+    const opencode: OpenCodeService = {
+      async implement() {
+        return { status: "completed", sessionId: "session-implement" }
+      },
+    }
+    try {
+      const runner = new NoValidationRunner()
+      const workflow = new CodingWorkflow(github, new WorkspaceService(runner), opencode)
+      const result = await runWithAdk(workflow, request(root, "implement"))
+      expect(result).toMatchObject({
+        phase: "validating",
+        summary: "Implementation completed pending deterministic validation",
+      })
+      expect(runner.validations).toBe(0)
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test("retries implementation once with deterministic validation feedback", async () => {
+    class RemediationRunner extends FakeRunner {
+      validations = 0
+
+      override async run(command: string[]): Promise<ProcessResult> {
+        if (command[0] === "bash") {
+          this.validations += 1
+          if (this.validations === 1) return { exitCode: 2, stdout: "", stderr: "Property active does not exist" }
+        }
+        return super.run(command)
+      }
+    }
+
+    const root = mkdtempSync(join(tmpdir(), "adk-remediation-"))
+    const github = new FakeGitHub()
+    const feedback: Array<string | undefined> = []
+    const opencode: OpenCodeService = {
+      async implement(input) {
+        feedback.push(input.validationFeedback)
+        return { status: "completed", sessionId: `session-${feedback.length}` }
+      },
+    }
+    try {
+      const runner = new RemediationRunner()
+      const workflow = new CodingWorkflow(github, new WorkspaceService(runner), opencode)
+      const result = await runWithAdk(workflow, request(root, "execute"))
+      expect(result).toMatchObject({ phase: "completed", sessionId: "session-2" })
+      expect(feedback).toEqual([undefined, expect.stringContaining("Property active does not exist")])
+      expect(runner.validations).toBe(2)
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test("blocks when validation removes all implementation changes", async () => {
+    class RemovedChangesRunner implements ProcessRunner {
+      changedChecks = 0
+
+      async run(command: string[]): Promise<ProcessResult> {
+        if (command.includes("rev-parse")) return { exitCode: 0, stdout: "base-head\n", stderr: "" }
+        if (command.includes("--cached")) return { exitCode: 0, stdout: "", stderr: "" }
+        if (command[0] === "git" && command[1] === "diff" && command.includes("--name-only")) {
+          this.changedChecks += 1
+          return { exitCode: 0, stdout: this.changedChecks === 1 ? "src/prototype.ts\0" : "", stderr: "" }
+        }
+        if (command.includes("ls-files")) return { exitCode: 0, stdout: "", stderr: "" }
+        return { exitCode: 0, stdout: "", stderr: "" }
+      }
+    }
+
+    const root = mkdtempSync(join(tmpdir(), "adk-empty-after-validation-"))
+    const opencode: OpenCodeService = {
+      async implement() {
+        return { status: "completed", sessionId: "session-empty" }
+      },
+    }
+    try {
+      const workflow = new CodingWorkflow(
+        new FakeGitHub(),
+        new WorkspaceService(new RemovedChangesRunner()),
+        opencode,
+      )
+      const result = await runWithAdk(workflow, request(root, "execute"))
+      expect(result).toMatchObject({
+        phase: "blocked",
+        summary: "Validation or remediation removed all implementation changes",
+        changedFiles: [],
+      })
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
   test("publish mode claims and creates a PR only after implementation", async () => {
     const root = mkdtempSync(join(tmpdir(), "adk-publish-"))
     const github = new FakeGitHub()
@@ -157,6 +265,30 @@ describe("CodingWorkflow through ADK", () => {
       })
       expect(github.claims).toBe(0)
       expect(calls).toBe(0)
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test("publish mode rechecks for a concurrent pull request before pushing", async () => {
+    const root = mkdtempSync(join(tmpdir(), "adk-concurrent-pr-"))
+    const github = new FakeGitHub()
+    github.existingPullRequests = [undefined, "https://github.com/prokube/example/pull/8"]
+    const opencode: OpenCodeService = {
+      async implement() {
+        return { status: "completed", sessionId: "session-concurrent" }
+      },
+    }
+    try {
+      const workflow = new CodingWorkflow(github, new WorkspaceService(new FakeRunner()), opencode, "secret-token")
+      const result = await runWithAdk(workflow, request(root, "publish"))
+      expect(result).toMatchObject({
+        phase: "blocked",
+        pullRequestUrl: "https://github.com/prokube/example/pull/8",
+      })
+      expect(github.pullRequestChecks).toBe(2)
+      expect(github.claims).toBe(1)
+      expect(github.pullRequests).toBe(0)
     } finally {
       rmSync(root, { recursive: true, force: true })
     }

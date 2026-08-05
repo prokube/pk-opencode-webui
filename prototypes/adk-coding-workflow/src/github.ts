@@ -72,11 +72,15 @@ export class GitHubClient implements GitHubService {
   }
 
   async findOpenPullRequest(repository: string, branch: string, issueNumber: number): Promise<string | undefined> {
-    const pulls = await this.request<Array<{ html_url: string; body?: string | null; head?: { ref?: string } }>>(
-      `/repos/${repository}/pulls?state=open&per_page=100`,
-    )
     const closesIssue = new RegExp(`(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\\s+(?:${repository})?#${issueNumber}\\b`, "i")
-    return pulls.find((pull) => pull.head?.ref === branch || closesIssue.test(pull.body ?? ""))?.html_url
+    for (let page = 1; ; page += 1) {
+      const pulls = await this.request<Array<{ html_url: string; body?: string | null; head?: { ref?: string } }>>(
+        `/repos/${repository}/pulls?state=open&per_page=100&page=${page}`,
+      )
+      const existing = pulls.find((pull) => pull.head?.ref === branch || closesIssue.test(pull.body ?? ""))
+      if (existing) return existing.html_url
+      if (pulls.length < 100) return undefined
+    }
   }
 
   async createPullRequest(input: {

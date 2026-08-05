@@ -573,21 +573,30 @@ and environment values remain in the `prokube` repository.
 
 ### Current prototype
 
-The repository contains an initial TypeScript ADK prototype with three explicit
+The repository contains an initial TypeScript ADK prototype with four explicit
 modes:
 
 - `plan` validates issue eligibility without mutating GitHub or a repository
+- `implement` prepares and edits a worktree while deferring validation to a
+  credential-isolated Argo step
 - `execute` prepares an isolated worktree, invokes OpenCode, and runs validation
   without publishing
 - `publish` additionally claims the issue, commits, pushes, and creates an
   unmerged pull request
 
 The prototype uses GitHub issues, branches, and pull requests as its durable
-publish state and drives the workflow through an ADK `BaseAgent`. Run results
-remain in memory. It is intentionally a local validation of the control-flow
-boundaries, not a production service. Webhooks, review remediation, Argo
-synchronization, Kubernetes isolation, durable ADK sessions, and Argo execution
-remain later phases.
+publish state and drives the workflow through an ADK `BaseAgent`. Argo templates
+run `plan` and `execute` under gVisor. The execute pod isolates the GitHub token
+to the deterministic worker and the model-scoped Agent Gateway key to an
+OpenCode sidecar, retains the workspace on a workflow-owned PVC, and permits one
+validation-remediation cycle for local execution. The credential-isolated Argo
+path copies a read-only worktree into validation scratch space and fails closed
+for manual retry when validation fails. User-code containers do not mount a
+Kubernetes service-account token; only Argo's executor containers receive the
+narrowly scoped token required to report task results. It remains a constrained
+proof of concept rather than a production service. Webhooks, per-issue Argo
+synchronization, automated Argo remediation, durable ADK sessions, publishing,
+and review remediation remain later phases.
 
 ### Phase 0: Verify foundations
 
@@ -595,7 +604,7 @@ remain later phases.
   concept.
 - Define the dedicated controller instance, namespace, service accounts, RBAC,
   quotas, network policy, and CRD ownership plan for production.
-- Select the workflow state store and artifact repository.
+- Define artifact retention and cross-run query requirements.
 - Create the dedicated GitHub bot and fine-grained PAT.
 - Define one repository allowlist and automation policy.
 - Validate controller stability and resource behavior under representative

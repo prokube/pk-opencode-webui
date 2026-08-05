@@ -1,4 +1,5 @@
-import { resolve } from "node:path"
+import { mkdirSync } from "node:fs"
+import { join, resolve } from "node:path"
 
 import { CodingWorkflowAgent, runWithAdk } from "./adk-agent"
 import { runModes, type RunMode, type WorkflowRequest } from "./domain"
@@ -51,15 +52,31 @@ export async function main(argv = Bun.argv.slice(2)): Promise<number> {
   const options = parseArgs(argv)
   const token = process.env.GH_TOKEN
   const runner = new BunProcessRunner()
+  const workspaces = new WorkspaceService(runner)
+  const providerID = process.env.OPENCODE_PROVIDER_ID
+  const modelID = process.env.OPENCODE_MODEL_ID
+  const runId = process.env.PK_WORKFLOW_RUN_ID
+  if (Boolean(providerID) !== Boolean(modelID)) {
+    throw new Error("OPENCODE_PROVIDER_ID and OPENCODE_MODEL_ID must be configured together")
+  }
   const workflow = new CodingWorkflow(
     new GitHubClient(token),
-    new WorkspaceService(runner),
-    new OpenCodeClient(options.opencodeUrl),
+    workspaces,
+    new OpenCodeClient(options.opencodeUrl, undefined, undefined, providerID && modelID ? { providerID, modelID } : undefined),
     token,
+    runId ? () => runId : undefined,
   )
   const result = await runWithAdk(workflow, options)
+  const outputDir = process.env.PK_WORKFLOW_OUTPUT_DIR
+  if (outputDir) {
+    mkdirSync(outputDir, { recursive: true })
+    await Bun.write(join(outputDir, "result.json"), `${JSON.stringify(result, null, 2)}\n`)
+    if (["completed", "validating"].includes(result.phase) && result.workspace && result.changedFiles) {
+      await Bun.write(join(outputDir, "changes.patch"), await workspaces.createPatch(result.workspace, result.changedFiles))
+    }
+  }
   console.log(JSON.stringify(result, null, 2))
-  return result.phase === "completed" ? 0 : 1
+  return result.phase === "completed" || (options.mode === "implement" && result.phase === "validating") ? 0 : 1
 }
 
 if (import.meta.main) {

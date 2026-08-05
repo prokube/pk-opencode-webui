@@ -80,6 +80,18 @@ describe("WorkspaceService", () => {
     })).rejects.toThrow("Refusing to publish sensitive paths")
   })
 
+  test("refuses to export likely credential files", async () => {
+    const workspace = new WorkspaceService(new RecordingRunner())
+    await expect(workspace.createPatch("/tmp/worktree", ["credentials/token.txt"]))
+      .rejects.toThrow("Refusing to export sensitive paths")
+  })
+
+  test("refuses to export an empty change set", async () => {
+    const workspace = new WorkspaceService(new RecordingRunner())
+    await expect(workspace.createPatch("/tmp/worktree", []))
+      .rejects.toThrow("No changed files to export")
+  })
+
   test("rejects files staged before deterministic publication", async () => {
     class StagedRunner extends RecordingRunner {
       override async run(command: string[], options: { env?: Record<string, string | undefined> } = {}): Promise<ProcessResult> {

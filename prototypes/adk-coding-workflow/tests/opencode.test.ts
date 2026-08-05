@@ -28,15 +28,20 @@ const input = {
 describe("OpenCodeClient", () => {
   test("uses the OpenCode permission ruleset and recognizes absent idle status", async () => {
     let createBody: Record<string, unknown> | undefined
+    let promptBody: Record<string, unknown> | undefined
     const server = Bun.serve({
       port: 0,
       async fetch(request) {
         const url = new URL(request.url)
+        if (url.pathname === "/global/health") return Response.json({ healthy: true })
         if (url.pathname === "/session" && request.method === "POST") {
           createBody = await request.json() as Record<string, unknown>
           return Response.json({ id: "session-1" })
         }
-        if (url.pathname === "/session/session-1/prompt_async") return new Response(null, { status: 204 })
+        if (url.pathname === "/session/session-1/prompt_async") {
+          promptBody = await request.json() as Record<string, unknown>
+          return new Response(null, { status: 204 })
+        }
         if (url.pathname === "/question" || url.pathname === "/permission") return Response.json([])
         if (url.pathname === "/session/status") return Response.json({})
         if (url.pathname === "/session/session-1/message") {
@@ -50,10 +55,16 @@ describe("OpenCodeClient", () => {
     })
     servers.push(server)
 
-    const result = await new OpenCodeClient(`http://127.0.0.1:${server.port}`, 1_000, 1).implement(input)
+    const result = await new OpenCodeClient(
+      `http://127.0.0.1:${server.port}`,
+      1_000,
+      1,
+      { providerID: "prokube", modelID: "qwen/qwen3.6-flash" },
+    ).implement(input)
     expect(result).toEqual({ status: "completed", sessionId: "session-1" })
     expect(createBody?.permission).toEqual(sessionPermissions())
     expect(sessionPermissions()).toContainEqual({ permission: "bash", pattern: "*", action: "deny" })
+    expect(promptBody?.model).toEqual({ providerID: "prokube", modelID: "qwen/qwen3.6-flash" })
   })
 
   test("aborts and returns blocked when OpenCode asks a question", async () => {
@@ -63,6 +74,7 @@ describe("OpenCodeClient", () => {
       port: 0,
       async fetch(request) {
         const url = new URL(request.url)
+        if (url.pathname === "/global/health") return Response.json({ healthy: true })
         if (url.pathname === "/session" && request.method === "POST") return Response.json({ id: "session-2" })
         if (url.pathname === "/session/session-2/prompt_async") return new Response(null, { status: 204 })
         if (url.pathname === "/question") {
@@ -94,6 +106,7 @@ describe("OpenCodeClient", () => {
       port: 0,
       async fetch(request) {
         const url = new URL(request.url)
+        if (url.pathname === "/global/health") return Response.json({ healthy: true })
         if (url.pathname === "/session" && request.method === "POST") return Response.json({ id: "session-3" })
         if (url.pathname === "/session/session-3/prompt_async") return new Response(null, { status: 204 })
         if (url.pathname === "/question" || url.pathname === "/permission") return Response.json([])

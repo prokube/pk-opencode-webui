@@ -5,6 +5,14 @@ metadata:
 imagePullSecrets:
   - name: regcred-prokube
 ---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: adk-coding-workflow.service-account-token
+  annotations:
+    kubernetes.io/service-account.name: adk-coding-workflow
+type: kubernetes.io/service-account-token
+---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
@@ -60,8 +68,9 @@ spec:
           - name: issue
           - name: base
       container:
-        image: europe-west3-docker.pkg.dev/prokube-internal/prokube-customer/adk-coding-workflow:prototype-cg-20260804-161155
+        image: europe-west3-docker.pkg.dev/prokube-internal/prokube-customer/adk-coding-workflow:prototype-cg-20260805-122114
         imagePullPolicy: IfNotPresent
+        command: ["bun", "/app/src/cli.ts"]
         args:
           - --repository
           - "{{inputs.parameters.repository}}"
@@ -85,6 +94,216 @@ spec:
           limits:
             cpu: "1"
             memory: 1Gi
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop: ["ALL"]
+          readOnlyRootFilesystem: true
+          runAsNonRoot: true
+          runAsUser: 1000
+          runAsGroup: 1000
+          seccompProfile:
+            type: RuntimeDefault
+---
+apiVersion: argoproj.io/v1alpha1
+kind: WorkflowTemplate
+metadata:
+  name: adk-coding-workflow-execute
+  labels:
+    app.kubernetes.io/name: adk-coding-workflow
+    app.kubernetes.io/component: prototype
+spec:
+  entrypoint: execute
+  serviceAccountName: adk-coding-workflow
+  executor:
+    serviceAccountName: adk-coding-workflow
+  activeDeadlineSeconds: 3900
+  podMetadata:
+    annotations:
+      sidecar.istio.io/inject: "false"
+  podGC:
+    strategy: OnWorkflowCompletion
+    deleteDelayDuration: 30m
+  volumeClaimGC:
+    strategy: OnWorkflowDeletion
+  volumeClaimTemplates:
+    - metadata:
+        name: workspace
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 5Gi
+  ttlStrategy:
+    secondsAfterCompletion: 86400
+  podSpecPatch: '{"runtimeClassName":"gvisor","securityContext":{"fsGroup":1000,"fsGroupChangePolicy":"OnRootMismatch"}}'
+  arguments:
+    parameters:
+      - name: issue
+  templates:
+    - name: execute
+      inputs:
+        parameters:
+          - name: issue
+      steps:
+        - - name: implement
+            template: implement
+            arguments:
+              parameters:
+                - name: issue
+                  value: "{{inputs.parameters.issue}}"
+        - - name: validate
+            template: validate
+    - name: implement
+      inputs:
+        parameters:
+          - name: issue
+      automountServiceAccountToken: false
+      volumes:
+        - name: opencode-home
+          emptyDir:
+            sizeLimit: 1Gi
+        - name: opencode-tmp
+          emptyDir:
+            sizeLimit: 1Gi
+      container:
+        image: europe-west3-docker.pkg.dev/prokube-internal/prokube-customer/adk-coding-workflow:prototype-cg-20260805-122114
+        imagePullPolicy: IfNotPresent
+        command: ["bun", "/app/src/cli.ts"]
+        args:
+          - --repository
+          - prokube/pkui
+          - --issue
+          - "{{inputs.parameters.issue}}"
+          - --base
+          - main
+          - --mode
+          - implement
+          - --opencode-url
+          - http://127.0.0.1:4096
+          - --validate
+          - cd frontend && git diff --exit-code HEAD -- package.json package-lock.json && npm ci --ignore-scripts && ./node_modules/.bin/tsc --noEmit && ./node_modules/.bin/vitest run src/modules/ai-gateway/__tests__/KeyCreationModals.test.tsx
+        env:
+          - name: GH_TOKEN
+            valueFrom:
+              secretKeyRef:
+                name: adk-coding-workflow-github
+                key: token
+          - name: OPENCODE_PROVIDER_ID
+            value: prokube
+          - name: OPENCODE_MODEL_ID
+            value: qwen/qwen3.6-flash
+          - name: PK_WORKFLOW_RUN_ID
+            value: "{{workflow.name}}"
+          - name: PK_WORKFLOW_OUTPUT_DIR
+            value: /workspace/.workflow-output
+        volumeMounts:
+          - name: workspace
+            mountPath: /workspace
+        resources:
+          requests:
+            cpu: 100m
+            memory: 256Mi
+          limits:
+            cpu: "2"
+            memory: 2Gi
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop: ["ALL"]
+          readOnlyRootFilesystem: true
+          runAsNonRoot: true
+          runAsUser: 1000
+          runAsGroup: 1000
+          seccompProfile:
+            type: RuntimeDefault
+      sidecars:
+        - name: opencode
+          image: europe-west3-docker.pkg.dev/prokube-internal/prokube-customer/adk-coding-workflow:prototype-cg-20260805-122114
+          imagePullPolicy: IfNotPresent
+          command: ["opencode"]
+          args: ["serve", "--pure", "--hostname", "127.0.0.1", "--port", "4096"]
+          env:
+            - name: HOME
+              value: /opencode-home
+            - name: OPENAI_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: llm-gateway-key-qwen-qwen3-6-flash
+                  key: OPENAI_API_KEY
+            - name: OPENCODE_CONFIG_CONTENT
+              value: >-
+                {"model":"prokube/qwen/qwen3.6-flash","small_model":"prokube/qwen/qwen3.6-flash","share":"disabled","autoupdate":false,"snapshot":false,"enabled_providers":["prokube"],"tools":{"bash":false,"webfetch":false},"provider":{"prokube":{"npm":"@ai-sdk/openai-compatible","name":"prokube Agent Gateway","options":{"baseURL":"http://agentgateway-proxy.agentgateway-system.svc.cluster.local/ai/demo/v1","apiKey":"{env:OPENAI_API_KEY}"},"models":{"qwen/qwen3.6-flash":{"name":"Qwen 3.6 Flash"}}}}}
+          ports:
+            - name: http
+              containerPort: 4096
+          readinessProbe:
+            exec:
+              command: ["curl", "-fsS", "http://127.0.0.1:4096/global/health"]
+            periodSeconds: 2
+            failureThreshold: 30
+          volumeMounts:
+            - name: workspace
+              mountPath: /workspace
+            - name: opencode-home
+              mountPath: /opencode-home
+            - name: opencode-tmp
+              mountPath: /tmp
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: "2"
+              memory: 2Gi
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            runAsUser: 1000
+            runAsGroup: 1000
+            seccompProfile:
+              type: RuntimeDefault
+    - name: validate
+      automountServiceAccountToken: false
+      volumes:
+        - name: validation-work
+          emptyDir:
+            sizeLimit: 4Gi
+        - name: validation-tmp
+          emptyDir:
+            sizeLimit: 1Gi
+      container:
+        image: europe-west3-docker.pkg.dev/prokube-internal/prokube-customer/adk-coding-workflow:prototype-cg-20260805-122114
+        imagePullPolicy: IfNotPresent
+        command: ["bash", "-c"]
+        args:
+          - >-
+            cp -a /workspace/.data/workspaces/{{workflow.name}}/worktree /validation/worktree &&
+            mkdir -p /validation/home &&
+            export HOME=/validation/home &&
+            cd /validation/worktree/frontend &&
+            git diff --exit-code HEAD -- package.json package-lock.json &&
+            npm ci --ignore-scripts &&
+            ./node_modules/.bin/tsc --noEmit &&
+            ./node_modules/.bin/vitest run src/modules/ai-gateway/__tests__/KeyCreationModals.test.tsx
+        volumeMounts:
+          - name: workspace
+            mountPath: /workspace
+            readOnly: true
+          - name: validation-work
+            mountPath: /validation
+          - name: validation-tmp
+            mountPath: /tmp
+        resources:
+          requests:
+            cpu: 100m
+            memory: 256Mi
+          limits:
+            cpu: "2"
+            memory: 2Gi
         securityContext:
           allowPrivilegeEscalation: false
           capabilities:

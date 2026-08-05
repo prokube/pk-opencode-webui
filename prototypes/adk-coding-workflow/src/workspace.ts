@@ -71,6 +71,23 @@ export class WorkspaceService {
     }
   }
 
+  async createPatch(worktree: string, changedFiles: string[]): Promise<string> {
+    if (!changedFiles.length) throw new Error("No changed files to export")
+    this.assertSafePaths(changedFiles, "export")
+    await requireSuccess(this.runner, ["git", "add", "--intent-to-add", "--", ...changedFiles], { cwd: worktree })
+    try {
+      const patch = await requireSuccess(
+        this.runner,
+        ["git", "diff", "--binary", "HEAD", "--", ...changedFiles],
+        { cwd: worktree },
+      )
+      if (Buffer.byteLength(patch.stdout) > 10 * 1024 * 1024) throw new Error("Refusing to export a patch larger than 10 MiB")
+      return patch.stdout
+    } finally {
+      await requireSuccess(this.runner, ["git", "reset", "--mixed", "HEAD", "--"], { cwd: worktree })
+    }
+  }
+
   async commitAndPush(input: {
     worktree: string
     branch: string
@@ -80,8 +97,7 @@ export class WorkspaceService {
     baseHead?: string
   }): Promise<void> {
     if (input.baseHead) await this.assertHead(input.worktree, input.baseHead)
-    const unsafe = input.changedFiles.filter((file) => sensitivePath.test(file))
-    if (unsafe.length) throw new Error(`Refusing to publish sensitive paths: ${unsafe.join(", ")}`)
+    this.assertSafePaths(input.changedFiles, "publish")
     if (!input.changedFiles.length) throw new Error("No changed files to publish")
     await requireSuccess(this.runner, ["git", "reset", "--mixed", "HEAD", "--"], { cwd: input.worktree })
     await requireSuccess(this.runner, ["git", "add", "--", ...input.changedFiles], { cwd: input.worktree })
@@ -108,6 +124,11 @@ export class WorkspaceService {
   private async assertHead(worktree: string, expected: string): Promise<void> {
     const head = await requireSuccess(this.runner, ["git", "rev-parse", "HEAD"], { cwd: worktree })
     if (head.stdout.trim() !== expected) throw new Error("Worktree HEAD changed during agent execution")
+  }
+
+  private assertSafePaths(changedFiles: string[], action: "export" | "publish"): void {
+    const unsafe = changedFiles.filter((file) => sensitivePath.test(file))
+    if (unsafe.length) throw new Error(`Refusing to ${action} sensitive paths: ${unsafe.join(", ")}`)
   }
 }
 

@@ -57,4 +57,32 @@ describe("GitHubClient", () => {
     expect(await client.findOpenPullRequest("prokube/example", "feature/issue-42", 42))
       .toBe("https://github.com/prokube/example/pull/7")
   })
+
+  test("checks every page of open pull requests", async () => {
+    const server = Bun.serve({
+      port: 0,
+      fetch(request) {
+        const url = new URL(request.url)
+        if (url.pathname === "/repos/prokube/example/pulls") {
+          if (url.searchParams.get("page") === "1") {
+            return Response.json(Array.from({ length: 100 }, (_, index) => ({
+              html_url: `https://github.com/prokube/example/pull/${index + 1}`,
+              body: "Unrelated change",
+              head: { ref: `human/change-${index + 1}` },
+            })))
+          }
+          return Response.json([{
+            html_url: "https://github.com/prokube/example/pull/101",
+            body: "Resolves #42",
+            head: { ref: "human/alternative" },
+          }])
+        }
+        return new Response("Not found", { status: 404 })
+      },
+    })
+    servers.push(server)
+    const client = new GitHubClient("token", `http://127.0.0.1:${server.port}`)
+    expect(await client.findOpenPullRequest("prokube/example", "feature/issue-42", 42))
+      .toBe("https://github.com/prokube/example/pull/101")
+  })
 })

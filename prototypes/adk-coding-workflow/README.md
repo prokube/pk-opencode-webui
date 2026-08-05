@@ -33,6 +33,7 @@ or clone a repository unless a more permissive mode is explicitly selected.
 | Mode | GitHub mutation | Repository changes | OpenCode | Pull request |
 | --- | --- | --- | --- | --- |
 | `plan` | No | No | No | No |
+| `implement` | No | Shared workflow workspace | Yes | No |
 | `execute` | No | Local isolated workspace | Yes | No |
 | `publish` | Claim/comment | Isolated workspace and remote branch | Yes | Yes |
 
@@ -125,23 +126,34 @@ bun run typecheck
 The unit suite uses fake GitHub, OpenCode, and process boundaries. It does not
 contact GitHub, clone repositories, start OpenCode, or create pull requests.
 
-## Deploy The Plan Worker
+## Deploy The Workers
 
-The prototype includes a pinned worker image and an Argo `WorkflowTemplate` for
-read-only `plan` runs. The template uses gVisor and a dedicated service account
-with only the Argo executor permissions required in its namespace.
+The prototype includes pinned Argo `WorkflowTemplate` resources for read-only
+`plan` and non-publishing `execute` runs. Both use gVisor and a dedicated service
+account with only the Argo executor permissions required in the namespace.
 
 ```bash
 make build
 make push
-make deploy KUBECONFIG=~/.kube/solid-crocodile.yaml NAMESPACE=experiments
+make deploy KUBECONFIG=~/.kube/solid-crocodile.yaml NAMESPACE=demo
 ```
 
 Private repositories require a Secret named `adk-coding-workflow-github` with a
 `token` key. Use a dedicated read-only bot token; do not expose a personal token
-to the worker. Submit `deploy/smoke-workflow.yaml` with `make smoke` after the
-Secret exists. The template intentionally exposes only `plan`; `execute` and
-`publish` require an isolated OpenCode runtime and stronger production controls.
+to the deterministic worker. Submit `deploy/smoke-workflow.yaml` with `make
+smoke`, or `deploy/execute-smoke-workflow.yaml` with `make smoke-execute`, after
+the Secret exists.
+
+The `execute` template uses internal `implement` mode with OpenCode 1.18.10 as a
+loopback-only sidecar and the demo workspace's model-scoped Agent Gateway key.
+OpenCode does not receive the GitHub token. A subsequent Argo pod performs the
+fixed validation command without GitHub, model, or Kubernetes credentials. The
+Argo `init` and `wait` containers alone receive the narrowly scoped executor
+service-account token. Validation copies a read-only worktree into scratch
+space, so generated tests cannot overwrite retained results or patches.
+Workspaces, structured results, and bounded patch files are retained on a
+workflow-owned PVC until the Workflow is deleted or its one-day TTL expires.
+`publish` remains undeployed because it needs stronger production controls.
 
 ## Prototype Limitations
 
@@ -152,25 +164,29 @@ Secret exists. The template intentionally exposes only `plan`; `execute` and
 - The local prototype assumes one dispatcher. GitHub label updates are not an
   atomic lock, so concurrent workers could duplicate work before deterministic
   branch and pull-request checks stop duplicate publication.
-- The OpenCode server and repository commands run on the local machine rather
-  than in gVisor, `pk-sandbox`, or an Argo Workflow.
+- The deployed `execute` worker runs in gVisor, but the deterministic worker and
+  OpenCode still share one pod network namespace. Their credentials are isolated
+  by container environment, not by separate network policies.
+- The execute pod has no dedicated egress policy yet.
 - OpenCode tool permissions and removed GitHub token variables do not constitute
   production process or filesystem isolation.
 - The publisher rejects pre-staged files, local HEAD changes, existing pull
   requests, and existing remote branches, but does not recover GitHub labels
   after every partial failure.
-- There is no automatic cleanup or retention controller for worktrees.
-- Validation commands are operator-provided shell commands and must be reviewed.
+- Execute PVCs follow the Workflow's one-day TTL and are deleted with it.
+- Local validation commands are operator-provided shell commands and must be
+  reviewed; the deployed execute command is fixed in the template.
 - Repository and validation commands have a 30-minute hard timeout, which is a
   prototype-wide default rather than a command-specific resource policy.
-- Review-remediation correlation keys exist, but remediation workflows are not
-  implemented.
+- Local `execute` permits one deterministic-validation remediation retry. The
+  credential-isolated Argo workflow fails closed for manual retry instead;
+  pull-request review remediation is not implemented.
 
 The ADK dependency currently needs explicit transitive security overrides in
 `package.json`. `bun audit` must remain clean before this prototype is built into
 an image; remove the overrides when upstream dependency ranges include the fixed
 versions directly.
 
-These limitations are deliberate. The next useful increment is a single
-containerized `execute` run in gVisor, followed by webhook reconciliation, Argo
-synchronization, and review-remediation support.
+These limitations are deliberate. The next useful increment is webhook
+reconciliation and per-issue Argo synchronization, followed by separate network
+boundaries for checkout, OpenCode, validation, and publishing.
