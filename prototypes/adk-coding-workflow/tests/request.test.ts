@@ -22,6 +22,9 @@ describe("coding request", () => {
     expect(repositoryPolicy("prokube/pkui").validationCommands).toContain(
       "cd frontend && npm run typecheck",
     )
+    expect(repositoryPolicy("prokube/pkui").validationCommands).toContain(
+      "cd frontend && npm test -- --maxWorkers=2",
+    )
   })
 
   test("rejects unsupported repositories and multi-target requests in M1", () => {
