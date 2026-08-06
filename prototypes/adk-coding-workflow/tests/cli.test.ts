@@ -22,7 +22,8 @@ describe("CLI", () => {
       "--mode", "execute",
     ])
     expect(options.validationCommands).toContain("cd frontend && npm run typecheck")
-    expect(options.validationCommands).toContain("cd backend-main && uv run pytest tests/ -q")
+    expect(options.validationCommands.some((command) => command.includes("npm test"))).toBe(true)
+    expect(options.validationCommands.some((command) => command.includes("pytest"))).toBe(false)
   })
 
   test("rejects invalid modes and issue numbers", () => {

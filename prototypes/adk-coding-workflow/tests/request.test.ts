@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test"
 
-import { repositoryCommands, repositoryPolicy } from "../src/policy"
+import { assertPolicyPaths, repositoryCommands, repositoryPolicy } from "../src/policy"
 import { workflowRequest } from "../src/request"
 
 const request = {
@@ -42,5 +42,12 @@ describe("coding request", () => {
 
   test("rejects a target repository without an approved policy", () => {
     expect(() => repositoryPolicy("unknown/repository")).toThrow("not allowlisted")
+  })
+
+  test("limits the M1 policy to frontend changes", () => {
+    expect(() => assertPolicyPaths("prokube/pkui", ["frontend/src/App.tsx"])).not.toThrow()
+    expect(() => assertPolicyPaths("prokube/pkui", ["backend-main/src/main.py"])).toThrow(
+      "outside the approved M1 policy",
+    )
   })
 })

@@ -126,16 +126,14 @@ file from an arbitrary checkout.
 ```yaml
 repository: prokube/pkui
 baseBranch: main
+allowedPathPrefixes:
+  - frontend/
 setup:
   - cd frontend && npm ci --ignore-scripts
-  - cd backend-main && uv sync --frozen --group dev
-  - cd backend-kubeconfig && uv sync --frozen --group dev
 validate:
   - git diff --exit-code HEAD -- frontend/package.json frontend/package-lock.json
   - cd frontend && npm run typecheck
-  - cd frontend && npm test
-  - cd backend-main && uv run pytest tests/ -q
-  - cd backend-kubeconfig && uv run pytest tests/ -q
+  - cd frontend && npm test -- --maxWorkers=2
 publish:
   branchPattern: feature/issue-{ticket}
   draft: false
@@ -144,6 +142,10 @@ publish:
 A later policy service may distribute signed policies. A repository file can be
 used only after the repository itself is trusted and the policy revision is
 approved outside untrusted ticket content.
+
+The M1 request targets a frontend-only ticket, so its reviewed pkui policy runs
+the complete frontend gate. Change-aware frontend, backend, Helm, and combined
+profiles are required before this policy accepts tickets outside that scope.
 
 ## Validation And Repair
 
@@ -222,6 +224,7 @@ shows the structured result with a direct PR link.
 
 ### M2: Multiple Target Repositories
 
+- [ ] Select reviewed validation profiles from planned changed-path families.
 - [ ] Add one isolated workspace and result per target repository.
 - [ ] Produce a structured plan mapping ticket requirements to allowed targets.
 - [ ] Fan out implementation and validation per repository.
