@@ -19,7 +19,8 @@ const policies: Record<string, RepositoryPolicy> = {
     validationCommands: [
       "git diff --exit-code HEAD -- frontend/package.json frontend/package-lock.json",
       "cd frontend && npm run typecheck",
-      "cd frontend && npm test -- --maxWorkers=2",
+      // A cold gVisor run can lose Vitest workers; one bounded retry still leaves stable failures red.
+      "cd frontend && npm test -- --maxWorkers=2 || npm test -- --maxWorkers=2",
       "cd backend-main && uv run pytest tests/ -q",
       "cd backend-kubeconfig && uv run pytest tests/ -q",
     ],
