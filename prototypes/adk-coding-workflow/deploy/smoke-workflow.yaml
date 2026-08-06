@@ -10,7 +10,9 @@ spec:
     name: adk-coding-workflow-plan
   arguments:
     parameters:
-      - name: repository
+      - name: ticket-repository
+        value: prokube/pkui
+      - name: target-repository
         value: prokube/pkui
       - name: issue
         value: "3531"

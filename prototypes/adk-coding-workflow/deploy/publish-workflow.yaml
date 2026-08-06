@@ -10,6 +10,10 @@ spec:
     name: adk-coding-workflow-execute
   arguments:
     parameters:
+      - name: ticket-repository
+        value: prokube/pkui
+      - name: target-repository
+        value: prokube/pkui
       - name: issue
         value: "3522"
       - name: publish

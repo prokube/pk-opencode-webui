@@ -9,6 +9,8 @@ import {
   type WorkflowResult,
 } from "./domain"
 
+const MAX_REMEDIATION_ATTEMPTS = 3
+
 export class CodingWorkflow {
   constructor(
     private readonly github: GitHubService,
@@ -102,7 +104,6 @@ export class CodingWorkflow {
         if (existing) return result("blocked", `An open pull request already exists: ${existing}`, {
           pullRequestUrl: existing,
         })
-        await this.github.claimIssue(repository, issue, request.botLogin, runId)
       }
 
       const workspace = await this.workspaces.prepare({
@@ -118,6 +119,17 @@ export class CodingWorkflow {
         repository,
         worktree: workspace.worktree,
         validationCommands: request.validationCommands,
+      }
+      if (["execute", "publish"].includes(request.mode)) {
+        try {
+          await this.workspaces.validate(workspace.worktree, request.validationCommands)
+        } catch (error) {
+          const diagnostics = error instanceof Error ? error.message : String(error)
+          return result("blocked", `Base branch failed deterministic validation: ${diagnostics}`, {
+            branch: workspace.branch,
+            workspace: workspace.worktree,
+          })
+        }
       }
       const implementation = await this.opencode.implement(implementationInput)
       if (implementation.status === "blocked") {
@@ -151,11 +163,21 @@ export class CodingWorkflow {
         })
       }
 
-      try {
-        await this.workspaces.validate(workspace.worktree, request.validationCommands)
-      } catch (error) {
-        const validationFeedback = error instanceof Error ? error.message : String(error)
-        const remediation = await this.opencode.implement({ ...implementationInput, validationFeedback })
+      let validationFailure: string | undefined
+      for (let attempt = 0; attempt <= MAX_REMEDIATION_ATTEMPTS; attempt += 1) {
+        try {
+          await this.workspaces.validate(workspace.worktree, request.validationCommands)
+          validationFailure = undefined
+          break
+        } catch (error) {
+          validationFailure = error instanceof Error ? error.message : String(error)
+        }
+        if (attempt === MAX_REMEDIATION_ATTEMPTS) break
+        const remediation = await this.opencode.implement({
+          ...implementationInput,
+          validationFeedback: validationFailure,
+          sessionId,
+        })
         if (remediation.status === "blocked") {
           return result("blocked", remediation.question ?? "OpenCode requested guidance during remediation", {
             branch: workspace.branch,
@@ -166,7 +188,13 @@ export class CodingWorkflow {
         }
         sessionId = remediation.sessionId
         changedFiles = await this.workspaces.changedFiles(workspace.worktree, workspace.baseHead)
-        await this.workspaces.validate(workspace.worktree, request.validationCommands)
+      }
+      if (validationFailure) {
+        return result(
+          "failed",
+          `Deterministic validation failed after ${MAX_REMEDIATION_ATTEMPTS} repair attempts: ${validationFailure}`,
+          { branch: workspace.branch, workspace: workspace.worktree, sessionId, changedFiles },
+        )
       }
       changedFiles = await this.workspaces.changedFiles(workspace.worktree, workspace.baseHead)
       if (!changedFiles.length) {
@@ -187,6 +215,9 @@ export class CodingWorkflow {
         })
       }
 
+      if (request.mode === "publish") {
+        await this.github.claimIssue(repository, issue, request.botLogin!, runId)
+      }
       await this.workspaces.commitAndPush({
         repository,
         worktree: workspace.worktree,

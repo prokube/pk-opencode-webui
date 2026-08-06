@@ -161,14 +161,14 @@ describe("CodingWorkflow through ADK", () => {
     }
   })
 
-  test("retries implementation once with deterministic validation feedback", async () => {
+  test("repairs deterministic validation in the original OpenCode session", async () => {
     class RemediationRunner extends FakeRunner {
       validations = 0
 
       override async run(command: string[]): Promise<ProcessResult> {
         if (command[0] === "bash") {
           this.validations += 1
-          if (this.validations === 1) return { exitCode: 2, stdout: "", stderr: "Property active does not exist" }
+          if (this.validations === 2) return { exitCode: 2, stdout: "", stderr: "Property active does not exist" }
         }
         return super.run(command)
       }
@@ -177,19 +177,87 @@ describe("CodingWorkflow through ADK", () => {
     const root = mkdtempSync(join(tmpdir(), "adk-remediation-"))
     const github = new FakeGitHub()
     const feedback: Array<string | undefined> = []
+    const sessions: Array<string | undefined> = []
     const opencode: OpenCodeService = {
       async implement(input) {
         feedback.push(input.validationFeedback)
-        return { status: "completed", sessionId: `session-${feedback.length}` }
+        sessions.push(input.sessionId)
+        return { status: "completed", sessionId: input.sessionId ?? "session-1" }
       },
     }
     try {
       const runner = new RemediationRunner()
       const workflow = new CodingWorkflow(github, new WorkspaceService(runner), opencode)
       const result = await runWithAdk(workflow, request(root, "execute"))
-      expect(result).toMatchObject({ phase: "completed", sessionId: "session-2" })
+      expect(result).toMatchObject({ phase: "completed", sessionId: "session-1" })
       expect(feedback).toEqual([undefined, expect.stringContaining("Property active does not exist")])
-      expect(runner.validations).toBe(2)
+      expect(sessions).toEqual([undefined, "session-1"])
+      expect(runner.validations).toBe(3)
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test("blocks before implementation when the base branch fails validation", async () => {
+    class FailingBaselineRunner extends FakeRunner {
+      override async run(command: string[]): Promise<ProcessResult> {
+        if (command[0] === "bash") return { exitCode: 2, stdout: "", stderr: "base is red" }
+        return super.run(command)
+      }
+    }
+    let calls = 0
+    const opencode: OpenCodeService = {
+      async implement() {
+        calls += 1
+        return { status: "completed", sessionId: "unexpected" }
+      },
+    }
+    const root = mkdtempSync(join(tmpdir(), "adk-baseline-"))
+    try {
+      const result = await runWithAdk(
+        new CodingWorkflow(new FakeGitHub(), new WorkspaceService(new FailingBaselineRunner()), opencode),
+        request(root, "execute"),
+      )
+      expect(result).toMatchObject({ phase: "blocked", summary: expect.stringContaining("Base branch failed") })
+      expect(calls).toBe(0)
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test("stops after three unsuccessful repair attempts", async () => {
+    class FailingRepairsRunner extends FakeRunner {
+      validations = 0
+
+      override async run(command: string[]): Promise<ProcessResult> {
+        if (command[0] === "bash") {
+          this.validations += 1
+          if (this.validations > 1) return { exitCode: 2, stdout: "", stderr: "still failing" }
+        }
+        return super.run(command)
+      }
+    }
+    const sessions: Array<string | undefined> = []
+    const opencode: OpenCodeService = {
+      async implement(input) {
+        sessions.push(input.sessionId)
+        return { status: "completed", sessionId: input.sessionId ?? "session-1" }
+      },
+    }
+    const root = mkdtempSync(join(tmpdir(), "adk-repair-limit-"))
+    try {
+      const runner = new FailingRepairsRunner()
+      const result = await runWithAdk(
+        new CodingWorkflow(new FakeGitHub(), new WorkspaceService(runner), opencode),
+        request(root, "execute"),
+      )
+      expect(result).toMatchObject({
+        phase: "failed",
+        summary: expect.stringContaining("after 3 repair attempts"),
+        sessionId: "session-1",
+      })
+      expect(sessions).toEqual([undefined, "session-1", "session-1", "session-1"])
+      expect(runner.validations).toBe(5)
     } finally {
       rmSync(root, { recursive: true, force: true })
     }

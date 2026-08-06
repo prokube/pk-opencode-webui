@@ -24,6 +24,10 @@ or clone a repository unless a more permissive mode is explicitly selected.
   validation runs only in a separate deterministic step.
 - Stop when OpenCode asks a question or requests an unsupported permission.
 - Run explicit validation commands without GitHub token environment variables.
+- Validate the clean base before editing, then run frontend, backend-main,
+  backend-kubeconfig, and Helm-backed unit tests for every proposed change.
+- Continue up to three validation repairs in the original OpenCode session so
+  the agent retains issue and implementation context.
 - Refuse to publish common credential and private-key paths.
 - Commit, push, and create a normal unmerged pull request in `publish` mode.
 - Generate stable review-remediation correlation keys.
@@ -66,7 +70,8 @@ repositories require a fine-grained token with issue read access.
 
 ```bash
 GH_TOKEN=<bot-token> bun run src/cli.ts \
-  --repository prokube/pkui \
+  --ticket-repository prokube/pkui \
+  --target-repository prokube/pkui \
   --issue 3523
 ```
 
@@ -77,10 +82,10 @@ GitHub state.
 
 ```bash
 GH_TOKEN=<bot-token> bun run src/cli.ts \
-  --repository prokube/pkui \
+  --ticket-repository prokube/pkui \
+  --target-repository prokube/pkui \
   --issue 3523 \
-  --mode execute \
-  --validate "make test-unit"
+  --mode execute
 ```
 
 The result includes the retained worktree and OpenCode session ID for manual
@@ -95,17 +100,18 @@ and Pull requests read/write access.
 
 ```bash
 GH_TOKEN=<bot-token> bun run src/cli.ts \
-  --repository prokube/pkui \
+  --ticket-repository prokube/pkui \
+  --target-repository prokube/pkui \
   --issue 3523 \
   --mode publish \
-  --bot-login <bot-login> \
-  --validate "make test-unit"
+  --bot-login <bot-login>
 ```
 
 The mode removes `ready`, adds `in-progress`, assigns the bot, pushes
 `feature/issue-N`, and creates a normal unmerged pull request containing
-`Closes #N`. Publish mode requires at least one `--validate` command and refuses
-to continue when an open pull request or remote issue branch already exists.
+`Closes #N`. Validation is resolved from the target repository's reviewed
+allowlist policy. Publish mode refuses to continue when an open pull request or
+remote issue branch already exists.
 
 ## Other Options
 
@@ -113,7 +119,6 @@ to continue when an open pull request or remote issue branch already exists.
 --base <branch>             Base branch, default: main
 --workspace-root <path>     Run workspaces, default: .data/workspaces
 --opencode-url <url>        OpenCode server, default: http://127.0.0.1:4096
---validate <command>        Repeatable validation command
 ```
 
 ## Test
@@ -187,8 +192,9 @@ the same workflow identity and recognizes completed claims, pushes, and PRs.
   reviewed; the deployed execute command is fixed in the template.
 - Repository and validation commands have a 30-minute hard timeout, which is a
   prototype-wide default rather than a command-specific resource policy.
-- Local and deployed `execute` permit one deterministic-validation remediation
-  retry. The deployed workflow then repeats validation in a fresh,
+- Local and deployed `execute` permit up to three deterministic-validation
+  repair attempts in the original agent session. The deployed workflow then
+  repeats validation in a fresh,
   credential-isolated worktree before attestation; pull-request review
   remediation is not implemented.
 

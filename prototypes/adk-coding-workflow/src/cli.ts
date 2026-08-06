@@ -6,10 +6,12 @@ import { runModes, type RunMode, type WorkflowRequest } from "./domain"
 import { GitHubClient } from "./github"
 import { OpenCodeClient } from "./opencode"
 import { BunProcessRunner } from "./process"
+import { workflowRequest, type CodingRequest } from "./request"
 import { CodingWorkflow } from "./workflow"
 import { WorkspaceService } from "./workspace"
 
 type CliOptions = WorkflowRequest & {
+  codingRequest: CodingRequest
   opencodeUrl: string
   validatedPatchSha?: string
 }
@@ -32,19 +34,27 @@ export function parseArgs(argv: string[]): CliOptions {
   const mode = (values.get("--mode")?.at(-1) ?? "plan") as RunMode
   if (!runModes.includes(mode)) throw new Error(`Invalid --mode: ${mode}`)
   const issueNumber = Number(required("--issue"))
-  if (!Number.isSafeInteger(issueNumber) || issueNumber < 1) throw new Error("--issue must be a positive integer")
-  const validationCommands = values.get("--validate") ?? []
-  if (mode === "publish" && validationCommands.length === 0) {
-    throw new Error("Publish mode requires at least one --validate command")
+  const codingRequest: CodingRequest = {
+    ticket: {
+      provider: "github",
+      repository: required("--ticket-repository"),
+      number: issueNumber,
+    },
+    targets: (values.get("--target-repository") ?? []).map((repository) => ({
+      repository,
+      baseBranch: values.get("--base")?.at(-1),
+    })),
+    publish: ["finalize", "publish"].includes(mode),
   }
-  return {
-    repository: required("--repository"),
-    issueNumber,
+  const request = workflowRequest({
+    request: codingRequest,
     mode,
-    baseBranch: values.get("--base")?.at(-1) ?? "main",
     workspaceRoot: resolve(values.get("--workspace-root")?.at(-1) ?? ".data/workspaces"),
-    validationCommands,
     botLogin: values.get("--bot-login")?.at(-1),
+  })
+  return {
+    ...request,
+    codingRequest,
     opencodeUrl: values.get("--opencode-url")?.at(-1) ?? "http://127.0.0.1:4096",
     validatedPatchSha: values.get("--validated-patch-sha")?.at(-1),
   }

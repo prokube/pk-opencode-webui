@@ -13,6 +13,7 @@ export interface OpenCodeService {
     worktree: string
     validationCommands: string[]
     validationFeedback?: string
+    sessionId?: string
   }): Promise<OpenCodeResult>
 }
 
@@ -30,16 +31,22 @@ export class OpenCodeClient implements OpenCodeService {
     worktree: string
     validationCommands: string[]
     validationFeedback?: string
+    sessionId?: string
   }): Promise<OpenCodeResult> {
     await this.waitUntilReady()
-    const session = await this.request<{ id: string }>("/session", {
-      method: "POST",
-      directory: input.worktree,
-      body: {
-        title: `Issue #${input.issue.number}: ${input.issue.title}`,
-        permission: sessionPermissions(),
-      },
-    })
+    const previousCompletion = input.sessionId
+      ? (await this.assistantOutcome(input.sessionId, input.worktree)).completedAt ?? 0
+      : 0
+    const session = input.sessionId
+      ? { id: input.sessionId }
+      : await this.request<{ id: string }>("/session", {
+          method: "POST",
+          directory: input.worktree,
+          body: {
+            title: `Issue #${input.issue.number}: ${input.issue.title}`,
+            permission: sessionPermissions(),
+          },
+        })
     await this.request(`/session/${session.id}/prompt_async`, {
       method: "POST",
       directory: input.worktree,
@@ -74,14 +81,18 @@ export class OpenCodeClient implements OpenCodeService {
       if (status?.type === "idle") {
         const outcome = await this.assistantOutcome(session.id, input.worktree)
         if (outcome.error) throw new Error(`OpenCode failed: ${outcome.error}`)
-        if (outcome.completed) return { status: "completed", sessionId: session.id }
+        if ((outcome.completedAt ?? 0) > previousCompletion) {
+          return { status: "completed", sessionId: session.id }
+        }
       }
       if (!status) {
         missingStatusPolls += 1
         if (missingStatusPolls >= 2) {
           const outcome = await this.assistantOutcome(session.id, input.worktree)
           if (outcome.error) throw new Error(`OpenCode failed: ${outcome.error}`)
-          if (outcome.completed) return { status: "completed", sessionId: session.id }
+          if ((outcome.completedAt ?? 0) > previousCompletion) {
+            return { status: "completed", sessionId: session.id }
+          }
         }
       } else {
         missingStatusPolls = 0
@@ -125,7 +136,7 @@ export class OpenCodeClient implements OpenCodeService {
   private async assistantOutcome(
     sessionId: string,
     directory: string,
-  ): Promise<{ completed: boolean; error?: string }> {
+  ): Promise<{ completedAt?: number; error?: string }> {
     const messages = await this.request<Array<{
       info?: { role?: string; time?: { completed?: number }; error?: { name?: string; data?: { message?: string } } }
       parts?: unknown[]
@@ -142,11 +153,10 @@ export class OpenCodeClient implements OpenCodeService {
     }
     if (assistant?.info?.error) {
       return {
-        completed: false,
         error: assistant.info.error.data?.message ?? assistant.info.error.name ?? "assistant message failed",
       }
     }
-    return { completed: Boolean(assistant?.info?.time?.completed) }
+    return { completedAt: assistant?.info?.time?.completed }
   }
 
   private async request<T = unknown>(

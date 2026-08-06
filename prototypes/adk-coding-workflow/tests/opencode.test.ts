@@ -107,6 +107,49 @@ describe("OpenCodeClient", () => {
     expect(String(questionDirectory)).toBe("/tmp/worktree")
   })
 
+  test("continues remediation in an existing session and waits for a new response", async () => {
+    let createdSessions = 0
+    let prompts = 0
+    let messageReads = 0
+    const server = Bun.serve({
+      port: 0,
+      async fetch(request) {
+        const url = new URL(request.url)
+        if (url.pathname === "/global/health") return Response.json({ healthy: true })
+        if (url.pathname === "/session" && request.method === "POST") {
+          createdSessions += 1
+          return Response.json({ id: "unexpected" })
+        }
+        if (url.pathname === "/session/session-existing/prompt_async") {
+          prompts += 1
+          return new Response(null, { status: 204 })
+        }
+        if (url.pathname === "/question" || url.pathname === "/permission") return Response.json([])
+        if (url.pathname === "/session/status") return Response.json({ "session-existing": { type: "idle" } })
+        if (url.pathname === "/session/session-existing/message") {
+          messageReads += 1
+          return Response.json([{
+            info: { role: "assistant", time: { created: 1, completed: messageReads === 1 ? 2 : 3 } },
+            parts: [{ type: "text", text: messageReads === 1 ? "Initial change" : "Repair complete" }],
+          }])
+        }
+        return new Response("Not found", { status: 404 })
+      },
+    })
+    servers.push(server)
+
+    const result = await new OpenCodeClient(`http://127.0.0.1:${server.port}`, 1_000, 1).implement({
+      ...input,
+      validationFeedback: "TypeScript failed",
+      sessionId: "session-existing",
+    })
+
+    expect(result).toEqual({ status: "completed", sessionId: "session-existing" })
+    expect(createdSessions).toBe(0)
+    expect(prompts).toBe(1)
+    expect(messageReads).toBe(2)
+  })
+
   test("does not treat a failed assistant message as success", async () => {
     const server = Bun.serve({
       port: 0,

@@ -2,22 +2,30 @@ import { describe, expect, test } from "bun:test"
 import { readFileSync } from "node:fs"
 
 const manifest = readFileSync(new URL("../deploy/workflow-template.yaml", import.meta.url), "utf8")
+const dockerfile = readFileSync(new URL("../Dockerfile", import.meta.url), "utf8")
 const executeManifest = manifest.split("---\n").at(-1) ?? ""
-const validateTemplate = executeManifest.split("    - name: validate\n      automountServiceAccountToken:").at(-1) ?? ""
+const validateTemplate = executeManifest.split("    - name: validate\n      inputs:").at(-1) ?? ""
 const publishTemplate = executeManifest.split("    - name: publish\n      retryStrategy:").at(-1) ?? ""
 const reportTemplate = executeManifest.split("    - name: report\n      automountServiceAccountToken:").at(-1) ?? ""
 
 describe("execute workflow template", () => {
-  test("pins the repository, base branch, and validation entry points", () => {
-    expect(executeManifest).toContain("- prokube/pkui")
-    expect(executeManifest).toContain("- --base\n          - main")
+  test("accepts an explicit target and resolves validation through policy", () => {
+    expect(executeManifest).toContain("- name: ticket-repository")
+    expect(executeManifest).toContain("- name: target-repository")
+    expect(executeManifest).not.toContain("- prokube/pkui")
     expect(executeManifest).not.toContain("- name: base")
     expect(executeManifest).toContain("- --mode\n          - execute")
     expect(executeManifest).not.toContain("- --mode\n          - implement")
-    expect(executeManifest).toContain("npm ci --ignore-scripts")
-    expect(executeManifest.match(/npm run typecheck/g)).toHaveLength(2)
-    expect(executeManifest.match(/npm test/g)).toHaveLength(2)
+    expect(validateTemplate).toContain("bun /app/src/validate.ts")
+    expect(validateTemplate).toContain('--repository "{{inputs.parameters.target-repository}}"')
     expect(executeManifest).not.toContain("KeyCreationModals.test.tsx")
+  })
+
+  test("includes the repository toolchain needed by all unit-test suites", () => {
+    expect(dockerfile).toContain("node:22.22-bookworm-slim")
+    expect(dockerfile).toContain('"uv==${UV_VERSION}"')
+    expect(dockerfile).toContain("/usr/local/bin/helm")
+    expect(dockerfile).toContain("/usr/local/bin/kubectl")
   })
 
   test("does not mount Kubernetes service-account tokens in code execution pods", () => {
@@ -30,7 +38,7 @@ describe("execute workflow template", () => {
   test("uses one worker image and isolates validation from retained artifacts", () => {
     const images = [...executeManifest.matchAll(/image: (\S+)/g)].map((match) => match[1])
     expect(new Set(images)).toEqual(new Set([
-      "europe-west3-docker.pkg.dev/prokube-internal/prokube-customer/adk-coding-workflow:prototype-cg-20260806-1503",
+      "europe-west3-docker.pkg.dev/prokube-internal/prokube-customer/adk-coding-workflow:prototype-cg-20260806-1611",
     ]))
     expect(validateTemplate).toContain("git clone --no-hardlinks")
     expect(validateTemplate).toContain("git -C /validation/worktree apply --binary /workspace/.workflow-output/changes.patch")
