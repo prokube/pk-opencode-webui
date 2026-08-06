@@ -151,14 +151,29 @@ bot token with issue, content, and pull-request write access. Submit
 `deploy/execute-smoke-workflow.yaml` with `make smoke-execute`, or the explicit
 `deploy/publish-workflow.yaml` with `make publish-issue` after the Secret exists.
 
+The execute template currently uses OpenAI OAuth for the OpenCode sidecar. Copy
+only the local OpenAI entry into the required Secret without printing or storing
+the token in a manifest:
+
+```bash
+jq -c '{apiVersion:"v1",kind:"Secret",metadata:{name:"adk-coding-workflow-opencode-auth",namespace:"demo"},type:"Opaque",stringData:{"auth.json":({openai:.openai}|tojson)}}' \
+  ~/.local/share/opencode/auth.json | \
+  kubectl --kubeconfig ~/.kube/solid-crocodile.yaml apply -f -
+```
+
+This is suitable only for an explicit prototype test: it copies a personal,
+expiring OAuth credential into the cluster. The Secret is mounted only in the
+OpenCode sidecar and copied to its ephemeral writable home so OpenCode can
+refresh it during the run. Production automation should use a dedicated,
+revocable service credential instead.
+
 The `execute` template uses internal `implement` mode with OpenCode 1.18.10 as a
-loopback-only sidecar and the demo workspace's model-scoped Agent Gateway key.
-OpenCode does not receive the GitHub token. A subsequent Argo pod performs the
-fixed validation command without GitHub, model, or Kubernetes credentials. The
-Argo `init` and `wait` containers alone receive the narrowly scoped executor
-service-account token. Validation reconstructs `HEAD + changes.patch` in scratch
-space, so ignored files cannot affect tests and generated code cannot overwrite
-retained results or patches.
+loopback-only sidecar and `openai/gpt-5.6-sol`. OpenCode does not receive the
+GitHub token. A subsequent Argo pod performs the fixed validation command without
+GitHub, model, or Kubernetes credentials. The Argo `init` and `wait` containers
+alone receive the narrowly scoped executor service-account token. Validation
+reconstructs `HEAD + changes.patch` in scratch space, so ignored files cannot
+affect tests and generated code cannot overwrite retained results or patches.
 Workspaces, structured results, and bounded patch files are retained on a
 workflow-owned PVC until the Workflow is deleted or its one-day TTL expires.
 An `onExit` reporter publishes an allowlisted, size-limited `workflow-result`

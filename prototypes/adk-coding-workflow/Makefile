@@ -1,5 +1,5 @@
 IMAGE ?= europe-west3-docker.pkg.dev/prokube-internal/prokube-customer/adk-coding-workflow
-TAG ?= prototype-cg-20260806-1611
+TAG ?= prototype-cg-20260806-1732
 KUBECONFIG ?= $(HOME)/.kube/solid-crocodile.yaml
 NAMESPACE ?= experiments
 

@@ -38,7 +38,7 @@ describe("execute workflow template", () => {
   test("uses one worker image and isolates validation from retained artifacts", () => {
     const images = [...executeManifest.matchAll(/image: (\S+)/g)].map((match) => match[1])
     expect(new Set(images)).toEqual(new Set([
-      "europe-west3-docker.pkg.dev/prokube-internal/prokube-customer/adk-coding-workflow:prototype-cg-20260806-1611",
+      "europe-west3-docker.pkg.dev/prokube-internal/prokube-customer/adk-coding-workflow:prototype-cg-20260806-1732",
     ]))
     expect(validateTemplate).toContain("git clone --no-hardlinks")
     expect(validateTemplate).toContain("git -C /validation/worktree apply --binary /workspace/.workflow-output/changes.patch")
@@ -56,9 +56,14 @@ describe("execute workflow template", () => {
     expect(executeManifest).toContain("retryPolicy: Always")
     expect(publishTemplate).toContain("- finalize")
     expect(publishTemplate).toContain("name: GH_TOKEN")
-    expect(publishTemplate).not.toContain("OPENAI_API_KEY")
+    expect(publishTemplate).not.toContain("adk-coding-workflow-opencode-auth")
     expect(executeManifest.match(/name: GH_TOKEN/g)).toHaveLength(2)
-    expect(executeManifest.match(/name: OPENAI_API_KEY/g)).toHaveLength(1)
+    expect(executeManifest.match(/secretName: adk-coding-workflow-opencode-auth/g)).toHaveLength(1)
+    expect(executeManifest).toContain('"model":"openai/gpt-5.6-sol"')
+    expect(executeManifest).toContain("cp /opencode-auth/auth.json")
+    expect(executeManifest).toContain("activeDeadlineSeconds: 10800")
+    expect(validateTemplate).toContain('cpu: "4"')
+    expect(validateTemplate).toContain("memory: 4Gi")
   })
 
   test("reports a safe result after success, failure, or blocking", () => {
@@ -69,6 +74,6 @@ describe("execute workflow template", () => {
     expect(reportTemplate).toContain('value: "{{workflow.status}}"')
     expect(reportTemplate).toContain("readOnly: true")
     expect(reportTemplate).not.toContain("GH_TOKEN")
-    expect(reportTemplate).not.toContain("OPENAI_API_KEY")
+    expect(reportTemplate).not.toContain("adk-coding-workflow-opencode-auth")
   })
 })
