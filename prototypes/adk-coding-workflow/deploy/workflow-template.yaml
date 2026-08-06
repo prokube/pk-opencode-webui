@@ -68,7 +68,7 @@ spec:
           - name: issue
           - name: base
       container:
-        image: europe-west3-docker.pkg.dev/prokube-internal/prokube-customer/adk-coding-workflow:prototype-cg-20260806-1224
+        image: europe-west3-docker.pkg.dev/prokube-internal/prokube-customer/adk-coding-workflow:prototype-cg-20260806-1503
         imagePullPolicy: IfNotPresent
         command: ["bun", "/app/src/cli.ts"]
         args:
@@ -114,6 +114,7 @@ metadata:
     app.kubernetes.io/component: prototype
 spec:
   entrypoint: execute
+  onExit: report
   serviceAccountName: adk-coding-workflow
   executor:
     serviceAccountName: adk-coding-workflow
@@ -186,7 +187,7 @@ spec:
           emptyDir:
             sizeLimit: 1Gi
       container:
-        image: europe-west3-docker.pkg.dev/prokube-internal/prokube-customer/adk-coding-workflow:prototype-cg-20260806-1224
+        image: europe-west3-docker.pkg.dev/prokube-internal/prokube-customer/adk-coding-workflow:prototype-cg-20260806-1503
         imagePullPolicy: IfNotPresent
         command: ["bun", "/app/src/cli.ts"]
         args:
@@ -238,7 +239,7 @@ spec:
             type: RuntimeDefault
       sidecars:
         - name: opencode
-          image: europe-west3-docker.pkg.dev/prokube-internal/prokube-customer/adk-coding-workflow:prototype-cg-20260806-1224
+          image: europe-west3-docker.pkg.dev/prokube-internal/prokube-customer/adk-coding-workflow:prototype-cg-20260806-1503
           imagePullPolicy: IfNotPresent
           command: ["opencode"]
           args: ["serve", "--pure", "--hostname", "127.0.0.1", "--port", "4096"]
@@ -300,7 +301,7 @@ spec:
           emptyDir:
             sizeLimit: 1Gi
       container:
-        image: europe-west3-docker.pkg.dev/prokube-internal/prokube-customer/adk-coding-workflow:prototype-cg-20260806-1224
+        image: europe-west3-docker.pkg.dev/prokube-internal/prokube-customer/adk-coding-workflow:prototype-cg-20260806-1503
         imagePullPolicy: IfNotPresent
         command: ["bash", "-c"]
         args:
@@ -352,7 +353,7 @@ spec:
           emptyDir:
             sizeLimit: 1Gi
       container:
-        image: europe-west3-docker.pkg.dev/prokube-internal/prokube-customer/adk-coding-workflow:prototype-cg-20260806-1224
+        image: europe-west3-docker.pkg.dev/prokube-internal/prokube-customer/adk-coding-workflow:prototype-cg-20260806-1503
         imagePullPolicy: IfNotPresent
         command: ["bun", "/app/src/cli.ts"]
         args:
@@ -410,7 +411,7 @@ spec:
           emptyDir:
             sizeLimit: 1Gi
       container:
-        image: europe-west3-docker.pkg.dev/prokube-internal/prokube-customer/adk-coding-workflow:prototype-cg-20260806-1224
+        image: europe-west3-docker.pkg.dev/prokube-internal/prokube-customer/adk-coding-workflow:prototype-cg-20260806-1503
         imagePullPolicy: IfNotPresent
         command: ["bun", "/app/src/cli.ts"]
         args:
@@ -448,6 +449,47 @@ spec:
           limits:
             cpu: "1"
             memory: 1Gi
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop: ["ALL"]
+          readOnlyRootFilesystem: true
+          runAsNonRoot: true
+          runAsUser: 1000
+          runAsGroup: 1000
+          seccompProfile:
+            type: RuntimeDefault
+    - name: report
+      automountServiceAccountToken: false
+      outputs:
+        parameters:
+          - name: workflow-result
+            valueFrom:
+              path: /tmp/workflow-result.json
+      volumes:
+        - name: report-tmp
+          emptyDir:
+            sizeLimit: 10Mi
+      container:
+        image: europe-west3-docker.pkg.dev/prokube-internal/prokube-customer/adk-coding-workflow:prototype-cg-20260806-1503
+        imagePullPolicy: IfNotPresent
+        command: ["bun", "/app/src/report.ts"]
+        env:
+          - name: PK_WORKFLOW_STATUS
+            value: "{{workflow.status}}"
+        volumeMounts:
+          - name: workspace
+            mountPath: /workspace
+            readOnly: true
+          - name: report-tmp
+            mountPath: /tmp
+        resources:
+          requests:
+            cpu: 10m
+            memory: 32Mi
+          limits:
+            cpu: 100m
+            memory: 128Mi
         securityContext:
           allowPrivilegeEscalation: false
           capabilities:

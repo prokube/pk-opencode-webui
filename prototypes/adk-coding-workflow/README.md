@@ -156,6 +156,9 @@ space, so ignored files cannot affect tests and generated code cannot overwrite
 retained results or patches.
 Workspaces, structured results, and bounded patch files are retained on a
 workflow-owned PVC until the Workflow is deleted or its one-day TTL expires.
+An `onExit` reporter publishes an allowlisted, size-limited `workflow-result`
+output with the outcome, branch, changed files, and validated GitHub pull-request
+URL. It mounts the workspace read-only and receives no application credentials.
 Publishing hashes the validated patch, attests the unchanged PVC worktree, then
 runs a model-free finalizer that claims the issue, commits and pushes the fixed
 branch, and creates a normal unmerged pull request. The finalizer retries under

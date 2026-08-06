@@ -5,6 +5,7 @@ const manifest = readFileSync(new URL("../deploy/workflow-template.yaml", import
 const executeManifest = manifest.split("---\n").at(-1) ?? ""
 const validateTemplate = executeManifest.split("    - name: validate\n      automountServiceAccountToken:").at(-1) ?? ""
 const publishTemplate = executeManifest.split("    - name: publish\n      retryStrategy:").at(-1) ?? ""
+const reportTemplate = executeManifest.split("    - name: report\n      automountServiceAccountToken:").at(-1) ?? ""
 
 describe("execute workflow template", () => {
   test("pins the repository, base branch, and validation entry points", () => {
@@ -22,14 +23,14 @@ describe("execute workflow template", () => {
   test("does not mount Kubernetes service-account tokens in code execution pods", () => {
     expect(manifest).toContain("name: adk-coding-workflow.service-account-token")
     expect(manifest).toContain("kubernetes.io/service-account.name: adk-coding-workflow")
-    expect(executeManifest.match(/automountServiceAccountToken: false/g)).toHaveLength(4)
+    expect(executeManifest.match(/automountServiceAccountToken: false/g)).toHaveLength(5)
     expect(executeManifest).toContain("executor:\n    serviceAccountName: adk-coding-workflow")
   })
 
   test("uses one worker image and isolates validation from retained artifacts", () => {
     const images = [...executeManifest.matchAll(/image: (\S+)/g)].map((match) => match[1])
     expect(new Set(images)).toEqual(new Set([
-      "europe-west3-docker.pkg.dev/prokube-internal/prokube-customer/adk-coding-workflow:prototype-cg-20260806-1224",
+      "europe-west3-docker.pkg.dev/prokube-internal/prokube-customer/adk-coding-workflow:prototype-cg-20260806-1503",
     ]))
     expect(validateTemplate).toContain("git clone --no-hardlinks")
     expect(validateTemplate).toContain("git -C /validation/worktree apply --binary /workspace/.workflow-output/changes.patch")
@@ -50,5 +51,16 @@ describe("execute workflow template", () => {
     expect(publishTemplate).not.toContain("OPENAI_API_KEY")
     expect(executeManifest.match(/name: GH_TOKEN/g)).toHaveLength(2)
     expect(executeManifest.match(/name: OPENAI_API_KEY/g)).toHaveLength(1)
+  })
+
+  test("reports a safe result after success, failure, or blocking", () => {
+    expect(executeManifest).toContain("onExit: report")
+    expect(reportTemplate).toContain("name: workflow-result")
+    expect(reportTemplate).toContain("path: /tmp/workflow-result.json")
+    expect(reportTemplate).toContain("/app/src/report.ts")
+    expect(reportTemplate).toContain('value: "{{workflow.status}}"')
+    expect(reportTemplate).toContain("readOnly: true")
+    expect(reportTemplate).not.toContain("GH_TOKEN")
+    expect(reportTemplate).not.toContain("OPENAI_API_KEY")
   })
 })
