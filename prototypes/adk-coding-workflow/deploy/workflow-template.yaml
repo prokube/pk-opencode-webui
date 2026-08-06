@@ -68,7 +68,7 @@ spec:
           - name: issue
           - name: base
       container:
-        image: europe-west3-docker.pkg.dev/prokube-internal/prokube-customer/adk-coding-workflow:prototype-cg-20260805-151607
+        image: europe-west3-docker.pkg.dev/prokube-internal/prokube-customer/adk-coding-workflow:prototype-cg-20260806-1224
         imagePullPolicy: IfNotPresent
         command: ["bun", "/app/src/cli.ts"]
         args:
@@ -186,7 +186,7 @@ spec:
           emptyDir:
             sizeLimit: 1Gi
       container:
-        image: europe-west3-docker.pkg.dev/prokube-internal/prokube-customer/adk-coding-workflow:prototype-cg-20260805-151607
+        image: europe-west3-docker.pkg.dev/prokube-internal/prokube-customer/adk-coding-workflow:prototype-cg-20260806-1224
         imagePullPolicy: IfNotPresent
         command: ["bun", "/app/src/cli.ts"]
         args:
@@ -197,11 +197,11 @@ spec:
           - --base
           - main
           - --mode
-          - implement
+          - execute
           - --opencode-url
           - http://127.0.0.1:4096
           - --validate
-          - cd frontend && git diff --exit-code HEAD -- package.json package-lock.json && npm ci --ignore-scripts && ./node_modules/.bin/tsc --noEmit && ./node_modules/.bin/vitest run src/modules/ai-gateway/__tests__/KeyCreationModals.test.tsx
+          - cd frontend && git diff --exit-code HEAD -- package.json package-lock.json && npm ci --ignore-scripts && npm run typecheck && npm test
         env:
           - name: GH_TOKEN
             valueFrom:
@@ -238,7 +238,7 @@ spec:
             type: RuntimeDefault
       sidecars:
         - name: opencode
-          image: europe-west3-docker.pkg.dev/prokube-internal/prokube-customer/adk-coding-workflow:prototype-cg-20260805-151607
+          image: europe-west3-docker.pkg.dev/prokube-internal/prokube-customer/adk-coding-workflow:prototype-cg-20260806-1224
           imagePullPolicy: IfNotPresent
           command: ["opencode"]
           args: ["serve", "--pure", "--hostname", "127.0.0.1", "--port", "4096"]
@@ -300,7 +300,7 @@ spec:
           emptyDir:
             sizeLimit: 1Gi
       container:
-        image: europe-west3-docker.pkg.dev/prokube-internal/prokube-customer/adk-coding-workflow:prototype-cg-20260805-151607
+        image: europe-west3-docker.pkg.dev/prokube-internal/prokube-customer/adk-coding-workflow:prototype-cg-20260806-1224
         imagePullPolicy: IfNotPresent
         command: ["bash", "-c"]
         args:
@@ -312,8 +312,8 @@ spec:
             cd /validation/worktree/frontend &&
             git diff --exit-code HEAD -- package.json package-lock.json &&
             npm ci --ignore-scripts &&
-            ./node_modules/.bin/tsc --noEmit &&
-            ./node_modules/.bin/vitest run src/modules/ai-gateway/__tests__/KeyCreationModals.test.tsx &&
+            npm run typecheck &&
+            npm test &&
             mkdir -p /var/run/argo/outputs &&
             sha256sum /workspace/.workflow-output/changes.patch | cut -d ' ' -f 1 > /var/run/argo/outputs/patch.sha256
         volumeMounts:
@@ -352,7 +352,7 @@ spec:
           emptyDir:
             sizeLimit: 1Gi
       container:
-        image: europe-west3-docker.pkg.dev/prokube-internal/prokube-customer/adk-coding-workflow:prototype-cg-20260805-151607
+        image: europe-west3-docker.pkg.dev/prokube-internal/prokube-customer/adk-coding-workflow:prototype-cg-20260806-1224
         imagePullPolicy: IfNotPresent
         command: ["bun", "/app/src/cli.ts"]
         args:
@@ -410,7 +410,7 @@ spec:
           emptyDir:
             sizeLimit: 1Gi
       container:
-        image: europe-west3-docker.pkg.dev/prokube-internal/prokube-customer/adk-coding-workflow:prototype-cg-20260805-151607
+        image: europe-west3-docker.pkg.dev/prokube-internal/prokube-customer/adk-coding-workflow:prototype-cg-20260806-1224
         imagePullPolicy: IfNotPresent
         command: ["bun", "/app/src/cli.ts"]
         args:

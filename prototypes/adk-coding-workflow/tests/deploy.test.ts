@@ -11,11 +11,12 @@ describe("execute workflow template", () => {
     expect(executeManifest).toContain("- prokube/pkui")
     expect(executeManifest).toContain("- --base\n          - main")
     expect(executeManifest).not.toContain("- name: base")
+    expect(executeManifest).toContain("- --mode\n          - execute")
+    expect(executeManifest).not.toContain("- --mode\n          - implement")
     expect(executeManifest).toContain("npm ci --ignore-scripts")
-    expect(executeManifest).toContain("./node_modules/.bin/tsc --noEmit")
-    expect(executeManifest).toContain("./node_modules/.bin/vitest run")
-    expect(executeManifest).not.toContain("npm run typecheck")
-    expect(executeManifest).not.toContain("npm test")
+    expect(executeManifest.match(/npm run typecheck/g)).toHaveLength(2)
+    expect(executeManifest.match(/npm test/g)).toHaveLength(2)
+    expect(executeManifest).not.toContain("KeyCreationModals.test.tsx")
   })
 
   test("does not mount Kubernetes service-account tokens in code execution pods", () => {
@@ -28,7 +29,7 @@ describe("execute workflow template", () => {
   test("uses one worker image and isolates validation from retained artifacts", () => {
     const images = [...executeManifest.matchAll(/image: (\S+)/g)].map((match) => match[1])
     expect(new Set(images)).toEqual(new Set([
-      "europe-west3-docker.pkg.dev/prokube-internal/prokube-customer/adk-coding-workflow:prototype-cg-20260805-151607",
+      "europe-west3-docker.pkg.dev/prokube-internal/prokube-customer/adk-coding-workflow:prototype-cg-20260806-1224",
     ]))
     expect(validateTemplate).toContain("git clone --no-hardlinks")
     expect(validateTemplate).toContain("git -C /validation/worktree apply --binary /workspace/.workflow-output/changes.patch")

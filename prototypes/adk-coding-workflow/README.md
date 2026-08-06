@@ -184,9 +184,10 @@ the same workflow identity and recognizes completed claims, pushes, and PRs.
   reviewed; the deployed execute command is fixed in the template.
 - Repository and validation commands have a 30-minute hard timeout, which is a
   prototype-wide default rather than a command-specific resource policy.
-- Local `execute` permits one deterministic-validation remediation retry. The
-  credential-isolated Argo workflow fails closed for manual retry instead;
-  pull-request review remediation is not implemented.
+- Local and deployed `execute` permit one deterministic-validation remediation
+  retry. The deployed workflow then repeats validation in a fresh,
+  credential-isolated worktree before attestation; pull-request review
+  remediation is not implemented.
 
 The ADK dependency currently needs explicit transitive security overrides in
 `package.json`. `bun audit` must remain clean before this prototype is built into

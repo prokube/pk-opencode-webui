@@ -18,4 +18,14 @@ describe("BunProcessRunner", () => {
     await expect(requireSuccess(runner, ["npm", "run", "typecheck"]))
       .rejects.toThrow("final diagnostic")
   })
+
+  test("includes stdout diagnostics from failed test runners", async () => {
+    const runner: ProcessRunner = {
+      async run() {
+        return { exitCode: 1, stdout: "expected true to be false", stderr: "" }
+      },
+    }
+    await expect(requireSuccess(runner, ["npm", "test"]))
+      .rejects.toThrow("stdout:\nexpected true to be false")
+  })
 })
