@@ -127,13 +127,13 @@ file from an arbitrary checkout.
 repository: prokube/pkui
 baseBranch: main
 allowedPathPrefixes:
-  - frontend/
+  - frontend/src/modules/user-management/
 setup:
   - cd frontend && npm ci --ignore-scripts
 validate:
   - git diff --exit-code HEAD -- frontend/package.json frontend/package-lock.json
   - cd frontend && npm run typecheck
-  - cd frontend && npm test -- --maxWorkers=2
+  - cd frontend && npm test -- src/modules/user-management --maxWorkers=2
 publish:
   branchPattern: feature/issue-{ticket}
   draft: false
@@ -143,9 +143,10 @@ A later policy service may distribute signed policies. A repository file can be
 used only after the repository itself is trusted and the policy revision is
 approved outside untrusted ticket content.
 
-The M1 request targets a frontend-only ticket, so its reviewed pkui policy runs
-the complete frontend gate. Change-aware frontend, backend, Helm, and combined
-profiles are required before this policy accepts tickets outside that scope.
+The M1 request targets a user-management frontend ticket, so its reviewed pkui
+policy permits only that module and runs its complete suite plus global frontend
+typechecking. Change-aware frontend, backend, Helm, and combined profiles are
+required before this policy accepts tickets outside that scope.
 
 ## Validation And Repair
 

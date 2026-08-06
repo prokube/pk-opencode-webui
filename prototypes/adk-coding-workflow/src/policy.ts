@@ -12,15 +12,14 @@ const policies: Record<string, RepositoryPolicy> = {
   "prokube/pkui": {
     repository: "prokube/pkui",
     baseBranch: "main",
-    allowedPathPrefixes: ["frontend/"],
+    allowedPathPrefixes: ["frontend/src/modules/user-management/"],
     setupCommands: [
       "cd frontend && npm ci --ignore-scripts",
     ],
     validationCommands: [
       "git diff --exit-code HEAD -- frontend/package.json frontend/package-lock.json",
       "cd frontend && npm run typecheck",
-      // A cold gVisor run can lose Vitest workers; one bounded retry still leaves stable failures red.
-      "cd frontend && npm test -- --maxWorkers=2 || npm test -- --maxWorkers=2",
+      "cd frontend && npm test -- src/modules/user-management --maxWorkers=2",
     ],
   },
 }

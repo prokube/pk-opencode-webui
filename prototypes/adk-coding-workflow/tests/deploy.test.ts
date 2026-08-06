@@ -38,7 +38,7 @@ describe("execute workflow template", () => {
   test("uses one worker image and isolates validation from retained artifacts", () => {
     const images = [...executeManifest.matchAll(/image: (\S+)/g)].map((match) => match[1])
     expect(new Set(images)).toEqual(new Set([
-      "europe-west3-docker.pkg.dev/prokube-internal/prokube-customer/adk-coding-workflow:prototype-cg-20260806-2300",
+      "europe-west3-docker.pkg.dev/prokube-internal/prokube-customer/adk-coding-workflow:prototype-cg-20260807-0158",
     ]))
     expect(validateTemplate).toContain("git clone --no-hardlinks")
     expect(validateTemplate).toContain("git -C /validation/worktree apply --binary /workspace/.workflow-output/changes.patch")
@@ -61,7 +61,7 @@ describe("execute workflow template", () => {
     expect(executeManifest.match(/secretName: adk-coding-workflow-opencode-auth/g)).toHaveLength(1)
     expect(executeManifest).toContain('"model":"openai/gpt-5.6-sol"')
     expect(executeManifest).toContain("cp /opencode-auth/auth.json")
-    expect(executeManifest).toContain("activeDeadlineSeconds: 10800")
+    expect(executeManifest).toContain("activeDeadlineSeconds: 18000")
     expect(executeManifest).toContain("name: runner-tmp")
     expect(executeManifest).toContain("value: /tmp")
     expect(validateTemplate).toContain('cpu: "4"')
