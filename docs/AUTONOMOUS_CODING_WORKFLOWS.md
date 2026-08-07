@@ -89,7 +89,65 @@ its own smaller workflow and run model, then compile it to Argo resources. This
 keeps the door open for another engine if long-lived signaling or workflow
 semantics outgrow Argo.
 
-## System Overview
+## Current Prototype Architecture
+
+```mermaid
+flowchart LR
+    operator[Operator or schedule] -->|start auto-supervise| argo
+    user[User in pkui] -->|start or resume manual supervise| pkui[pkui Workflow UI and API]
+    pkui --> argo[Argo Workflow controller]
+
+    subgraph control[Deterministic workflow control]
+        discover[Discover issues<br/>include all required labels<br/>exclude any blocked label]
+        manual[Manual select-ticket suspend]
+        automatic[Select first ranked ticket]
+        revalidate[Revalidate issue, labels,<br/>dependencies, branch and PR]
+        claim[Claim mutex<br/>comment, in-progress, assignee]
+        validate[Credential-free validation<br/>in a fresh worktree]
+        attest[Patch attestation]
+        publish[Commit, push and create PR]
+    end
+
+    argo --> discover
+    discover -->|supervise| manual
+    manual -->|authorized pkui selection| revalidate
+    discover -->|auto-supervise| automatic
+    automatic --> revalidate
+    revalidate --> claim
+
+    subgraph pod[Isolated implementation pod]
+        runner[Deterministic Bun runner]
+        opencode[OpenCode server sidecar<br/>openai/gpt-5.6-sol]
+        worktree[(Workflow worktree)]
+        runner <-->|HTTP on 127.0.0.1:4096| opencode
+        runner --> worktree
+        opencode -->|read, search and edit only| worktree
+    end
+
+    claim --> runner
+    runner --> validate
+    validate --> attest
+    attest --> publish
+
+    github[(GitHub issues and pull requests)] -->|issue context| discover
+    revalidate -->|read current state| github
+    claim -->|GitHub bot credential| github
+    publish -->|GitHub bot credential| github
+    publish -->|normal unmerged PR| github
+
+    openai[OpenAI OAuth Secret] -->|mounted only here| opencode
+    githubSecret[GitHub bot Secret] -->|deterministic steps only| discover
+    githubSecret --> claim
+    githubSecret --> publish
+```
+
+The manual and automatic entrypoints share discovery, revalidation, claim,
+implementation, validation, and publishing. Only ticket selection differs. The
+OpenCode process receives the model credential and a constrained editing
+session, but no GitHub credential. Deterministic workflow steps own GitHub
+state, validation, retries, cleanup, and publication.
+
+## Target System Overview
 
 ```text
 GitHub webhook                    Periodic reconciliation
