@@ -216,10 +216,12 @@ or overwrites human changes.
 - [x] Make the Argo template accept ticket repository and target repository parameters.
 - [x] Cover request validation, policy resolution, and unsupported repositories.
 - [x] Run all prototype and pkui quality gates.
-- [ ] Build, push, and deploy the worker and pkui images.
-- [ ] Submit issue `prokube/pkui#3628` through the request contract.
-- [ ] Produce a validated, unmerged pull request.
-- [ ] Verify the PR URL and connected graph through the live pkui API and UI.
+- [x] Build, push, and deploy the worker and pkui images.
+- [x] Submit issue `prokube/pkui#3628` through the request contract.
+- [x] Produce validated, unmerged pull request
+  [`prokube/pkui#3668`](https://github.com/prokube/pkui/pull/3668).
+- [x] Verify the PR URL and connected exit-hook graph through the live pkui API.
+- [ ] Verify the result card and PR link through the live pkui browser UI.
 
 M1 exit criterion: one manual request produces a green pull request and pkui
 shows the structured result with a direct PR link.
