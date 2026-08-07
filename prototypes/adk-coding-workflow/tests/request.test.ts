@@ -19,12 +19,7 @@ describe("coding request", () => {
       baseBranch: "main",
     })
     expect(resolved.validationCommands).toEqual(repositoryCommands("prokube/pkui"))
-    expect(repositoryPolicy("prokube/pkui").validationCommands).toContain(
-      "cd frontend && npm run typecheck",
-    )
-    expect(repositoryPolicy("prokube/pkui").validationCommands).toContain(
-      "cd frontend && npm test -- src/modules/user-management src/modules/sandbox --maxWorkers=2 || npm test -- src/modules/user-management src/modules/sandbox --maxWorkers=2",
-    )
+    expect(repositoryPolicy("prokube/pkui").validationCommands).toEqual(["make test-unit"])
   })
 
   test("rejects unsupported repositories and multi-target requests in M1", () => {
@@ -44,20 +39,25 @@ describe("coding request", () => {
     expect(() => repositoryPolicy("unknown/repository")).toThrow("not allowlisted")
   })
 
-  test("limits the M1 policy to frontend changes", () => {
+  test("allows reviewed product paths and rejects repository control files", () => {
     expect(() => assertPolicyPaths(
       "prokube/pkui",
-      ["frontend/src/modules/user-management/components/CreateUserModal.tsx"],
+      [
+        "backend-main/src/pk_ui_backend/modules/marathon/routes.py",
+        "backend-main/tests/test_marathon.py",
+        "frontend/src/modules/llm/components/DeployLlmModal.tsx",
+        "k8s/helm/pk-ui/files/marathon-presets.yaml",
+      ],
     )).not.toThrow()
     expect(() => assertPolicyPaths(
       "prokube/pkui",
-      ["frontend/src/modules/sandbox/components/create-sandbox-modal.tsx"],
+      ["docs/INSTALLATION.md", "tests/e2e/test_capabilities.py"],
     )).not.toThrow()
-    expect(() => assertPolicyPaths("prokube/pkui", ["frontend/src/App.tsx"])).toThrow(
-      "outside the approved M1 policy",
+    expect(() => assertPolicyPaths("prokube/pkui", ["frontend/package.json"])).toThrow(
+      "outside the approved repository policy",
     )
-    expect(() => assertPolicyPaths("prokube/pkui", ["backend-main/src/main.py"])).toThrow(
-      "outside the approved M1 policy",
+    expect(() => assertPolicyPaths("prokube/pkui", [".github/workflows/ci.yml"])).toThrow(
+      "outside the approved repository policy",
     )
   })
 })

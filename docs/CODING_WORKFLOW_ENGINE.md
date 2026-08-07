@@ -127,14 +127,12 @@ file from an arbitrary checkout.
 repository: prokube/pkui
 baseBranch: main
 allowedPathPrefixes:
-  - frontend/src/modules/user-management/
-setup:
-  - cd frontend && npm ci --ignore-scripts
+  - backend-main/src/
+  - backend-main/tests/
+  - frontend/src/
+  - k8s/helm/pk-ui/
 validate:
-  - git diff --exit-code HEAD -- frontend/package.json frontend/package-lock.json
-  - cd frontend && npm run typecheck
-  - cd frontend && npm test -- src/modules/user-management --maxWorkers=2
-    # retried once for existing flaky UI tests
+  - make test-unit
 publish:
   branchPattern: feature/issue-{ticket}
   draft: false
@@ -144,10 +142,12 @@ A later policy service may distribute signed policies. A repository file can be
 used only after the repository itself is trusted and the policy revision is
 approved outside untrusted ticket content.
 
-The M1 request targets a user-management frontend ticket, so its reviewed pkui
-policy permits only that module and runs its complete suite plus global frontend
-typechecking. Change-aware frontend, backend, Helm, and combined profiles are
-required before this policy accepts tickets outside that scope.
+The original M1 request targeted a user-management frontend ticket. The reviewed
+pkui policy now permits product source and tests across the three backends,
+frontend source, the pk-ui Helm chart, deployment tests, and documentation. It
+still excludes dependency manifests, CI workflows, repository instructions,
+and other control-plane files. Every accepted patch runs the aggregate unit
+suite before it can be attested or published.
 
 ## Validation And Repair
 

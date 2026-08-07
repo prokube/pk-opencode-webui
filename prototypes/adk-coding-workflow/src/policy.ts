@@ -13,16 +13,20 @@ const policies: Record<string, RepositoryPolicy> = {
     repository: "prokube/pkui",
     baseBranch: "main",
     allowedPathPrefixes: [
-      "frontend/src/modules/sandbox/components/",
-      "frontend/src/modules/user-management/",
+      "backend-agent/src/",
+      "backend-agent/tests/",
+      "backend-kubeconfig/src/",
+      "backend-kubeconfig/tests/",
+      "backend-main/src/",
+      "backend-main/tests/",
+      "docs/",
+      "frontend/src/",
+      "k8s/helm/pk-ui/",
+      "tests/",
     ],
-    setupCommands: [
-      "cd frontend && npm ci --ignore-scripts",
-    ],
+    setupCommands: [],
     validationCommands: [
-      "git diff --exit-code HEAD -- frontend/package.json frontend/package-lock.json",
-      "cd frontend && npm run typecheck",
-      "cd frontend && npm test -- src/modules/user-management src/modules/sandbox --maxWorkers=2 || npm test -- src/modules/user-management src/modules/sandbox --maxWorkers=2",
+      "make test-unit",
     ],
   },
 }
@@ -45,6 +49,6 @@ export function assertPolicyPaths(repository: string, changedFiles: string[]): v
     (path) => !policy.allowedPathPrefixes.some((prefix) => path.startsWith(prefix)),
   )
   if (disallowed.length) {
-    throw new Error(`Changed files are outside the approved M1 policy: ${disallowed.join(", ")}`)
+    throw new Error(`Changed files are outside the approved repository policy: ${disallowed.join(", ")}`)
   }
 }

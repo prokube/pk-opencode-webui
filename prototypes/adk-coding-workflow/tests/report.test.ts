@@ -53,4 +53,17 @@ describe("toPublicWorkflowResult", () => {
       changedFilesTruncated: false,
     })
   })
+
+  test("reports a failed Argo validation instead of an internal implementation success", () => {
+    expect(toPublicWorkflowResult({
+      phase: "completed",
+      summary: "Implementation and validation completed without publishing",
+      changedFiles: ["frontend/src/App.tsx"],
+    }, "Failed")).toEqual({
+      phase: "failed",
+      summary: "Workflow ended with Argo status Failed; internal result: Implementation and validation completed without publishing",
+      changedFiles: ["frontend/src/App.tsx"],
+      changedFilesTruncated: false,
+    })
+  })
 })

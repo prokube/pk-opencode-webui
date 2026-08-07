@@ -22,9 +22,7 @@ describe("CLI", () => {
       "--issue", "42",
       "--mode", "execute",
     ])
-    expect(options.validationCommands).toContain("cd frontend && npm run typecheck")
-    expect(options.validationCommands.some((command) => command.includes("npm test"))).toBe(true)
-    expect(options.validationCommands.some((command) => command.includes("pytest"))).toBe(false)
+    expect(options.validationCommands).toEqual(["make test-unit"])
   })
 
   test("rejects invalid modes and issue numbers", () => {

@@ -32,16 +32,21 @@ export function toPublicWorkflowResult(
   argoStatus = "Unknown",
 ): PublicWorkflowResult {
   const input = value && typeof value === "object" ? value as Partial<WorkflowResult> : {}
-  const phase = typeof input.phase === "string" && runPhases.includes(input.phase as RunPhase)
+  const internalPhase = typeof input.phase === "string" && runPhases.includes(input.phase as RunPhase)
     ? input.phase as RunPhase
     : "failed"
+  const argoFailed = argoStatus === "Failed" || argoStatus === "Error"
+  const phase = argoFailed ? "failed" : internalPhase
   const fallbackSummary = `Workflow ended with Argo status ${argoStatus.slice(0, 50)} before producing a result`
   const rawSummary = typeof input.summary === "string" ? input.summary.replaceAll("\0", " ").trim() : ""
-  const summary = rawSummary
+  const safeSummary = rawSummary
     ? sensitiveSummary.test(rawSummary)
       ? "Result summary contained sensitive credential material and was redacted."
       : rawSummary.slice(0, MAX_SUMMARY_LENGTH)
     : fallbackSummary
+  const summary = argoFailed && rawSummary
+    ? `Workflow ended with Argo status ${argoStatus}; internal result: ${safeSummary}`.slice(0, MAX_SUMMARY_LENGTH)
+    : safeSummary
   const inputChangedFiles = Array.isArray(input.changedFiles) ? input.changedFiles : []
   const rawChangedFiles = inputChangedFiles.filter(safeChangedFile)
   const result: PublicWorkflowResult = {
