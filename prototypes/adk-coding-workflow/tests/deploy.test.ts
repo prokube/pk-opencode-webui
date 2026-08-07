@@ -5,6 +5,7 @@ const manifest = readFileSync(new URL("../deploy/workflow-template.yaml", import
 const dockerfile = readFileSync(new URL("../Dockerfile", import.meta.url), "utf8")
 const makefile = readFileSync(new URL("../Makefile", import.meta.url), "utf8")
 const supervisorManifest = readFileSync(new URL("../deploy/supervisor-workflow.yaml", import.meta.url), "utf8")
+const autoManifest = readFileSync(new URL("../deploy/auto-workflow.yaml", import.meta.url), "utf8")
 const executeManifest = manifest.split("---\n").at(-1) ?? ""
 const validateTemplate = executeManifest.split("    - name: validate\n      inputs:").at(-1)?.split("    - name: attest\n")[0] ?? ""
 const publishTemplate = executeManifest.split("    - name: publish\n      retryStrategy:").at(-1) ?? ""
@@ -38,14 +39,14 @@ describe("execute workflow template", () => {
   test("does not mount Kubernetes service-account tokens in code execution pods", () => {
     expect(manifest).toContain("name: adk-coding-workflow.service-account-token")
     expect(manifest).toContain("kubernetes.io/service-account.name: adk-coding-workflow")
-    expect(executeManifest.match(/automountServiceAccountToken: false/g)).toHaveLength(9)
+    expect(executeManifest.match(/automountServiceAccountToken: false/g)).toHaveLength(10)
     expect(executeManifest).toContain("executor:\n    serviceAccountName: adk-coding-workflow")
   })
 
   test("uses one worker image and isolates validation from retained artifacts", () => {
     const images = [...executeManifest.matchAll(/image: (\S+)/g)].map((match) => match[1])
     expect(new Set(images)).toEqual(new Set([
-      "europe-west3-docker.pkg.dev/prokube-internal/prokube-customer/adk-coding-workflow:prototype-cg-20260807-1711",
+      "europe-west3-docker.pkg.dev/prokube-internal/prokube-customer/adk-coding-workflow:prototype-cg-20260807-2225",
     ]))
     expect(validateTemplate).toContain("git clone --no-hardlinks")
     expect(validateTemplate).toContain("bun /app/src/validate.ts \\")
@@ -126,13 +127,27 @@ describe("execute workflow template", () => {
       .toBeLessThan(executeManifest.indexOf("        - - name: claim-selected-ticket"))
     expect(executeManifest.indexOf("        - - name: claim-selected-ticket"))
       .toBeLessThan(executeManifest.indexOf("        - - name: execute-selected-ticket"))
-    const claimTemplate = executeManifest.split("    - name: claim-selected-ticket\n      retryStrategy:").at(-1)?.split("    - name: execute\n")[0] ?? ""
+    const claimTemplate = executeManifest.split("    - name: claim-selected-ticket\n").at(-1)?.split("    - name: execute\n")[0] ?? ""
+    expect(executeManifest).toContain("name: adk-coding-workflow-ticket-claim")
     expect(claimTemplate).toContain("- claim")
     expect(claimTemplate).toContain('value: "{{workflow.name}}"')
     expect(claimTemplate).toContain("PK_WORKFLOW_BOT_LOGIN")
     expect(claimTemplate).toContain("PK_WORKFLOW_CLAIM_FILE")
     expect(claimTemplate).toContain("mountPath: /workspace")
     expect(claimTemplate).not.toContain("adk-coding-workflow-opencode-auth")
+  })
+
+  test("keeps an automatic first-candidate variant beside manual selection", () => {
+    expect(autoManifest).toContain("entrypoint: auto-supervise")
+    expect(autoManifest).toContain('"includeLabels":["ready"]')
+    expect(autoManifest).toContain('"excludeLabels":["in-progress","needs-discussion","needs-supervisor"]')
+    expect(executeManifest).toContain("- name: auto-supervise")
+    expect(executeManifest).toContain("- name: select-first-ticket")
+    expect(executeManifest).toContain("- select-first")
+    expect(executeManifest.indexOf("        - - name: select-first-ticket"))
+      .toBeLessThan(executeManifest.indexOf("        - - name: revalidate-selection", executeManifest.indexOf("- name: auto-supervise")))
+    expect(makefile).toContain("auto:")
+    expect(makefile).toContain("deploy/auto-workflow.yaml")
   })
 
   test("keeps discovery credentials out of model, validation, attestation, and reports", () => {

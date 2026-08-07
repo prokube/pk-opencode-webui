@@ -6,11 +6,19 @@ import {
   type DiscoveryRequest,
   type SelectedTicket,
   type TicketCandidate,
+  type TicketLabelPolicy,
   type ValidatedSelection,
 } from "./domain"
 
 export const MAX_CANDIDATES = 50
 const MAX_PROJECTS = 20
+const MAX_LABELS = 20
+const MAX_LABEL_LENGTH = 50
+
+export const defaultLabelPolicy: TicketLabelPolicy = {
+  includeLabels: ["ready"],
+  excludeLabels: ["in-progress", "needs-discussion", "needs-supervisor"],
+}
 
 export type DiscoveryProjectSource = Pick<DiscoveryProject, "provider" | "project">
 
@@ -31,8 +39,8 @@ export type ProviderCandidateList = {
 
 export interface TicketDiscoveryProvider {
   readonly provider: string
-  discover(project: DiscoveryProject): Promise<ProviderCandidateList>
-  revalidate(candidate: TicketCandidate, baseBranch: string): Promise<void>
+  discover(project: DiscoveryProject, policy: TicketLabelPolicy): Promise<ProviderCandidateList>
+  revalidate(candidate: TicketCandidate, baseBranch: string, policy: TicketLabelPolicy): Promise<void>
 }
 
 export function parseDiscoveryRequest(
@@ -57,7 +65,15 @@ export function parseDiscoveryRequest(
     assertAllowedProject(normalized, allowedProjects)
     return normalized
   })
-  return { projects }
+  const labelPolicy = {
+    includeLabels: parseLabels(parsed.includeLabels, "includeLabels", defaultLabelPolicy.includeLabels, 1),
+    excludeLabels: parseLabels(parsed.excludeLabels, "excludeLabels", defaultLabelPolicy.excludeLabels, 0),
+  }
+  const excluded = new Set(labelPolicy.excludeLabels.map((label) => label.toLowerCase()))
+  if (labelPolicy.includeLabels.some((label) => excluded.has(label.toLowerCase()))) {
+    throw new Error("Include and exclude labels must not overlap")
+  }
+  return { projects, labelPolicy }
 }
 
 export function parseCandidateList(
@@ -117,7 +133,7 @@ export async function discoverTickets(
     assertAllowedProject(project, allowedProjects)
     const provider = providers.find((item) => item.provider === project.provider)
     if (!provider) throw new Error(`Unsupported ticket provider: ${project.provider}`)
-    const result = await provider.discover(project)
+    const result = await provider.discover(project, request.labelPolicy)
     candidates.push(...result.candidates)
     truncated ||= result.truncated
   }
@@ -134,6 +150,7 @@ export async function revalidateSelection(input: {
   candidateList: CandidateList
   selectedTicket: SelectedTicket
   baseBranch: string
+  labelPolicy?: TicketLabelPolicy
   providers: TicketDiscoveryProvider[]
 }): Promise<ValidatedSelection> {
   const candidate = input.candidateList.candidates.find((item) => item.provider === input.selectedTicket.provider
@@ -142,8 +159,24 @@ export async function revalidateSelection(input: {
   const provider = input.providers.find((item) => item.provider === candidate.provider)
   if (!provider) throw new Error(`Unsupported ticket provider: ${candidate.provider}`)
   const baseBranch = validateBranch(input.baseBranch)
-  await provider.revalidate(candidate, baseBranch)
+  await provider.revalidate(candidate, baseBranch, input.labelPolicy ?? defaultLabelPolicy)
   return { ...input.selectedTicket, baseBranch }
+}
+
+export function selectFirstCandidate(candidateList: CandidateList): {
+  selectedTicket: SelectedTicket
+  baseBranch: string
+} {
+  const candidate = candidateList.candidates[0]
+  if (!candidate) throw new Error("No eligible ticket candidates were discovered")
+  return {
+    selectedTicket: {
+      provider: candidate.provider,
+      project: candidate.project,
+      number: candidate.number,
+    },
+    baseBranch: candidate.suggestedBaseBranch,
+  }
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -156,6 +189,26 @@ function validateProject(value: string): string {
     throw new Error("Invalid provider project")
   }
   return project
+}
+
+function parseLabels(value: unknown, field: string, defaults: string[], minimum: number): string[] {
+  if (value === undefined) return [...defaults]
+  if (!Array.isArray(value) || value.length < minimum || value.length > MAX_LABELS) {
+    throw new Error(`${field} must contain between ${minimum} and ${MAX_LABELS} labels`)
+  }
+  const labels: string[] = []
+  const seen = new Set<string>()
+  for (const raw of value) {
+    if (typeof raw !== "string") throw new Error(`${field} contains an invalid label`)
+    const label = raw.trim()
+    const normalized = label.toLowerCase()
+    if (!label || label.length > MAX_LABEL_LENGTH || /[\x00-\x1f\x7f]/.test(label) || seen.has(normalized)) {
+      throw new Error(`${field} contains an invalid or duplicate label`)
+    }
+    seen.add(normalized)
+    labels.push(label)
+  }
+  return labels
 }
 
 function assertAllowedProject(project: DiscoveryProjectSource, allowedProjects: DiscoveryProjectSource[]): void {

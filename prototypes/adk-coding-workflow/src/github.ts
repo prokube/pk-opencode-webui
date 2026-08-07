@@ -1,5 +1,6 @@
-import { branchForIssue, evaluateEligibility, evaluateWorkflowClaim, evaluateWorkflowOwnership, hasWorkflowClaim, isClaimedByWorkflow, validateRepository, workflowClaimComment, type DiscoveryProject, type Issue, type TicketCandidate, type TicketPriority } from "./domain"
+import { branchForIssue, evaluateTicketEligibility, evaluateWorkflowOwnership, hasWorkflowClaim, isClaimedByWorkflow, validateRepository, workflowClaimComment, type DiscoveryProject, type Issue, type TicketCandidate, type TicketLabelPolicy, type TicketPriority } from "./domain"
 import type { ProviderCandidateList, TicketDiscoveryProvider } from "./discovery"
+import { defaultLabelPolicy } from "./discovery"
 
 const MAX_DISCOVERY_ISSUES = 500
 const MAX_CANDIDATES = 50
@@ -83,7 +84,7 @@ export class GitHubClient implements GitHubService, TicketDiscoveryProvider {
     return user.login
   }
 
-  async discover(project: DiscoveryProject): Promise<ProviderCandidateList> {
+  async discover(project: DiscoveryProject, policy: TicketLabelPolicy = defaultLabelPolicy): Promise<ProviderCandidateList> {
     const repository = validateRepository(project.project)
     const login = await this.getAuthenticatedLogin()
     const issues: GitHubIssue[] = []
@@ -91,7 +92,7 @@ export class GitHubClient implements GitHubService, TicketDiscoveryProvider {
     let scanned = 0
     for (let page = 1; scanned < MAX_DISCOVERY_ISSUES; page += 1) {
       const batch = await this.request<GitHubIssue[]>(
-        `/repos/${repository}/issues?state=open&labels=ready&sort=created&direction=asc&per_page=100&page=${page}`,
+        `/repos/${repository}/issues?state=open&labels=${encodeURIComponent(policy.includeLabels.join(","))}&sort=created&direction=asc&per_page=100&page=${page}`,
       )
       const bounded = batch.slice(0, MAX_DISCOVERY_ISSUES - scanned)
       scanned += bounded.length
@@ -103,7 +104,7 @@ export class GitHubClient implements GitHubService, TicketDiscoveryProvider {
     const eligible: ProviderCandidateList["candidates"] = []
     for (const raw of issues) {
       const issue = await this.getEligibilityIssue(repository, raw)
-      if (!evaluateEligibility(issue).eligible) continue
+      if (!evaluateTicketEligibility(issue, policy).eligible) continue
       const branch = branchForIssue(issue.number)
       if (this.pullForIssue(pulls, repository, branch, issue.number)
         || await this.branchExists(repository, branch)) continue
@@ -134,11 +135,15 @@ export class GitHubClient implements GitHubService, TicketDiscoveryProvider {
     }
   }
 
-  async revalidate(candidate: TicketCandidate, baseBranch: string): Promise<void> {
+  async revalidate(
+    candidate: TicketCandidate,
+    baseBranch: string,
+    policy: TicketLabelPolicy = defaultLabelPolicy,
+  ): Promise<void> {
     const repository = validateRepository(candidate.project)
     const raw = await this.request<GitHubIssue>(`/repos/${repository}/issues/${candidate.number}`)
     const issue = await this.getEligibilityIssue(repository, raw)
-    const eligibility = evaluateEligibility(issue)
+    const eligibility = evaluateTicketEligibility(issue, policy)
     if (!eligibility.eligible) throw new Error(`Selected issue is no longer eligible: ${eligibility.reason}`)
     const branch = branchForIssue(candidate.number)
     const existing = await this.findOpenPullRequest(repository, branch, candidate.number)
@@ -151,21 +156,31 @@ export class GitHubClient implements GitHubService, TicketDiscoveryProvider {
     }
   }
 
-  async claimIssue(repository: string, issue: Issue, botLogin: string, runId: string): Promise<void> {
+  async claimIssue(
+    repository: string,
+    issue: Issue,
+    botLogin: string,
+    runId: string,
+    policy: TicketLabelPolicy = defaultLabelPolicy,
+  ): Promise<void> {
     this.requireToken()
     let current = await this.getIssue(repository, issue.number)
     const hasMarker = isClaimedByWorkflow(current, botLogin, runId)
     if (hasMarker) {
-      const ownership = evaluateWorkflowClaim(current, botLogin, runId, false)
+      const ownership = evaluateWorkflowOwnership(current, botLogin, runId)
       if (!ownership.eligible) throw new Error(`Issue claim conflict: ${ownership.reason}`)
+      const eligibility = evaluateClaimPolicy(current, policy, botLogin)
+      if (!eligibility.eligible) throw new Error(`Issue changed during claim: ${eligibility.reason}`)
     } else {
       if (hasWorkflowClaim(current)) throw new Error("Issue claim conflict: Issue has a conflicting workflow claim")
-      const eligibility = evaluateEligibility(current)
+      const eligibility = evaluateTicketEligibility(current, policy)
       if (!eligibility.eligible) throw new Error(`Issue changed before claim: ${eligibility.reason}`)
       await this.comment(repository, issue.number, workflowClaimComment(runId))
       current = await this.getIssue(repository, issue.number)
-      const ownership = evaluateWorkflowClaim(current, botLogin, runId, false)
+      const ownership = evaluateWorkflowOwnership(current, botLogin, runId)
       if (!ownership.eligible) throw new Error(`Issue claim conflict: ${ownership.reason}`)
+      const afterMarker = evaluateClaimPolicy(current, policy, botLogin)
+      if (!afterMarker.eligible) throw new Error(`Issue changed during claim: ${afterMarker.reason}`)
     }
     if (!current.labels.includes("in-progress")) {
       await this.request(`/repos/${repository}/issues/${issue.number}/labels`, {
@@ -179,7 +194,7 @@ export class GitHubClient implements GitHubService, TicketDiscoveryProvider {
         body: { assignees: [botLogin] },
       })
     }
-    if (current.labels.includes("ready")) {
+    if (current.labels.some((label) => label.toLowerCase() === "ready")) {
       await this.request(`/repos/${repository}/issues/${issue.number}/labels/ready`, { method: "DELETE" })
     }
   }
@@ -373,4 +388,19 @@ function priorityForLabels(labels: string[]): TicketPriority {
 
 function priorityRank(priority: TicketPriority): number {
   return ["critical", "high", "medium", "low"].indexOf(priority)
+}
+
+function evaluateClaimPolicy(issue: Issue, policy: TicketLabelPolicy, botLogin: string) {
+  const hasOwnMutation = issue.labels.some((label) => label.toLowerCase() === "in-progress")
+    || issue.assignees.some((assignee) => assignee.toLowerCase() === botLogin.toLowerCase())
+  const labels = issue.labels.filter((label) => label.toLowerCase() !== "in-progress")
+  if (hasOwnMutation && policy.includeLabels.some((label) => label.toLowerCase() === "ready")
+    && !labels.some((label) => label.toLowerCase() === "ready")) {
+    labels.push("ready")
+  }
+  return evaluateTicketEligibility({
+    ...issue,
+    labels,
+    assignees: issue.assignees.filter((assignee) => assignee.toLowerCase() !== botLogin.toLowerCase()),
+  }, policy)
 }

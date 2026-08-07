@@ -15,7 +15,7 @@ describe("GitHubClient", () => {
       fetch(request) {
         const url = new URL(request.url)
         if (url.pathname === "/user") return Response.json({ login: "owner" })
-        if (url.pathname === "/repos/prokube/example/issues" && url.searchParams.get("labels") === "ready") {
+        if (url.pathname === "/repos/prokube/example/issues" && url.searchParams.get("labels") === "ready,automated") {
           return Response.json([
             {
               number: 1,
@@ -23,7 +23,7 @@ describe("GitHubClient", () => {
               body: "",
               state: "open",
               html_url: "https://github.com/prokube/example/issues/1",
-              labels: [{ name: "ready" }, { name: "priority:critical" }],
+              labels: [{ name: "ready" }, { name: "automated" }, { name: "priority:critical" }],
               assignees: [],
               user: { login: "someone" },
               created_at: "2026-01-01T00:00:00Z",
@@ -34,7 +34,7 @@ describe("GitHubClient", () => {
               body: "",
               state: "open",
               html_url: "https://github.com/prokube/example/issues/2",
-              labels: [{ name: "ready" }, { name: "priority:low" }],
+              labels: [{ name: "ready" }, { name: "automated" }, { name: "priority:low" }],
               assignees: [],
               user: { login: "owner" },
               created_at: "2026-02-01T00:00:00Z",
@@ -50,7 +50,7 @@ describe("GitHubClient", () => {
             body: "",
             state: "open",
             html_url: `https://github.com/prokube/example/issues/${number}`,
-            labels: [{ name: "ready" }, { name: number === 1 ? "priority:critical" : "priority:low" }],
+            labels: [{ name: "ready" }, { name: "automated" }, { name: number === 1 ? "priority:critical" : "priority:low" }],
             assignees: [],
           })
         }
@@ -69,6 +69,9 @@ describe("GitHubClient", () => {
       provider: "github",
       project: "prokube/example",
       suggestedBaseBranch: "main",
+    }, {
+      includeLabels: ["ready", "automated"],
+      excludeLabels: ["blocked"],
     })
     expect(result.candidates.map((item) => item.candidate.number)).toEqual([2, 1])
     expect(result.candidates[0]?.candidate).toEqual({
@@ -96,7 +99,7 @@ describe("GitHubClient", () => {
             body: "Body",
             state: "open",
             html_url: "https://example.test/issues/42",
-            labels: [{ name: "ready" }],
+            labels: [{ name: "ready" }, { name: "automated" }],
             assignees: [],
           })
         }
@@ -281,7 +284,7 @@ describe("GitHubClient", () => {
             body: "Body",
             state: "open",
             html_url: "https://example.test/issues/42",
-            labels: [{ name: "ready" }],
+            labels: [{ name: "ready" }, { name: "automated" }],
             assignees: [],
           })
         }
@@ -301,12 +304,15 @@ describe("GitHubClient", () => {
       title: "Issue",
       body: "Body",
       state: "open",
-      labels: ["ready"],
+      labels: ["ready", "automated"],
       assignees: [],
       comments: [],
       openBlockers: [],
       url: "https://example.test/issues/42",
-    }, "prokube-bot", "run-42")
+    }, "prokube-bot", "run-42", {
+      includeLabels: ["ready", "automated"],
+      excludeLabels: ["blocked"],
+    })
     expect(issueReads).toBe(2)
     expect(mutations).toEqual([
       "POST /repos/prokube/example/issues/42/comments",
@@ -362,6 +368,56 @@ describe("GitHubClient", () => {
       "POST /repos/prokube/example/issues/42/assignees",
       "DELETE /repos/prokube/example/issues/42/labels/ready",
     ])
+  })
+
+  test("rechecks configured labels before retrying an owned partial claim", async () => {
+    let mutations = 0
+    const server = Bun.serve({
+      port: 0,
+      fetch(request) {
+        const url = new URL(request.url)
+        if (request.method !== "GET") {
+          mutations += 1
+          return new Response(null, { status: 204 })
+        }
+        if (url.pathname === "/repos/prokube/example/issues/42") {
+          return Response.json({
+            number: 42,
+            title: "Issue",
+            body: "Body",
+            state: "open",
+            html_url: "https://example.test/issues/42",
+            labels: [{ name: "ready" }, { name: "automated" }, { name: "manual-only" }],
+            assignees: [],
+          })
+        }
+        if (url.pathname === "/repos/prokube/example/issues/42/comments") {
+          return Response.json([{
+            user: { login: "prokube-bot" },
+            body: "Coding workflow `run-42` claimed this issue.",
+          }])
+        }
+        if (url.pathname === "/repos/prokube/example/issues/42/dependencies/blocked_by") return Response.json([])
+        return new Response("Not found", { status: 404 })
+      },
+    })
+    servers.push(server)
+    const client = new GitHubClient("token", `http://127.0.0.1:${server.port}`)
+    await expect(client.claimIssue("prokube/example", {
+      number: 42,
+      title: "Issue",
+      body: "Body",
+      state: "open",
+      labels: ["ready", "automated"],
+      assignees: [],
+      comments: [],
+      openBlockers: [],
+      url: "https://example.test/issues/42",
+    }, "prokube-bot", "run-42", {
+      includeLabels: ["ready", "automated"],
+      excludeLabels: ["manual-only"],
+    })).rejects.toThrow("Issue changed during claim: Issue has excluded label: manual-only")
+    expect(mutations).toBe(0)
   })
 
   test("refuses to overwrite a conflicting workflow claim", async () => {

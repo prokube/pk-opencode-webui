@@ -3,6 +3,7 @@ import { describe, expect, test } from "bun:test"
 import {
   branchForIssue,
   evaluateEligibility,
+  evaluateTicketEligibility,
   evaluateWorkflowClaim,
   reviewRunKey,
   validateBranch,
@@ -44,6 +45,19 @@ describe("issue eligibility", () => {
       eligible: false,
       reason: "Issue is blocked by #7",
     })
+  })
+
+  test("requires every include label and rejects any exclude label", () => {
+    const policy = {
+      includeLabels: ["ready", "automated"],
+      excludeLabels: ["blocked", "manual-only"],
+    }
+    expect(evaluateTicketEligibility(issue({ labels: ["READY", "Automated"] }), policy))
+      .toEqual({ eligible: true })
+    expect(evaluateTicketEligibility(issue({ labels: ["ready"] }), policy))
+      .toEqual({ eligible: false, reason: "Issue is missing required label: automated" })
+    expect(evaluateTicketEligibility(issue({ labels: ["ready", "automated", "blocked"] }), policy))
+      .toEqual({ eligible: false, reason: "Issue has excluded label: blocked" })
   })
 
   test("accepts only a complete claim owned by the same workflow", () => {

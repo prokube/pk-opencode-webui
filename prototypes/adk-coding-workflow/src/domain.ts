@@ -61,8 +61,14 @@ export type DiscoveryProject = {
   suggestedBaseBranch: string
 }
 
+export type TicketLabelPolicy = {
+  includeLabels: string[]
+  excludeLabels: string[]
+}
+
 export type DiscoveryRequest = {
   projects: DiscoveryProject[]
+  labelPolicy: TicketLabelPolicy
 }
 
 export type TicketCandidate = {
@@ -97,6 +103,21 @@ export function evaluateEligibility(issue: Issue): Eligibility {
   if (issue.labels.includes("in-progress")) return { eligible: false, reason: "Issue is already in progress" }
   if (issue.labels.includes("needs-discussion")) return { eligible: false, reason: "Issue needs discussion" }
   if (issue.labels.includes("needs-supervisor")) return { eligible: false, reason: "Issue needs supervisor attention" }
+  if (issue.assignees.length) return { eligible: false, reason: "Issue already has an assignee" }
+  if (issue.openBlockers.length) {
+    const blockers = issue.openBlockers.map((blocker) => `#${blocker.number}`).join(", ")
+    return { eligible: false, reason: `Issue is blocked by ${blockers}` }
+  }
+  return { eligible: true }
+}
+
+export function evaluateTicketEligibility(issue: Issue, policy: TicketLabelPolicy): Eligibility {
+  if (issue.state !== "open") return { eligible: false, reason: "Issue is not open" }
+  const labels = new Set(issue.labels.map((label) => label.toLowerCase()))
+  const missing = policy.includeLabels.find((label) => !labels.has(label.toLowerCase()))
+  if (missing) return { eligible: false, reason: `Issue is missing required label: ${missing}` }
+  const excluded = policy.excludeLabels.find((label) => labels.has(label.toLowerCase()))
+  if (excluded) return { eligible: false, reason: `Issue has excluded label: ${excluded}` }
   if (issue.assignees.length) return { eligible: false, reason: "Issue already has an assignee" }
   if (issue.openBlockers.length) {
     const blockers = issue.openBlockers.map((blocker) => `#${blocker.number}`).join(", ")

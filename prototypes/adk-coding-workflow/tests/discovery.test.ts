@@ -6,6 +6,7 @@ import {
   parseDiscoveryRequest,
   parseSelectedTicket,
   revalidateSelection,
+  selectFirstCandidate,
   type TicketDiscoveryProvider,
 } from "../src/discovery"
 import type { DiscoveryProject, TicketCandidate } from "../src/domain"
@@ -75,7 +76,10 @@ describe("ticket discovery contract", () => {
       { provider: "github", project: "prokube/other", suggestedBaseBranch: "main" },
       { provider: "github", project: "prokube/owned", suggestedBaseBranch: "main" },
     ]
-    const result = await discoverTickets({ projects }, [provider], projects)
+    const result = await discoverTickets({ projects, labelPolicy: {
+      includeLabels: ["ready"],
+      excludeLabels: ["in-progress"],
+    } }, [provider], projects)
     expect(result.candidates.map((item) => item.project)).toEqual(["prokube/owned", "prokube/other"])
   })
 
@@ -85,7 +89,10 @@ describe("ticket discovery contract", () => {
     ] }))).toThrow("not allowlisted")
     await expect(discoverTickets({ projects: [
       { provider: "github", project: "unrelated/private", suggestedBaseBranch: "main" },
-    ] }, [new FakeProvider()])).rejects.toThrow("not allowlisted")
+    ], labelPolicy: {
+      includeLabels: ["ready"],
+      excludeLabels: ["in-progress"],
+    } }, [new FakeProvider()])).rejects.toThrow("not allowlisted")
     expect(() => parseCandidateList(JSON.stringify({
       candidates: [candidate({
         project: "unrelated/private",
@@ -127,5 +134,37 @@ describe("ticket discovery contract", () => {
       candidates: Array.from({ length: 51 }, (_, number) => candidate({ number: number + 1 })),
       truncated: true,
     }))).toThrow("oversized")
+  })
+
+  test("parses bounded label policies and defaults to the reviewed safety labels", () => {
+    const base = { projects: [
+      { provider: "github", project: "prokube/pkui", suggestedBaseBranch: "main" },
+    ] }
+    expect(parseDiscoveryRequest(JSON.stringify(base)).labelPolicy).toEqual({
+      includeLabels: ["ready"],
+      excludeLabels: ["in-progress", "needs-discussion", "needs-supervisor"],
+    })
+    expect(parseDiscoveryRequest(JSON.stringify({
+      ...base,
+      includeLabels: ["ready", "automated"],
+      excludeLabels: [],
+    })).labelPolicy).toEqual({
+      includeLabels: ["ready", "automated"],
+      excludeLabels: [],
+    })
+    expect(() => parseDiscoveryRequest(JSON.stringify({
+      ...base,
+      includeLabels: ["ready"],
+      excludeLabels: ["READY"],
+    }))).toThrow("must not overlap")
+  })
+
+  test("automatically selects only the first ranked candidate", () => {
+    expect(selectFirstCandidate({ candidates: [candidate(), candidate({ number: 43 })], truncated: false }))
+      .toEqual({
+        selectedTicket: { provider: "github", project: "prokube/pkui", number: 42 },
+        baseBranch: "main",
+      })
+    expect(() => selectFirstCandidate({ candidates: [], truncated: false })).toThrow("No eligible")
   })
 })

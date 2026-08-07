@@ -56,6 +56,7 @@ describe("discovery CLI", () => {
     ])).toEqual({ mode: "discover", request: '{"projects":[]}', outputDir: "/tmp/outputs" })
     expect(() => parseDiscoveryArgs([
       "--mode", "revalidate",
+      "--request", '{"projects":[]}',
       "--candidates", '{"candidates":[],"truncated":false}',
       "--output-dir", "/tmp/outputs",
     ])).toThrow("--selected-ticket")
@@ -64,9 +65,11 @@ describe("discovery CLI", () => {
   test("parses the mutation-only claim mode without an output directory", () => {
     expect(parseDiscoveryArgs([
       "--mode", "claim",
+      "--request", '{"projects":[]}',
       "--selected-ticket", '{"provider":"github","project":"prokube/pkui","number":42}',
     ])).toEqual({
       mode: "claim",
+      request: '{"projects":[]}',
       selectedTicket: '{"provider":"github","project":"prokube/pkui","number":42}',
     })
   })

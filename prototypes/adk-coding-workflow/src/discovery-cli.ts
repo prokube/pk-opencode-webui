@@ -7,14 +7,16 @@ import {
   parseDiscoveryRequest,
   parseSelectedTicket,
   revalidateSelection,
+  selectFirstCandidate,
 } from "./discovery"
 import { writeClaimRecord } from "./claim-record"
 import { GitHubClient } from "./github"
 
 type DiscoveryCliOptions =
   | { mode: "discover"; request: string; outputDir: string }
-  | { mode: "revalidate"; candidates: string; selectedTicket: string; baseBranch: string; outputDir: string }
-  | { mode: "claim"; selectedTicket: string }
+  | { mode: "select-first"; candidates: string; outputDir: string }
+  | { mode: "revalidate"; request: string; candidates: string; selectedTicket: string; baseBranch: string; outputDir: string }
+  | { mode: "claim"; request: string; selectedTicket: string }
 
 export function parseDiscoveryArgs(argv: string[]): DiscoveryCliOptions {
   const values = new Map<string, string>()
@@ -30,12 +32,18 @@ export function parseDiscoveryArgs(argv: string[]): DiscoveryCliOptions {
     return value
   }
   const mode = required("--mode")
-  if (mode === "claim") return { mode, selectedTicket: required("--selected-ticket") }
+  if (mode === "claim") {
+    return { mode, request: required("--request"), selectedTicket: required("--selected-ticket") }
+  }
   const outputDir = required("--output-dir")
   if (mode === "discover") return { mode, request: required("--request"), outputDir }
+  if (mode === "select-first") {
+    return { mode, candidates: required("--candidates"), outputDir }
+  }
   if (mode === "revalidate") {
     return {
       mode,
+      request: required("--request"),
       candidates: required("--candidates"),
       selectedTicket: required("--selected-ticket"),
       baseBranch: required("--base-branch"),
@@ -52,6 +60,7 @@ export async function discoveryMain(argv = Bun.argv.slice(2)): Promise<number> {
     const runId = process.env.PK_WORKFLOW_RUN_ID
     if (!runId) throw new Error("PK_WORKFLOW_RUN_ID is required in claim mode")
     const selected = parseSelectedTicket(options.selectedTicket)
+    const request = parseDiscoveryRequest(options.request)
     if (selected.provider !== provider.provider) throw new Error(`Unsupported ticket provider: ${selected.provider}`)
     const currentLogin = await provider.getAuthenticatedLogin()
     const configuredLogin = process.env.PK_WORKFLOW_BOT_LOGIN?.trim()
@@ -67,7 +76,7 @@ export async function discoveryMain(argv = Bun.argv.slice(2)): Promise<number> {
       runId,
     })
     const issue = await provider.getIssue(selected.project, selected.number)
-    await provider.claimIssue(selected.project, issue, currentLogin, runId)
+    await provider.claimIssue(selected.project, issue, currentLogin, runId, request.labelPolicy)
     console.log(JSON.stringify({ ...selected, claimedBy: currentLogin, runId }))
     return 0
   }
@@ -78,10 +87,21 @@ export async function discoveryMain(argv = Bun.argv.slice(2)): Promise<number> {
     console.log(JSON.stringify(result))
     return 0
   }
+  if (options.mode === "select-first") {
+    const selected = selectFirstCandidate(parseCandidateList(options.candidates))
+    await Promise.all([
+      Bun.write(join(options.outputDir, "selected-ticket.json"), JSON.stringify(selected.selectedTicket)),
+      Bun.write(join(options.outputDir, "base-branch"), selected.baseBranch),
+    ])
+    console.log(JSON.stringify(selected))
+    return 0
+  }
+  const request = parseDiscoveryRequest(options.request)
   const result = await revalidateSelection({
     candidateList: parseCandidateList(options.candidates),
     selectedTicket: parseSelectedTicket(options.selectedTicket),
     baseBranch: options.baseBranch,
+    labelPolicy: request.labelPolicy,
     providers: [provider],
   })
   await Promise.all([

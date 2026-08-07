@@ -1,11 +1,11 @@
 IMAGE ?= europe-west3-docker.pkg.dev/prokube-internal/prokube-customer/adk-coding-workflow
-TAG ?= prototype-cg-20260807-1711
+TAG ?= prototype-cg-20260807-2225
 KUBECONFIG ?= $(HOME)/.kube/solid-crocodile.yaml
 NAMESPACE ?= experiments
 ISSUE ?=
 BASE ?= main
 
-.PHONY: build push deploy smoke smoke-execute publish-issue test
+.PHONY: build push deploy smoke smoke-execute supervise auto publish-issue test
 
 build:
 	docker build --platform linux/amd64 -t $(IMAGE):$(TAG) .
@@ -21,6 +21,12 @@ smoke:
 
 smoke-execute:
 	kubectl --kubeconfig "$(KUBECONFIG)" create -n "$(NAMESPACE)" -f deploy/execute-smoke-workflow.yaml
+
+supervise:
+	kubectl --kubeconfig "$(KUBECONFIG)" create -n "$(NAMESPACE)" -f deploy/supervisor-workflow.yaml
+
+auto:
+	kubectl --kubeconfig "$(KUBECONFIG)" create -n "$(NAMESPACE)" -f deploy/auto-workflow.yaml
 
 publish-issue:
 	@test -n "$(ISSUE)" || (echo "ISSUE is required" >&2; exit 2)

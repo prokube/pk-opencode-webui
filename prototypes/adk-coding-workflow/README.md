@@ -31,8 +31,9 @@ or clone a repository unless a more permissive mode is explicitly selected.
 - Refuse to publish common credential and private-key paths.
 - Commit, push, and create a normal unmerged pull request in `publish` mode.
 - Generate stable review-remediation correlation keys.
-- Discover and rank eligible tickets across configured GitHub repositories, then
-  suspend the deployed supervisor for an explicit human selection.
+- Discover and rank eligible tickets across configured GitHub repositories.
+- Either suspend for an explicit human selection or automatically process the
+  first ranked ticket while preserving the same revalidation and claim guards.
 
 ## Modes
 
@@ -150,7 +151,9 @@ Private repositories require a Secret named `adk-coding-workflow-github` with a
 `token` key. Execute-only runs need read access; publishing requires a dedicated
 bot token with issue, content, and pull-request write access. Submit
 `deploy/smoke-workflow.yaml` with `make smoke`,
-`deploy/execute-smoke-workflow.yaml` with `make smoke-execute`, or the explicit
+`deploy/execute-smoke-workflow.yaml` with `make smoke-execute`, the manual
+supervisor with `make supervise`, the automatic first-ticket variant with
+`make auto`, or the explicit
 `deploy/publish-workflow.yaml` with `make publish-issue` after the Secret exists.
 
 Start a publishing run with an issue number and optional PR base branch:
@@ -194,19 +197,34 @@ The finalizer retries under the same workflow identity and recognizes completed
 claims, pushes, and PRs. Manually specified runs that do not use the supervisor
 retain the safe late-claim behavior in the finalizer.
 
-### Supervisor Selection Contract
+### Supervisor Contracts
 
 Submit `deploy/supervisor-workflow.yaml`, or reference
 `adk-coding-workflow-execute` with `entrypoint: supervise`. The workflow starts
-without an issue and accepts one `discovery-request` parameter:
+without an issue and accepts one `discovery-request` parameter. Include labels
+use AND semantics; any matching exclude label rejects the issue:
 
 ```json
-{"projects":[{"provider":"github","project":"prokube/pkui","suggestedBaseBranch":"main"}]}
+{"projects":[{"provider":"github","project":"prokube/pkui","suggestedBaseBranch":"main"}],"includeLabels":["ready"],"excludeLabels":["in-progress","needs-discussion","needs-supervisor"]}
 ```
 
 The optional `bot-login` parameter may name the expected GitHub bot. If set, it
 must match the user authenticated by `GH_TOKEN`; otherwise the authenticated
 login is used.
+
+The manual `supervise` entrypoint publishes the candidate list and suspends at
+`select-ticket` for pkui. The `auto-supervise` entrypoint uses the same ranked
+list but selects only its first candidate and proceeds without suspension. An
+empty list fails before a claim. Run one automatic ticket with:
+
+```bash
+make auto KUBECONFIG=~/.kube/solid-crocodile.yaml NAMESPACE=demo
+```
+
+Multiple automatic Workflow objects may be submitted concurrently, but their
+short claim steps share the namespace mutex `adk-coding-workflow-ticket-claim`.
+This prevents competing claim comments; implementation can overlap only after
+different tickets have been claimed. The provided launcher starts one ticket.
 
 Discovery requests are checked against a reviewed provider/project allowlist
 before any provider call. The initial allowlist contains only
@@ -220,7 +238,7 @@ The `discover` node publishes the global output parameter `candidate-list` as:
 ```
 
 Candidate output is capped at 50 entries and contains no issue bodies, comments,
-labels, blockers, or credentials. The workflow then suspends in template
+labels, blockers, or credentials. The manual workflow then suspends in template
 `select-ticket`; the step/node display name is also `select-ticket`. Resume that
 node by supplying both output parameters:
 
