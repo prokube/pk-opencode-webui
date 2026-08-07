@@ -38,9 +38,10 @@ describe("execute workflow template", () => {
   test("uses one worker image and isolates validation from retained artifacts", () => {
     const images = [...executeManifest.matchAll(/image: (\S+)/g)].map((match) => match[1])
     expect(new Set(images)).toEqual(new Set([
-      "europe-west3-docker.pkg.dev/prokube-internal/prokube-customer/adk-coding-workflow:prototype-cg-20260807-0158",
+      "europe-west3-docker.pkg.dev/prokube-internal/prokube-customer/adk-coding-workflow:prototype-cg-20260807-0221",
     ]))
     expect(validateTemplate).toContain("git clone --no-hardlinks")
+    expect(validateTemplate).toContain("bun /app/src/validate.ts \\")
     expect(validateTemplate).toContain("git -C /validation/worktree apply --binary /workspace/.workflow-output/changes.patch")
     expect(validateTemplate).toContain("mountPath: /workspace")
     expect(validateTemplate).toContain("readOnly: true")

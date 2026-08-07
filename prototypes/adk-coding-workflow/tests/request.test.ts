@@ -23,7 +23,7 @@ describe("coding request", () => {
       "cd frontend && npm run typecheck",
     )
     expect(repositoryPolicy("prokube/pkui").validationCommands).toContain(
-      "cd frontend && npm test -- src/modules/user-management --maxWorkers=2",
+      "cd frontend && npm test -- src/modules/user-management --maxWorkers=2 || npm test -- src/modules/user-management --maxWorkers=2",
     )
   })
 

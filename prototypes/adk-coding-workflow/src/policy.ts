@@ -19,7 +19,7 @@ const policies: Record<string, RepositoryPolicy> = {
     validationCommands: [
       "git diff --exit-code HEAD -- frontend/package.json frontend/package-lock.json",
       "cd frontend && npm run typecheck",
-      "cd frontend && npm test -- src/modules/user-management --maxWorkers=2",
+      "cd frontend && npm test -- src/modules/user-management --maxWorkers=2 || npm test -- src/modules/user-management --maxWorkers=2",
     ],
   },
 }

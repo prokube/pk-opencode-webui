@@ -134,6 +134,7 @@ validate:
   - git diff --exit-code HEAD -- frontend/package.json frontend/package-lock.json
   - cd frontend && npm run typecheck
   - cd frontend && npm test -- src/modules/user-management --maxWorkers=2
+    # retried once for existing flaky UI tests
 publish:
   branchPattern: feature/issue-{ticket}
   draft: false

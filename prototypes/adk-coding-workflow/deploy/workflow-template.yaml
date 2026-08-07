@@ -70,7 +70,7 @@ spec:
           - name: issue
           - name: base
       container:
-        image: europe-west3-docker.pkg.dev/prokube-internal/prokube-customer/adk-coding-workflow:prototype-cg-20260807-0158
+        image: europe-west3-docker.pkg.dev/prokube-internal/prokube-customer/adk-coding-workflow:prototype-cg-20260807-0221
         imagePullPolicy: IfNotPresent
         command: ["bun", "/app/src/cli.ts"]
         args:
@@ -219,7 +219,7 @@ spec:
           secret:
             secretName: adk-coding-workflow-opencode-auth
       container:
-        image: europe-west3-docker.pkg.dev/prokube-internal/prokube-customer/adk-coding-workflow:prototype-cg-20260807-0158
+        image: europe-west3-docker.pkg.dev/prokube-internal/prokube-customer/adk-coding-workflow:prototype-cg-20260807-0221
         imagePullPolicy: IfNotPresent
         command: ["bun", "/app/src/cli.ts"]
         args:
@@ -273,7 +273,7 @@ spec:
             type: RuntimeDefault
       sidecars:
         - name: opencode
-          image: europe-west3-docker.pkg.dev/prokube-internal/prokube-customer/adk-coding-workflow:prototype-cg-20260807-0158
+          image: europe-west3-docker.pkg.dev/prokube-internal/prokube-customer/adk-coding-workflow:prototype-cg-20260807-0221
           imagePullPolicy: IfNotPresent
           command: ["bash", "-c"]
           args:
@@ -341,18 +341,18 @@ spec:
           emptyDir:
             sizeLimit: 1Gi
       container:
-        image: europe-west3-docker.pkg.dev/prokube-internal/prokube-customer/adk-coding-workflow:prototype-cg-20260807-0158
+        image: europe-west3-docker.pkg.dev/prokube-internal/prokube-customer/adk-coding-workflow:prototype-cg-20260807-0221
         imagePullPolicy: IfNotPresent
         command: ["bash", "-c"]
         args:
-          - >-
+          - |
             git clone --no-hardlinks /workspace/.data/workspaces/{{workflow.name}}/source /validation/worktree &&
             git -C /validation/worktree apply --binary /workspace/.workflow-output/changes.patch &&
             mkdir -p /validation/home &&
             export HOME=/validation/home &&
             cd /validation/worktree &&
-            bun /app/src/validate.ts
-              --repository "{{inputs.parameters.target-repository}}"
+            bun /app/src/validate.ts \
+              --repository "{{inputs.parameters.target-repository}}" \
               --worktree /validation/worktree &&
               mkdir -p /var/run/argo/outputs &&
               sha256sum /workspace/.workflow-output/changes.patch | cut -d ' ' -f 1 > /var/run/argo/outputs/patch.sha256
@@ -397,7 +397,7 @@ spec:
           emptyDir:
             sizeLimit: 1Gi
       container:
-        image: europe-west3-docker.pkg.dev/prokube-internal/prokube-customer/adk-coding-workflow:prototype-cg-20260807-0158
+        image: europe-west3-docker.pkg.dev/prokube-internal/prokube-customer/adk-coding-workflow:prototype-cg-20260807-0221
         imagePullPolicy: IfNotPresent
         command: ["bun", "/app/src/cli.ts"]
         args:
@@ -459,7 +459,7 @@ spec:
           emptyDir:
             sizeLimit: 1Gi
       container:
-        image: europe-west3-docker.pkg.dev/prokube-internal/prokube-customer/adk-coding-workflow:prototype-cg-20260807-0158
+        image: europe-west3-docker.pkg.dev/prokube-internal/prokube-customer/adk-coding-workflow:prototype-cg-20260807-0221
         imagePullPolicy: IfNotPresent
         command: ["bun", "/app/src/cli.ts"]
         args:
@@ -519,7 +519,7 @@ spec:
           emptyDir:
             sizeLimit: 10Mi
       container:
-        image: europe-west3-docker.pkg.dev/prokube-internal/prokube-customer/adk-coding-workflow:prototype-cg-20260807-0158
+        image: europe-west3-docker.pkg.dev/prokube-internal/prokube-customer/adk-coding-workflow:prototype-cg-20260807-0221
         imagePullPolicy: IfNotPresent
         command: ["bun", "/app/src/report.ts"]
         env:
