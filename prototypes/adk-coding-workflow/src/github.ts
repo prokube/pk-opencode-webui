@@ -223,6 +223,10 @@ export class GitHubClient implements GitHubService, TicketDiscoveryProvider {
   ): Promise<boolean> {
     this.requireToken()
     const current = await this.getIssue(repository, issueNumber)
+    const prefix = `Coding workflow \`${runId}\` stopped before creating a pull request.`
+    if (current.comments.some((comment) => comment.author === botLogin && comment.body.startsWith(prefix))) {
+      return true
+    }
     const ownership = evaluateWorkflowOwnership(current, botLogin, runId)
     if (!ownership.eligible) throw new Error(`Issue cleanup conflict: ${ownership.reason}`)
     if (current.state !== "open") return false
@@ -244,15 +248,12 @@ export class GitHubClient implements GitHubService, TicketDiscoveryProvider {
         body: { assignees: [botLogin] },
       })
     }
-    const prefix = `Coding workflow \`${runId}\` stopped before creating a pull request.`
-    if (!current.comments.some((comment) => comment.author === botLogin && comment.body.startsWith(prefix))) {
-      const bounded = reason.replace(/[\x00-\x1f\x7f]+/g, " ").replace(/\s+/g, " ").trim().slice(0, 300)
-      await this.comment(
-        repository,
-        issueNumber,
-        `${prefix} Added \`needs-supervisor\`: ${bounded || "workflow did not complete"}.`,
-      )
-    }
+    const bounded = reason.replace(/[\x00-\x1f\x7f]+/g, " ").replace(/\s+/g, " ").trim().slice(0, 300)
+    await this.comment(
+      repository,
+      issueNumber,
+      `${prefix} Added \`needs-supervisor\`: ${bounded || "workflow did not complete"}.`,
+    )
     return true
   }
 

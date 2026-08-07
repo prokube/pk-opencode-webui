@@ -5,6 +5,7 @@ import {
   evaluateEligibility,
   evaluateTicketEligibility,
   evaluateWorkflowClaim,
+  hasWorkflowClaim,
   reviewRunKey,
   validateBranch,
   validateRepository,
@@ -88,6 +89,37 @@ describe("issue eligibility", () => {
       eligible: false,
       reason: "Issue has a conflicting assignee",
     })
+  })
+
+  test("treats a same-author cleanup comment as releasing its workflow claim", () => {
+    const released = issue({
+      comments: [
+        { author: "prokube-bot", body: "Coding workflow `old-run` claimed this issue." },
+        {
+          author: "prokube-bot",
+          body: "Coding workflow `old-run` stopped before creating a pull request. Added `needs-supervisor`: failed.",
+        },
+      ],
+    })
+    expect(hasWorkflowClaim(released)).toBe(false)
+    expect(evaluateWorkflowClaim({
+      ...released,
+      labels: ["in-progress"],
+      assignees: ["prokube-bot"],
+      comments: [
+        ...released.comments,
+        { author: "prokube-bot", body: "Coding workflow `new-run` claimed this issue." },
+      ],
+    }, "prokube-bot", "new-run")).toEqual({ eligible: true })
+    expect(hasWorkflowClaim(issue({
+      comments: [
+        { author: "prokube-bot", body: "Coding workflow `active-run` claimed this issue." },
+        {
+          author: "another-user",
+          body: "Coding workflow `active-run` stopped before creating a pull request.",
+        },
+      ],
+    }))).toBe(true)
   })
 })
 

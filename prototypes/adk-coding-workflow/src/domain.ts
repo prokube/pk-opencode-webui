@@ -130,18 +130,31 @@ export function workflowClaimComment(runId: string): string {
   return `Coding workflow \`${runId}\` claimed this issue.`
 }
 
+function activeWorkflowClaims(issue: Issue): Array<{ author: string; body: string }> {
+  const active = new Map<string, { author: string; body: string }>()
+  for (const comment of issue.comments) {
+    const body = comment.body.trim()
+    const claim = body.match(/^Coding workflow `([^`]+)` claimed this issue\.$/)
+    if (claim) active.set(claim[1]!, comment)
+    const release = body.match(/^Coding workflow `([^`]+)` stopped before creating a pull request\./)
+    if (release && active.get(release[1]!)?.author === comment.author) active.delete(release[1]!)
+  }
+  return [...active.values()]
+}
+
 export function isClaimedByWorkflow(issue: Issue, botLogin: string, runId: string): boolean {
   const marker = workflowClaimComment(runId)
-  return issue.comments.some((comment) => comment.author === botLogin && comment.body.trim() === marker)
+  return activeWorkflowClaims(issue)
+    .some((comment) => comment.author === botLogin && comment.body.trim() === marker)
 }
 
 export function hasWorkflowClaim(issue: Issue): boolean {
-  return issue.comments.some((comment) => /^Coding workflow `[^`]+` claimed this issue\.$/.test(comment.body.trim()))
+  return activeWorkflowClaims(issue).length > 0
 }
 
 export function evaluateWorkflowOwnership(issue: Issue, botLogin: string, runId: string): Eligibility {
   const marker = workflowClaimComment(runId)
-  const claimComments = issue.comments.filter((comment) => /^Coding workflow `[^`]+` claimed this issue\.$/.test(comment.body.trim()))
+  const claimComments = activeWorkflowClaims(issue)
   if (claimComments.some((comment) => comment.author !== botLogin || comment.body.trim() !== marker)) {
     return { eligible: false, reason: "Issue has a conflicting workflow claim" }
   }
