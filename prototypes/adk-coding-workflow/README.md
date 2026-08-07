@@ -31,6 +31,8 @@ or clone a repository unless a more permissive mode is explicitly selected.
 - Refuse to publish common credential and private-key paths.
 - Commit, push, and create a normal unmerged pull request in `publish` mode.
 - Generate stable review-remediation correlation keys.
+- Discover and rank eligible tickets across configured GitHub repositories, then
+  suspend the deployed supervisor for an explicit human selection.
 
 ## Modes
 
@@ -186,9 +188,72 @@ An `onExit` reporter publishes an allowlisted, size-limited `workflow-result`
 output with the outcome, branch, changed files, and validated GitHub pull-request
 URL. It mounts the workspace read-only and receives no application credentials.
 Publishing hashes the validated patch, attests the unchanged PVC worktree, then
-runs a model-free finalizer that claims the issue, commits and pushes the fixed
-branch, and creates a normal unmerged pull request. The finalizer retries under
-the same workflow identity and recognizes completed claims, pushes, and PRs.
+runs a model-free finalizer that verifies or completes the workflow's claim,
+commits and pushes the fixed branch, and creates a normal unmerged pull request.
+The finalizer retries under the same workflow identity and recognizes completed
+claims, pushes, and PRs. Manually specified runs that do not use the supervisor
+retain the safe late-claim behavior in the finalizer.
+
+### Supervisor Selection Contract
+
+Submit `deploy/supervisor-workflow.yaml`, or reference
+`adk-coding-workflow-execute` with `entrypoint: supervise`. The workflow starts
+without an issue and accepts one `discovery-request` parameter:
+
+```json
+{"projects":[{"provider":"github","project":"prokube/pkui","suggestedBaseBranch":"main"}]}
+```
+
+The optional `bot-login` parameter may name the expected GitHub bot. If set, it
+must match the user authenticated by `GH_TOKEN`; otherwise the authenticated
+login is used.
+
+Discovery requests are checked against a reviewed provider/project allowlist
+before any provider call. The initial allowlist contains only
+`github/prokube/pkui`; adding another provider or project requires an explicit
+code change to `reviewedDiscoveryProjects`.
+
+The `discover` node publishes the global output parameter `candidate-list` as:
+
+```json
+{"candidates":[{"provider":"github","project":"prokube/pkui","number":42,"title":"Issue title","author":"login","priority":"high","url":"https://github.com/prokube/pkui/issues/42","suggestedBaseBranch":"main"}],"truncated":false}
+```
+
+Candidate output is capped at 50 entries and contains no issue bodies, comments,
+labels, blockers, or credentials. The workflow then suspends in template
+`select-ticket`; the step/node display name is also `select-ticket`. Resume that
+node by supplying both output parameters:
+
+- `selected-ticket`: JSON with the selection identity, for example
+  `{"provider":"github","project":"prokube/pkui","number":42}`.
+- `base-branch`: a Git branch name, for example `main`.
+
+The `revalidate-selection` node rejects selections absent from the published
+list and fails closed if the issue, blockers, assignment, issue branch, open PR,
+or selected base changed. It emits `ticket-repository`, `target-repository`,
+`issue`, and `base` into the existing pipeline. The `claim-selected-ticket` node
+then writes the workflow claim comment, adds `in-progress`, assigns the
+authenticated bot, and removes `ready` before `execute-selected-ticket` starts.
+Before mutating GitHub it atomically records the normalized ticket, workflow ID,
+and authenticated bot in `/workspace/.workflow-claim.json` on the workflow PVC.
+Execute and finalize accept that state only when the exact workflow marker and
+sole bot assignment still match; foreign markers or assignees block the run.
+Discovery, revalidation, and claiming have GitHub credentials but no model
+credentials; implementation has model and read-only GitHub credentials;
+validation, attestation, and reporting receive no application credential.
+Existing direct submissions remain compatible because the WorkflowTemplate's
+default entrypoint is still `execute` with the existing `ticket-repository`,
+`target-repository`, `issue`, `base`, and `publish` parameters.
+
+The workflow exit handler runs credentialed `reconcile-claim` before the public
+`report` step. Reconciliation is a no-op without the durable same-run record, on
+identity or ownership conflicts, or when either the fixed result or GitHub shows
+a pull request. Otherwise it adds `needs-supervisor`, removes `in-progress` and
+any residual `ready` from a partial claim, removes only the authenticated bot
+assignment, and posts a bounded status/phase comment. Cleanup retries are
+idempotent. Cleanup failure is tolerated so the
+credential-free reporter always runs, and the existing `workflow-result` output
+shape and name remain unchanged.
 
 ## Prototype Limitations
 

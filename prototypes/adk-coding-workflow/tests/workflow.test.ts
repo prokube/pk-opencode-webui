@@ -29,9 +29,10 @@ class FakeGitHub implements GitHubService {
   pullRequestChecks = 0
   existingPullRequest?: string
   existingPullRequests?: Array<string | undefined>
+  issue: Issue = readyIssue
 
   async getIssue(): Promise<Issue> {
-    return readyIssue
+    return this.issue
   }
 
   async getAuthenticatedLogin(): Promise<string> {
@@ -125,6 +126,69 @@ describe("CodingWorkflow through ADK", () => {
       })
       expect(github.claims).toBe(0)
       expect(github.pullRequests).toBe(0)
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test("execute accepts a complete claim owned by the same workflow", async () => {
+    const root = mkdtempSync(join(tmpdir(), "adk-owned-claim-"))
+    const github = new FakeGitHub()
+    github.issue = {
+      ...readyIssue,
+      labels: ["in-progress"],
+      assignees: ["prokube-bot"],
+      comments: [{ author: "prokube-bot", body: "Coding workflow `run-owned` claimed this issue." }],
+    }
+    let calls = 0
+    const opencode: OpenCodeService = {
+      async implement() {
+        calls += 1
+        return { status: "completed", sessionId: "session-owned" }
+      },
+    }
+    try {
+      const workflow = new CodingWorkflow(
+        github,
+        new WorkspaceService(new FakeRunner()),
+        opencode,
+        "secret-token",
+        () => "run-owned",
+      )
+      const result = await runWithAdk(workflow, request(root, "execute"))
+      expect(result.phase).toBe("completed")
+      expect(calls).toBe(1)
+      expect(github.claims).toBe(0)
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test("execute blocks a claim owned by another workflow before implementation", async () => {
+    const root = mkdtempSync(join(tmpdir(), "adk-conflicting-claim-"))
+    const github = new FakeGitHub()
+    github.issue = {
+      ...readyIssue,
+      comments: [{ author: "prokube-bot", body: "Coding workflow `other-run` claimed this issue." }],
+    }
+    let calls = 0
+    const opencode: OpenCodeService = {
+      async implement() {
+        calls += 1
+        return { status: "completed", sessionId: "unexpected" }
+      },
+    }
+    try {
+      const workflow = new CodingWorkflow(
+        github,
+        new WorkspaceService(new FakeRunner()),
+        opencode,
+        "secret-token",
+        () => "run-owned",
+      )
+      const result = await runWithAdk(workflow, request(root, "execute"))
+      expect(result).toMatchObject({ phase: "blocked", summary: "Issue has a conflicting workflow claim" })
+      expect(calls).toBe(0)
     } finally {
       rmSync(root, { recursive: true, force: true })
     }
@@ -364,6 +428,91 @@ describe("CodingWorkflow through ADK", () => {
       expect(github.claims).toBe(1)
       expect(github.pullRequests).toBe(1)
       expect(github.pullRequestChecks).toBe(2)
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test("finalize accepts and re-verifies a complete claim owned by the same workflow", async () => {
+    const root = mkdtempSync(join(tmpdir(), "adk-finalize-owned-"))
+    const github = new FakeGitHub()
+    github.issue = {
+      ...readyIssue,
+      labels: ["in-progress"],
+      assignees: ["prokube-bot"],
+      comments: [{ author: "prokube-bot", body: "Coding workflow `validated-run` claimed this issue." }],
+    }
+    class OwnedClaimWorkspaceService extends WorkspaceService {
+      override async verifyAttestation() {
+        return {
+          workspace: {
+            root: join(root, "validated-run"),
+            source: join(root, "validated-run", "source"),
+            worktree: join(root, "validated-run", "worktree"),
+            branch: "feature/issue-42",
+            baseHead: "base-head",
+          },
+          changedFiles: ["src/prototype.ts"],
+        }
+      }
+    }
+    let calls = 0
+    const opencode: OpenCodeService = {
+      async implement() {
+        calls += 1
+        return { status: "completed", sessionId: "unexpected" }
+      },
+    }
+    try {
+      const result = await runWithAdk(new CodingWorkflow(
+        github,
+        new OwnedClaimWorkspaceService(new FakeRunner()),
+        opencode,
+        "secret-token",
+        () => "validated-run",
+      ), request(root, "finalize"))
+      expect(result).toMatchObject({ phase: "completed", pullRequestUrl: "https://github.com/prokube/example/pull/1" })
+      expect(calls).toBe(0)
+      expect(github.claims).toBe(1)
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test("finalize blocks a conflicting claim before reading the attestation", async () => {
+    const root = mkdtempSync(join(tmpdir(), "adk-finalize-conflict-"))
+    const github = new FakeGitHub()
+    github.issue = {
+      ...readyIssue,
+      labels: ["in-progress"],
+      assignees: ["prokube-bot"],
+      comments: [{ author: "prokube-bot", body: "Coding workflow `other-run` claimed this issue." }],
+    }
+    class UnusedWorkspaceService extends WorkspaceService {
+      verifications = 0
+
+      override async verifyAttestation(): Promise<never> {
+        this.verifications += 1
+        throw new Error("should not verify")
+      }
+    }
+    const workspaces = new UnusedWorkspaceService(new FakeRunner())
+    const opencode: OpenCodeService = {
+      async implement() {
+        return { status: "completed", sessionId: "unexpected" }
+      },
+    }
+    try {
+      const result = await runWithAdk(new CodingWorkflow(
+        github,
+        workspaces,
+        opencode,
+        "secret-token",
+        () => "validated-run",
+      ), request(root, "finalize"))
+      expect(result).toMatchObject({ phase: "blocked", summary: "Issue has a conflicting workflow claim" })
+      expect(workspaces.verifications).toBe(0)
+      expect(github.claims).toBe(0)
     } finally {
       rmSync(root, { recursive: true, force: true })
     }

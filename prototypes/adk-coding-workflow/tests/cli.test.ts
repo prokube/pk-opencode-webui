@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test"
 
 import { parseArgs } from "../src/cli"
+import { parseDiscoveryArgs } from "../src/discovery-cli"
 
 describe("CLI", () => {
   test("defaults to non-mutating plan mode", () => {
@@ -43,5 +44,30 @@ describe("CLI", () => {
       "--mode", "publish",
       "--bot-login", "prokube-bot",
     ])).toThrow("exactly one target repository")
+  })
+})
+
+describe("discovery CLI", () => {
+  test("requires explicit discovery and revalidation inputs", () => {
+    expect(parseDiscoveryArgs([
+      "--mode", "discover",
+      "--request", '{"projects":[]}',
+      "--output-dir", "/tmp/outputs",
+    ])).toEqual({ mode: "discover", request: '{"projects":[]}', outputDir: "/tmp/outputs" })
+    expect(() => parseDiscoveryArgs([
+      "--mode", "revalidate",
+      "--candidates", '{"candidates":[],"truncated":false}',
+      "--output-dir", "/tmp/outputs",
+    ])).toThrow("--selected-ticket")
+  })
+
+  test("parses the mutation-only claim mode without an output directory", () => {
+    expect(parseDiscoveryArgs([
+      "--mode", "claim",
+      "--selected-ticket", '{"provider":"github","project":"prokube/pkui","number":42}',
+    ])).toEqual({
+      mode: "claim",
+      selectedTicket: '{"provider":"github","project":"prokube/pkui","number":42}',
+    })
   })
 })

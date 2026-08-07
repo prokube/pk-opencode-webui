@@ -3,6 +3,8 @@ import type { OpenCodeService } from "./opencode"
 import type { WorkspaceService } from "./workspace"
 import {
   evaluateEligibility,
+  evaluateWorkflowClaim,
+  hasWorkflowClaim,
   validateRepository,
   type RunPhase,
   type WorkflowRequest,
@@ -39,12 +41,11 @@ export class CodingWorkflow {
           pullRequestUrl: duplicate,
         })
         const botLogin = await this.github.getAuthenticatedLogin()
-        const claimMarker = `Coding workflow \`${runId}\` claimed this issue.`
-        const claimedByThisRun = issue.comments.some(
-          (comment) => comment.author === botLogin && comment.body.includes(claimMarker),
-        )
         const eligibility = evaluateEligibility(issue)
-        if (!eligibility.eligible && !claimedByThisRun) return result("blocked", eligibility.reason)
+        if (!eligibility.eligible || hasWorkflowClaim(issue)) {
+          const ownership = evaluateWorkflowClaim(issue, botLogin, runId)
+          if (!ownership.eligible) return result("blocked", ownership.reason)
+        }
         const verified = await this.workspaces.verifyAttestation({
           issueNumber: issue.number,
           runId,
@@ -91,7 +92,14 @@ export class CodingWorkflow {
       }
 
       const eligibility = evaluateEligibility(issue)
-      if (!eligibility.eligible) return result("blocked", eligibility.reason)
+      if (!eligibility.eligible || hasWorkflowClaim(issue)) {
+        if (request.mode === "plan" || !this.token) {
+          return result("blocked", eligibility.eligible ? "Issue is claimed by a workflow" : eligibility.reason)
+        }
+        const botLogin = await this.github.getAuthenticatedLogin()
+        const ownership = evaluateWorkflowClaim(issue, botLogin, runId)
+        if (!ownership.eligible) return result("blocked", ownership.reason)
+      }
 
       if (request.mode === "plan") {
         return result("completed", `Plan validated for ${repository}#${issue.number}`)

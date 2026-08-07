@@ -70,7 +70,7 @@ spec:
           - name: issue
           - name: base
       container:
-        image: europe-west3-docker.pkg.dev/prokube-internal/prokube-customer/adk-coding-workflow:prototype-cg-20260807-1128
+        image: europe-west3-docker.pkg.dev/prokube-internal/prokube-customer/adk-coding-workflow:prototype-cg-20260807-1711
         imagePullPolicy: IfNotPresent
         command: ["bun", "/app/src/cli.ts"]
         args:
@@ -118,11 +118,11 @@ metadata:
     app.kubernetes.io/component: prototype
 spec:
   entrypoint: execute
-  onExit: report
+  onExit: exit-handler
   serviceAccountName: adk-coding-workflow
   executor:
     serviceAccountName: adk-coding-workflow
-  activeDeadlineSeconds: 18000
+  activeDeadlineSeconds: 86400
   podMetadata:
     annotations:
       sidecar.istio.io/inject: "false"
@@ -144,6 +144,10 @@ spec:
   podSpecPatch: '{"runtimeClassName":"gvisor","securityContext":{"fsGroup":1000,"fsGroupChangePolicy":"OnRootMismatch"}}'
   arguments:
     parameters:
+      - name: discovery-request
+        value: '{"projects":[{"provider":"github","project":"prokube/pkui","suggestedBaseBranch":"main"}]}'
+      - name: bot-login
+        value: ""
       - name: issue
       - name: ticket-repository
       - name: target-repository
@@ -152,6 +156,246 @@ spec:
       - name: publish
         value: "false"
   templates:
+    - name: supervise
+      inputs:
+        parameters:
+          - name: discovery-request
+          - name: bot-login
+      outputs:
+        parameters:
+          - name: candidate-list
+            valueFrom:
+              parameter: "{{steps.discover.outputs.parameters.candidate-list}}"
+      steps:
+        - - name: discover
+            template: discover
+            arguments:
+              parameters:
+                - name: discovery-request
+                  value: "{{inputs.parameters.discovery-request}}"
+        - - name: select-ticket
+            template: select-ticket
+            arguments:
+              parameters:
+                - name: candidate-list
+                  value: "{{steps.discover.outputs.parameters.candidate-list}}"
+        - - name: revalidate-selection
+            template: revalidate-selection
+            arguments:
+              parameters:
+                - name: candidate-list
+                  value: "{{steps.discover.outputs.parameters.candidate-list}}"
+                - name: selected-ticket
+                  value: "{{steps.select-ticket.outputs.parameters.selected-ticket}}"
+                - name: base-branch
+                  value: "{{steps.select-ticket.outputs.parameters.base-branch}}"
+        - - name: claim-selected-ticket
+            template: claim-selected-ticket
+            arguments:
+              parameters:
+                - name: selected-ticket
+                  value: "{{steps.select-ticket.outputs.parameters.selected-ticket}}"
+                - name: bot-login
+                  value: "{{inputs.parameters.bot-login}}"
+        - - name: execute-selected-ticket
+            template: execute
+            arguments:
+              parameters:
+                - name: issue
+                  value: "{{steps.revalidate-selection.outputs.parameters.issue}}"
+                - name: ticket-repository
+                  value: "{{steps.revalidate-selection.outputs.parameters.ticket-repository}}"
+                - name: target-repository
+                  value: "{{steps.revalidate-selection.outputs.parameters.target-repository}}"
+                - name: base
+                  value: "{{steps.revalidate-selection.outputs.parameters.base}}"
+                - name: publish
+                  value: "true"
+    - name: discover
+      inputs:
+        parameters:
+          - name: discovery-request
+      outputs:
+        parameters:
+          - name: candidate-list
+            globalName: candidate-list
+            valueFrom:
+              path: /tmp/outputs/candidate-list.json
+      automountServiceAccountToken: false
+      volumes:
+        - name: discovery-output
+          emptyDir:
+            sizeLimit: 1Mi
+      container:
+        image: europe-west3-docker.pkg.dev/prokube-internal/prokube-customer/adk-coding-workflow:prototype-cg-20260807-1711
+        imagePullPolicy: IfNotPresent
+        command: ["bun", "/app/src/discovery-cli.ts"]
+        args:
+          - --mode
+          - discover
+          - --request
+          - "{{inputs.parameters.discovery-request}}"
+          - --output-dir
+          - /tmp/outputs
+        env:
+          - name: GH_TOKEN
+            valueFrom:
+              secretKeyRef:
+                name: adk-coding-workflow-github
+                key: token
+        volumeMounts:
+          - name: discovery-output
+            mountPath: /tmp
+        resources:
+          requests:
+            cpu: 25m
+            memory: 64Mi
+          limits:
+            cpu: "1"
+            memory: 256Mi
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop: ["ALL"]
+          readOnlyRootFilesystem: true
+          runAsNonRoot: true
+          runAsUser: 1000
+          runAsGroup: 1000
+          seccompProfile:
+            type: RuntimeDefault
+    - name: select-ticket
+      inputs:
+        parameters:
+          - name: candidate-list
+      suspend: {}
+      outputs:
+        parameters:
+          - name: selected-ticket
+            valueFrom:
+              supplied: {}
+          - name: base-branch
+            valueFrom:
+              supplied: {}
+    - name: revalidate-selection
+      inputs:
+        parameters:
+          - name: candidate-list
+          - name: selected-ticket
+          - name: base-branch
+      outputs:
+        parameters:
+          - name: ticket-repository
+            valueFrom:
+              path: /tmp/outputs/ticket-repository
+          - name: target-repository
+            valueFrom:
+              path: /tmp/outputs/target-repository
+          - name: issue
+            valueFrom:
+              path: /tmp/outputs/issue
+          - name: base
+            valueFrom:
+              path: /tmp/outputs/base
+      automountServiceAccountToken: false
+      volumes:
+        - name: selection-output
+          emptyDir:
+            sizeLimit: 1Mi
+      container:
+        image: europe-west3-docker.pkg.dev/prokube-internal/prokube-customer/adk-coding-workflow:prototype-cg-20260807-1711
+        imagePullPolicy: IfNotPresent
+        command: ["bun", "/app/src/discovery-cli.ts"]
+        args:
+          - --mode
+          - revalidate
+          - --candidates
+          - "{{inputs.parameters.candidate-list}}"
+          - --selected-ticket
+          - "{{inputs.parameters.selected-ticket}}"
+          - --base-branch
+          - "{{inputs.parameters.base-branch}}"
+          - --output-dir
+          - /tmp/outputs
+        env:
+          - name: GH_TOKEN
+            valueFrom:
+              secretKeyRef:
+                name: adk-coding-workflow-github
+                key: token
+        volumeMounts:
+          - name: selection-output
+            mountPath: /tmp
+        resources:
+          requests:
+            cpu: 25m
+            memory: 64Mi
+          limits:
+            cpu: "1"
+            memory: 256Mi
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop: ["ALL"]
+          readOnlyRootFilesystem: true
+          runAsNonRoot: true
+          runAsUser: 1000
+          runAsGroup: 1000
+          seccompProfile:
+            type: RuntimeDefault
+    - name: claim-selected-ticket
+      retryStrategy:
+        limit: "2"
+        retryPolicy: Always
+        backoff:
+          duration: 5s
+          factor: 2
+          maxDuration: 30s
+      inputs:
+        parameters:
+          - name: selected-ticket
+          - name: bot-login
+      automountServiceAccountToken: false
+      container:
+        image: europe-west3-docker.pkg.dev/prokube-internal/prokube-customer/adk-coding-workflow:prototype-cg-20260807-1711
+        imagePullPolicy: IfNotPresent
+        command: ["bun", "/app/src/discovery-cli.ts"]
+        args:
+          - --mode
+          - claim
+          - --selected-ticket
+          - "{{inputs.parameters.selected-ticket}}"
+        env:
+          - name: GH_TOKEN
+            valueFrom:
+              secretKeyRef:
+                name: adk-coding-workflow-github
+                key: token
+          - name: PK_WORKFLOW_RUN_ID
+            value: "{{workflow.name}}"
+          - name: PK_WORKFLOW_BOT_LOGIN
+            value: "{{inputs.parameters.bot-login}}"
+          - name: PK_WORKFLOW_CLAIM_FILE
+            value: /workspace/.workflow-claim.json
+        volumeMounts:
+          - name: workspace
+            mountPath: /workspace
+        resources:
+          requests:
+            cpu: 25m
+            memory: 64Mi
+          limits:
+            cpu: "1"
+            memory: 256Mi
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop: ["ALL"]
+          readOnlyRootFilesystem: true
+          runAsNonRoot: true
+          runAsUser: 1000
+          runAsGroup: 1000
+          seccompProfile:
+            type: RuntimeDefault
     - name: execute
       inputs:
         parameters:
@@ -229,7 +473,7 @@ spec:
           secret:
             secretName: adk-coding-workflow-opencode-auth
       container:
-        image: europe-west3-docker.pkg.dev/prokube-internal/prokube-customer/adk-coding-workflow:prototype-cg-20260807-1128
+        image: europe-west3-docker.pkg.dev/prokube-internal/prokube-customer/adk-coding-workflow:prototype-cg-20260807-1711
         imagePullPolicy: IfNotPresent
         command: ["bun", "/app/src/cli.ts"]
         args:
@@ -285,7 +529,7 @@ spec:
             type: RuntimeDefault
       sidecars:
         - name: opencode
-          image: europe-west3-docker.pkg.dev/prokube-internal/prokube-customer/adk-coding-workflow:prototype-cg-20260807-1128
+          image: europe-west3-docker.pkg.dev/prokube-internal/prokube-customer/adk-coding-workflow:prototype-cg-20260807-1711
           imagePullPolicy: IfNotPresent
           command: ["bash", "-c"]
           args:
@@ -353,7 +597,7 @@ spec:
           emptyDir:
             sizeLimit: 1Gi
       container:
-        image: europe-west3-docker.pkg.dev/prokube-internal/prokube-customer/adk-coding-workflow:prototype-cg-20260807-1128
+        image: europe-west3-docker.pkg.dev/prokube-internal/prokube-customer/adk-coding-workflow:prototype-cg-20260807-1711
         imagePullPolicy: IfNotPresent
         command: ["bash", "-c"]
         args:
@@ -410,7 +654,7 @@ spec:
           emptyDir:
             sizeLimit: 1Gi
       container:
-        image: europe-west3-docker.pkg.dev/prokube-internal/prokube-customer/adk-coding-workflow:prototype-cg-20260807-1128
+        image: europe-west3-docker.pkg.dev/prokube-internal/prokube-customer/adk-coding-workflow:prototype-cg-20260807-1711
         imagePullPolicy: IfNotPresent
         command: ["bun", "/app/src/cli.ts"]
         args:
@@ -475,7 +719,7 @@ spec:
           emptyDir:
             sizeLimit: 1Gi
       container:
-        image: europe-west3-docker.pkg.dev/prokube-internal/prokube-customer/adk-coding-workflow:prototype-cg-20260807-1128
+        image: europe-west3-docker.pkg.dev/prokube-internal/prokube-customer/adk-coding-workflow:prototype-cg-20260807-1711
         imagePullPolicy: IfNotPresent
         command: ["bun", "/app/src/cli.ts"]
         args:
@@ -525,6 +769,68 @@ spec:
           runAsGroup: 1000
           seccompProfile:
             type: RuntimeDefault
+    - name: exit-handler
+      outputs:
+        parameters:
+          - name: workflow-result
+            valueFrom:
+              parameter: "{{steps.report.outputs.parameters.workflow-result}}"
+      steps:
+        - - name: reconcile-claim
+            template: reconcile-claim
+            continueOn:
+              failed: true
+              error: true
+        - - name: report
+            template: report
+    - name: reconcile-claim
+      retryStrategy:
+        limit: "2"
+        retryPolicy: Always
+        backoff:
+          duration: 5s
+          factor: 2
+          maxDuration: 30s
+      automountServiceAccountToken: false
+      container:
+        image: europe-west3-docker.pkg.dev/prokube-internal/prokube-customer/adk-coding-workflow:prototype-cg-20260807-1711
+        imagePullPolicy: IfNotPresent
+        command: ["bun", "/app/src/cleanup.ts"]
+        env:
+          - name: GH_TOKEN
+            valueFrom:
+              secretKeyRef:
+                name: adk-coding-workflow-github
+                key: token
+          - name: PK_WORKFLOW_RUN_ID
+            value: "{{workflow.name}}"
+          - name: PK_WORKFLOW_STATUS
+            value: "{{workflow.status}}"
+          - name: PK_WORKFLOW_CLAIM_FILE
+            value: /workspace/.workflow-claim.json
+          - name: PK_WORKFLOW_RESULT_FILE
+            value: /workspace/.workflow-output/result.json
+        volumeMounts:
+          - name: workspace
+            mountPath: /workspace
+            readOnly: true
+        resources:
+          requests:
+            cpu: 25m
+            memory: 64Mi
+          limits:
+            cpu: "1"
+            memory: 256Mi
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop: ["ALL"]
+          readOnlyRootFilesystem: true
+          runAsNonRoot: true
+          runAsUser: 1000
+          runAsGroup: 1000
+          seccompProfile:
+            type: RuntimeDefault
     - name: report
       automountServiceAccountToken: false
       outputs:
@@ -537,7 +843,7 @@ spec:
           emptyDir:
             sizeLimit: 10Mi
       container:
-        image: europe-west3-docker.pkg.dev/prokube-internal/prokube-customer/adk-coding-workflow:prototype-cg-20260807-1128
+        image: europe-west3-docker.pkg.dev/prokube-internal/prokube-customer/adk-coding-workflow:prototype-cg-20260807-1711
         imagePullPolicy: IfNotPresent
         command: ["bun", "/app/src/report.ts"]
         env:

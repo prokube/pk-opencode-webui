@@ -1,0 +1,15 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Workflow
+metadata:
+  generateName: adk-coding-workflow-supervisor-
+  labels:
+    app.kubernetes.io/name: adk-coding-workflow
+    app.kubernetes.io/component: supervisor-run
+spec:
+  workflowTemplateRef:
+    name: adk-coding-workflow-execute
+  entrypoint: supervise
+  arguments:
+    parameters:
+      - name: discovery-request
+        value: '{"projects":[{"provider":"github","project":"prokube/pkui","suggestedBaseBranch":"main"}]}'
