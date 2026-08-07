@@ -151,6 +151,12 @@ bot token with issue, content, and pull-request write access. Submit
 `deploy/execute-smoke-workflow.yaml` with `make smoke-execute`, or the explicit
 `deploy/publish-workflow.yaml` with `make publish-issue` after the Secret exists.
 
+Start a publishing run with an issue number and optional PR base branch:
+
+```bash
+make publish-issue NAMESPACE=demo ISSUE=3622 BASE=feature/argo-workflows-ui
+```
+
 The execute template currently uses OpenAI OAuth for the OpenCode sidecar. Copy
 only the local OpenAI entry into the required Secret without printing or storing
 the token in a manifest:

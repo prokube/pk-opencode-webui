@@ -2,6 +2,8 @@ IMAGE ?= europe-west3-docker.pkg.dev/prokube-internal/prokube-customer/adk-codin
 TAG ?= prototype-cg-20260807-0221
 KUBECONFIG ?= $(HOME)/.kube/solid-crocodile.yaml
 NAMESPACE ?= experiments
+ISSUE ?=
+BASE ?= main
 
 .PHONY: build push deploy smoke smoke-execute publish-issue test
 
@@ -21,7 +23,8 @@ smoke-execute:
 	kubectl --kubeconfig "$(KUBECONFIG)" create -n "$(NAMESPACE)" -f deploy/execute-smoke-workflow.yaml
 
 publish-issue:
-	kubectl --kubeconfig "$(KUBECONFIG)" create -n "$(NAMESPACE)" -f deploy/publish-workflow.yaml
+	@test -n "$(ISSUE)" || (echo "ISSUE is required" >&2; exit 2)
+	@ISSUE="$(ISSUE)" BASE="$(BASE)" yq eval '(.spec.arguments.parameters[] | select(.name == "issue").value) = strenv(ISSUE) | .spec.arguments.parameters += [{"name": "base", "value": strenv(BASE)}]' deploy/publish-workflow.yaml | kubectl --kubeconfig "$(KUBECONFIG)" create -n "$(NAMESPACE)" -f -
 
 test:
 	bun test

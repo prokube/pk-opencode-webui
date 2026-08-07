@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs"
 
 const manifest = readFileSync(new URL("../deploy/workflow-template.yaml", import.meta.url), "utf8")
 const dockerfile = readFileSync(new URL("../Dockerfile", import.meta.url), "utf8")
+const makefile = readFileSync(new URL("../Makefile", import.meta.url), "utf8")
 const executeManifest = manifest.split("---\n").at(-1) ?? ""
 const validateTemplate = executeManifest.split("    - name: validate\n      inputs:").at(-1) ?? ""
 const publishTemplate = executeManifest.split("    - name: publish\n      retryStrategy:").at(-1) ?? ""
@@ -13,7 +14,10 @@ describe("execute workflow template", () => {
     expect(executeManifest).toContain("- name: ticket-repository")
     expect(executeManifest).toContain("- name: target-repository")
     expect(executeManifest).not.toContain("- prokube/pkui")
-    expect(executeManifest).not.toContain("- name: base")
+    expect(executeManifest).toContain("- name: base\n        value: main")
+    expect(executeManifest.match(/- --base/g)).toHaveLength(3)
+    expect(executeManifest.match(/- "{{inputs.parameters.base}}"/g)).toHaveLength(3)
+    expect(executeManifest.match(/value: "{{inputs.parameters.base}}"/g)).toHaveLength(3)
     expect(executeManifest).toContain("- --mode\n          - execute")
     expect(executeManifest).not.toContain("- --mode\n          - implement")
     expect(validateTemplate).toContain("bun /app/src/validate.ts")
@@ -78,5 +82,12 @@ describe("execute workflow template", () => {
     expect(reportTemplate).toContain("readOnly: true")
     expect(reportTemplate).not.toContain("GH_TOKEN")
     expect(reportTemplate).not.toContain("adk-coding-workflow-opencode-auth")
+  })
+
+  test("submits publishing runs with explicit issue and base parameters", () => {
+    expect(makefile).toContain("ISSUE ?=")
+    expect(makefile).toContain("BASE ?= main")
+    expect(makefile).toContain('test -n "$(ISSUE)"')
+    expect(makefile).toContain('{"name": "base", "value": strenv(BASE)}')
   })
 })

@@ -12,14 +12,17 @@ const policies: Record<string, RepositoryPolicy> = {
   "prokube/pkui": {
     repository: "prokube/pkui",
     baseBranch: "main",
-    allowedPathPrefixes: ["frontend/src/modules/user-management/"],
+    allowedPathPrefixes: [
+      "frontend/src/modules/sandbox/components/",
+      "frontend/src/modules/user-management/",
+    ],
     setupCommands: [
       "cd frontend && npm ci --ignore-scripts",
     ],
     validationCommands: [
       "git diff --exit-code HEAD -- frontend/package.json frontend/package-lock.json",
       "cd frontend && npm run typecheck",
-      "cd frontend && npm test -- src/modules/user-management --maxWorkers=2 || npm test -- src/modules/user-management --maxWorkers=2",
+      "cd frontend && npm test -- src/modules/user-management src/modules/sandbox --maxWorkers=2 || npm test -- src/modules/user-management src/modules/sandbox --maxWorkers=2",
     ],
   },
 }

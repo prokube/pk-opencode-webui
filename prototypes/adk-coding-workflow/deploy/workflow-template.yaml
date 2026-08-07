@@ -147,6 +147,8 @@ spec:
       - name: issue
       - name: ticket-repository
       - name: target-repository
+      - name: base
+        value: main
       - name: publish
         value: "false"
   templates:
@@ -156,6 +158,7 @@ spec:
           - name: issue
           - name: ticket-repository
           - name: target-repository
+          - name: base
           - name: publish
       steps:
         - - name: implement
@@ -168,6 +171,8 @@ spec:
                   value: "{{inputs.parameters.ticket-repository}}"
                 - name: target-repository
                   value: "{{inputs.parameters.target-repository}}"
+                - name: base
+                  value: "{{inputs.parameters.base}}"
         - - name: validate
             template: validate
             arguments:
@@ -185,6 +190,8 @@ spec:
                   value: "{{inputs.parameters.ticket-repository}}"
                 - name: target-repository
                   value: "{{inputs.parameters.target-repository}}"
+                - name: base
+                  value: "{{inputs.parameters.base}}"
                 - name: validated-patch-sha
                   value: "{{steps.validate.outputs.parameters.patch-sha256}}"
         - - name: publish
@@ -198,12 +205,15 @@ spec:
                   value: "{{inputs.parameters.ticket-repository}}"
                 - name: target-repository
                   value: "{{inputs.parameters.target-repository}}"
+                - name: base
+                  value: "{{inputs.parameters.base}}"
     - name: implement
       inputs:
         parameters:
           - name: issue
           - name: ticket-repository
           - name: target-repository
+          - name: base
       automountServiceAccountToken: false
       volumes:
         - name: opencode-home
@@ -229,6 +239,8 @@ spec:
           - "{{inputs.parameters.target-repository}}"
           - --issue
           - "{{inputs.parameters.issue}}"
+          - --base
+          - "{{inputs.parameters.base}}"
           - --mode
           - execute
           - --opencode-url
@@ -390,6 +402,7 @@ spec:
           - name: issue
           - name: ticket-repository
           - name: target-repository
+          - name: base
           - name: validated-patch-sha
       automountServiceAccountToken: false
       volumes:
@@ -407,6 +420,8 @@ spec:
           - "{{inputs.parameters.target-repository}}"
           - --issue
           - "{{inputs.parameters.issue}}"
+          - --base
+          - "{{inputs.parameters.base}}"
           - --mode
           - attest
           - --workspace-root
@@ -453,6 +468,7 @@ spec:
           - name: issue
           - name: ticket-repository
           - name: target-repository
+          - name: base
       automountServiceAccountToken: false
       volumes:
         - name: publish-tmp
@@ -469,6 +485,8 @@ spec:
           - "{{inputs.parameters.target-repository}}"
           - --issue
           - "{{inputs.parameters.issue}}"
+          - --base
+          - "{{inputs.parameters.base}}"
           - --mode
           - finalize
           - --workspace-root

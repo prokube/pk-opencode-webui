@@ -23,7 +23,7 @@ describe("coding request", () => {
       "cd frontend && npm run typecheck",
     )
     expect(repositoryPolicy("prokube/pkui").validationCommands).toContain(
-      "cd frontend && npm test -- src/modules/user-management --maxWorkers=2 || npm test -- src/modules/user-management --maxWorkers=2",
+      "cd frontend && npm test -- src/modules/user-management src/modules/sandbox --maxWorkers=2 || npm test -- src/modules/user-management src/modules/sandbox --maxWorkers=2",
     )
   })
 
@@ -48,6 +48,10 @@ describe("coding request", () => {
     expect(() => assertPolicyPaths(
       "prokube/pkui",
       ["frontend/src/modules/user-management/components/CreateUserModal.tsx"],
+    )).not.toThrow()
+    expect(() => assertPolicyPaths(
+      "prokube/pkui",
+      ["frontend/src/modules/sandbox/components/create-sandbox-modal.tsx"],
     )).not.toThrow()
     expect(() => assertPolicyPaths("prokube/pkui", ["frontend/src/App.tsx"])).toThrow(
       "outside the approved M1 policy",
