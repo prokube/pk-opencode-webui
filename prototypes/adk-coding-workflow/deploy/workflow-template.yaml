@@ -70,7 +70,7 @@ spec:
           - name: issue
           - name: base
       container:
-        image: europe-west3-docker.pkg.dev/prokube-internal/prokube-customer/adk-coding-workflow:prototype-cg-20260807-0221
+        image: europe-west3-docker.pkg.dev/prokube-internal/prokube-customer/adk-coding-workflow:prototype-cg-20260807-1128
         imagePullPolicy: IfNotPresent
         command: ["bun", "/app/src/cli.ts"]
         args:
@@ -229,7 +229,7 @@ spec:
           secret:
             secretName: adk-coding-workflow-opencode-auth
       container:
-        image: europe-west3-docker.pkg.dev/prokube-internal/prokube-customer/adk-coding-workflow:prototype-cg-20260807-0221
+        image: europe-west3-docker.pkg.dev/prokube-internal/prokube-customer/adk-coding-workflow:prototype-cg-20260807-1128
         imagePullPolicy: IfNotPresent
         command: ["bun", "/app/src/cli.ts"]
         args:
@@ -285,7 +285,7 @@ spec:
             type: RuntimeDefault
       sidecars:
         - name: opencode
-          image: europe-west3-docker.pkg.dev/prokube-internal/prokube-customer/adk-coding-workflow:prototype-cg-20260807-0221
+          image: europe-west3-docker.pkg.dev/prokube-internal/prokube-customer/adk-coding-workflow:prototype-cg-20260807-1128
           imagePullPolicy: IfNotPresent
           command: ["bash", "-c"]
           args:
@@ -353,7 +353,7 @@ spec:
           emptyDir:
             sizeLimit: 1Gi
       container:
-        image: europe-west3-docker.pkg.dev/prokube-internal/prokube-customer/adk-coding-workflow:prototype-cg-20260807-0221
+        image: europe-west3-docker.pkg.dev/prokube-internal/prokube-customer/adk-coding-workflow:prototype-cg-20260807-1128
         imagePullPolicy: IfNotPresent
         command: ["bash", "-c"]
         args:
@@ -410,7 +410,7 @@ spec:
           emptyDir:
             sizeLimit: 1Gi
       container:
-        image: europe-west3-docker.pkg.dev/prokube-internal/prokube-customer/adk-coding-workflow:prototype-cg-20260807-0221
+        image: europe-west3-docker.pkg.dev/prokube-internal/prokube-customer/adk-coding-workflow:prototype-cg-20260807-1128
         imagePullPolicy: IfNotPresent
         command: ["bun", "/app/src/cli.ts"]
         args:
@@ -475,7 +475,7 @@ spec:
           emptyDir:
             sizeLimit: 1Gi
       container:
-        image: europe-west3-docker.pkg.dev/prokube-internal/prokube-customer/adk-coding-workflow:prototype-cg-20260807-0221
+        image: europe-west3-docker.pkg.dev/prokube-internal/prokube-customer/adk-coding-workflow:prototype-cg-20260807-1128
         imagePullPolicy: IfNotPresent
         command: ["bun", "/app/src/cli.ts"]
         args:
@@ -537,7 +537,7 @@ spec:
           emptyDir:
             sizeLimit: 10Mi
       container:
-        image: europe-west3-docker.pkg.dev/prokube-internal/prokube-customer/adk-coding-workflow:prototype-cg-20260807-0221
+        image: europe-west3-docker.pkg.dev/prokube-internal/prokube-customer/adk-coding-workflow:prototype-cg-20260807-1128
         imagePullPolicy: IfNotPresent
         command: ["bun", "/app/src/report.ts"]
         env:
