@@ -22,7 +22,7 @@ describe("CLI", () => {
       "--issue", "42",
       "--mode", "execute",
     ])
-    expect(options.validationCommands).toEqual(["make test-unit"])
+    expect(options.validationCommands).toEqual(["make test-unit || make test-unit"])
   })
 
   test("rejects invalid modes and issue numbers", () => {

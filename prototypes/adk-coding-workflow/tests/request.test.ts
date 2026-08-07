@@ -19,7 +19,9 @@ describe("coding request", () => {
       baseBranch: "main",
     })
     expect(resolved.validationCommands).toEqual(repositoryCommands("prokube/pkui"))
-    expect(repositoryPolicy("prokube/pkui").validationCommands).toEqual(["make test-unit"])
+    expect(repositoryPolicy("prokube/pkui").validationCommands).toEqual([
+      "make test-unit || make test-unit",
+    ])
   })
 
   test("rejects unsupported repositories and multi-target requests in M1", () => {

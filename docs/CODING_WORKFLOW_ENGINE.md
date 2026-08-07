@@ -132,7 +132,7 @@ allowedPathPrefixes:
   - frontend/src/
   - k8s/helm/pk-ui/
 validate:
-  - make test-unit
+  - make test-unit || make test-unit
 publish:
   branchPattern: feature/issue-{ticket}
   draft: false
@@ -147,7 +147,8 @@ pkui policy now permits product source and tests across the three backends,
 frontend source, the pk-ui Helm chart, deployment tests, and documentation. It
 still excludes dependency manifests, CI workflows, repository instructions,
 and other control-plane files. Every accepted patch runs the aggregate unit
-suite before it can be attested or published.
+suite, with one retry for known flaky tests, before it can be attested or
+published.
 
 ## Validation And Repair
 

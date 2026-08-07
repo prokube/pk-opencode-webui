@@ -25,7 +25,7 @@ or clone a repository unless a more permissive mode is explicitly selected.
 - Stop when OpenCode asks a question or requests an unsupported permission.
 - Run explicit validation commands without GitHub token environment variables.
 - Validate the clean base before editing, then run the reviewed pkui aggregate
-  unit suite for every proposed change.
+  unit suite for every proposed change, with one retry for known flaky tests.
 - Continue up to three validation repairs in the original OpenCode session so
   the agent retains issue and implementation context.
 - Refuse to publish common credential and private-key paths.

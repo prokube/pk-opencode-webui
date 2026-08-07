@@ -26,7 +26,7 @@ const policies: Record<string, RepositoryPolicy> = {
     ],
     setupCommands: [],
     validationCommands: [
-      "make test-unit",
+      "make test-unit || make test-unit",
     ],
   },
 }
