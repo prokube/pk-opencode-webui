@@ -103,8 +103,10 @@ export class GitHubClient implements GitHubService, TicketDiscoveryProvider {
     const pulls = await this.listPullRequests(repository, "open")
     const eligible: ProviderCandidateList["candidates"] = []
     for (const raw of issues) {
-      const issue = await this.getEligibilityIssue(repository, raw)
-      if (!evaluateTicketEligibility(issue, policy).eligible) continue
+      const initial = await this.getEligibilityIssue(repository, raw)
+      if (!evaluateTicketEligibility(initial, policy).eligible) continue
+      const issue = await this.getIssue(repository, raw.number)
+      if (!evaluateTicketEligibility(issue, policy).eligible || hasWorkflowClaim(issue)) continue
       const branch = branchForIssue(issue.number)
       if (this.pullForIssue(pulls, repository, branch, issue.number)
         || await this.branchExists(repository, branch)) continue
@@ -141,10 +143,10 @@ export class GitHubClient implements GitHubService, TicketDiscoveryProvider {
     policy: TicketLabelPolicy = defaultLabelPolicy,
   ): Promise<void> {
     const repository = validateRepository(candidate.project)
-    const raw = await this.request<GitHubIssue>(`/repos/${repository}/issues/${candidate.number}`)
-    const issue = await this.getEligibilityIssue(repository, raw)
+    const issue = await this.getIssue(repository, candidate.number)
     const eligibility = evaluateTicketEligibility(issue, policy)
     if (!eligibility.eligible) throw new Error(`Selected issue is no longer eligible: ${eligibility.reason}`)
+    if (hasWorkflowClaim(issue)) throw new Error("Selected issue already has a workflow claim")
     const branch = branchForIssue(candidate.number)
     const existing = await this.findOpenPullRequest(repository, branch, candidate.number)
     if (existing) throw new Error(`Selected issue already has an open pull request: ${existing}`)

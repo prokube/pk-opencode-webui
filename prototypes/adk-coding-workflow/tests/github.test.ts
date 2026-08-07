@@ -39,6 +39,17 @@ describe("GitHubClient", () => {
               user: { login: "owner" },
               created_at: "2026-02-01T00:00:00Z",
             },
+            {
+              number: 3,
+              title: "Already claimed",
+              body: "",
+              state: "open",
+              html_url: "https://github.com/prokube/example/issues/3",
+              labels: [{ name: "ready" }, { name: "automated" }],
+              assignees: [],
+              user: { login: "owner" },
+              created_at: "2025-01-01T00:00:00Z",
+            },
           ])
         }
         const issue = url.pathname.match(/^\/repos\/prokube\/example\/issues\/(\d+)$/)?.[1]
@@ -46,13 +57,19 @@ describe("GitHubClient", () => {
           const number = Number(issue)
           return Response.json({
             number,
-            title: number === 1 ? "Critical from another author" : "Low priority from owner",
+            title: number === 1 ? "Critical from another author" : number === 2 ? "Low priority from owner" : "Already claimed",
             body: "",
             state: "open",
             html_url: `https://github.com/prokube/example/issues/${number}`,
-            labels: [{ name: "ready" }, { name: "automated" }, { name: number === 1 ? "priority:critical" : "priority:low" }],
+            labels: [{ name: "ready" }, { name: "automated" }, ...(number < 3 ? [{ name: number === 1 ? "priority:critical" : "priority:low" }] : [])],
             assignees: [],
           })
+        }
+        if (/\/issues\/3\/comments$/.test(url.pathname)) {
+          return Response.json([{
+            user: { login: "owner" },
+            body: "Coding workflow `another-run` claimed this issue.",
+          }])
         }
         if (/\/issues\/\d+\/comments$/.test(url.pathname)) return Response.json([])
         if (/\/issues\/\d+\/dependencies\/blocked_by$/.test(url.pathname)) return Response.json([])
@@ -155,6 +172,7 @@ describe("GitHubClient", () => {
           })
         }
         if (url.pathname === "/repos/prokube/example/issues/42/dependencies/blocked_by") return Response.json([])
+        if (url.pathname === "/repos/prokube/example/issues/42/comments") return Response.json([])
         if (url.pathname === "/repos/prokube/example/pulls") return Response.json([])
         if (url.pathname === "/repos/prokube/example/git/ref/heads/feature/issue-42") {
           return issueBranchExists ? Response.json({ ref: "refs/heads/feature/issue-42" }) : new Response(null, { status: 404 })
