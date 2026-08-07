@@ -11,5 +11,13 @@ spec:
   entrypoint: supervise
   arguments:
     parameters:
+      # Argo validates required template-level arguments before selecting an entrypoint.
+      # These values are not consumed by the supervise template.
+      - name: issue
+        value: "0"
+      - name: ticket-repository
+        value: prokube/pkui
+      - name: target-repository
+        value: prokube/pkui
       - name: discovery-request
         value: '{"projects":[{"provider":"github","project":"prokube/pkui","suggestedBaseBranch":"main"}]}'

@@ -107,7 +107,9 @@ describe("execute workflow template", () => {
 
   test("discovers, suspends for human selection, revalidates, and executes the selected ticket", () => {
     expect(supervisorManifest).toContain("entrypoint: supervise")
-    expect(supervisorManifest).not.toContain("- name: issue")
+    expect(supervisorManifest).toContain('- name: issue\n        value: "0"')
+    expect(supervisorManifest).toContain("- name: ticket-repository\n        value: prokube/pkui")
+    expect(supervisorManifest).toContain("- name: target-repository\n        value: prokube/pkui")
     expect(executeManifest).toContain("- name: supervise")
     expect(executeManifest).toContain("globalName: candidate-list")
     expect(executeManifest).toContain("- name: select-ticket")
