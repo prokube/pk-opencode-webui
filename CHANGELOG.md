@@ -6,6 +6,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.9.3] - 2026-08-13
+
+### Fixed
+- Reduce CPU and rendering overhead in long streaming sessions by throttling Markdown updates, avoiding unnecessary timeline regrouping, and sharing the active SSE connection (#449)
+
 ## [0.9.2] - 2026-05-29
 
 ### Fixed
