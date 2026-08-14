@@ -1159,43 +1159,25 @@ export function Layout(props: ParentProps) {
     });
   }
 
-  function errorText(err: unknown) {
-    if (err instanceof Error && err.message.trim()) return err.message;
-    return "Session bootstrap failed. Check API connectivity and retry.";
-  }
-
-  let lastSessionsLoadAt = 0;
-
-  async function loadSessions() {
-    lastSessionsLoadAt = Date.now();
-    try {
-      const res = await client.session.list({ roots: true });
-      const data = res.data;
-      if (Array.isArray(data)) {
-        const valid = data.filter(
-          (s): s is Session =>
-            s && typeof s === "object" && typeof s.id === "string",
-        );
-        setSessions(valid);
-        setSessionLoadError(null);
-      } else {
-        setSessions([]);
-        setSessionLoadError(null);
-      }
-    } catch (e) {
-      console.error("Failed to load sessions:", e);
+  createEffect(() => {
+    const error = sync.bootstrapError;
+    if (!sync.ready && !error) return;
+    if (error) {
       setSessions([]);
-      setSessionLoadError(errorText(e));
-    } finally {
+      setSessionLoadError(error);
       setLoading(false);
+      return;
     }
-  }
+    setSessions(sync.sessions().filter((session) => !session.parentID));
+    setSessionLoadError(null);
+    setLoading(false);
+  });
 
   const sessionError = createMemo(() => sessionLoadError());
 
   function retrySessionBootstrap() {
     setLoading(true);
-    void loadSessions();
+    void sync.refresh();
   }
 
   function handleSearchInput(query: string) {
@@ -1581,38 +1563,6 @@ export function Layout(props: ParentProps) {
         "focus.review",
         "focus.escape",
       ]);
-    });
-  });
-
-  onMount(() => {
-    loadSessions();
-
-    let sessionsTimer: number | undefined;
-    const unsub = events.subscribe((event) => {
-      if (event.type === "server.connected") {
-        if (Date.now() - lastSessionsLoadAt < 5000) return;
-        if (sessionsTimer !== undefined) clearTimeout(sessionsTimer);
-        sessionsTimer = window.setTimeout(() => {
-          sessionsTimer = undefined;
-          loadSessions();
-        }, 500);
-        return;
-      }
-      if (
-        event.type === "session.created" ||
-        event.type === "session.updated" ||
-        event.type === "session.deleted"
-      ) {
-        // Guard against child sessions — sidebar only shows root sessions
-        const info = (event.properties as { info: { parentID?: string } }).info;
-        if (info?.parentID) return;
-        loadSessions();
-      }
-    });
-
-    onCleanup(() => {
-      unsub();
-      if (sessionsTimer !== undefined) clearTimeout(sessionsTimer);
     });
   });
 
