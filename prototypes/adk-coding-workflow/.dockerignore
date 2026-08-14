@@ -1,0 +1,8 @@
+.data
+deploy
+node_modules
+tests
+Dockerfile
+Makefile
+README.md
+tsconfig.json
