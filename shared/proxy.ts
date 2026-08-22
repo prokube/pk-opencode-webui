@@ -45,3 +45,66 @@ export function normalizeProxiedResponse(response: Response) {
     headers: responseHeaders,
   })
 }
+
+export function isEventStreamPath(path: string) {
+  return path === "/event" || path === "/global/event"
+}
+
+export function proxyEventResponse(response: Response, signal: AbortSignal, upstream: AbortController) {
+  if (!response.body) return normalizeProxiedResponse(response)
+  const reader = response.body.getReader()
+  let closed = false
+  const abort = () => upstream.abort(signal.reason)
+  signal.addEventListener("abort", abort, { once: true })
+  if (signal.aborted) abort()
+
+  function release() {
+    try {
+      reader.releaseLock()
+    } catch {
+      // A pending read releases the lock after it rejects from the abort.
+    }
+  }
+
+  function cleanup(reason?: unknown) {
+    if (closed) return
+    closed = true
+    signal.removeEventListener("abort", abort)
+    upstream.abort(reason)
+  }
+
+  const body = new ReadableStream<Uint8Array>({
+    async pull(controller) {
+      try {
+        const chunk = await reader.read()
+        if (!chunk.done) {
+          controller.enqueue(chunk.value)
+          return
+        }
+        cleanup()
+        release()
+        controller.close()
+      } catch (error) {
+        cleanup(error)
+        release()
+        controller.error(error)
+      }
+    },
+    async cancel(reason) {
+      cleanup(reason)
+      await reader.cancel(reason).catch(() => undefined)
+      release()
+    },
+  })
+
+  return new Response(body, {
+    status: response.status,
+    headers: {
+      "Content-Type": "text/event-stream",
+      "Cache-Control": "no-store",
+      Pragma: "no-cache",
+      Expires: "0",
+      "X-Accel-Buffering": "no",
+    },
+  })
+}

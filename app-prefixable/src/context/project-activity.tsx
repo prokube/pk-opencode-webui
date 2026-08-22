@@ -1,7 +1,6 @@
 import { createContext, createEffect, createSignal, onCleanup, type ParentProps, untrack, useContext } from "solid-js"
-import type { Event, SessionStatus } from "../sdk/client"
+import type { SessionStatus } from "../sdk/client"
 import { createOpencodeClient } from "../sdk/client"
-import { createSSEParser } from "../utils/sse"
 import { useProjects } from "./projects"
 import { useServer } from "./server"
 import { sessionIsWorking } from "../utils/session-tree-request"
@@ -47,8 +46,6 @@ export function ProjectActivityProvider(props: ParentProps) {
   const [statuses, setStatuses] = createSignal<ProjectStatuses>({})
   const refreshes = new Map<string, object>()
   let disposed = false
-  let controller: AbortController | undefined
-  let reconnect: ReturnType<typeof setTimeout> | undefined
   let poll: ReturnType<typeof setTimeout> | undefined
 
   function directories() {
@@ -58,7 +55,10 @@ export function ProjectActivityProvider(props: ParentProps) {
   async function refresh(directory: string) {
     const token = {}
     refreshes.set(directory, token)
-    const response = await client.session.status({ directory }).catch(() => undefined)
+    const response = await client.session.status(
+      { directory },
+      { signal: AbortSignal.timeout(5_000) },
+    ).catch(() => undefined)
     if (disposed || refreshes.get(directory) !== token || !response?.data) return
     setStatuses((current) => ({ ...current, [directory]: response.data }))
   }
@@ -74,58 +74,7 @@ export function ProjectActivityProvider(props: ParentProps) {
       poll = undefined
       await refreshAll()
       schedulePoll()
-    }, active ? 5_000 : 30_000)
-  }
-
-  function apply(directory: string, event: Event) {
-    if (!directories().has(directory)) return
-    if (event.type !== "session.status" && event.type !== "session.idle" && event.type !== "session.deleted") return
-    refreshes.delete(directory)
-    setStatuses((current) => reduceProjectActivity(current, directory, event))
-    if (poll) clearTimeout(poll)
-    poll = undefined
-    schedulePoll()
-  }
-
-  async function connect() {
-    if (controller || disposed) return
-    controller = new AbortController()
-    const signal = controller.signal
-    try {
-      const response = await fetch(`${server.serverUrl().replace(/\/$/, "")}/global/event`, {
-        headers: { ...server.authHeaders(), Accept: "text/event-stream" },
-        signal,
-      })
-      if (!response.ok || !response.body) throw new Error(`SSE connection failed: ${response.status}`)
-      void refreshAll()
-      const reader = response.body.getReader()
-      const decoder = new TextDecoder()
-      const parser = createSSEParser((raw) => {
-        try {
-          const data = JSON.parse(raw) as { directory?: string; payload?: Event }
-          if (data.directory && data.payload?.type) apply(data.directory, data.payload)
-        } catch {
-          // Ignore malformed global events; polling repairs missed state.
-        }
-      })
-      for (;;) {
-        const chunk = await reader.read()
-        if (chunk.done) break
-        parser.push(decoder.decode(chunk.value, { stream: true }))
-      }
-      parser.push(decoder.decode())
-      parser.push("")
-    } catch {
-      if (signal.aborted || disposed) return
-    } finally {
-      if (controller?.signal === signal) controller = undefined
-    }
-    if (!disposed && !reconnect) {
-      reconnect = setTimeout(() => {
-        reconnect = undefined
-        void connect()
-      }, 3_000)
-    }
+    }, active ? 3_000 : 10_000)
   }
 
   createEffect(() => {
@@ -134,16 +83,15 @@ export function ProjectActivityProvider(props: ParentProps) {
     for (const directory of refreshes.keys()) {
       if (!current.has(directory)) refreshes.delete(directory)
     }
-    for (const directory of current) void refresh(directory)
-    schedulePoll()
+    void refreshAll().finally(() => {
+      if (poll) clearTimeout(poll)
+      poll = undefined
+      schedulePoll()
+    })
   })
-
-  void connect()
 
   onCleanup(() => {
     disposed = true
-    controller?.abort()
-    if (reconnect) clearTimeout(reconnect)
     if (poll) clearTimeout(poll)
   })
 

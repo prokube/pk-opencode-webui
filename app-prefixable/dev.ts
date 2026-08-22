@@ -1,7 +1,7 @@
 import { watch } from "fs"
 import { handleExtendedEndpoint, isApiPath, isMutation, isSameOriginRequest } from "../shared/extended-api"
 import { matchesBasePath, stripBasePath } from "../shared/base-path"
-import { normalizeProxiedResponse, serializeScriptData, stripHopByHopHeaders } from "../shared/proxy"
+import { isEventStreamPath, normalizeProxiedResponse, proxyEventResponse, serializeScriptData, stripHopByHopHeaders } from "../shared/proxy"
 
 const BASE_PATH = process.env.BASE_PATH || "/"
 const PORT = parseInt(process.env.PORT || "3000", 10)
@@ -105,32 +105,29 @@ const server = Bun.serve<{ target: string }>({
       stripHopByHopHeaders(headers)
 
       // SSE requests - just pass through the response body directly
-      if (strippedPath.startsWith("/event")) {
+      if (isEventStreamPath(strippedPath)) {
         console.log("[Proxy] SSE request to:", target.toString())
+        const upstream = new AbortController()
+        const abort = () => upstream.abort(req.signal.reason)
+        req.signal.addEventListener("abort", abort, { once: true })
+        if (req.signal.aborted) abort()
         try {
           const response = await fetch(target.toString(), {
             method: req.method,
             headers,
-            signal: req.signal,
+            signal: upstream.signal,
           })
 
           if (!response.ok) {
+            req.signal.removeEventListener("abort", abort)
             console.error("[Proxy] SSE error:", response.status, response.statusText)
             return withNoStoreHeaders(normalizeProxiedResponse(response))
           }
 
-          // Pass through the body directly - Bun handles streaming
-          return new Response(response.body, {
-            status: response.status,
-            headers: {
-              "Content-Type": "text/event-stream",
-              "Cache-Control": "no-store",
-              Pragma: "no-cache",
-              Expires: "0",
-              "X-Accel-Buffering": "no",
-            },
-          })
+          req.signal.removeEventListener("abort", abort)
+          return proxyEventResponse(response, req.signal, upstream)
         } catch (e) {
+          req.signal.removeEventListener("abort", abort)
           console.error("[Proxy] SSE connection error:", e)
           return withNoStoreHeaders(new Response("SSE proxy error", { status: 502 }))
         }

@@ -1,7 +1,31 @@
 import { describe, expect, test } from "bun:test"
-import { normalizeProxiedResponse, serializeScriptData, stripHopByHopHeaders } from "../../shared/proxy"
+import { isEventStreamPath, normalizeProxiedResponse, proxyEventResponse, serializeScriptData, stripHopByHopHeaders } from "../../shared/proxy"
 
 describe("normalizeProxiedResponse", () => {
+  test("recognizes both event stream routes", () => {
+    expect(isEventStreamPath("/event")).toBe(true)
+    expect(isEventStreamPath("/global/event")).toBe(true)
+    expect(isEventStreamPath("/eventual")).toBe(false)
+  })
+
+  test("aborts upstream when the downstream event stream is cancelled", async () => {
+    const request = new AbortController()
+    const upstream = new AbortController()
+    const source = new ReadableStream<Uint8Array>({ pull() {} })
+    const response = proxyEventResponse(new Response(source), request.signal, upstream)
+    await response.body?.cancel("offline")
+    expect(upstream.signal.aborted).toBe(true)
+    expect(response.headers.get("Content-Type")).toBe("text/event-stream")
+  })
+
+  test("aborts upstream when the downstream request was already aborted", () => {
+    const request = new AbortController()
+    const upstream = new AbortController()
+    request.abort("offline")
+    proxyEventResponse(new Response(new ReadableStream<Uint8Array>({ pull() {} })), request.signal, upstream)
+    expect(upstream.signal.aborted).toBe(true)
+  })
+
   test("removes decode-sensitive headers and keeps body/status", async () => {
     const response = new Response("payload", {
       status: 201,
