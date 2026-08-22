@@ -4,6 +4,7 @@ import { createOpencodeClient } from "../sdk/client"
 import { useProjects } from "./projects"
 import { useServer } from "./server"
 import { sessionIsWorking } from "../utils/session-tree-request"
+import { useBrowserNotifications } from "./browser-notifications"
 
 type ProjectStatuses = Record<string, Record<string, SessionStatus>>
 export type ProjectActivityBadge = { type: "permission" | "question" | "working"; count: number }
@@ -13,6 +14,12 @@ export function projectActivityBadge(statuses: Record<string, SessionStatus>, qu
   if (questions) return { type: "question", count: questions } satisfies ProjectActivityBadge
   const working = Object.values(statuses).filter(sessionIsWorking).length
   if (working) return { type: "working", count: working } satisfies ProjectActivityBadge
+}
+
+export function completedSessionIDs(previous: Record<string, SessionStatus>, next: Record<string, SessionStatus>) {
+  return Object.entries(previous)
+    .filter(([sessionID, status]) => sessionIsWorking(status) && (!next[sessionID] || !sessionIsWorking(next[sessionID])))
+    .map(([sessionID]) => sessionID)
 }
 
 export function reduceProjectActivity(
@@ -48,6 +55,7 @@ const ProjectActivityContext = createContext<ProjectActivityContextValue>()
 export function ProjectActivityProvider(props: ParentProps) {
   const projects = useProjects()
   const server = useServer()
+  const notifications = useBrowserNotifications()
   const client = createOpencodeClient({
     baseUrl: server.serverUrl(),
     headers: server.authHeaders(),
@@ -58,6 +66,7 @@ export function ProjectActivityProvider(props: ParentProps) {
   const [permissions, setPermissions] = createSignal<Record<string, number>>({})
   const [active, setActive] = createSignal<string>()
   const refreshes = new Map<string, object>()
+  const attention = new Map<string, { questions: Set<string>; permissions: Set<string> }>()
   let disposed = false
   let poll: ReturnType<typeof setTimeout> | undefined
 
@@ -75,9 +84,54 @@ export function ProjectActivityProvider(props: ParentProps) {
       client.permission.list({ directory }, options()).catch(() => undefined),
     ])
     if (disposed || refreshes.get(directory) !== token) return
-    setStatuses((current) => ({ ...current, [directory]: status?.data ?? {} }))
-    setQuestions((current) => ({ ...current, [directory]: question?.data?.length ?? 0 }))
-    setPermissions((current) => ({ ...current, [directory]: permission?.data?.length ?? 0 }))
+    const previous = statuses()[directory]
+    const next = status?.data ?? previous ?? {}
+    const previousAttention = attention.get(directory)
+    const currentAttention = {
+      questions: question ? new Set((question.data ?? []).map((item) => item.id)) : previousAttention?.questions ?? new Set<string>(),
+      permissions: permission ? new Set((permission.data ?? []).map((item) => item.id)) : previousAttention?.permissions ?? new Set<string>(),
+    }
+    const failed = new Set<string>()
+    if (previous && status) {
+      await Promise.all(completedSessionIDs(previous, next).map(async (sessionID) => {
+        const [sessionResult, messagesResult] = await Promise.all([
+          client.session.get({ sessionID, directory }, options()).catch(() => undefined),
+          client.session.messages({ sessionID, directory }, options()).catch(() => undefined),
+        ])
+        if (!sessionResult || !messagesResult) {
+          failed.add(sessionID)
+          return
+        }
+        if (disposed || refreshes.get(directory) !== token || !directories().has(directory)) return
+        const session = sessionResult.data
+        if (!session || session.parentID) return
+        const assistant = [...(messagesResult.data ?? [])].reverse().find((message) => message.info.role === "assistant")?.info
+        if (assistant?.role === "assistant" && assistant.error?.name === "MessageAbortedError") return
+        if (assistant?.role === "assistant" && assistant.error) {
+          notifications.notify("errors", "Session error", session.title ?? sessionID, directory, sessionID, `opencode:error:${directory}:${sessionID}`)
+          return
+        }
+        notifications.notify("agent", "Response ready", session.title ?? sessionID, directory, sessionID, `opencode:idle:${directory}:${sessionID}`)
+      }))
+    }
+    if (disposed || refreshes.get(directory) !== token) return
+    attention.set(directory, currentAttention)
+    if (previousAttention) {
+      for (const request of question?.data ?? []) {
+        if (previousAttention.questions.has(request.id)) continue
+        notifications.notify("agent", "Question", "A background session has a question", directory, request.sessionID, `opencode:question:${directory}:${request.id}`)
+      }
+      for (const request of permission?.data ?? []) {
+        if (previousAttention.permissions.has(request.id)) continue
+        notifications.notify("permissions", "Permission required", "A background session needs permission", directory, request.sessionID, `opencode:permission:${directory}:${request.id}`)
+      }
+    }
+    setStatuses((current) => ({
+      ...current,
+      [directory]: Object.fromEntries(Object.entries(next).concat([...failed].map((sessionID) => [sessionID, previous?.[sessionID] ?? { type: "busy" }]))),
+    }))
+    if (question) setQuestions((current) => ({ ...current, [directory]: question.data?.length ?? 0 }))
+    if (permission) setPermissions((current) => ({ ...current, [directory]: permission.data?.length ?? 0 }))
   }
 
   async function refreshAll() {
@@ -102,6 +156,7 @@ export function ProjectActivityProvider(props: ParentProps) {
     for (const directory of refreshes.keys()) {
       if (!current.has(directory)) refreshes.delete(directory)
     }
+    for (const directory of attention.keys()) if (!current.has(directory)) attention.delete(directory)
     void refreshAll().finally(() => {
       if (poll) clearTimeout(poll)
       poll = undefined

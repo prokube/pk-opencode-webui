@@ -14,6 +14,7 @@ import { Settings } from "./pages/settings"
 import { ProjectPicker } from "./pages/project-picker"
 import { base64Decode } from "./utils/path"
 import { legacyStorageValue, workspaceStorageKey } from "./utils/storage"
+import { BrowserNotificationsProvider } from "./context/browser-notifications"
 
 function validSessionId(value: string) {
   return !!value && !value.includes("..") && !/[/\\]/.test(value)
@@ -115,17 +116,19 @@ function AppRoutes() {
 function AppProviders() {
   return (
     <BasePathProvider>
-      <ThemeProvider>
-        <BrandingProvider>
-          <ProjectsProvider>
-            <ProjectActivityProvider>
-              <CommandProvider>
-                <AppRoutes />
-              </CommandProvider>
-            </ProjectActivityProvider>
-          </ProjectsProvider>
-        </BrandingProvider>
-      </ThemeProvider>
+      <BrowserNotificationsProvider>
+        <ThemeProvider>
+          <BrandingProvider>
+            <ProjectsProvider>
+              <ProjectActivityProvider>
+                <CommandProvider>
+                  <AppRoutes />
+                </CommandProvider>
+              </ProjectActivityProvider>
+            </ProjectsProvider>
+          </BrandingProvider>
+        </ThemeProvider>
+      </BrowserNotificationsProvider>
     </BasePathProvider>
   )
 }

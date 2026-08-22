@@ -16,6 +16,7 @@ import { writeFile } from "../utils/extended-api"
 import { OPENAI_BROWSER_OAUTH_UNSUPPORTED_MESSAGE, browserOAuthUnsupported, extractProviderAuthCode, providerOAuthMethodUnsupported } from "../utils/provider-auth"
 import type { Config, PermissionActionConfig } from "../sdk/client"
 import { SavedPromptsSettings } from "../components/saved-prompts-settings"
+import { BrowserNotificationsSettings } from "../components/browser-notifications-settings"
 
 // Connected via environment or built-in defaults, not removable by auth.remove.
 const NON_REMOVABLE_PROVIDER_IDS = new Set(["amazon-bedrock", "opencode"])
@@ -2116,6 +2117,7 @@ Add your project-specific instructions here.
                   </p>
                 </div>
               </section>
+              <BrowserNotificationsSettings />
             </div>
           </Show>
 

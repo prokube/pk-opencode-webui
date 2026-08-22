@@ -5,6 +5,7 @@ import { ProviderProvider } from "./providers"
 import { SDKProvider } from "./sdk"
 import { SyncProvider } from "./sync"
 import { SavedPromptsProvider } from "./saved-prompts"
+import { BrowserNotificationEvents } from "./browser-notification-events"
 
 export function CoreProviders(props: ParentProps & { directory?: string }) {
   return (
@@ -13,7 +14,10 @@ export function CoreProviders(props: ParentProps & { directory?: string }) {
         <ConfigProvider>
           <ProviderProvider>
             <MCPProvider>
-              <SavedPromptsProvider>{props.children}</SavedPromptsProvider>
+              <SavedPromptsProvider>
+                <BrowserNotificationEvents />
+                {props.children}
+              </SavedPromptsProvider>
             </MCPProvider>
           </ProviderProvider>
         </ConfigProvider>

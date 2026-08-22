@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { projectActivityBadge, reduceProjectActivity } from "../src/context/project-activity"
+import { completedSessionIDs, projectActivityBadge, reduceProjectActivity } from "../src/context/project-activity"
 
 describe("project activity", () => {
   test("tracks status and idle events per directory", () => {
@@ -43,5 +43,18 @@ describe("project activity", () => {
     expect(projectActivityBadge(statuses, 2, 3)).toEqual({ type: "permission", count: 3 })
     expect(projectActivityBadge(statuses, 2, 0)).toEqual({ type: "question", count: 2 })
     expect(projectActivityBadge(statuses, 0, 0)).toEqual({ type: "working", count: 2 })
+  })
+
+  test("detects background sessions that stopped working", () => {
+    const previous = {
+      done: { type: "busy" as const },
+      retrying: { type: "retry" as const, attempt: 1, message: "wait", next: 1 },
+      idle: { type: "idle" as const },
+    }
+    const next = {
+      retrying: { type: "busy" as const },
+      idle: { type: "idle" as const },
+    }
+    expect(completedSessionIDs(previous, next)).toEqual(["done"])
   })
 })
