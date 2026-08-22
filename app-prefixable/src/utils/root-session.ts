@@ -4,7 +4,7 @@ type SessionCreateClient = Pick<OpencodeClient, "session">;
 
 interface RootSessionTrace {
   source: string;
-  state: "start" | "join" | "success" | "error";
+  state: "start" | "success" | "error";
   route: string;
   at: number;
   sessionID?: string;
@@ -16,15 +16,16 @@ export interface RootSessionResult {
   isLeader: boolean;
 }
 
+export interface RootSessionScope {
+  serverId: string;
+  directory: string;
+}
+
 declare global {
   interface Window {
     __opencodeRootSessionTrace?: RootSessionTrace[];
   }
 }
-
-const IN_FLIGHT_TTL_MS = 30_000;
-
-const inFlight = new Map<string, Promise<SessionCreateResponse | undefined>>();
 
 function routePath() {
   if (typeof window === "undefined") return "server";
@@ -43,20 +44,8 @@ function trace(entry: RootSessionTrace) {
 
 export function createRootSession(
   client: SessionCreateClient,
-  opts: { source: string; scope?: string },
+  opts: { source: string; scope: RootSessionScope },
 ): Promise<RootSessionResult> {
-  const key = opts.scope ?? `route:${routePath()}`;
-  const current = inFlight.get(key);
-  if (current) {
-    trace({
-      source: opts.source,
-      state: "join",
-      route: routePath(),
-      at: Date.now(),
-    });
-    return current.then((data) => ({ data, isLeader: false }));
-  }
-
   trace({
     source: opts.source,
     state: "start",
@@ -64,9 +53,10 @@ export function createRootSession(
     at: Date.now(),
   });
 
-  const req = client.session
+  return client.session
     .create({})
     .then((res) => {
+      if ("error" in res && res.error) throw res.error;
       trace({
         source: opts.source,
         state: "success",
@@ -86,15 +76,5 @@ export function createRootSession(
       });
       throw err;
     })
-    .finally(() => {
-      if (inFlight.get(key) === req) inFlight.delete(key);
-    });
-
-  setTimeout(() => {
-    if (inFlight.get(key) !== req) return;
-    inFlight.delete(key);
-  }, IN_FLIGHT_TTL_MS);
-
-  inFlight.set(key, req);
-  return req.then((data) => ({ data, isLeader: true }));
+    .then((data) => ({ data, isLeader: true }));
 }

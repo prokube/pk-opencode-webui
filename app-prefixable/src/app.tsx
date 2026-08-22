@@ -1,7 +1,7 @@
 import { Router, Route, useNavigate, useParams } from "@solidjs/router"
-import { createEffect, For } from "solid-js"
+import { createEffect, createMemo, Show } from "solid-js"
 import { BasePathProvider, useBasePath } from "./context/base-path"
-import { ServerProvider, useServer } from "./context/server"
+import { LOCAL_SERVER_ID, ServerProvider } from "./context/server"
 import { BrandingProvider } from "./context/branding"
 import { ThemeProvider } from "./context/theme"
 import { CommandProvider } from "./context/command"
@@ -18,16 +18,14 @@ function validSessionId(value: string) {
   return !!value && !value.includes("..") && !/[/\\]/.test(value)
 }
 
-function getLastSessionHref(encodedDir: string, serverId: string): string {
+function getLastSessionHref(encodedDir: string): string {
   try {
     const dir = base64Decode(encodedDir)
     if (typeof window === "undefined") return "session"
-    const key = workspaceStorageKey(serverId, dir, "lastSession")
+    const key = workspaceStorageKey(LOCAL_SERVER_ID, dir, "lastSession")
     const current = window.localStorage.getItem(key)
-    const legacy = serverId === "local"
-      ? [window.localStorage.getItem(`opencode.lastSession.${dir}`)]
-      : []
-    const result = legacyStorageValue(serverId, current, legacy, validSessionId)
+    const legacy = [window.localStorage.getItem(`opencode.lastSession.${dir}`)]
+    const result = legacyStorageValue(LOCAL_SERVER_ID, current, legacy, validSessionId)
     if (result.migrated && result.value) window.localStorage.setItem(key, result.value)
     const last = result.value
     if (!last || !validSessionId(last)) return "session"
@@ -40,20 +38,20 @@ function getLastSessionHref(encodedDir: string, serverId: string): string {
 function DirectoryIndex() {
   const params = useParams<{ dir: string }>()
   const navigate = useNavigate()
-  const server = useServer()
-  createEffect(() => navigate(getLastSessionHref(params.dir, server.activeServerId()), { replace: true }))
+  createEffect(() => navigate(getLastSessionHref(params.dir), { replace: true }))
   return null
 }
 
 function SessionIndex() {
   const params = useParams<{ dir: string }>()
   const navigate = useNavigate()
-  const server = useServer()
-  const href = getLastSessionHref(params.dir, server.activeServerId())
-  if (href === "session") return <Session />
-  const id = href.replace(/^session\//, "")
-  createEffect(() => navigate(id, { replace: true }))
-  return null
+  const href = createMemo(() => getLastSessionHref(params.dir))
+  createEffect(() => {
+    const next = href()
+    if (next === "session") return
+    navigate(next.replace(/^session\//, ""), { replace: true })
+  })
+  return <Show when={href() === "session"}><Session /></Show>
 }
 
 function AppRoutes() {
@@ -79,33 +77,26 @@ function AppRoutes() {
   )
 }
 
-function AppWithServer() {
-  const { activeServerKey } = useServer()
-
-  // Key by server config to force full remount when switching or editing servers
+function AppProviders() {
   return (
-    <For each={[activeServerKey()]}>
-      {() => (
-        <BasePathProvider>
-          <ThemeProvider>
-            <BrandingProvider>
-              <ProjectsProvider>
-                <CommandProvider>
-                  <AppRoutes />
-                </CommandProvider>
-              </ProjectsProvider>
-            </BrandingProvider>
-          </ThemeProvider>
-        </BasePathProvider>
-      )}
-    </For>
+    <BasePathProvider>
+      <ThemeProvider>
+        <BrandingProvider>
+          <ProjectsProvider>
+            <CommandProvider>
+              <AppRoutes />
+            </CommandProvider>
+          </ProjectsProvider>
+        </BrandingProvider>
+      </ThemeProvider>
+    </BasePathProvider>
   )
 }
 
 export function App() {
   return (
     <ServerProvider>
-      <AppWithServer />
+      <AppProviders />
     </ServerProvider>
   )
 }

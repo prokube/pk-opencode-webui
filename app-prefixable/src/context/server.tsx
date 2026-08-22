@@ -1,263 +1,29 @@
-import { createContext, useContext, createSignal, type ParentProps, type Accessor } from "solid-js"
-import { type ServerConfig, type ServerAuth, getAuthHeaders, isLocalServer } from "../types/server"
+import { createContext, useContext, onMount, type ParentProps, type Accessor } from "solid-js"
 import { getServerUrl } from "../utils/path"
 
-const SERVERS_KEY = "opencode.servers"           // localStorage: metadata (no secrets)
-const SERVERS_CREDS_KEY = "opencode.serversCreds" // sessionStorage: credentials only
-const ACTIVE_SERVER_KEY = "opencode.activeServerId"
-
-function createDefaultServer(): ServerConfig {
-  // Check for env-var pre-configured auth (guard against missing import.meta.env in non-Vite builds)
-  const env = typeof import.meta !== "undefined" ? import.meta.env ?? {} : {}
-  const apiKey = env.VITE_OPENCODE_API_KEY as string | undefined
-  const username = env.VITE_OPENCODE_SERVER_USERNAME as string | undefined
-  const password = env.VITE_OPENCODE_SERVER_PASSWORD as string | undefined
-
-  let auth: ServerAuth = { type: "none" }
-  if (apiKey) {
-    auth = { type: "api-key", key: apiKey }
-  } else if (username && password) {
-    auth = { type: "basic", username, password }
-  }
-
-  return {
-    id: "local",
-    name: "Local Server",
-    url: getServerUrl(),
-    auth,
-  }
-}
-
-function isValidServerEntry(s: unknown): s is ServerConfig {
-  if (!s || typeof s !== "object") return false
-  const obj = s as Record<string, unknown>
-  if (typeof obj.id !== "string" || !obj.id) return false
-  if (typeof obj.name !== "string" || !obj.name) return false
-  if (typeof obj.url !== "string" || !obj.url) return false
-  // Validate auth shape; default missing/invalid auth to {type:"none"}
-  if (obj.auth && typeof obj.auth === "object") {
-    const auth = obj.auth as Record<string, unknown>
-    if (auth.type === "api-key" && typeof auth.key === "string") return true
-    if (auth.type === "basic" && typeof auth.username === "string" && typeof auth.password === "string") return true
-    if (auth.type === "none") return true
-    // Invalid auth shape — will be defaulted below
-  }
-  return true
-}
-
-function normalizeAuth(s: Record<string, unknown>): ServerAuth {
-  const auth = s.auth as Record<string, unknown> | undefined
-  if (!auth || typeof auth !== "object") return { type: "none" }
-  if (auth.type === "api-key" && typeof auth.key === "string") return auth as ServerAuth
-  if (auth.type === "basic" && typeof auth.username === "string" && typeof auth.password === "string") return auth as ServerAuth
-  if (auth.type === "none") return { type: "none" }
-  return { type: "none" }
-}
-
-/** Load credentials overlay from sessionStorage (keyed by server id) */
-function loadCredentials(): Record<string, ServerAuth> {
-  try {
-    const stored = sessionStorage.getItem(SERVERS_CREDS_KEY)
-    if (stored) return JSON.parse(stored)
-  } catch {
-    // Storage can be unavailable in private browsing contexts.
-  }
-  return {}
-}
-
-function loadServers(): ServerConfig[] {
-  try {
-    const stored = localStorage.getItem(SERVERS_KEY)
-    if (stored) {
-      const raw = JSON.parse(stored)
-      if (Array.isArray(raw) && raw.length > 0) {
-        // Validate and normalize entries from localStorage (metadata only, no secrets)
-        const creds = loadCredentials()
-        const parsed: ServerConfig[] = raw
-          .filter(isValidServerEntry)
-          .map((s) => {
-            const obj = s as unknown as Record<string, unknown>
-            // Prefer credentials from sessionStorage; fall back to authMethod stub
-            if (creds[obj.id as string]) {
-              return { ...s, auth: normalizeAuth({ auth: creds[obj.id as string] } as unknown as Record<string, unknown>) }
-            }
-            // No session credentials — use authMethod to preserve configured type
-            // (credentials will need re-entry after browser restart)
-            const method = (obj.authMethod as string) || "none"
-            if (method === "api-key") return { ...s, auth: { type: "api-key" as const, key: "" } }
-            if (method === "basic") return { ...s, auth: { type: "basic" as const, username: "", password: "" } }
-            return { ...s, auth: { type: "none" as const } }
-          })
-
-        // Ensure the default server exists and has the correct URL and env-based auth
-        const defaultServer = createDefaultServer()
-        const hasDefault = parsed.some((s) => s.id === "local")
-        if (!hasDefault) {
-          parsed.unshift(defaultServer)
-        } else {
-          const idx = parsed.findIndex((s) => s.id === "local")
-          if (idx >= 0) {
-            parsed[idx] = {
-              ...parsed[idx],
-              url: defaultServer.url,
-              auth: defaultServer.auth,
-              name: defaultServer.name,
-            }
-          }
-        }
-        return parsed
-      }
-    }
-  } catch {
-    // Fall back to the runtime-configured local server.
-  }
-  return [createDefaultServer()]
-}
-
-function loadActiveServerId(): string {
-  try {
-    return localStorage.getItem(ACTIVE_SERVER_KEY) || "local"
-  } catch {
-    return "local"
-  }
-}
+export const LOCAL_SERVER_ID = "local"
 
 interface ServerContextValue {
-  servers: Accessor<ServerConfig[]>
-  activeServer: Accessor<ServerConfig>
-  activeServerId: Accessor<string>
   authHeaders: Accessor<Record<string, string>>
   serverUrl: Accessor<string>
-  /** Key that changes whenever the active server's identity or config changes — use for remounting */
-  activeServerKey: Accessor<string>
-  addServer: (server: Omit<ServerConfig, "id">) => ServerConfig
-  updateServer: (id: string, updates: Partial<Omit<ServerConfig, "id">>) => void
-  removeServer: (id: string) => void
-  setActiveServer: (id: string) => void
 }
 
 const ServerContext = createContext<ServerContextValue>()
 
 export function ServerProvider(props: ParentProps) {
-  const initialServers = loadServers()
-  const initialActiveId = loadActiveServerId()
-  // Validate activeId against server list
-  const validatedActiveId = initialServers.some((s) => s.id === initialActiveId) ? initialActiveId : "local"
-  if (validatedActiveId !== initialActiveId) {
-    try { localStorage.setItem(ACTIVE_SERVER_KEY, validatedActiveId) } catch {
-      // The in-memory selection still remains valid.
-    }
-  }
-
-  const [servers, setServers] = createSignal<ServerConfig[]>(initialServers)
-  const [activeId, setActiveId] = createSignal(validatedActiveId)
-  const [revision, setRevision] = createSignal(0)
-
-  function save(list: ServerConfig[]) {
-    // Only bump revision if the active server's config actually changed
-    const currentActive = activeServer()
-    const nextActive = list.find((s) => s.id === activeId()) || list[0]
-    if (nextActive && (nextActive.url !== currentActive.url || JSON.stringify(nextActive.auth) !== JSON.stringify(currentActive.auth))) {
-      setRevision((r) => r + 1)
-    }
-    setServers(list)
+  onMount(() => {
     try {
-      // Persist metadata (without secrets) to localStorage for durability.
-      // Store authMethod separately so the configured auth type survives reload
-      // even when credentials (in sessionStorage) are cleared.
-      const metadata = list.map((s) => ({
-        ...s,
-        authMethod: s.auth.type,
-        auth: { type: "none" as const },
-      }))
-      localStorage.setItem(SERVERS_KEY, JSON.stringify(metadata))
-
-      // Persist credentials to sessionStorage (does not survive browser restart)
-      // Skip env-derived auth for the default server to avoid leaking env secrets
-      const defaultAuth = createDefaultServer().auth
-      const creds: Record<string, ServerAuth> = {}
-      for (const s of list) {
-        if (s.id === "local" && JSON.stringify(s.auth) === JSON.stringify(defaultAuth)) continue
-        if (s.auth.type !== "none") creds[s.id] = s.auth
-      }
-      sessionStorage.setItem(SERVERS_CREDS_KEY, JSON.stringify(creds))
+      sessionStorage.removeItem("opencode.serversCreds")
+      localStorage.removeItem("opencode.servers")
     } catch {
-      // Persisting server metadata is best-effort.
+      // Storage may be unavailable in restricted browser contexts.
     }
-  }
-
-  function activeServer() {
-    return servers().find((s) => s.id === activeId()) || servers()[0]
-  }
-
-  function authHeaders() {
-    const s = activeServer()
-    const auth = getAuthHeaders(s.auth)
-    // For remote servers, add proxy target header so the local server
-    // can forward the request to the correct remote URL
-    if (!isLocalServer(s)) {
-      return { ...auth, "X-Proxy-Target": s.url }
-    }
-    return auth
-  }
-
-  function serverUrl() {
-    const s = activeServer()
-    // Remote servers go through the local proxy to avoid CORS issues
-    if (!isLocalServer(s)) {
-      return getServerUrl() + "/__proxy"
-    }
-    return s.url
-  }
-
-  function activeServerKey() {
-    const s = activeServer()
-    return `${s.id}|${s.url}|${s.auth.type}|${revision()}`
-  }
-
-  function addServer(server: Omit<ServerConfig, "id">): ServerConfig {
-    const newServer: ServerConfig = { ...server, id: crypto.randomUUID() }
-    save([...servers(), newServer])
-    return newServer
-  }
-
-  function updateServer(id: string, updates: Partial<Omit<ServerConfig, "id">>) {
-    save(servers().map((s) => (s.id === id ? { ...s, ...updates } : s)))
-  }
-
-  function removeServer(id: string) {
-    if (id === "local") return // Can't remove default
-    save(servers().filter((s) => s.id !== id))
-    if (activeId() === id) {
-      setActiveId("local")
-      try { localStorage.setItem(ACTIVE_SERVER_KEY, "local") } catch {
-        // The in-memory selection still changes.
-      }
-    }
-  }
-
-  function setActiveServerFn(id: string) {
-    const exists = servers().some((s) => s.id === id)
-    const nextId = exists ? id : "local"
-    setActiveId(nextId)
-    try { localStorage.setItem(ACTIVE_SERVER_KEY, nextId) } catch {
-      // The in-memory selection still changes.
-    }
-  }
-
+  })
   return (
     <ServerContext.Provider
       value={{
-        servers,
-        activeServer,
-        activeServerId: activeId,
-        authHeaders,
-        serverUrl,
-        activeServerKey,
-        addServer,
-        updateServer,
-        removeServer,
-        setActiveServer: setActiveServerFn,
+        authHeaders: () => ({}),
+        serverUrl: getServerUrl,
       }}
     >
       {props.children}

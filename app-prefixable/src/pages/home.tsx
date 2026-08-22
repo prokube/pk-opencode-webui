@@ -2,8 +2,10 @@ import { useNavigate } from "@solidjs/router"
 import { useSDK } from "../context/sdk"
 import { base64Encode } from "../utils/path"
 import { createRootSession } from "../utils/root-session"
+import { LOCAL_SERVER_ID } from "../context/server"
 import { Plus, Settings } from "lucide-solid"
 import { Button } from "../components/ui/button"
+import { onCleanup } from "solid-js"
 
 // OpenCode Wordmark (same as project-picker)
 function OpenCodeWordmark(props: { class?: string }) {
@@ -53,14 +55,25 @@ function OpenCodeWordmark(props: { class?: string }) {
 export function Home() {
   const { client, directory } = useSDK()
   const navigate = useNavigate()
+  const lifetime = { active: true, create: 0 }
+  onCleanup(() => {
+    lifetime.active = false
+    lifetime.create += 1
+  })
 
   async function createNewSession() {
     if (!directory) return
+    const token = ++lifetime.create
+    const scope = { serverId: LOCAL_SERVER_ID, directory }
     try {
       const res = await createRootSession(client, {
         source: "home.createNewSession",
-        scope: directory,
+        scope,
       })
+      if (!lifetime.active || token !== lifetime.create) {
+        if (res.data) await client.session.delete({ sessionID: res.data.id }).catch(() => undefined)
+        return
+      }
       const data = res.data
       if (data) {
         const slug = base64Encode(directory)

@@ -9,8 +9,9 @@
  * 5. Provides extended API endpoints (/api/ext/*)
  */
 
-import { handleExtendedEndpoint, isApiPath } from "../shared/extended-api"
-import { handleProxyRequest, normalizeProxiedResponse } from "../shared/proxy"
+import { handleExtendedEndpoint, isApiPath, isMutation, isSameOriginRequest } from "../shared/extended-api"
+import { matchesBasePath, stripBasePath } from "../shared/base-path"
+import { normalizeProxiedResponse } from "../shared/proxy"
 
 const BASE_PATH = process.env.NB_PREFIX || process.env.BASE_PATH || "/"
 const PORT = parseInt(process.env.PORT || "8080", 10)
@@ -155,12 +156,12 @@ const server = Bun.serve<{ path: string; search: string }>({
 
   async fetch(req, server) {
     const url = new URL(req.url)
-    let path = url.pathname
-
-    // Strip base path prefix if present
-    if (basePathWithoutTrailing && path.startsWith(basePathWithoutTrailing)) {
-      path = path.slice(basePathWithoutTrailing.length) || "/"
+    if (!matchesBasePath(url.pathname, basePathWithoutTrailing)) {
+      return new Response("Not Found", { status: 404 })
     }
+
+    // Strip only a complete base-path segment.
+    let path = stripBasePath(url.pathname, basePathWithoutTrailing)
     if (!path.startsWith("/")) {
       path = "/" + path
     }
@@ -193,6 +194,7 @@ const server = Bun.serve<{ path: string; search: string }>({
     if (isPtyWebSocket(path)) {
       const upgradeHeader = req.headers.get("Upgrade")
       if (upgradeHeader?.toLowerCase() === "websocket") {
+        if (!isSameOriginRequest(req, url)) return new Response("Cross-origin request denied", { status: 403 })
         console.log("[Proxy] WebSocket upgrade for PTY:", path)
         const success = server.upgrade(req, {
           data: { path, search: url.search },
@@ -204,21 +206,15 @@ const server = Bun.serve<{ path: string; search: string }>({
       }
     }
 
-    // Proxy requests to remote servers (avoids CORS)
-    if (path.startsWith("/__proxy/")) {
-      const proxyPath = path.slice("/__proxy".length)
-      return handleProxyRequest(proxyPath, req)
-    }
-    if (path === "/__proxy") {
-      return handleProxyRequest("/", req)
-    }
-
     // Extended API endpoints (handled locally, not proxied)
     const extResponse = await handleExtendedEndpoint(path, req.method, url, req)
     if (extResponse) return withNoStoreHeaders(extResponse)
 
     // Check if this is an API request (after stripping prefix)
     if (isApiPath(path)) {
+      if (isMutation(req.method) && !isSameOriginRequest(req, url)) {
+        return new Response("Cross-origin request denied", { status: 403 })
+      }
       const target = new URL(path + url.search, API_URL)
       const headers = new Headers(req.headers)
 

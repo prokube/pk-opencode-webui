@@ -70,8 +70,9 @@ import { useProjects } from "../context/projects";
 import { sessionHasQuestion, buildChildMap } from "../utils/session-tree-request";
 import { createRootSession } from "../utils/root-session";
 import { formatStartError } from "../utils/session-start";
-import { useServer } from "../context/server";
+import { LOCAL_SERVER_ID } from "../context/server";
 import { legacyStorageValue, serverStorageKey, workspaceStorageKey } from "../utils/storage";
+import { sessionNeighbor } from "../utils/session-load";
 
 // Storage keys
 const SIDEBAR_EXPANDED_KEY = "opencode.sidebarExpanded";
@@ -140,7 +141,6 @@ function SortablePinnedSession(props: {
 
 export function Layout(props: ParentProps) {
   const { client, directory } = useSDK();
-  const server = useServer();
   const events = useEvents();
   const providers = useProviders();
   const terminal = useTerminal();
@@ -151,7 +151,7 @@ export function Layout(props: ParentProps) {
   const projects = useProjects();
   const location = useLocation();
   const navigate = useNavigate();
-  const serverId = server.activeServerId();
+  const serverId = LOCAL_SERVER_ID;
   const sidebarExpandedKey = serverStorageKey(serverId, "sidebarExpanded");
   const showArchivedKey = serverStorageKey(serverId, "showArchived");
   const pinnedSessionsKey = directory ? workspaceStorageKey(serverId, directory, "pinnedSessions") : undefined;
@@ -176,6 +176,12 @@ export function Layout(props: ParentProps) {
   const [worktreeToast, setWorktreeToast] = createSignal<string | null>(null);
   const [worktreeToastVariant, setWorktreeToastVariant] = createSignal<"default" | "error">("default");
   const worktreeToastTimer = { id: undefined as ReturnType<typeof setTimeout> | undefined };
+  const lifetime = { active: true, create: 0 };
+  onCleanup(() => {
+    lifetime.active = false;
+    lifetime.create += 1;
+  });
+  createEffect(on(() => location.pathname, () => setCreatingSession(false), { defer: true }));
 
   // Search state
   const [searchQuery, setSearchQuery] = createSignal("");
@@ -1394,11 +1400,20 @@ export function Layout(props: ParentProps) {
     if (creatingSession()) return;
     setSessionStartError(null);
     setCreatingSession(true);
+    const token = ++lifetime.create;
+    const scope = { serverId: LOCAL_SERVER_ID, directory };
+    const route = location.pathname;
+    const current = () => lifetime.active && token === lifetime.create &&
+      scope.directory === directory && route === location.pathname;
     try {
       const res = await createRootSession(client, {
         source: "layout.createNewSession",
-        scope: directory,
+        scope,
       });
+      if (!current()) {
+        if (res.isLeader && res.data) await client.session.delete({ sessionID: res.data.id }).catch(() => undefined);
+        return;
+      }
       const data = res.data;
       if (!data) {
         const msg = formatStartError((res as { error?: unknown }).error);
@@ -1408,10 +1423,11 @@ export function Layout(props: ParentProps) {
       sync.session.upsert(data);
       navigate(`/${dirSlug()}/session/${data.id}`);
     } catch (e) {
+      if (!current()) return;
       console.error("Failed to create session:", e);
       setSessionStartError(`Failed to create session: ${formatStartError(e)}`);
     } finally {
-      setCreatingSession(false);
+      if (current()) setCreatingSession(false);
     }
   }
 
@@ -1449,29 +1465,35 @@ export function Layout(props: ParentProps) {
 
   function archiveAndNavigate(session: Session) {
     const ids = flatSessionIds();
-    const index = ids.indexOf(session.id);
-    const neighborId = ids[index + 1] ?? ids[index - 1];
-
-    const archived = { ...session, time: { ...session.time, archived: Date.now() } };
-    sync.session.upsert(archived);
+    const neighborId = sessionNeighbor(ids, session.id);
+    const archivedAt = Date.now();
+    const archived = { ...session, time: { ...session.time, archived: archivedAt } };
 
     client.session.update({
       sessionID: session.id,
-      time: { archived: Date.now() },
+      time: { archived: archivedAt },
     })
       .then((res) => {
+        if ("error" in res && res.error) throw res.error;
         sync.session.upsert(res.data ?? archived);
         // Unpin only after successful archive
         unpinSession(session.id);
         // Navigate only after successful archive
         if (isActive(session.id)) {
+          try {
+            if (directory) {
+              const key = workspaceStorageKey(LOCAL_SERVER_ID, directory, "lastSession");
+              if (window.localStorage.getItem(key) === session.id) window.localStorage.removeItem(key);
+            }
+          } catch (err) {
+            console.warn("Failed to clear archived last session:", err);
+          }
           navigate(neighborId ? `/${dirSlug()}/session/${neighborId}` : `/${dirSlug()}/session`);
         }
       })
       .catch((err: unknown) => {
         console.error("Failed to archive session:", err);
-        sync.session.upsert(session);
-        void sync.refresh();
+        showWorktreeToast("Failed to archive session. Please try again.", 4000, "error");
       });
   }
 

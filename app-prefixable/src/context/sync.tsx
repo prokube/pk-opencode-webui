@@ -85,6 +85,7 @@ interface SyncContextValue {
 const SyncContext = createContext<SyncContextValue>()
 
 const cmp = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0)
+const encoder = new TextEncoder()
 
 function sortParts(parts: Part[]): Part[] {
   const withId = parts.filter((p) => !!p?.id).sort((a, b) => cmp(a.id, b.id))
@@ -168,12 +169,271 @@ export function mergeSessionMessages(existing: MessageWithParts[] | undefined, s
   return merged.sort((a, b) => cmp(a.info.id, b.info.id))
 }
 
+type SessionRequest = {
+  sessionID: string
+  version: number
+  updatedMessages: Set<string>
+  updatedParts: Map<string, Set<string>>
+  removedMessages: Set<string>
+  removedParts: Map<string, Set<string>>
+}
+
+type SessionTombstones = {
+  messages: Set<string>
+  parts: Map<string, Set<string>>
+  unknown: boolean
+}
+
+export function createSessionRequestTracker(limit = 1000) {
+  const versions = new Map<string, number>()
+  const requests = new Map<string, Set<SessionRequest>>()
+  const tombstones = new Map<string, SessionTombstones>()
+  const deleted = new Set<string>()
+
+  function removals(sessionID: string) {
+    const existing = tombstones.get(sessionID)
+    if (existing) return existing
+    const next = { messages: new Set<string>(), parts: new Map<string, Set<string>>(), unknown: false }
+    tombstones.set(sessionID, next)
+    return next
+  }
+
+  function collapse(sessionID: string, state: SessionTombstones) {
+    const count = state.messages.size + [...state.parts.values()].reduce((total, parts) => total + parts.size, 0)
+    if (count <= limit) return false
+    state.messages.clear()
+    state.parts.clear()
+    state.unknown = true
+    return true
+  }
+
+  function invalidate(sessionID: string) {
+    versions.set(sessionID, (versions.get(sessionID) ?? 0) + 1)
+  }
+
+  function begin(sessionID: string) {
+    invalidate(sessionID)
+    const request: SessionRequest = {
+      sessionID,
+      version: versions.get(sessionID)!,
+      updatedMessages: new Set(),
+      updatedParts: new Map(),
+      removedMessages: new Set(),
+      removedParts: new Map(),
+    }
+    const active = requests.get(sessionID) ?? new Set()
+    active.add(request)
+    requests.set(sessionID, active)
+    return request
+  }
+
+  function valid(request: SessionRequest) {
+    return versions.get(request.sessionID) === request.version
+  }
+
+  function removeMessage(sessionID: string, messageID: string) {
+    const state = removals(sessionID)
+    if (!state.unknown) state.messages.add(messageID)
+    state.parts.delete(messageID)
+    for (const request of requests.get(sessionID) ?? []) {
+      request.removedMessages.add(messageID)
+      request.removedParts.delete(messageID)
+    }
+    return collapse(sessionID, state)
+  }
+
+  function removePart(sessionID: string, messageID: string, partID: string) {
+    const state = removals(sessionID)
+    if (!state.unknown && !state.messages.has(messageID)) {
+      const parts = state.parts.get(messageID) ?? new Set()
+      parts.add(partID)
+      state.parts.set(messageID, parts)
+    }
+    for (const request of requests.get(sessionID) ?? []) {
+      if (request.removedMessages.has(messageID)) continue
+      const parts = request.removedParts.get(messageID) ?? new Set()
+      parts.add(partID)
+      request.removedParts.set(messageID, parts)
+    }
+    return collapse(sessionID, state)
+  }
+
+  function updateMessage(sessionID: string, messageID: string) {
+    const state = tombstones.get(sessionID)
+    if (!state?.unknown) {
+      state?.messages.delete(messageID)
+      if (state && state.messages.size === 0 && state.parts.size === 0) tombstones.delete(sessionID)
+    }
+    for (const request of requests.get(sessionID) ?? []) {
+      request.removedMessages.delete(messageID)
+      request.updatedMessages.add(messageID)
+    }
+  }
+
+  function touchPart(sessionID: string, messageID: string, partID: string) {
+    for (const request of requests.get(sessionID) ?? []) {
+      const parts = request.updatedParts.get(messageID) ?? new Set()
+      parts.add(partID)
+      request.updatedParts.set(messageID, parts)
+    }
+  }
+
+  function updatePart(sessionID: string, messageID: string, partID: string) {
+    const state = tombstones.get(sessionID)
+    if (!state?.unknown) {
+      state?.parts.get(messageID)?.delete(partID)
+      if (state?.parts.get(messageID)?.size === 0) state.parts.delete(messageID)
+      if (state && state.messages.size === 0 && state.parts.size === 0) tombstones.delete(sessionID)
+    }
+    for (const request of requests.get(sessionID) ?? []) {
+      request.removedParts.get(messageID)?.delete(partID)
+      if (request.removedParts.get(messageID)?.size === 0) request.removedParts.delete(messageID)
+    }
+    touchPart(sessionID, messageID, partID)
+  }
+
+  function requireSnapshot(sessionID: string) {
+    const state = removals(sessionID)
+    state.messages.clear()
+    state.parts.clear()
+    state.unknown = true
+  }
+
+  function filter(request: SessionRequest, messages: MessageWithParts[]) {
+    const state = tombstones.get(request.sessionID)
+    if (!state) return messages
+    return messages
+      .filter((message) => !state.messages.has(message.info.id) && !request.removedMessages.has(message.info.id))
+      .map((message) => ({
+        ...message,
+        parts: message.parts.filter((part) =>
+          !state.parts.get(message.info.id)?.has(part.id) && !request.removedParts.get(message.info.id)?.has(part.id)),
+      }))
+  }
+
+  function snapshot(request: SessionRequest, existing: MessageWithParts[] | undefined, messages: MessageWithParts[]) {
+    const current = existing ?? []
+    const state = tombstones.get(request.sessionID)
+    const next = filter(request, messages).map((message) => {
+      const cached = current.find((item) => item.info.id === message.info.id)
+      if (!cached) return message
+      if (request.updatedMessages.has(message.info.id)) return cached
+      const updated = request.updatedParts.get(message.info.id)
+      if (!updated) return message
+      const parts = message.parts.map((part) => updated.has(part.id)
+        ? cached.parts.find((item) => item.id === part.id) ?? part
+        : part)
+      for (const part of cached.parts) {
+        if (state?.parts.get(message.info.id)?.has(part.id) || request.removedParts.get(message.info.id)?.has(part.id)) continue
+        if (!updated.has(part.id) || parts.some((item) => item.id === part.id)) continue
+        parts.push(part)
+      }
+      return {
+        ...message,
+        parts: sortParts(parts),
+      }
+    })
+    for (const message of current) {
+      if (state?.messages.has(message.info.id) || request.removedMessages.has(message.info.id)) continue
+      if (!request.updatedMessages.has(message.info.id) && !request.updatedParts.has(message.info.id)) continue
+      if (next.some((item) => item.info.id === message.info.id)) continue
+      next.push(message)
+    }
+    return next.sort((a, b) => cmp(a.info.id, b.info.id))
+  }
+
+  function appliedSnapshot(sessionID: string) {
+    tombstones.delete(sessionID)
+  }
+
+  function needsSnapshot(sessionID: string) {
+    return tombstones.get(sessionID)?.unknown === true
+  }
+
+  function removeSession(sessionID: string) {
+    tombstones.delete(sessionID)
+    deleted.add(sessionID)
+    invalidate(sessionID)
+    if (requests.get(sessionID)?.size) return
+    versions.delete(sessionID)
+    deleted.delete(sessionID)
+  }
+
+  function restore(sessionID: string) {
+    if (!deleted.delete(sessionID)) return
+    invalidate(sessionID)
+  }
+
+  function end(request: SessionRequest) {
+    const active = requests.get(request.sessionID)
+    active?.delete(request)
+    if (active?.size === 0) requests.delete(request.sessionID)
+    if (!deleted.has(request.sessionID) || requests.has(request.sessionID)) return
+    versions.delete(request.sessionID)
+    deleted.delete(request.sessionID)
+  }
+
+  return {
+    appliedSnapshot,
+    begin,
+    end,
+    filter,
+    invalidate,
+    needsSnapshot,
+    removeMessage,
+    removePart,
+    removeSession,
+    requireSnapshot,
+    restore,
+    snapshot,
+    touchPart,
+    updateMessage,
+    updatePart,
+    valid,
+  }
+}
+
+export function coalesceSyncEvent(previous: SyncEvent, event: SyncEvent) {
+  if (previous.type !== "message.part.delta" || event.type !== "message.part.delta") return undefined
+  const before = previous.properties
+  const next = event.properties
+  if (
+    before.sessionID !== next.sessionID ||
+    before.messageID !== next.messageID ||
+    before.partID !== next.partID ||
+    before.field !== next.field
+  ) return undefined
+  return { ...event, properties: { ...next, delta: before.delta + next.delta } }
+}
+
+export function syncEventSize(event: SyncEvent) {
+  const value = event.type === "message.part.delta" ? event.properties.delta : JSON.stringify(event)
+  return encoder.encode(value).byteLength
+}
+
 export function updateProviderConnected(data: ProviderData, providerID: string, connected: boolean) {
   const current = data.connected.includes(providerID)
   if (current === connected) return data
   return {
     ...data,
     connected: connected ? [...data.connected, providerID] : data.connected.filter((id) => id !== providerID),
+  }
+}
+
+export function createLatestSuccessfulRequest() {
+  let requested = 0
+  let applied = 0
+  return {
+    begin: () => ++requested,
+    apply: (version: number, update: () => void) => {
+      if (version <= applied) return false
+      applied = version
+      update()
+      return true
+    },
+    invalidate: () => {
+      applied = ++requested
+    },
   }
 }
 
@@ -204,6 +464,14 @@ export function mergeMessageUpdate(
   const result = [...current]
   result.splice(match.index, 0, next)
   return result
+}
+
+export function removeMessageByID(messages: MessageWithParts[] | undefined, messageID: string) {
+  return messages?.filter((message) => message.info.id !== messageID) ?? []
+}
+
+export function removePartByID(parts: Part[] | undefined, partID: string) {
+  return parts?.filter((part) => part.id !== partID) ?? []
 }
 
 function eventInfo<T>(props: Record<string, unknown>) {
@@ -288,6 +556,10 @@ function binarySearch<T>(arr: T[], id: string, getId: (item: T) => string): { fo
 }
 
 export type SyncSessionState = Pick<SyncStore, "session" | "archivedSession">
+export type SyncSessionData = Pick<
+  SyncStore,
+  "session" | "archivedSession" | "message" | "part" | "status" | "pendingQuestions" | "pendingPermissions"
+>
 
 export function upsertSyncSession(state: SyncSessionState, session: Session): SyncSessionState {
   const archived = !!session.time?.archived
@@ -313,6 +585,24 @@ export function removeSyncSession(state: SyncSessionState, sessionID: string): S
   }
 }
 
+export function removeSyncSessionData(state: SyncSessionData, sessionID: string): SyncSessionData {
+  const sessions = removeSyncSession(state, sessionID)
+  const messageIDs = new Set((state.message[sessionID] ?? []).map((message) => message.info.id))
+  return {
+    ...sessions,
+    message: Object.fromEntries(Object.entries(state.message).filter(([id]) => id !== sessionID)),
+    part: Object.fromEntries(
+      Object.entries(state.part).filter(([messageID, parts]) =>
+        !messageIDs.has(messageID) && !parts.some((part) => part.sessionID === sessionID)),
+    ),
+    status: Object.fromEntries(Object.entries(state.status).filter(([id]) => id !== sessionID)),
+    pendingQuestions: Object.fromEntries(Object.entries(state.pendingQuestions).filter(([id]) => id !== sessionID)),
+    pendingPermissions: Object.fromEntries(
+      Object.entries(state.pendingPermissions).filter(([, permission]) => permission.sessionID !== sessionID),
+    ),
+  }
+}
+
 export function SyncProvider(props: ParentProps) {
   const { client, directory, url: sdkUrl } = useSDK()
   const { authHeaders } = useServer()
@@ -332,14 +622,59 @@ export function SyncProvider(props: ParentProps) {
   })
 
   const inflight = new Map<string, Promise<boolean>>()
+  const sessionRequests = createSessionRequestTracker()
   const handlers = new Set<SyncEventHandler>()
   const [sseUnhealthy, setSseUnhealthy] = createSignal(false)
   const [providerLoading, setProviderLoading] = createSignal(false)
-  const events = createEventBuffer<SyncEvent>(handleEvent)
+  const overflowSessions = new Set<string>()
+  const overflowDeleted = new Set<string>()
+  let overflowGlobal = false
+  const events = createEventBuffer<SyncEvent>(handleEvent, {
+    coalesce: coalesceSyncEvent,
+    byteLimit: 1024 * 1024,
+    size: syncEventSize,
+    overflow: (event) => {
+      const props = event.properties as Record<string, unknown>
+      const sessionID = event.type === "message.part.updated"
+        ? (props.part as Part | undefined)?.sessionID
+        : event.type === "message.updated" || event.type === "message.created"
+          ? eventInfo<Message>(props)?.sessionID
+          : event.type.startsWith("session.")
+            ? eventInfo<Session>(props)?.id
+            : typeof props.sessionID === "string"
+              ? props.sessionID
+              : undefined
+      if (event.type.startsWith("message.") && sessionID) {
+        sessionRequests.requireSnapshot(sessionID)
+        overflowSessions.add(sessionID)
+        return
+      }
+      if (event.type === "session.deleted" && sessionID) overflowDeleted.add(sessionID)
+      overflowGlobal = true
+    },
+    released: (overflowed) => {
+      if (!overflowed) return
+      const sessions = [...overflowSessions]
+      overflowSessions.clear()
+      const deleted = new Set(overflowDeleted)
+      for (const sessionID of deleted) removeSession(sessionID)
+      overflowDeleted.clear()
+      for (const sessionID of sessions) {
+        if (!deleted.has(sessionID)) void resyncSession(sessionID)
+      }
+      if (!overflowGlobal) return
+      overflowGlobal = false
+      if (bootstrapPromise) {
+        reconnectBootstrapPending = true
+        return
+      }
+      void bootstrap()
+    },
+  })
   let bootstrapPromise: Promise<void> | undefined
   let reconnectBootstrapPending = false
   let providerRequests = 0
-  let providerVersion = 0
+  const providerRefresh = createLatestSuccessfulRequest()
 
   // Connect to SSE endpoint using fetch (supports custom headers unlike EventSource)
   let abortController: AbortController | null = null
@@ -353,12 +688,30 @@ export function SyncProvider(props: ParentProps) {
     })
   }
 
-  function upsertSession(session: Session) {
+  function applySession(session: Session) {
     applySessions(upsertSyncSession(store, session))
   }
 
+  function upsertSession(session: Session) {
+    sessionRequests.restore(session.id)
+    applySession(session)
+  }
+
   function removeSession(sessionID: string) {
-    applySessions(removeSyncSession(store, sessionID))
+    sessionRequests.removeSession(sessionID)
+    const next = removeSyncSessionData(store, sessionID)
+    batch(() => {
+      applySessions(next)
+      setStore("message", reconcile(next.message))
+      setStore("part", reconcile(next.part))
+      setStore("status", reconcile(next.status))
+      setStore("pendingQuestions", reconcile(next.pendingQuestions))
+      setStore("pendingPermissions", reconcile(next.pendingPermissions))
+    })
+  }
+
+  function resyncSession(sessionID: string) {
+    return syncSession(sessionID, true)
   }
 
   async function connect() {
@@ -458,20 +811,52 @@ export function SyncProvider(props: ParentProps) {
     if (event.type === "session.updated") {
       const session = eventInfo<Session>(props)
       if (!session?.id) return
+      const pending = inflight.get(session.id)
       upsertSession(session)
+      pending?.finally(() => queueMicrotask(() => {
+        if (!inflight.has(session.id)) void syncSession(session.id)
+      }))
     }
 
     if (event.type === "session.deleted") {
       const session = eventInfo<Session>(props)
       if (!session?.id) return
       removeSession(session.id)
-      setStore("message", session.id, reconcile([]))
+    }
+
+    if (event.type === "message.removed") {
+      const removed = props as { sessionID?: string; messageID?: string }
+      if (!removed.sessionID || !removed.messageID) return
+      const resync = sessionRequests.removeMessage(removed.sessionID, removed.messageID)
+      setStore("message", removed.sessionID, (messages: MessageWithParts[] | undefined) =>
+        removeMessageByID(messages, removed.messageID!),
+      )
+      setStore("part", produce((parts) => {
+        delete parts[removed.messageID!]
+      }))
+      if (resync) void resyncSession(removed.sessionID)
+    }
+
+    if (event.type === "message.part.removed") {
+      const removed = props as { sessionID?: string; messageID?: string; partID?: string }
+      if (!removed.sessionID || !removed.messageID || !removed.partID) return
+      const resync = sessionRequests.removePart(removed.sessionID, removed.messageID, removed.partID)
+      setStore("part", removed.messageID, (parts: Part[] | undefined) =>
+        removePartByID(parts, removed.partID!),
+      )
+      setStore("message", removed.sessionID, (messages: MessageWithParts[] | undefined) =>
+        messages?.map((message) => message.info.id === removed.messageID
+          ? { ...message, parts: removePartByID(message.parts, removed.partID!) }
+          : message) ?? [],
+      )
+      if (resync) void resyncSession(removed.sessionID)
     }
 
     // Message part events - the main real-time update mechanism
     if (event.type === "message.part.updated") {
       const part = event.properties.part
       if (!part?.sessionID || !part?.messageID) return
+      sessionRequests.updatePart(part.sessionID, part.messageID, part.id)
 
       // Update or insert the part
       setStore("part", part.messageID, (existing: Part[] | undefined) => mergePartUpdate(existing, part))
@@ -496,6 +881,7 @@ export function SyncProvider(props: ParentProps) {
       if (!delta.sessionID || !delta.messageID || !delta.partID || !delta.field || delta.delta === undefined) return
       const field = delta.field
       const text = delta.delta
+      sessionRequests.touchPart(delta.sessionID, delta.messageID, delta.partID)
 
       if (store.part[delta.messageID]) {
         setStore("part", delta.messageID, (existing: Part[]) =>
@@ -518,6 +904,8 @@ export function SyncProvider(props: ParentProps) {
     if (event.type === "message.created") {
       const msg = props as unknown as MessageWithParts
       if (!msg?.info?.sessionID) return
+      sessionRequests.updateMessage(msg.info.sessionID, msg.info.id)
+      for (const part of msg.parts ?? []) sessionRequests.updatePart(msg.info.sessionID, msg.info.id, part.id)
 
       setStore("message", msg.info.sessionID, (existing: MessageWithParts[]) => {
         if (!existing || existing.length === 0) return [msg]
@@ -539,6 +927,8 @@ export function SyncProvider(props: ParentProps) {
       const info = eventInfo<Message>(props)
       const parts = msgProps.parts
       if (!info?.sessionID) return
+      sessionRequests.updateMessage(info.sessionID, info.id)
+      for (const part of parts ?? []) sessionRequests.updatePart(info.sessionID, info.id, part.id)
 
       setStore("message", info.sessionID, (existing: MessageWithParts[] | undefined) =>
         mergeMessageUpdate(existing, info, store.part[info.id], parts),
@@ -554,7 +944,7 @@ export function SyncProvider(props: ParentProps) {
     if (event.type === "provider.updated") {
       const data = props as unknown as ProviderData
       if (data) {
-        providerVersion += 1
+        providerRefresh.invalidate()
         setStore("provider", data)
       }
     }
@@ -572,7 +962,7 @@ export function SyncProvider(props: ParentProps) {
         reconnectBootstrapPending = true
         return
       }
-      void bootstrap()
+      void recoverAfterReconnect()
     }
   }
 
@@ -583,7 +973,7 @@ export function SyncProvider(props: ParentProps) {
 
   function bootstrap() {
     if (bootstrapPromise) return bootstrapPromise
-    const providerVersionAtStart = providerVersion
+    const providerVersion = providerRefresh.begin()
 
     const promise = events.during(async () => {
       setStore("error", null)
@@ -598,6 +988,7 @@ export function SyncProvider(props: ParentProps) {
         permissionRequest,
       ])
 
+      let listedSessions: Set<string> | undefined
       batch(() => {
         if (sessionsResult.status === "fulfilled") {
           const sessionsRes = sessionsResult.value
@@ -605,14 +996,17 @@ export function SyncProvider(props: ParentProps) {
           const valid = rawSessions.filter((s: Session | undefined): s is Session => !!s?.id)
           const sessions = valid.filter((s) => !s.time?.archived).sort((a, b) => cmp(a.id, b.id))
           const archived = valid.filter((s) => !!s.time?.archived).sort((a, b) => cmp(a.id, b.id))
+          listedSessions = new Set(valid.map((session) => session.id))
           setStore("session", reconcile(sessions, { key: "id" }))
           setStore("archivedSession", reconcile(archived, { key: "id" }))
         }
 
-        if (providersResult.status === "fulfilled" && providerVersion === providerVersionAtStart) {
+        if (providersResult.status === "fulfilled") {
           const providersRes = providersResult.value
           if (providersRes.data) {
-            setStore("provider", providersRes.data as unknown as ProviderData)
+            providerRefresh.apply(providerVersion, () => {
+              setStore("provider", providersRes.data as unknown as ProviderData)
+            })
           }
         }
 
@@ -648,6 +1042,12 @@ export function SyncProvider(props: ParentProps) {
         if (coreError) setStore("error", errorText(coreError))
       })
 
+      if (listedSessions) {
+        for (const sessionID of Object.keys(store.message)) {
+          if (!listedSessions.has(sessionID)) removeSession(sessionID)
+        }
+      }
+
       if (sessionsResult.status === "rejected") console.error("[Sync] Failed to load sessions:", sessionsResult.reason)
       if (providersResult.status === "rejected") console.error("[Sync] Failed to load providers:", providersResult.reason)
       if (statusResult.status === "rejected") console.error("[Sync] Failed to load statuses:", statusResult.reason)
@@ -663,21 +1063,26 @@ export function SyncProvider(props: ParentProps) {
       bootstrapPromise = undefined
       if (!reconnectBootstrapPending) return
       reconnectBootstrapPending = false
-      void bootstrap()
+      void recoverAfterReconnect()
     })
     return promise
   }
 
+
+  async function recoverAfterReconnect() {
+    await bootstrap()
+    await Promise.all(Object.keys(store.message).map((sessionID) => resyncSession(sessionID)))
+  }
+
   async function refreshProvider() {
-    const version = ++providerVersion
+    const version = providerRefresh.begin()
     providerRequests += 1
     setProviderLoading(true)
     try {
       const res = await client.provider.list()
       if (!res.data) return undefined
-      if (version !== providerVersion) return store.provider
-      setStore("provider", reconcile(res.data))
-      return res.data
+      const applied = providerRefresh.apply(version, () => setStore("provider", reconcile(res.data!)))
+      return applied ? res.data : store.provider
     } catch (err) {
       console.error("[Sync] Failed to load providers:", err)
       return undefined
@@ -687,9 +1092,10 @@ export function SyncProvider(props: ParentProps) {
     }
   }
 
-  async function syncSession(sessionID: string) {
-    const pending = inflight.get(sessionID)
-    if (pending) return pending
+  async function syncSession(sessionID: string, replace = false) {
+    const current = inflight.get(sessionID)
+    if (current && !replace && !sessionRequests.needsSnapshot(sessionID)) return current
+    const request = sessionRequests.begin(sessionID)
 
     const promise = (async () => {
       try {
@@ -697,28 +1103,33 @@ export function SyncProvider(props: ParentProps) {
           client.session.get({ sessionID }),
           client.session.messages({ sessionID }),
         ])
+        if (!sessionRequests.valid(request)) return true
 
         batch(() => {
           // Update session in appropriate list and remove from other list
           if (sessionRes.data) {
-            upsertSession(sessionRes.data)
+            applySession(sessionRes.data)
           }
 
           // Merge messages - preserve newer SSE updates
           if (messagesRes.data) {
-            const synced = (messagesRes.data as MessageWithParts[])
+            const synced = sessionRequests.filter(request, messagesRes.data as MessageWithParts[])
               .filter((m): m is MessageWithParts => !!m?.info?.id)
               .sort((a, b) => cmp(a.info.id, b.info.id))
 
-            setStore("message", sessionID, (existing: MessageWithParts[]) => mergeSessionMessages(existing, synced))
-
-            // Update parts
-            const msgs = store.message[sessionID] ?? []
-            for (const msg of msgs) {
-              if (msg.parts) {
-                setStore("part", msg.info.id, sortParts(msg.parts))
+            const snapshot = sessionRequests.snapshot(request, store.message[sessionID], synced)
+            const oldMessageIDs = new Set((store.message[sessionID] ?? []).map((message) => message.info.id))
+            const messageIDs = new Set(snapshot.map((message) => message.info.id))
+            setStore("message", sessionID, reconcile(snapshot))
+            setStore("part", produce((parts) => {
+              for (const [messageID, items] of Object.entries(parts)) {
+                if (oldMessageIDs.has(messageID) || messageIDs.has(messageID) || items.some((part) => part.sessionID === sessionID)) {
+                  delete parts[messageID]
+                }
               }
-            }
+              for (const message of snapshot) parts[message.info.id] = sortParts(message.parts)
+            }))
+            sessionRequests.appliedSnapshot(sessionID)
           }
         })
         return true
@@ -729,7 +1140,10 @@ export function SyncProvider(props: ParentProps) {
     })()
 
     inflight.set(sessionID, promise)
-    promise.finally(() => inflight.delete(sessionID))
+    promise.finally(() => {
+      sessionRequests.end(request)
+      if (inflight.get(sessionID) === promise) inflight.delete(sessionID)
+    })
     return promise
   }
 
@@ -807,11 +1221,11 @@ export function SyncProvider(props: ParentProps) {
     },
     provider: {
       invalidate: () => {
-        providerVersion += 1
+        providerRefresh.invalidate()
       },
       refresh: refreshProvider,
       updateConnected: (providerID: string, connected: boolean) => {
-        providerVersion += 1
+        providerRefresh.invalidate()
         setStore("provider", updateProviderConnected(store.provider, providerID, connected))
       },
       loading: providerLoading,

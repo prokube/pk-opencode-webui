@@ -18,6 +18,8 @@ docker build -f docker/Dockerfile -t opencode-web .
 
 ### Run
 
+The browser always uses the UI server's same-origin, prefix-aware URL. `API_URL` is a trusted deployment setting used only by the UI server; there is no client-selectable remote proxy target or browser-side backend credential support. Protect the UI and its `/api/ext/*` routes with authenticated ingress, and keep the OpenCode backend reachable only from the UI server.
+
 The UI server requires the OpenCode API server to be running. You can either:
 
 1. Run them separately:

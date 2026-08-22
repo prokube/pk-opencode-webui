@@ -48,8 +48,14 @@ import {
   formatStartError,
   startSessionError,
 } from "../utils/session-start";
-import { useServer } from "../context/server";
+import { LOCAL_SERVER_ID } from "../context/server";
 import { workspaceStorageKey } from "../utils/storage";
+import {
+  archivedLastSession,
+  requestSession,
+  sessionDraftKey,
+  sessionRouteKey,
+} from "../utils/session-load";
 
 const ACCEPTED_TYPES = [
   "image/png",
@@ -79,18 +85,11 @@ interface SessionDraft {
 }
 const drafts = new Map<string, SessionDraft>();
 
-// Composite key for the drafts Map so drafts are scoped to a directory+session
-// pair. Uses "__new__" as sentinel when there is no session id yet.
-function draftKey(dir: string, id?: string) {
-  return `${dir}:${id ?? "__new__"}`;
-}
-
+// Draft keys include server, directory, and session. "__new__" represents a new-session draft.
 export function Session() {
   const params = useParams<{ dir: string; id?: string }>();
   const navigate = useNavigate();
   const { client, directory } = useSDK();
-  const server = useServer();
-  const serverId = server.activeServerId();
   const events = useEvents();
   const sync = useSync();
   const providers = useProviders();
@@ -176,6 +175,14 @@ export function Session() {
   const [processing, setProcessing] = createSignal(false);
   const [loadingHistory, setLoadingHistory] = createSignal(false);
   const [creatingSession, setCreatingSession] = createSignal(false);
+  const [loadError, setLoadError] = createSignal<string | null>(null);
+  const lifetime = { active: true, load: 0, create: 0, submit: 0 };
+  onCleanup(() => {
+    lifetime.active = false;
+    lifetime.load += 1;
+    lifetime.create += 1;
+    lifetime.submit += 1;
+  });
 
   // Find the Nth-from-last user message (1-indexed: 1 = last, 2 = second-to-last)
   function getNthLastUserMsg(msgs: DisplayMessage[], n: number) {
@@ -306,11 +313,66 @@ export function Session() {
     setProcessing(false);
   }
 
+  async function loadSession(id: string, route: string) {
+    const token = ++lifetime.load;
+    const current = () => lifetime.active && token === lifetime.load &&
+      route === sessionDraftKey(LOCAL_SERVER_ID, params.dir, params.id);
+    try {
+      const loaded = await requestSession(
+        (params, options) => client.session.get(params, options),
+        id,
+      );
+      if (!current()) return;
+      const res = loaded.response;
+      const result = loaded.result;
+      if (result === "not-found") {
+        setLoadingHistory(false);
+        clearLastSession(id);
+        navigate(`/${dirSlug()}/session`, { replace: true });
+        return;
+      }
+      if (result === "error" || !res?.data) {
+        if ("error" in loaded) console.error("[Session] Failed to load session:", loaded.error);
+        setLoadingHistory(false);
+        setLoadError("Failed to load this session. Check your connection and try again.");
+        return;
+      }
+      if (isArchivedLastSession(res.data)) {
+        clearLastSession(id);
+        setLoadingHistory(false);
+        navigate(`/${dirSlug()}/session`, { replace: true });
+        return;
+      }
+      sync.session.upsert(res.data);
+      const synced = await sync.session.sync(id);
+      if (!current()) return;
+      setLoadingHistory(false);
+      if (!synced) {
+        setLoadError("Failed to load this session. Check your connection and try again.");
+        return;
+      }
+      if (providers.getSessionModel(id)) return;
+      const msgs = visibleSyncMessages(id);
+      for (let i = msgs.length - 1; i >= 0; i--) {
+        const info = msgs[i].info;
+        if (info.role !== "assistant" || !info.providerID || !info.modelID) continue;
+        providers.setSessionModel(id, { providerID: info.providerID, modelID: info.modelID });
+        break;
+      }
+    } catch (err) {
+      if (!current()) return;
+      console.error("[Session] Failed to load session:", err);
+      setLoadingHistory(false);
+      setLoadError("Failed to load this session. Check your connection and try again.");
+    }
+  }
+
   // Keep sessionId in sync with URL params and sync session data.
   // Track the composite dir+id key so the effect fires on directory changes too,
   // preventing drafts from leaking across projects when id stays undefined.
-  createEffect(on(() => draftKey(params.dir, params.id), (key, prevKey) => {
+  createEffect(on(() => sessionDraftKey(LOCAL_SERVER_ID, params.dir, params.id), (key, prevKey) => {
     const id = params.id;
+    const preservesSubmission = !!id && untrack(sessionId) === id && untrack(loading);
     console.log("[Session] URL param changed:", key);
 
     // Save draft from the previous session before switching.
@@ -332,7 +394,7 @@ export function Session() {
     }
 
     setSessionId(id);
-    setPendingUserMessageText(null); // Clear pending text on session change
+    if (!preservesSubmission) setPendingUserMessageText(null);
     // Restore draft for the new session (or clear if none saved)
     const saved = drafts.get(key);
     setInput(saved?.text ?? "");
@@ -344,27 +406,17 @@ export function Session() {
     setSlashQuery("");
     setSlashIndex(0);
     wasProcessing.value = false;
+    if (!preservesSubmission) setLoading(false);
+    setCreatingSession(false);
     if (id) {
-      // Use sync context to load session data - no local state needed
       setLoadingHistory(true);
+      setLoadError(null);
       setProcessing(false); // Reset processing state for new session
-      sync.session.sync(id).then((synced) => {
-        if (!synced) return;
-        setLoadingHistory(false);
-        // Initialize per-session model from existing messages if not already set
-        if (!providers.getSessionModel(id)) {
-          const msgs = visibleSyncMessages(id);
-          for (let i = msgs.length - 1; i >= 0; i--) {
-            const info = msgs[i].info;
-            if (info.role === "assistant" && info.providerID && info.modelID) {
-              providers.setSessionModel(id, { providerID: info.providerID, modelID: info.modelID });
-              break;
-            }
-          }
-        }
-      });
+      void loadSession(id, key);
     } else {
+      lifetime.load += 1;
       setLoadingHistory(false);
+      setLoadError(null);
       setProcessing(false);
     }
   }));
@@ -543,11 +595,23 @@ export function Session() {
           if (creatingSession()) return;
           console.log("[Command] New session - creating...");
           setCreatingSession(true);
+          const token = ++lifetime.create;
+          const scope = {
+            serverId: LOCAL_SERVER_ID,
+            directory: directory ?? base64Decode(params.dir),
+          };
+          const route = sessionRouteKey(scope.serverId, scope.directory, params.id);
+          const current = () => lifetime.active && token === lifetime.create &&
+            route === sessionRouteKey(LOCAL_SERVER_ID, directory ?? base64Decode(params.dir), params.id);
           try {
             const res = await createRootSession(client, {
               source: "session.command.new",
-              scope: directory,
+              scope,
             });
+            if (!current()) {
+              if (res.isLeader && res.data) await client.session.delete({ sessionID: res.data.id }).catch(() => undefined);
+              return;
+            }
             const data = res.data;
             if (!data) {
               const msg = formatStartError((res as { error?: unknown }).error);
@@ -557,9 +621,10 @@ export function Session() {
             console.log("[Command] Created session:", data.id);
             navigate(`/${dirSlug()}/session/${data.id}`);
           } catch (err) {
+            if (!current()) return;
             showToast(`Failed to create session: ${formatStartError(err)}`);
           } finally {
-            setCreatingSession(false);
+            if (current()) setCreatingSession(false);
           }
         },
       },
@@ -979,47 +1044,30 @@ export function Session() {
     if (id) await sync.session.sync(id);
   };
 
-  // Clear stale localStorage key when sessions are loaded and ID is not found
-  createEffect(() => {
-    const id = params.id;
-    if (!id) return;
-    // loadingHistory() stays true when sync.session.sync() fails,
-    // so this effect only fires after a successful sync, not on transient failures.
-    if (loadingHistory()) return;
-    const found = sync.session.get(id);
-    // Non-archived session exists — keep it
-    if (found && !found.time?.archived) return;
-    // For archived sessions: only treat as stale when it matches the stored last-session
-    // (allows direct navigation to archived sessions from the sidebar)
-    if (found?.time?.archived) {
-      try {
-        const dir = directory || base64Decode(params.dir);
-        if (dir && typeof window !== "undefined") {
-          const key = workspaceStorageKey(serverId, dir, "lastSession");
-          const stored = window.localStorage.getItem(key);
-          if (stored === id) {
-            window.localStorage.removeItem(key);
-            navigate(`/${dirSlug()}/session`, { replace: true });
-          }
-        }
-      } catch (err) {
-        console.warn("[Session] localStorage error:", err);
-      }
-      return;
-    }
-    // Session not found at all: clear and redirect
+  function clearLastSession(id: string) {
     try {
       const dir = directory || base64Decode(params.dir);
       if (dir && typeof window !== "undefined") {
-        const key = workspaceStorageKey(serverId, dir, "lastSession");
+        const key = workspaceStorageKey(LOCAL_SERVER_ID, dir, "lastSession");
         const stored = window.localStorage.getItem(key);
         if (stored === id) window.localStorage.removeItem(key);
       }
     } catch (err) {
       console.warn("[Session] localStorage error:", err);
     }
-    navigate(`/${dirSlug()}/session`, { replace: true });
-  });
+  }
+
+  function isArchivedLastSession(session: { id: string; time?: { archived?: number } }) {
+    try {
+      const dir = directory || base64Decode(params.dir);
+      if (!dir || typeof window === "undefined") return false;
+      const key = workspaceStorageKey(LOCAL_SERVER_ID, dir, "lastSession");
+      return archivedLastSession(window.localStorage.getItem(key), session);
+    } catch (err) {
+      console.warn("[Session] localStorage error:", err);
+      return false;
+    }
+  }
 
   // Persist lastSession only after the session is confirmed to exist in sync
   createEffect(() => {
@@ -1031,7 +1079,7 @@ export function Session() {
     try {
       const dir = directory || base64Decode(params.dir);
       if (dir && typeof window !== "undefined") {
-        window.localStorage.setItem(workspaceStorageKey(serverId, dir, "lastSession"), id);
+        window.localStorage.setItem(workspaceStorageKey(LOCAL_SERVER_ID, dir, "lastSession"), id);
       }
     } catch (err) {
       console.warn("[Session] Failed to persist last session:", err);
@@ -1338,6 +1386,18 @@ export function Session() {
       return;
     }
 
+    const submitDirectory = directory ?? base64Decode(params.dir);
+    const originalID = sessionId();
+    const originalDraft = sessionDraftKey(LOCAL_SERVER_ID, params.dir, originalID);
+    const scope = {
+      token: ++lifetime.submit,
+      route: sessionRouteKey(LOCAL_SERVER_ID, submitDirectory, params.id),
+      sessionID: originalID,
+    };
+    const current = () => lifetime.active && scope.token === lifetime.submit &&
+      scope.route === sessionRouteKey(LOCAL_SERVER_ID, directory ?? base64Decode(params.dir), params.id) &&
+      scope.sessionID === sessionId();
+
     setError(null);
     setLoading(true);
     setInput("");
@@ -1347,7 +1407,7 @@ export function Session() {
     setImageAttachments([]); // Clear image attachments after sending
 
     // Clear saved draft for this session since the message was sent
-    drafts.delete(draftKey(params.dir, sessionId()));
+    drafts.delete(originalDraft);
 
     // Track pending user message text to match backend echoes
     setPendingUserMessageText(text);
@@ -1356,8 +1416,24 @@ export function Session() {
     const userMessage = optimisticUserMessage(text || "(files attached)", sessionId() || "");
     setOptimisticMessage(userMessage);
 
-    const needsSession = !sessionId();
+    const needsSession = !originalID;
+    const createToken = needsSession ? ++lifetime.create : 0;
+    const createScope = {
+      serverId: LOCAL_SERVER_ID,
+      directory: submitDirectory,
+    };
+    const saveDraft = () => {
+      drafts.set(originalDraft, {
+        text,
+        files,
+        images,
+        height: "",
+        drag: 0,
+      });
+    };
     const restoreComposer = () => {
+      saveDraft();
+      if (!current() || scope.route !== sessionRouteKey(LOCAL_SERVER_ID, submitDirectory, originalID)) return;
       setPendingUserMessageText(null);
       setOptimisticMessage(null);
       setInput(text);
@@ -1366,15 +1442,21 @@ export function Session() {
       if (inputRef) applyInputAndAutogrow(inputRef, text);
     };
     let createdID: string | undefined;
+    let ownsCreated = false;
     try {
-      let id = sessionId();
+      let id = originalID;
 
       if (!id) {
         console.log("[Session] Creating new session...");
         const res = await createRootSession(client, {
           source: "session.send.createIfMissing",
-          scope: directory,
+          scope: createScope,
         });
+        if (!current() || createToken !== lifetime.create) {
+          saveDraft();
+          if (res.isLeader && res.data) await client.session.delete({ sessionID: res.data.id }).catch(() => undefined);
+          return;
+        }
         const data = res.data;
         console.log("[Session] Create response:", data);
         if (!data) {
@@ -1385,6 +1467,9 @@ export function Session() {
 
         id = data.id;
         createdID = id;
+        ownsCreated = res.isLeader;
+        scope.sessionID = id;
+        scope.route = sessionRouteKey(LOCAL_SERVER_ID, submitDirectory, id);
         setSessionId(id);
         navigate(`/${dirSlug()}/session/${id}`, { replace: true });
         // Store the model for the new session
@@ -1450,6 +1535,7 @@ export function Session() {
       promptPayload.variant = providers.variant.current(id, model, providers.selectedAgent);
 
       const promptRes = await client.session.promptAsync(promptPayload);
+      if (!current()) return;
       if ("error" in promptRes && promptRes.error) {
         throw new Error(formatStartError(promptRes.error));
       }
@@ -1458,13 +1544,20 @@ export function Session() {
       // Start processing - SSE events will handle updates and completion
       startProcessing();
     } catch (err) {
-      if (createdID) {
+      if (scope.token === lifetime.submit) saveDraft();
+      const active = current();
+      if (createdID && ownsCreated) {
         const cleaned = await client.session
           .delete({ sessionID: createdID })
           .catch((error) => ({ error }));
         if (cleaned && typeof cleaned === "object" && "error" in cleaned && cleaned.error) {
           console.warn("[Session] Failed to cleanup session after send error:", cleaned.error);
         }
+      }
+      if (!active || !current()) return;
+      if (createdID) {
+        scope.sessionID = originalID;
+        scope.route = sessionRouteKey(LOCAL_SERVER_ID, submitDirectory, originalID);
         setSessionId(undefined);
         navigate(`/${dirSlug()}/session`, { replace: true });
       }
@@ -1477,7 +1570,7 @@ export function Session() {
         `${msg}: ${formatStartError(err)}`,
       );
     } finally {
-      setLoading(false);
+      if (current()) setLoading(false);
     }
   }
 
@@ -1632,7 +1725,7 @@ export function Session() {
           <div class="flex flex-col gap-3 w-full max-w-xs">
             <Button
               onClick={async () => {
-                if (creatingSession()) return;
+                if (creatingSession() || loading()) return;
                 console.log(
                   "[Welcome] New Session clicked, directory:",
                   directory,
@@ -1644,12 +1737,21 @@ export function Session() {
                   return;
                 }
                 setCreatingSession(true);
+                const token = ++lifetime.create;
+                const scope = { serverId: LOCAL_SERVER_ID, directory };
+                const route = sessionRouteKey(scope.serverId, scope.directory, params.id);
+                const current = () => lifetime.active && token === lifetime.create &&
+                  route === sessionRouteKey(LOCAL_SERVER_ID, directory, params.id);
                 try {
                   console.log("[Welcome] Creating session...");
                   const res = await createRootSession(client, {
                     source: "session.welcome.createNewSession",
-                    scope: directory,
+                    scope,
                   });
+                  if (!current()) {
+                    if (res.isLeader && res.data) await client.session.delete({ sessionID: res.data.id }).catch(() => undefined);
+                    return;
+                  }
                   const data = res.data;
                   console.log("[Welcome] Create response:", data);
                   if (!data) {
@@ -1660,14 +1762,15 @@ export function Session() {
                   console.log("[Welcome] Navigating to:", url);
                   navigate(url);
                 } catch (e) {
+                  if (!current()) return;
                   console.error("[Welcome] Failed to create session:", e);
                   setError(`Failed to create session: ${formatStartError(e)}`);
                 } finally {
-                  setCreatingSession(false);
+                  if (current()) setCreatingSession(false);
                 }
               }}
               variant="ghost"
-              disabled={creatingSession()}
+              disabled={creatingSession() || loading()}
               class="w-full"
               size="sm"
             >
@@ -2320,60 +2423,77 @@ export function Session() {
 
   // Use Show to reactively switch between welcome and chat views
   return (
-    <Show when={sessionId()} fallback={<WelcomeScreen />}>
-      <div class="flex h-full overflow-hidden">
-        {/* Main chat area */}
-        <div class="flex-1 min-w-0 flex flex-col">
-          <ChatView />
+    <Show when={loadError()} fallback={
+      <Show when={sessionId()} fallback={<WelcomeScreen />}>
+        <div class="flex h-full overflow-hidden">
+          {/* Main chat area */}
+          <div class="flex-1 min-w-0 flex flex-col">
+            <ChatView />
+          </div>
+
+          {/* Review Panel - collapsible with resize handle */}
+          <Show when={layout.review.opened()}>
+            <aside class="flex shrink-0" aria-label="Review panel">
+              <ResizeHandle
+                direction="horizontal"
+                edge="start"
+                size={layout.review.width()}
+                min={200}
+                // Computed from viewport width at render time; clamped to never fall below min
+                max={Math.max(200, typeof window !== "undefined" ? Math.round(window.innerWidth * 0.8) : 800)}
+                onResize={layout.review.resize}
+                onCollapse={layout.review.close}
+                collapseThreshold={100}
+              />
+              <div
+                data-panel="review"
+                tabIndex={-1}
+                class="shrink-0 overflow-hidden focus-visible:outline-2 focus-visible:outline-[var(--interactive-base)] focus-visible:outline-offset-[-2px]"
+                style={{ width: `${layout.review.width()}px` }}
+              >
+                <ReviewPanel sessionId={sessionId()!} />
+              </div>
+            </aside>
+          </Show>
+
+          {/* Info Panel (Session Sidebar) - collapsible with resize handle */}
+          <Show when={layout.info.opened()}>
+            <aside class="flex shrink-0" aria-label="Session info">
+              <ResizeHandle
+                direction="horizontal"
+                edge="start"
+                size={layout.info.width()}
+                min={180}
+                max={400}
+                onResize={layout.info.resize}
+                onCollapse={layout.info.close}
+                collapseThreshold={80}
+              />
+              <div
+                class="shrink-0 overflow-hidden"
+                style={{ width: `${layout.info.width()}px` }}
+              >
+                <SessionSidebar sessionId={sessionId()} />
+              </div>
+            </aside>
+          </Show>
         </div>
-
-        {/* Review Panel - collapsible with resize handle */}
-        <Show when={layout.review.opened()}>
-          <aside class="flex shrink-0" aria-label="Review panel">
-            <ResizeHandle
-              direction="horizontal"
-              edge="start"
-              size={layout.review.width()}
-              min={200}
-              // Computed from viewport width at render time; clamped to never fall below min
-              max={Math.max(200, typeof window !== "undefined" ? Math.round(window.innerWidth * 0.8) : 800)}
-              onResize={layout.review.resize}
-              onCollapse={layout.review.close}
-              collapseThreshold={100}
-            />
-            <div
-              data-panel="review"
-              tabIndex={-1}
-              class="shrink-0 overflow-hidden focus-visible:outline-2 focus-visible:outline-[var(--interactive-base)] focus-visible:outline-offset-[-2px]"
-              style={{ width: `${layout.review.width()}px` }}
-            >
-              <ReviewPanel sessionId={sessionId()!} />
-            </div>
-          </aside>
-        </Show>
-
-        {/* Info Panel (Session Sidebar) - collapsible with resize handle */}
-        <Show when={layout.info.opened()}>
-          <aside class="flex shrink-0" aria-label="Session info">
-            <ResizeHandle
-              direction="horizontal"
-              edge="start"
-              size={layout.info.width()}
-              min={180}
-              max={400}
-              onResize={layout.info.resize}
-              onCollapse={layout.info.close}
-              collapseThreshold={80}
-            />
-            <div
-              class="shrink-0 overflow-hidden"
-              style={{ width: `${layout.info.width()}px` }}
-            >
-              <SessionSidebar sessionId={sessionId()} />
-            </div>
-          </aside>
-        </Show>
-      </div>
+      </Show>
+    }>
+      {(message) => (
+        <div class="flex h-full items-center justify-center px-6" style={{ background: "var(--background-stronger)" }}>
+          <div class="max-w-md text-center">
+            <p class="text-sm mb-4" role="alert" style={{ color: "var(--status-danger-text)" }}>{message()}</p>
+            <Button variant="ghost" size="sm" onClick={() => {
+              const id = params.id;
+              if (!id) return;
+              setLoadError(null);
+              setLoadingHistory(true);
+              void loadSession(id, sessionDraftKey(LOCAL_SERVER_ID, params.dir, id));
+            }}>Retry</Button>
+          </div>
+        </div>
+      )}
     </Show>
   );
 }

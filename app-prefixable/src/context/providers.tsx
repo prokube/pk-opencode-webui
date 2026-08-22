@@ -1,9 +1,9 @@
-import { createContext, useContext, createResource, createEffect, type ParentProps, onMount } from "solid-js"
+import { createContext, useContext, createResource, createEffect, createMemo, type ParentProps, onMount } from "solid-js"
 import { createStore, produce } from "solid-js/store"
 import { useSDK } from "./sdk"
 import { useConfig } from "./config"
 import { cycleModelVariant, getConfiguredAgentVariant, resolveModelVariant } from "./model-variant"
-import { useServer } from "./server"
+import { LOCAL_SERVER_ID } from "./server"
 import { useSync, type ProviderData } from "./sync"
 import { legacyStorageValue, serverStorageKey, workspaceStorageKey } from "../utils/storage"
 
@@ -131,10 +131,9 @@ export function normalizeProviderData(data: ProviderData): ProviderListData {
 
 export function ProviderProvider(props: ParentProps) {
   const { client, directory } = useSDK()
-  const server = useServer()
   const sync = useSync()
   const cfg = useConfig()
-  const serverId = server.activeServerId()
+  const serverId = LOCAL_SERVER_ID
   const workspace = directory ?? ""
   const storageKey = workspaceStorageKey(serverId, workspace, "modelsByAgent")
   const variantKey = workspaceStorageKey(serverId, workspace, "variantsBySession")
@@ -240,12 +239,7 @@ export function ProviderProvider(props: ParentProps) {
     }
   })
 
-  const providerData = () => normalizeProviderData(sync.providers())
-
-  onMount(() => {
-    if (!directory) return
-    void refreshProviderInstance()
-  })
+  const providerData = createMemo(() => normalizeProviderData(sync.providers()))
 
   // Auto-select default model/agent from project config, falling back to hardcoded defaults.
   // localStorage selections take priority (user's runtime choice wins).
@@ -475,16 +469,17 @@ export function ProviderProvider(props: ParentProps) {
     return (await sync.provider.refresh())?.connected.includes(providerID)
   }
 
-  async function refreshProviderInstance() {
+  async function refreshProviderAuthInstance() {
     sync.provider.invalidate()
     await client.instance.dispose()
     return sync.provider.refresh()
   }
 
   async function waitProviderConnected(providerID: string, expected: boolean) {
-    await refreshProviderInstance()
-    for (const delay of [0, 500, 1000, 2000, 3000, 5000, 8000]) {
-      if (delay > 0) await new Promise((resolve) => setTimeout(resolve, delay))
+    const initial = await refreshProviderAuthInstance()
+    if (initial?.connected.includes(providerID) === expected) return expected
+    for (const delay of [500, 1000, 2000, 3000, 5000, 8000]) {
+      await new Promise((resolve) => setTimeout(resolve, delay))
       const connected = (await sync.provider.refresh())?.connected.includes(providerID)
       if (connected === expected) return connected
     }

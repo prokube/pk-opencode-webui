@@ -80,12 +80,13 @@ For trusted projects, enable **auto-accept** to automatically approve file edit 
 A full settings page with tabs for:
 
 1. **Providers** -- configure API keys, run OAuth flows (including device code flow)
-2. **Servers** -- select and configure OpenCode API servers
-3. **Git** -- view SSH keys, configure Git settings
-4. **MCP** -- manage MCP servers (see above)
-5. **Instructions** -- edit project-level instruction files (AGENTS.md, etc.) with inline editor
-6. **Project Config** -- edit project tools, permissions, and configuration
-7. **Appearance** -- Light / Dark / System theme
+2. **Git** -- view SSH keys, configure Git settings
+3. **MCP** -- manage MCP servers (see above)
+4. **Instructions** -- edit project-level instruction files (AGENTS.md, etc.) with inline editor
+5. **Project Config** -- edit project tools, permissions, and configuration
+6. **Appearance** -- Light / Dark / System theme
+
+The UI connects only to its local OpenCode API through the prefix-aware, same-origin UI proxy. Arbitrary remote OpenCode server targets are not accepted by the browser or UI server.
 
 ## Quick Start
 
@@ -132,6 +133,12 @@ bun install && bun run dev
 | `BRANDING_NAME` | _(empty)_ | Branding text shown as "Powered by {name}" |
 | `BRANDING_URL` | _(empty)_ | URL for the branding link |
 | `BRANDING_ICON` | _(empty)_ | Custom icon URL (HTTP, relative path, or data URI) |
+
+### Local-only security model
+
+This core branch does not support browser-supplied OpenCode backend credentials or backend auth tickets. The OpenCode backend must be reachable only by the UI server, while Kubeflow or another authenticated ingress protects the UI, proxied backend routes, and `/api/ext/*` routes externally. Do not expose the local backend or UI server directly to untrusted networks.
+
+PTY WebSockets use the same prefix-aware UI proxy and external deployment authentication as the rest of the UI. The UI server does not add separate PTY credentials or claim ticket-based PTY authentication.
 
 ## Deployment
 

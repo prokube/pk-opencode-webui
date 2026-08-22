@@ -9,9 +9,9 @@ describe("scoped storage", () => {
     )
   })
 
-  test("encodes special characters in server IDs and directories", () => {
-    expect(workspaceStorageKey("remote/name?x=1", "/work/a b/#demo", "layout")).toBe(
-      "opencode.server.remote%2Fname%3Fx%3D1.workspace.%2Fwork%2Fa%20b%2F%23demo.layout",
+  test("encodes special characters in directories", () => {
+    expect(workspaceStorageKey("local", "/work/a b/#demo", "layout")).toBe(
+      "opencode.server.local.workspace.%2Fwork%2Fa%20b%2F%23demo.layout",
     )
   })
 
@@ -23,13 +23,6 @@ describe("scoped storage", () => {
     })
     expect(legacyStorageValue("local", "current", ["valid"], valid)).toEqual({
       value: "current",
-      migrated: false,
-    })
-  })
-
-  test("never selects local legacy data for a remote server", () => {
-    expect(legacyStorageValue("remote/special", null, ["valid"], () => true)).toEqual({
-      value: null,
       migrated: false,
     })
   })

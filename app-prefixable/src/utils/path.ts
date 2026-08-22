@@ -2,7 +2,6 @@ declare global {
   interface Window {
     __OPENCODE__?: {
       basePath?: string
-      serverUrl?: string
     }
   }
 }
@@ -56,10 +55,7 @@ export function prefixPath(path: string, basePath: string): string {
 }
 
 export function getServerUrl(): string {
-  if (typeof window !== "undefined" && window.__OPENCODE__?.serverUrl) {
-    return window.__OPENCODE__.serverUrl
-  }
-  // Default to same origin + base path (so SDK requests go through our proxy)
+  // SDK and extended API requests always use the prefix-aware same-origin UI proxy.
   if (typeof window !== "undefined") {
     const basePath = getBasePath()
     // Remove trailing slash for server URL

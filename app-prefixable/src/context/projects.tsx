@@ -1,5 +1,5 @@
 import { createContext, createMemo, createSignal, onCleanup, type ParentProps, untrack, useContext } from "solid-js"
-import { useServer } from "./server"
+import { LOCAL_SERVER_ID } from "./server"
 import { serverStorageKey } from "../utils/storage"
 
 export interface Project {
@@ -147,8 +147,7 @@ export function loadProjects(storage: ProjectStorage, serverId: string, now = Da
 }
 
 export function ProjectsProvider(props: ParentProps) {
-  const server = useServer()
-  const serverId = server.activeServerId()
+  const serverId = LOCAL_SERVER_ID
   const key = projectsStorageKey(serverId)
   const storage = typeof localStorage === "undefined" ? undefined : localStorage
   const [projects, setProjects] = createSignal<Project[]>(storage ? loadProjects(storage, serverId) : [])

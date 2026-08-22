@@ -39,45 +39,4 @@ describe("normalizeProxiedResponse", () => {
     expect(normalized.headers.get("content-encoding")).toBeNull()
   })
 
-  test("sets explicit cors origin and vary when requested", async () => {
-    const response = new Response("ok", {
-      headers: {
-        "access-control-allow-origin": "https://example.com",
-        vary: "Accept-Encoding",
-      },
-    })
-
-    const normalized = normalizeProxiedResponse(response, "https://ui.example.com")
-
-    expect(await normalized.text()).toBe("ok")
-    expect(normalized.headers.get("access-control-allow-origin")).toBe("https://ui.example.com")
-    expect(normalized.headers.get("vary")).toBe("Accept-Encoding, Origin")
-  })
-
-  test("keeps existing Origin vary token without duplication", async () => {
-    const response = new Response("ok", {
-      headers: {
-        vary: "Accept-Encoding, Origin",
-      },
-    })
-
-    const normalized = normalizeProxiedResponse(response, "https://ui.example.com")
-
-    expect(await normalized.text()).toBe("ok")
-    expect(normalized.headers.get("vary")).toBe("Accept-Encoding, Origin")
-  })
-
-  test("preserves wildcard vary when cors origin is applied", async () => {
-    const response = new Response("ok", {
-      headers: {
-        vary: "*",
-      },
-    })
-
-    const normalized = normalizeProxiedResponse(response, "https://ui.example.com")
-
-    expect(await normalized.text()).toBe("ok")
-    expect(normalized.headers.get("vary")).toBe("*")
-    expect(normalized.headers.get("access-control-allow-origin")).toBe("https://ui.example.com")
-  })
 })

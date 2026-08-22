@@ -11,6 +11,7 @@ This image combines:
 - **GitHub CLI and Copilot Review extension** (`gh` + `gh-copilot-review`)
 
 The UI automatically adapts to any URL prefix set by Kubeflow's `NB_PREFIX` environment variable.
+Browser requests remain same-origin and are forwarded only to the container's configured `API_URL`; the server does not expose an arbitrary remote-target proxy route. Kubeflow ingress authentication is the security boundary for the UI and its extended API. This branch does not put backend credentials in the browser or add a separate PTY ticket mechanism.
 
 ## Features
 

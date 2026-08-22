@@ -91,6 +91,43 @@ function internalError(message: string): Response {
   return Response.json({ error: message }, { status: 500 })
 }
 
+const MUTATING_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"])
+
+function firstForwarded(value: string | null) {
+  return value?.split(",", 1)[0]?.trim()
+}
+
+export function isSameOriginRequest(req: Request, url = new URL(req.url)) {
+  if (req.headers.get("Sec-Fetch-Site") === "cross-site") return false
+  const origin = req.headers.get("Origin")
+  if (!origin) return true
+  try {
+    const source = new URL(origin)
+    const host = firstForwarded(req.headers.get("X-Forwarded-Host")) ?? url.host
+    const protocol = firstForwarded(req.headers.get("X-Forwarded-Proto")) ?? url.protocol.slice(0, -1)
+    return source.host === host && source.protocol === `${protocol}:`
+  } catch {
+    return false
+  }
+}
+
+export function isMutation(method: string) {
+  return MUTATING_METHODS.has(method.toUpperCase())
+}
+
+function withSecurityHeaders(response: Response) {
+  const headers = new Headers(response.headers)
+  headers.set("Cross-Origin-Resource-Policy", "same-origin")
+  headers.set("Referrer-Policy", "no-referrer")
+  headers.set("X-Content-Type-Options", "nosniff")
+  headers.append("Vary", "Origin")
+  return new Response(response.body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers,
+  })
+}
+
 /**
  * API paths that should be proxied to the OpenCode API server.
  * Extended endpoints (/api/ext/*) are NOT in this list - they're handled separately.
@@ -136,6 +173,23 @@ export function isApiPath(path: string): boolean {
  * Returns a Response if the path matches an extended endpoint, otherwise undefined.
  */
 export async function handleExtendedEndpoint(
+  path: string,
+  method: string,
+  url: URL,
+  req: Request,
+): Promise<Response | undefined> {
+  if (!path.startsWith("/api/ext/")) return undefined
+
+  if (isMutation(method) && !isSameOriginRequest(req, url)) {
+    return withSecurityHeaders(Response.json({ error: "cross-origin request denied" }, { status: 403 }))
+  }
+
+  const response = await handleExtendedRoute(path, method, url, req)
+  if (!response) return undefined
+  return withSecurityHeaders(response)
+}
+
+async function handleExtendedRoute(
   path: string,
   method: string,
   url: URL,

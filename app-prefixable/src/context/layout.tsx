@@ -5,7 +5,7 @@ import {
   type ParentProps,
 } from "solid-js";
 import { useSDK } from "./sdk";
-import { useServer } from "./server";
+import { LOCAL_SERVER_ID } from "./server";
 import { legacyStorageValue, workspaceStorageKey } from "../utils/storage";
 
 const LAYOUT_STORAGE_KEY = "opencode.layout";
@@ -151,9 +151,8 @@ function loadState(key: string, serverId: string): LayoutState {
 
 export function LayoutProvider(props: ParentProps) {
   const { directory } = useSDK();
-  const server = useServer();
-  const storageKey = workspaceStorageKey(server.activeServerId(), directory ?? "", "layout");
-  const initial = loadState(storageKey, server.activeServerId());
+  const storageKey = workspaceStorageKey(LOCAL_SERVER_ID, directory ?? "", "layout");
+  const initial = loadState(storageKey, LOCAL_SERVER_ID);
 
   // Review panel state
   const [reviewOpened, setReviewOpened] = createSignal(initial.review.opened);
