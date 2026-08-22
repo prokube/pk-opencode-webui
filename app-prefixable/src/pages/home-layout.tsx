@@ -35,12 +35,15 @@ function HomeContent(props: ParentProps) {
   const [terminalPtyId, setTerminalPtyId] = createSignal<string | null>(null)
   const [terminalLoading, setTerminalLoading] = createSignal(false)
   const [terminalHeight, setTerminalHeight] = createSignal(300)
+  let disposed = false
+  let terminalOperation = 0
 
   // Client for PTY operations
   const client = createOpencodeClient({ baseUrl: serverUrl(), headers: authHeaders(), throwOnError: false })
 
   // Cleanup PTY on unmount
   onCleanup(() => {
+    disposed = true
     const ptyId = terminalPtyId()
     if (ptyId) {
       client.pty.remove({ ptyID: ptyId }).catch(() => {})
@@ -49,6 +52,7 @@ function HomeContent(props: ParentProps) {
 
   async function toggleTerminal() {
     if (terminalOpen()) {
+      terminalOperation += 1
       // Close terminal
       const ptyId = terminalPtyId()
       if (ptyId) {
@@ -60,7 +64,9 @@ function HomeContent(props: ParentProps) {
       }
       setTerminalPtyId(null)
       setTerminalOpen(false)
+      setTerminalLoading(false)
     } else {
+      const operation = ++terminalOperation
       // Open terminal
       setTerminalOpen(true)
       setTerminalLoading(true)
@@ -81,12 +87,17 @@ function HomeContent(props: ParentProps) {
           throw new Error("Failed to create terminal")
         }
 
+        if (disposed || operation !== terminalOperation) {
+          await client.pty.remove({ ptyID: ptyRes.data.id }).catch(() => undefined)
+          return
+        }
+
         setTerminalPtyId(ptyRes.data.id)
       } catch (e) {
         console.error("[HomeLayout] Failed to open terminal:", e)
         setTerminalOpen(false)
       } finally {
-        setTerminalLoading(false)
+        if (operation === terminalOperation) setTerminalLoading(false)
       }
     }
   }
@@ -271,7 +282,13 @@ function HomeContent(props: ParentProps) {
                       </Show>
 
                       <Show when={!terminalLoading() && terminalPtyId()}>
-                        <Terminal ptyId={terminalPtyId()!} />
+                        <Terminal
+                          ptyId={terminalPtyId()!}
+                          onClose={() => {
+                            setTerminalPtyId(null)
+                            setTerminalOpen(false)
+                          }}
+                        />
                       </Show>
                     </div>
                   </div>

@@ -276,14 +276,22 @@ describe("sync event helpers", () => {
     tracker.end(second)
   })
 
-  test("bounded tombstones require an authoritative snapshot without resurrection", () => {
+  test("collapsed tombstones survive snapshots without resurrection", () => {
     const tracker = createSessionRequestTracker(1)
     tracker.removeMessage("ses_1", "msg_1")
     expect(tracker.removeMessage("ses_1", "msg_2")).toBe(true)
+    expect(tracker.removeMessage("ses_1", "msg_3")).toBe(false)
     expect(tracker.needsSnapshot("ses_1")).toBe(true)
 
-    tracker.updateMessage("ses_1", "msg_1")
-    expect(tracker.needsSnapshot("ses_1")).toBe(true)
+    const request = tracker.begin("ses_1")
+    const stale = [message(user("msg_1"), []), message(user("msg_2"), []), message(user("msg_3"), [])]
+    expect(tracker.snapshot(request, [], stale)).toEqual([])
+    tracker.appliedSnapshot("ses_1")
+    tracker.end(request)
+
+    const next = tracker.begin("ses_1")
+    expect(tracker.filter(next, stale)).toEqual([])
+    expect(tracker.needsSnapshot("ses_1")).toBe(false)
   })
 
   test("authoritative snapshot preserves in-flight SSE updates and applies atomically after success", async () => {
@@ -455,7 +463,7 @@ describe("sync event helpers", () => {
     const pending = reduceSyncLiveEvent(asked, { type: "permission.asked", properties: permission })
 
     expect(pending.status.ses_1).toEqual({ type: "busy" })
-    expect(pending.pendingQuestions.ses_1).toEqual(question)
+    expect(pending.pendingQuestions.ses_1).toEqual([question])
     expect(pending.pendingPermissions.per_1).toEqual(permission)
 
     const idle = reduceSyncLiveEvent(pending, {
@@ -484,7 +492,7 @@ describe("sync event helpers", () => {
     }
     const state: SyncLiveState = {
       status: {},
-      pendingQuestions: { ses_1: question },
+      pendingQuestions: { ses_1: [question] },
       pendingPermissions: {},
     }
 
@@ -494,7 +502,24 @@ describe("sync event helpers", () => {
     })
 
     expect(next).toBe(state)
-    expect(next.pendingQuestions.ses_1).toEqual(question)
+    expect(next.pendingQuestions.ses_1).toEqual([question])
+  })
+
+  test("retains multiple pending questions and removes only the replied request", () => {
+    const first = { id: "que_1", sessionID: "ses_1", questions: [] } satisfies QuestionRequest
+    const second = { id: "que_2", sessionID: "ses_1", questions: [] } satisfies QuestionRequest
+    const initial: SyncLiveState = { status: {}, pendingQuestions: {}, pendingPermissions: {} }
+    const asked = reduceSyncLiveEvent(
+      reduceSyncLiveEvent(initial, { type: "question.asked", properties: first }),
+      { type: "question.asked", properties: second },
+    )
+    const replied = reduceSyncLiveEvent(asked, {
+      type: "question.replied",
+      properties: { sessionID: "ses_1", requestID: first.id },
+    })
+
+    expect(asked.pendingQuestions.ses_1).toEqual([first, second])
+    expect(replied.pendingQuestions.ses_1).toEqual([second])
   })
 })
 
@@ -621,6 +646,23 @@ describe("sync event buffer", () => {
     expect(seen).toEqual(["live"])
     events.push("after")
     expect(seen).toEqual(["live", "after"])
+  })
+
+  test("drops buffered events after disposal", async () => {
+    const seen: string[] = []
+    const release = Promise.withResolvers<void>()
+    const events = createEventBuffer<string>((event) => seen.push(event))
+    const task = events.during(async () => {
+      events.push("stale")
+      await release.promise
+    })
+
+    events.dispose()
+    release.resolve()
+    await task
+    events.push("after")
+
+    expect(seen).toEqual([])
   })
 
   test("applies live events after a stale snapshot", async () => {

@@ -67,9 +67,7 @@ import type { DragEvent as SolidDragEvent } from "@thisbeyond/solid-dnd";
 import { ConstrainDragXAxis } from "../utils/solid-dnd";
 
 import { useProjects } from "../context/projects";
-import { sessionHasQuestion, buildChildMap } from "../utils/session-tree-request";
-import { createRootSession } from "../utils/root-session";
-import { formatStartError } from "../utils/session-start";
+import { sessionHasQuestion, buildChildMap, sessionDescendantIds } from "../utils/session-tree-request";
 import { LOCAL_SERVER_ID } from "../context/server";
 import { legacyStorageValue, serverStorageKey, workspaceStorageKey } from "../utils/storage";
 import { sessionNeighbor } from "../utils/session-load";
@@ -171,17 +169,9 @@ export function Layout(props: ParentProps) {
   const [deleteError, setDeleteError] = createSignal<string | null>(null);
   const [confirmArchiveSession, setConfirmArchiveSession] = createSignal<Session | null>(null);
   const [pinnedIds, setPinnedIds] = createSignal<string[]>([]);
-  const [creatingSession, setCreatingSession] = createSignal(false);
-  const [sessionStartError, setSessionStartError] = createSignal<string | null>(null);
   const [worktreeToast, setWorktreeToast] = createSignal<string | null>(null);
   const [worktreeToastVariant, setWorktreeToastVariant] = createSignal<"default" | "error">("default");
   const worktreeToastTimer = { id: undefined as ReturnType<typeof setTimeout> | undefined };
-  const lifetime = { active: true, create: 0 };
-  onCleanup(() => {
-    lifetime.active = false;
-    lifetime.create += 1;
-  });
-  createEffect(on(() => location.pathname, () => setCreatingSession(false), { defer: true }));
 
   // Search state
   const [searchQuery, setSearchQuery] = createSignal("");
@@ -1395,40 +1385,9 @@ export function Layout(props: ParentProps) {
     ),
   );
 
-  async function createNewSession() {
+  function createNewSession() {
     if (!directory) return;
-    if (creatingSession()) return;
-    setSessionStartError(null);
-    setCreatingSession(true);
-    const token = ++lifetime.create;
-    const scope = { serverId: LOCAL_SERVER_ID, directory };
-    const route = location.pathname;
-    const current = () => lifetime.active && token === lifetime.create &&
-      scope.directory === directory && route === location.pathname;
-    try {
-      const res = await createRootSession(client, {
-        source: "layout.createNewSession",
-        scope,
-      });
-      if (!current()) {
-        if (res.isLeader && res.data) await client.session.delete({ sessionID: res.data.id }).catch(() => undefined);
-        return;
-      }
-      const data = res.data;
-      if (!data) {
-        const msg = formatStartError((res as { error?: unknown }).error);
-        setSessionStartError(`Failed to create session: ${msg}`);
-        return;
-      }
-      sync.session.upsert(data);
-      navigate(`/${dirSlug()}/session/${data.id}`);
-    } catch (e) {
-      if (!current()) return;
-      console.error("Failed to create session:", e);
-      setSessionStartError(`Failed to create session: ${formatStartError(e)}`);
-    } finally {
-      if (current()) setCreatingSession(false);
-    }
+    navigate(`/${dirSlug()}/session?new=${crypto.randomUUID()}`);
   }
 
   async function restoreSession(session: Session) {
@@ -1466,6 +1425,8 @@ export function Layout(props: ParentProps) {
   function archiveAndNavigate(session: Session) {
     const ids = flatSessionIds();
     const neighborId = sessionNeighbor(ids, session.id);
+    const descendants = sessionDescendantIds(sync.sessions(), session.id, childMap());
+    const activeID = currentSessionId();
     const archivedAt = Date.now();
     const archived = { ...session, time: { ...session.time, archived: archivedAt } };
 
@@ -1479,16 +1440,10 @@ export function Layout(props: ParentProps) {
         // Unpin only after successful archive
         unpinSession(session.id);
         // Navigate only after successful archive
-        if (isActive(session.id)) {
-          try {
-            if (directory) {
-              const key = workspaceStorageKey(LOCAL_SERVER_ID, directory, "lastSession");
-              if (window.localStorage.getItem(key) === session.id) window.localStorage.removeItem(key);
-            }
-          } catch (err) {
-            console.warn("Failed to clear archived last session:", err);
-          }
-          navigate(neighborId ? `/${dirSlug()}/session/${neighborId}` : `/${dirSlug()}/session`);
+        if (activeID && descendants.has(activeID)) {
+          clearLastSession(descendants);
+          const target = session.parentID ?? neighborId;
+          navigate(target ? `/${dirSlug()}/session/${target}` : `/${dirSlug()}/session?new=${crypto.randomUUID()}`);
         }
       })
       .catch((err: unknown) => {
@@ -1507,6 +1462,8 @@ export function Layout(props: ParentProps) {
     // Archived sessions live in archivedSessions(), not flatSessionIds(),
     // so guard against indexOf returning -1.
     const isArchived = !!session.time?.archived;
+    const descendants = sessionDescendantIds(sync.sessions(), session.id, childMap());
+    const activeID = currentSessionId();
     const neighborId = (() => {
       if (isArchived) return undefined;
       const ids = flatSessionIds();
@@ -1518,10 +1475,14 @@ export function Layout(props: ParentProps) {
     client.session.delete({ sessionID: session.id })
       .then(() => {
         setConfirmDeleteSession(null);
-        sync.session.remove(session.id);
-        unpinSession(session.id);
-        if (isActive(session.id)) {
-          navigate(neighborId ? `/${dirSlug()}/session/${neighborId}` : `/${dirSlug()}/session`);
+        for (const id of descendants) {
+          sync.session.remove(id);
+          unpinSession(id);
+        }
+        if (activeID && descendants.has(activeID)) {
+          clearLastSession(descendants);
+          const target = session.parentID ?? neighborId;
+          navigate(target ? `/${dirSlug()}/session/${target}` : `/${dirSlug()}/session?new=${crypto.randomUUID()}`);
         }
       })
       .catch((err: unknown) => {
@@ -1547,7 +1508,18 @@ export function Layout(props: ParentProps) {
   });
 
   function isActive(sessionId: string) {
-    return location.pathname.includes(sessionId);
+    return currentSessionId() === sessionId;
+  }
+
+  function clearLastSession(ids: Set<string>) {
+    if (!directory) return;
+    try {
+      const key = workspaceStorageKey(LOCAL_SERVER_ID, directory, "lastSession");
+      const stored = window.localStorage.getItem(key);
+      if (stored && ids.has(stored)) window.localStorage.removeItem(key);
+    } catch (err) {
+      console.warn("Failed to clear last session:", err);
+    }
   }
 
   function isSettingsActive() {
@@ -1767,25 +1739,11 @@ export function Layout(props: ParentProps) {
               onClick={createNewSession}
               variant="ghost"
               class="w-full justify-start"
-              disabled={creatingSession()}
               size="sm"
             >
               <Plus class="w-4 h-4" />
               <span>New Session</span>
             </Button>
-            <Show when={sessionStartError()}>
-              <div
-                class="mt-2 px-3 py-2 rounded-md text-xs"
-                role="alert"
-                aria-live="assertive"
-                style={{
-                  background: "var(--status-danger-dim)",
-                  color: "var(--status-danger-text)",
-                }}
-              >
-                {sessionStartError()}
-              </div>
-            </Show>
           </div>
 
           {/* Session Search */}
@@ -2489,7 +2447,7 @@ export function Layout(props: ParentProps) {
                           terminal.active() === session.id ? "block" : "none",
                       }}
                     >
-                      <Terminal ptyId={session.id} />
+                      <Terminal ptyId={session.id} onClose={() => terminal.close(session.id)} />
                     </div>
                   )}
                 </For>

@@ -11,7 +11,7 @@
 
 import { handleExtendedEndpoint, isApiPath, isMutation, isSameOriginRequest } from "../shared/extended-api"
 import { matchesBasePath, stripBasePath } from "../shared/base-path"
-import { normalizeProxiedResponse } from "../shared/proxy"
+import { normalizeProxiedResponse, serializeScriptData, stripHopByHopHeaders } from "../shared/proxy"
 
 const BASE_PATH = process.env.NB_PREFIX || process.env.BASE_PATH || "/"
 const PORT = parseInt(process.env.PORT || "8080", 10)
@@ -130,25 +130,6 @@ async function openAIBrowserOAuthMethods() {
   return blockedOpenAIMethods
 }
 
-function shouldDisposeAfterAuthMutation(path: string, req: Request, response: Response) {
-  if (!response.ok) return false
-  if (!AUTH_MUTATION_METHODS.has(req.method)) return false
-  if (/^\/auth\/[^/]+$/.test(path)) return true
-  return /^\/provider\/[^/]+\/oauth\/callback$/.test(path)
-}
-
-const AUTH_MUTATION_METHODS = new Set(["POST", "PUT", "DELETE"])
-
-async function disposeInstanceAfterAuthMutation(path: string, req: Request, response: Response) {
-  if (!shouldDisposeAfterAuthMutation(path, req, response)) return
-  const dispose = new URL("/instance/dispose", API_URL)
-  const res = await fetch(dispose.toString(), { method: "POST" }).catch((e) => {
-    console.error("[Proxy] Failed to dispose instance after auth mutation:", e)
-    return undefined
-  })
-  if (res && !res.ok) console.error("[Proxy] Failed to dispose instance after auth mutation:", res.status, res.statusText)
-}
-
 const server = Bun.serve<{ path: string; search: string }>({
   port: PORT,
   hostname: "0.0.0.0",
@@ -217,6 +198,7 @@ const server = Bun.serve<{ path: string; search: string }>({
       }
       const target = new URL(path + url.search, API_URL)
       const headers = new Headers(req.headers)
+      stripHopByHopHeaders(headers)
 
       // SSE requests need special handling
       if (path.startsWith("/event")) {
@@ -225,17 +207,12 @@ const server = Bun.serve<{ path: string; search: string }>({
           const response = await fetch(target.toString(), {
             method: req.method,
             headers,
+            signal: req.signal,
           })
 
           if (!response.ok) {
             console.error("[Proxy] SSE error:", response.status, response.statusText)
-            return withNoStoreHeaders(
-              new Response(response.body, {
-                status: response.status,
-                statusText: response.statusText,
-                headers: response.headers,
-              }),
-            )
+            return withNoStoreHeaders(normalizeProxiedResponse(response))
           }
 
           return new Response(response.body, {
@@ -245,7 +222,6 @@ const server = Bun.serve<{ path: string; search: string }>({
               "Cache-Control": "no-store",
               Pragma: "no-cache",
               Expires: "0",
-              Connection: "keep-alive",
               "X-Accel-Buffering": "no",
             },
           })
@@ -266,8 +242,8 @@ const server = Bun.serve<{ path: string; search: string }>({
           method: req.method,
           headers,
           body,
+          signal: req.signal,
         })
-        await disposeInstanceAfterAuthMutation(path, req, response)
         return withNoStoreHeaders(normalizeProxiedResponse(response))
       } catch (e) {
         console.error("[Proxy] API error:", e)
@@ -306,7 +282,7 @@ const server = Bun.serve<{ path: string; search: string }>({
 
     const indexHtml = await indexFile.text()
     // Use JSON.stringify for safe encoding to prevent XSS
-    const config = JSON.stringify({
+    const config = serializeScriptData({
       basePath: basePathWithTrailing,
       branding: { name: BRANDING_NAME, url: BRANDING_URL, icon: BRANDING_ICON },
     })

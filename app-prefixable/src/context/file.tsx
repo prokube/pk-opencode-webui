@@ -1,7 +1,8 @@
-import { createContext, useContext, batch, type ParentProps } from "solid-js"
+import { createContext, useContext, batch, onCleanup, type ParentProps } from "solid-js"
 import { createStore, produce } from "solid-js/store"
 import type { FileNode } from "../sdk/client"
 import { useSDK } from "./sdk"
+import { useEvents } from "./events"
 
 type DirState = {
   expanded: boolean
@@ -52,7 +53,8 @@ function basename(path: string) {
 }
 
 export function FileProvider(props: ParentProps) {
-  const { client } = useSDK()
+  const { client, directory } = useSDK()
+  const events = useEvents()
 
   const [store, setStore] = createStore<FileStore>({
     dirs: {},
@@ -182,6 +184,29 @@ export function FileProvider(props: ParentProps) {
     fileInflight.set(path, promise)
     return promise
   }
+
+  const unsub = events.subscribe((event) => {
+    if (event.type !== "file.watcher.updated") return
+    const raw = event.properties.file
+    const root = directory?.replace(/[\\/]+$/, "")
+    const path = root && (raw === root || raw.startsWith(`${root}/`))
+      ? raw.slice(root.length).replace(/^\//, "")
+      : raw.replace(/^\.\//, "")
+    if (root && path === raw && raw.startsWith("/")) return
+    const parent = path.includes("/") ? path.slice(0, path.lastIndexOf("/")) : ""
+    if (store.files[path]) {
+      const pending = fileInflight.get(path)
+      if (pending) void pending.then(() => loadFile(path, { force: true }))
+      if (!pending) void loadFile(path, { force: true })
+    }
+    if (store.dirs[parent]?.loaded) {
+      const pending = inflight.get(parent)
+      if (pending) void pending.then(() => listDir(parent, { force: true }))
+      if (!pending) void listDir(parent, { force: true })
+    }
+    if (event.properties.event === "change" && store.dirs[path]?.loaded) void listDir(path, { force: true })
+  })
+  onCleanup(unsub)
 
   const value: FileContextValue = {
     tree: {

@@ -30,11 +30,12 @@ export function MCPDialog(props: Props) {
     if (status?.status === "connected") {
       await mcp.disconnect(name)
     } else if (status?.status === "needs_auth") {
-      // Start OAuth flow
-      const result = await mcp.startAuth(name)
-      if (result?.authorizationUrl) {
-        window.open(result.authorizationUrl, "_blank")
-      }
+      const popup = window.open("about:blank", "_blank")
+      const connected = await mcp.startAuth(name, (url) => {
+        if (popup) popup.location.href = url
+        if (!popup) window.open(url, "_blank")
+      })
+      if (!connected) popup?.close()
     } else {
       await mcp.connect(name)
     }

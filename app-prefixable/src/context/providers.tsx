@@ -130,7 +130,7 @@ export function normalizeProviderData(data: ProviderData): ProviderListData {
 }
 
 export function ProviderProvider(props: ParentProps) {
-  const { client, directory } = useSDK()
+  const { client, global, directory } = useSDK()
   const sync = useSync()
   const cfg = useConfig()
   const serverId = LOCAL_SERVER_ID
@@ -270,6 +270,16 @@ export function ProviderProvider(props: ParentProps) {
     const targetProvider = hasValidConfigModel ? parsedProvider : FALLBACK_PROVIDER
     const targetModel = hasValidConfigModel ? parsedModel : FALLBACK_MODEL
 
+    const selected = store.modelsByAgent[defaultAgent]
+    if (selected) {
+      const provider = data.all.find((item) => item.id === selected.providerID)
+      if (!data.connected.includes(selected.providerID) || !provider?.models[selected.modelID]) {
+        setStore("modelsByAgent", produce((models) => {
+          delete models[defaultAgent]
+        }))
+      }
+    }
+
     // Only auto-set model when there is no existing selection for this agent
     // (localStorage or previous user choice). This prevents overriding user selections.
     if (!store.modelsByAgent[defaultAgent]) {
@@ -291,11 +301,22 @@ export function ProviderProvider(props: ParentProps) {
           }
         }
       }
+
+      if (!store.modelsByAgent[defaultAgent]) {
+        for (const providerID of data.connected) {
+          const provider = data.all.find((item) => item.id === providerID)
+          if (!provider) continue
+          const modelID = data.default[providerID] ?? Object.keys(provider.models)[0]
+          if (!modelID || !provider.models[modelID]) continue
+          setStore("modelsByAgent", defaultAgent, { providerID, modelID })
+          break
+        }
+      }
     }
   })
 
   // Fetch auth methods for all providers (returns { [providerID]: ProviderAuthMethod[] })
-  const [authData] = createResource(async () => {
+  const [authData, { refetch: refetchAuth }] = createResource(async () => {
     try {
       const res = await client.provider.auth()
       return (res.data as Record<string, ProviderAuthMethod[]>) ?? {}
@@ -471,7 +492,7 @@ export function ProviderProvider(props: ParentProps) {
 
   async function refreshProviderAuthInstance() {
     sync.provider.invalidate()
-    await client.instance.dispose()
+    await global.global.dispose()
     return sync.provider.refresh()
   }
 
@@ -524,6 +545,7 @@ export function ProviderProvider(props: ParentProps) {
   function refetch() {
     sync.provider.refresh()
     refetchAgents()
+    refetchAuth()
   }
 
   const value: ProviderContextValue = {

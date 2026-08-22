@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { normalizeProxiedResponse } from "../../shared/proxy"
+import { normalizeProxiedResponse, serializeScriptData, stripHopByHopHeaders } from "../../shared/proxy"
 
 describe("normalizeProxiedResponse", () => {
   test("removes decode-sensitive headers and keeps body/status", async () => {
@@ -37,6 +37,23 @@ describe("normalizeProxiedResponse", () => {
     expect(await normalized.text()).toBe("ok")
     expect(normalized.headers.get("content-length")).toBe("2")
     expect(normalized.headers.get("content-encoding")).toBeNull()
+  })
+
+  test("escapes data that could terminate an inline script", () => {
+    const value = "</script><script>alert(1)</script>&\u2028"
+    const data = serializeScriptData({ branding: value })
+    expect(data).not.toContain("<")
+    expect(data).not.toContain(">")
+    expect(data).not.toContain("&")
+    expect(JSON.parse(data)).toEqual({ branding: value })
+  })
+
+  test("strips hop-by-hop request headers named by Connection", () => {
+    const headers = new Headers({ Connection: "keep-alive, X-Internal", Host: "ui.example", "X-Internal": "secret" })
+    stripHopByHopHeaders(headers)
+    expect(headers.get("connection")).toBeNull()
+    expect(headers.get("host")).toBeNull()
+    expect(headers.get("x-internal")).toBeNull()
   })
 
 })

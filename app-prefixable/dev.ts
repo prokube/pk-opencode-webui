@@ -1,7 +1,7 @@
 import { watch } from "fs"
 import { handleExtendedEndpoint, isApiPath, isMutation, isSameOriginRequest } from "../shared/extended-api"
 import { matchesBasePath, stripBasePath } from "../shared/base-path"
-import { normalizeProxiedResponse } from "../shared/proxy"
+import { normalizeProxiedResponse, serializeScriptData, stripHopByHopHeaders } from "../shared/proxy"
 
 const BASE_PATH = process.env.BASE_PATH || "/"
 const PORT = parseInt(process.env.PORT || "3000", 10)
@@ -47,31 +47,6 @@ function withNoStoreHeaders(response: Response) {
     statusText: response.statusText,
     headers,
   })
-}
-
-function stripHopByHopHeaders(headers: Headers) {
-  const connection = headers.get("connection")
-  if (connection) {
-    for (const name of connection.split(",")) {
-      const trimmed = name.trim()
-      if (trimmed) headers.delete(trimmed)
-    }
-  }
-
-  for (const name of [
-    "connection",
-    "content-length",
-    "host",
-    "keep-alive",
-    "proxy-authenticate",
-    "proxy-authorization",
-    "te",
-    "trailer",
-    "transfer-encoding",
-    "upgrade",
-  ]) {
-    headers.delete(name)
-  }
 }
 
 function normalizeDevProxiedResponse(response: Response) {
@@ -141,13 +116,7 @@ const server = Bun.serve<{ target: string }>({
 
           if (!response.ok) {
             console.error("[Proxy] SSE error:", response.status, response.statusText)
-            return withNoStoreHeaders(
-              new Response(response.body, {
-                status: response.status,
-                statusText: response.statusText,
-                headers: response.headers,
-              }),
-            )
+            return withNoStoreHeaders(normalizeProxiedResponse(response))
           }
 
           // Pass through the body directly - Bun handles streaming
@@ -158,7 +127,6 @@ const server = Bun.serve<{ target: string }>({
               "Cache-Control": "no-store",
               Pragma: "no-cache",
               Expires: "0",
-              Connection: "keep-alive",
               "X-Accel-Buffering": "no",
             },
           })
@@ -210,7 +178,7 @@ const server = Bun.serve<{ target: string }>({
     // SPA fallback - serve index.html with injected config
     const indexHtml = await Bun.file("./dist/index.html").text()
     // Use JSON.stringify for safe encoding to prevent XSS
-    const config = JSON.stringify({
+    const config = serializeScriptData({
       basePath: basePathWithTrailing,
       branding: { name: BRANDING_NAME, url: BRANDING_URL, icon: BRANDING_ICON },
     })

@@ -12,6 +12,7 @@ export function createEventBuffer<T>(consume: (event: T) => void, options: Event
   let sizes: number[] | undefined
   let bytes = 0
   let overflowed = false
+  let disposed = false
   const limit = Math.max(1, options.limit ?? 1000)
   const byteLimit = Math.max(1, options.byteLimit ?? Number.POSITIVE_INFINITY)
 
@@ -21,6 +22,7 @@ export function createEventBuffer<T>(consume: (event: T) => void, options: Event
   }
 
   function push(event: T) {
+    if (disposed) return
     if (!queue) {
       consume(event)
       return
@@ -63,6 +65,7 @@ export function createEventBuffer<T>(consume: (event: T) => void, options: Event
   }
 
   async function during<R>(task: () => Promise<R>) {
+    if (disposed) return task()
     if (queue) return task()
     queue = []
     sizes = []
@@ -73,5 +76,13 @@ export function createEventBuffer<T>(consume: (event: T) => void, options: Event
     }
   }
 
-  return { push, during }
+  function dispose() {
+    disposed = true
+    queue = undefined
+    sizes = undefined
+    bytes = 0
+    overflowed = false
+  }
+
+  return { push, during, dispose }
 }

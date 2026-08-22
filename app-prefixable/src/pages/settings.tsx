@@ -1,4 +1,4 @@
-import { createSignal, For, Show, type JSX, createMemo, onMount, onCleanup, createEffect } from "solid-js"
+import { createSignal, For, Show, type JSX, createMemo, onMount, onCleanup } from "solid-js"
 import { Spinner } from "../components/ui/spinner"
 import { useProviders } from "../context/providers"
 import { useMCP } from "../context/mcp"
@@ -8,7 +8,7 @@ import { useConfig } from "../context/config"
 import { MCPAddDialog } from "../components/mcp-add-dialog"
 import { ConfirmDialog } from "../components/confirm-dialog"
 import { Button } from "../components/ui/button"
-import { Check, Copy, Plug, GitBranch, Server, ExternalLink, Key, Search, X, Trash2, Pencil, Palette, Sun, Moon, Monitor, BookOpen, Plus, Save, Settings2, Code, Shield, Cpu, Wrench, ChevronDown, ChevronRight, Info } from "lucide-solid"
+import { Check, Copy, Plug, GitBranch, Server, ExternalLink, Key, Search, X, Trash2, Pencil, Palette, Sun, Moon, Monitor, BookOpen, Plus, Save, Settings2, Shield, Cpu, Wrench, ChevronDown, ChevronRight, Info } from "lucide-solid"
 import { useTheme } from "../context/theme"
 import { useOptionalPermission } from "../context/permission"
 import { SETTINGS_BASE_TABS } from "./settings-tabs"
@@ -1585,10 +1585,12 @@ Add your project-specific instructions here.
                                 <button
                                   onClick={async () => {
                                     setMcpLoading(name)
-                                    const result = await mcp.startAuth(name)
-                                    if (result?.authorizationUrl) {
-                                      window.open(result.authorizationUrl, "_blank")
-                                    }
+                                    const popup = window.open("about:blank", "_blank")
+                                    const connected = await mcp.startAuth(name, (url) => {
+                                      if (popup) popup.location.href = url
+                                      if (!popup) window.open(url, "_blank")
+                                    })
+                                    if (!connected) popup?.close()
                                     setMcpLoading(null)
                                   }}
                                   class="text-xs px-2 py-1 rounded"
@@ -2183,9 +2185,7 @@ function getPermissionPatterns(rule: unknown): Array<{ pattern: string; action: 
 function ProjectConfigTab() {
   const config = useConfig()
   const providers = useProviders()
-  const { directory, url } = useSDK()
-  const [view, setView] = createSignal<"form" | "json">("form")
-  const [jsonText, setJsonText] = createSignal("")
+  const { directory } = useSDK()
   const [saveError, setSaveError] = createSignal<string | null>(null)
   const [saving, setSaving] = createSignal(false)
   const [saved, setSaved] = createSignal(false)
@@ -2193,21 +2193,6 @@ function ProjectConfigTab() {
   const [newPatternTool, setNewPatternTool] = createSignal<string | null>(null)
   const [newPatternValue, setNewPatternValue] = createSignal("")
   const [newPatternAction, setNewPatternAction] = createSignal<PermissionActionConfig>("deny")
-
-  // Sync JSON text from config only when switching into JSON view,
-  // not on every reactive config update (which would overwrite in-progress edits).
-  // Also clear errors on any view switch.
-  let prevView: "form" | "json" = "form"
-  createEffect(() => {
-    const current = view()
-    if (current !== prevView) {
-      setSaveError(null)
-      if (current === "json") {
-        setJsonText(JSON.stringify(config.project, null, 2))
-      }
-    }
-    prevView = current
-  })
 
   let savedTimer: number | undefined
   function showSaved() {
@@ -2227,19 +2212,17 @@ function ProjectConfigTab() {
   function getPermissionObject(): Record<string, unknown> {
     const perm = config.project.permission
     if (typeof perm === "string") {
-      // Convert global string to per-tool object. Include all SDK-known tools
-      // (not just those in our UI) so tools like external_directory, doom_loop
-      // retain the global default when we patch a single tool.
-      const allKeys = [
-        ...PERMISSION_TOOLS.map((t) => t.key),
-        "external_directory", "doom_loop",
-      ]
-      const obj: Record<string, unknown> = {}
-      for (const k of allKeys) obj[k] = perm
-      return obj
+      return { "*": perm }
     }
     if (typeof perm === "object" && perm !== null) return perm as Record<string, unknown>
     return {}
+  }
+
+  function permissionPatch(tool: string, value: unknown): Config["permission"] {
+    if (typeof config.project.permission === "string") {
+      return { ...getPermissionObject(), [tool]: value } as Config["permission"]
+    }
+    return { [tool]: value } as Config["permission"]
   }
 
   const ACTION_ONLY_TOOLS: Set<string> = new Set(
@@ -2254,7 +2237,7 @@ function ProjectConfigTab() {
     // discard any pattern object that may exist from manual edits or older configs.
     if (ACTION_ONLY_TOOLS.has(tool)) {
       const patch: Config = {
-        permission: { ...permObj, [tool]: action } as Config["permission"],
+        permission: permissionPatch(tool, action),
       }
       const result = await config.updateProject(patch)
       setSaving(false)
@@ -2271,7 +2254,7 @@ function ProjectConfigTab() {
       : action
 
     const patch: Config = {
-      permission: { ...permObj, [tool]: newRule } as Config["permission"],
+      permission: permissionPatch(tool, newRule),
     }
     const result = await config.updateProject(patch)
     setSaving(false)
@@ -2296,7 +2279,7 @@ function ProjectConfigTab() {
     }
 
     const patch: Config = {
-      permission: { ...permObj, [tool]: newRule } as Config["permission"],
+      permission: permissionPatch(tool, newRule),
     }
     const result = await config.updateProject(patch)
     setSaving(false)
@@ -2306,25 +2289,6 @@ function ProjectConfigTab() {
       setNewPatternAction("deny")
       showSaved()
     }
-  }
-
-  async function removePermissionPattern(tool: string, pattern: string) {
-    setSaving(true)
-    const permObj = getPermissionObject()
-    const currentRule = permObj[tool]
-    const defaultAction = getPermissionAction(currentRule)
-    const existingPatterns = getPermissionPatterns(currentRule).filter((p) => p.pattern !== pattern)
-
-    const newRule = existingPatterns.length > 0
-      ? { "*": defaultAction, ...Object.fromEntries(existingPatterns.map((p) => [p.pattern, p.action])) }
-      : defaultAction
-
-    const patch: Config = {
-      permission: { ...permObj, [tool]: newRule } as Config["permission"],
-    }
-    const result = await config.updateProject(patch)
-    setSaving(false)
-    if (result) showSaved()
   }
 
   // ── Model defaults handlers ──
@@ -2341,64 +2305,27 @@ function ProjectConfigTab() {
   })
 
   async function setDefaultModel(value: string) {
+    if (!value) return
     setSaving(true)
-    if (value) {
-      const result = await config.updateProject({ model: value })
-      setSaving(false)
-      if (result) showSaved()
-      return
-    }
-    // To clear model, write the full config file without the key.
-    // The PATCH API only does deep-merge and cannot delete keys.
-    const full = JSON.parse(JSON.stringify(config.project)) as Config
-    delete full.model
-    await writeConfigFile(JSON.stringify(full, null, 2))
+    const result = await config.updateProject({ model: value })
+    setSaving(false)
+    if (result) showSaved()
   }
 
   async function setDefaultAgent(value: string) {
+    if (!value) return
     setSaving(true)
-    if (value) {
-      const result = await config.updateProject({ default_agent: value })
-      setSaving(false)
-      if (result) showSaved()
-      return
-    }
-    const full = JSON.parse(JSON.stringify(config.project)) as Config
-    delete full.default_agent
-    await writeConfigFile(JSON.stringify(full, null, 2))
-  }
-
-  function configFilePath() {
-    if (!directory) return null
-    return `${directory.replace(/\/$/, "")}/opencode.json`
-  }
-
-  // Write the full config to opencode.json directly (used when clearing keys
-  // or full-file saves, since the PATCH API cannot delete keys via deep-merge)
-  async function writeConfigFile(content: string): Promise<boolean> {
-    const path = configFilePath()
-    if (!path) {
-      setSaving(false)
-      return false
-    }
-    const ok = await writeFile(url, path, content)
+    const result = await config.updateProject({ default_agent: value })
     setSaving(false)
-    if (ok) {
-      await config.refresh()
-      showSaved()
-      return true
-    }
-    setSaveError("Failed to write opencode.json. Changes were not saved.")
-    return false
+    if (result) showSaved()
   }
 
   // ── Tool toggle handlers ──
 
   async function toggleTool(tool: string, enabled: boolean) {
     setSaving(true)
-    const currentTools = (config.project.tools as Record<string, boolean> | undefined) ?? {}
     const patch: Config = {
-      tools: { ...currentTools, [tool]: enabled },
+      tools: { [tool]: enabled },
     }
     const result = await config.updateProject(patch)
     setSaving(false)
@@ -2409,27 +2336,6 @@ function ProjectConfigTab() {
     const tools = config.project.tools as Record<string, boolean> | undefined
     if (!tools || tools[tool] === undefined) return true // enabled by default
     return tools[tool]
-  }
-
-  // ── JSON save handler ──
-
-  async function saveJson() {
-    const text = jsonText()
-    let parsed: unknown
-    try {
-      parsed = JSON.parse(text)
-    } catch (e) {
-      setSaveError(`Invalid JSON: ${e instanceof Error ? e.message : String(e)}`)
-      return
-    }
-    if (parsed === null || Array.isArray(parsed) || typeof parsed !== "object") {
-      setSaveError("Config must be a JSON object at the top level.")
-      return
-    }
-    setSaveError(null)
-    setSaving(true)
-    // Write the full file directly so removed keys are actually deleted
-    await writeConfigFile(text)
   }
 
   return (
@@ -2472,34 +2378,6 @@ function ProjectConfigTab() {
         </div>
       </header>
 
-      {/* View toggle */}
-      <div class="flex gap-1 p-1 rounded-md" style={{ background: "var(--surface-inset)" }}>
-        <button
-          onClick={() => setView("form")}
-          class="flex-1 flex items-center justify-center gap-1.5 px-3 py-1.5 rounded text-sm font-medium transition-colors"
-          style={{
-            background: view() === "form" ? "var(--background-base)" : "transparent",
-            color: view() === "form" ? "var(--text-strong)" : "var(--text-weak)",
-            "box-shadow": view() === "form" ? "0 1px 2px rgba(0,0,0,0.05)" : "none",
-          }}
-        >
-          <Settings2 class="w-3.5 h-3.5" />
-          Form
-        </button>
-        <button
-          onClick={() => setView("json")}
-          class="flex-1 flex items-center justify-center gap-1.5 px-3 py-1.5 rounded text-sm font-medium transition-colors"
-          style={{
-            background: view() === "json" ? "var(--background-base)" : "transparent",
-            color: view() === "json" ? "var(--text-strong)" : "var(--text-weak)",
-            "box-shadow": view() === "json" ? "0 1px 2px rgba(0,0,0,0.05)" : "none",
-          }}
-        >
-          <Code class="w-3.5 h-3.5" />
-          JSON
-        </button>
-      </div>
-
       <Show when={config.error()}>
         <div
           class="p-3 rounded-md text-sm"
@@ -2536,7 +2414,7 @@ function ProjectConfigTab() {
       </Show>
 
       {/* Form View */}
-      <Show when={!config.initialLoading() && view() === "form"}>
+      <Show when={!config.initialLoading()}>
         <div class="space-y-6">
 
           {/* Permissions Section */}
@@ -2635,15 +2513,6 @@ function ProjectConfigTab() {
                                       >
                                         {p.action}
                                       </span>
-                                      <button
-                                        onClick={() => removePermissionPattern(tool.key, p.pattern)}
-                                        disabled={saving()}
-                                        class="p-0.5 rounded transition-colors opacity-50 hover:opacity-100 disabled:opacity-30"
-                                        style={{ color: "var(--icon-critical-base)" }}
-                                        title="Remove rule"
-                                      >
-                                        <X class="w-3 h-3" />
-                                      </button>
                                     </div>
                                   </div>
                                 )}
@@ -2753,7 +2622,7 @@ function ProjectConfigTab() {
                     color: "var(--text-base)",
                   }}
                 >
-                  <option value="">Use system default</option>
+                  <option value="" disabled>Select a project default</option>
                   <For each={availableModels()}>
                     {(m) => (
                       <option value={m.id}>
@@ -2782,7 +2651,7 @@ function ProjectConfigTab() {
                     color: "var(--text-base)",
                   }}
                 >
-                  <option value="">Use system default</option>
+                  <option value="" disabled>Select a project default</option>
                   <For each={providers.agents}>
                     {(agent) => (
                       <option value={agent.name}>{agent.name}</option>
@@ -2844,67 +2713,6 @@ function ProjectConfigTab() {
         </div>
       </Show>
 
-      {/* JSON View */}
-      <Show when={!config.initialLoading() && view() === "json"}>
-        <section
-          class="rounded-lg overflow-hidden"
-          style={{
-            background: "var(--background-base)",
-            border: "1px solid var(--border-base)",
-          }}
-        >
-          <div
-            class="px-4 py-3 flex items-center justify-between"
-            style={{ "border-bottom": "1px solid var(--border-base)" }}
-          >
-            <div class="flex items-center gap-2">
-              <Code class="w-4 h-4" style={{ color: "var(--text-weak)" }} />
-              <h2 class="text-sm font-medium" style={{ color: "var(--text-strong)" }}>
-                opencode.json
-              </h2>
-            </div>
-            <Button
-              onClick={saveJson}
-              variant="primary"
-              size="sm"
-              disabled={saving()}
-            >
-              <Show when={saving()} fallback={
-                <>
-                  <Save class="w-3.5 h-3.5" />
-                  Save
-                </>
-              }>
-                <Spinner class="w-3.5 h-3.5" />
-                Saving...
-              </Show>
-            </Button>
-          </div>
-
-          <div class="p-4">
-            <textarea
-              value={jsonText()}
-              onInput={(e) => {
-                setJsonText(e.currentTarget.value)
-                setSaveError(null)
-              }}
-              rows={20}
-              class="w-full px-3 py-2 rounded-md text-sm font-mono resize-y"
-              style={{
-                background: "var(--surface-inset)",
-                border: "1px solid var(--border-base)",
-                color: "var(--text-base)",
-                "min-height": "300px",
-                "tab-size": "2",
-              }}
-              spellcheck={false}
-            />
-            <p class="text-xs mt-2" style={{ color: "var(--text-weak)" }}>
-              Schema: <code class="px-1 py-0.5 rounded" style={{ background: "var(--surface-inset)" }}>https://opencode.ai/config.json</code>
-            </p>
-          </div>
-        </section>
-      </Show>
     </div>
   )
 }

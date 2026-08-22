@@ -9,7 +9,7 @@ import {
   on,
   untrack,
 } from "solid-js";
-import { useParams, useNavigate } from "@solidjs/router";
+import { useLocation, useParams, useNavigate } from "@solidjs/router";
 import { Button } from "../components/ui/button";
 import { useSDK } from "../context/sdk";
 import { sessionStatusEvent, useEvents } from "../context/events";
@@ -17,7 +17,6 @@ import { useSync } from "../context/sync";
 import { useProviders } from "../context/providers";
 import { usePermission } from "../context/permission";
 import { useLayout } from "../context/layout";
-import { useBranding } from "../context/branding";
 import { useTerminal } from "../context/terminal";
 import { useConfig } from "../context/config";
 import { useCommand } from "../context/command";
@@ -35,7 +34,7 @@ import { ResizeHandle } from "../components/resize-handle";
 import { base64Encode, base64Decode } from "../utils/path";
 import type { Part, TextPart } from "../sdk/client";
 import type { DisplayMessage } from "../types/message";
-import { Plus, Settings, Paperclip, Upload, BookOpen } from "lucide-solid";
+import { Paperclip, Upload } from "lucide-solid";
 import { ContextItems, type FileContext } from "../components/context-items";
 import { FilePickerDialog } from "../components/file-picker-dialog";
 import {
@@ -43,11 +42,9 @@ import {
   type ImageAttachment,
 } from "../components/image-attachments";
 import { sessionQuestionRequest } from "../utils/session-tree-request";
+import { ascendingID } from "../utils/id";
 import { createRootSession } from "../utils/root-session";
-import {
-  formatStartError,
-  startSessionError,
-} from "../utils/session-start";
+import { formatStartError } from "../utils/session-start";
 import { LOCAL_SERVER_ID } from "../context/server";
 import { workspaceStorageKey } from "../utils/storage";
 import {
@@ -84,10 +81,18 @@ interface SessionDraft {
   drag: number;
 }
 const drafts = new Map<string, SessionDraft>();
+const DRAFT_LIMIT = 40;
+
+function storeDraft(key: string, draft: SessionDraft) {
+  drafts.delete(key);
+  drafts.set(key, draft);
+  while (drafts.size > DRAFT_LIMIT) drafts.delete(drafts.keys().next().value!);
+}
 
 // Draft keys include server, directory, and session. "__new__" represents a new-session draft.
 export function Session() {
   const params = useParams<{ dir: string; id?: string }>();
+  const location = useLocation();
   const navigate = useNavigate();
   const { client, directory } = useSDK();
   const events = useEvents();
@@ -95,7 +100,6 @@ export function Session() {
   const providers = useProviders();
   const permission = usePermission();
   const layout = useLayout();
-  const branding = useBranding();
   const terminal = useTerminal();
   const appConfig = useConfig();
   const command = useCommand();
@@ -166,6 +170,11 @@ export function Session() {
   const dirSlug = createMemo(() =>
     directory ? base64Encode(directory) : params.dir,
   );
+  const draftID = createMemo(() => {
+    if (params.id) return params.id;
+    const token = new URLSearchParams(location.search).get("new");
+    return token ? `__new__:${token}` : undefined;
+  });
 
   const [input, setInput] = createSignal("");
   const [dragHeight, setDragHeight] = createSignal(0); // 0 = no manual drag, positive = user-set minimum
@@ -174,7 +183,7 @@ export function Session() {
   const [loading, setLoading] = createSignal(false);
   const [processing, setProcessing] = createSignal(false);
   const [loadingHistory, setLoadingHistory] = createSignal(false);
-  const [creatingSession, setCreatingSession] = createSignal(false);
+  const [reverting, setReverting] = createSignal(false);
   const [loadError, setLoadError] = createSignal<string | null>(null);
   const lifetime = { active: true, load: 0, create: 0, submit: 0 };
   onCleanup(() => {
@@ -288,12 +297,11 @@ export function Session() {
   const pendingQuestion = createMemo(() =>
     sessionQuestionRequest(sync.sessions(), events.pendingQuestions, sessionId()) ?? null,
   );
-  const [pendingUserMessageText, setPendingUserMessageText] = createSignal<
-    string | null
-  >(null);
-
   const pendingPermissions = createMemo(() => permission.pendingForSession(sessionId() ?? ""));
-  const inputBlocked = createMemo(() => !!pendingQuestion() || pendingPermissions().length > 0);
+  const inputBlocked = createMemo(() =>
+    !!pendingQuestion() || pendingPermissions().length > 0 || loadingHistory() || !!loadError() ||
+    !!sync.session.get(sessionId() ?? "")?.parentID,
+  );
 
   // Double-Escape to abort: track last Escape press timestamp
   const lastEsc = { ts: 0 };
@@ -308,7 +316,6 @@ export function Session() {
 
   function finishProcessing() {
     setOptimisticMessage(null);
-    setPendingUserMessageText(null);
     wasProcessing.value = false;
     setProcessing(false);
   }
@@ -370,7 +377,7 @@ export function Session() {
   // Keep sessionId in sync with URL params and sync session data.
   // Track the composite dir+id key so the effect fires on directory changes too,
   // preventing drafts from leaking across projects when id stays undefined.
-  createEffect(on(() => sessionDraftKey(LOCAL_SERVER_ID, params.dir, params.id), (key, prevKey) => {
+  createEffect(on(() => sessionDraftKey(LOCAL_SERVER_ID, params.dir, draftID()), (key, prevKey) => {
     const id = params.id;
     const preservesSubmission = !!id && untrack(sessionId) === id && untrack(loading);
     console.log("[Session] URL param changed:", key);
@@ -387,14 +394,13 @@ export function Session() {
         (images && images.length > 0);
 
       if (meaningful) {
-        drafts.set(prevKey, { text, files, images, height: inputRef?.style.height ?? "", drag: untrack(dragHeight) });
+        storeDraft(prevKey, { text, files, images, height: inputRef?.style.height ?? "", drag: untrack(dragHeight) });
       } else {
         drafts.delete(prevKey);
       }
     }
 
     setSessionId(id);
-    if (!preservesSubmission) setPendingUserMessageText(null);
     // Restore draft for the new session (or clear if none saved)
     const saved = drafts.get(key);
     setInput(saved?.text ?? "");
@@ -407,7 +413,6 @@ export function Session() {
     setSlashIndex(0);
     wasProcessing.value = false;
     if (!preservesSubmission) setLoading(false);
-    setCreatingSession(false);
     if (id) {
       setLoadingHistory(true);
       setLoadError(null);
@@ -420,6 +425,12 @@ export function Session() {
       setProcessing(false);
     }
   }));
+
+  createEffect(() => {
+    const id = sessionId();
+    if (!id) return;
+    onCleanup(sync.session.retain(id));
+  });
 
   // Mirror processing state from the global status store so status emitted
   // before this page mounts still initializes the busy indicator correctly.
@@ -544,25 +555,7 @@ export function Session() {
 
     // Add optimistic message if it exists and isn't already in sync
     const opt = optimisticMessage();
-    if (opt) {
-      // Check if the pending user message text matches any message in sync
-      const pendingText = pendingUserMessageText();
-      if (pendingText) {
-        const alreadyInSync = syncMsgs.some((m) => {
-          if (m.role !== "user") return false;
-          // Check all text parts for a match
-          return m.parts
-            .filter((p) => p.type === "text")
-            .some(
-              (p) =>
-                (p as { text?: string }).text?.trim() === pendingText.trim(),
-            );
-        });
-        if (!alreadyInSync) {
-          return [...syncMsgs, opt];
-        }
-      }
-    }
+    if (opt && !syncMsgs.some((message) => message.id === opt.id)) return [...syncMsgs, opt];
     return syncMsgs;
   });
   let inputRef: HTMLTextAreaElement | undefined;
@@ -592,40 +585,7 @@ export function Session() {
         description: "Create a new chat session",
         slash: "new",
         onSelect: async () => {
-          if (creatingSession()) return;
-          console.log("[Command] New session - creating...");
-          setCreatingSession(true);
-          const token = ++lifetime.create;
-          const scope = {
-            serverId: LOCAL_SERVER_ID,
-            directory: directory ?? base64Decode(params.dir),
-          };
-          const route = sessionRouteKey(scope.serverId, scope.directory, params.id);
-          const current = () => lifetime.active && token === lifetime.create &&
-            route === sessionRouteKey(LOCAL_SERVER_ID, directory ?? base64Decode(params.dir), params.id);
-          try {
-            const res = await createRootSession(client, {
-              source: "session.command.new",
-              scope,
-            });
-            if (!current()) {
-              if (res.isLeader && res.data) await client.session.delete({ sessionID: res.data.id }).catch(() => undefined);
-              return;
-            }
-            const data = res.data;
-            if (!data) {
-              const msg = formatStartError((res as { error?: unknown }).error);
-              showToast(`Failed to create session: ${msg}`);
-              return;
-            }
-            console.log("[Command] Created session:", data.id);
-            navigate(`/${dirSlug()}/session/${data.id}`);
-          } catch (err) {
-            if (!current()) return;
-            showToast(`Failed to create session: ${formatStartError(err)}`);
-          } finally {
-            if (current()) setCreatingSession(false);
-          }
+          navigate(`/${dirSlug()}/session?new=${crypto.randomUUID()}`);
         },
       },
       {
@@ -751,8 +711,11 @@ export function Session() {
         slash: "share",
         onSelect: async () => {
           if (!id) return;
+          const route = sessionRouteKey(LOCAL_SERVER_ID, directory ?? base64Decode(params.dir), params.id);
           try {
             const res = await client.session.share({ sessionID: id });
+            void sync.session.sync(id);
+            if (route !== sessionRouteKey(LOCAL_SERVER_ID, directory ?? base64Decode(params.dir), params.id)) return;
             const url = res.data?.share?.url;
             if (!url) {
               showToast("Failed to share session: no URL returned");
@@ -764,7 +727,6 @@ export function Session() {
             } catch {
               showToast(`Share link: ${url}`, 8000);
             }
-            refetchSession();
           } catch (err) {
             showToast(`Failed to share session: ${formatStartError(err)}`);
           }
@@ -800,10 +762,12 @@ export function Session() {
         slash: "unshare",
         onSelect: async () => {
           if (!id) return;
+          const route = sessionRouteKey(LOCAL_SERVER_ID, directory ?? base64Decode(params.dir), params.id);
           try {
             await client.session.unshare({ sessionID: id });
+            void sync.session.sync(id);
+            if (route !== sessionRouteKey(LOCAL_SERVER_ID, directory ?? base64Decode(params.dir), params.id)) return;
             showToast("Session unshared");
-            refetchSession();
           } catch (err) {
             showToast(`Failed to unshare session: ${formatStartError(err)}`);
           }
@@ -835,13 +799,18 @@ export function Session() {
         slash: "redo",
         onSelect: async () => {
           if (!id) return;
+          if (reverting()) return;
+          const route = sessionRouteKey(LOCAL_SERVER_ID, directory ?? base64Decode(params.dir), params.id);
+          setReverting(true);
           try {
             await client.session.unrevert({ sessionID: id });
-            setInput("");
+            if (route === sessionRouteKey(LOCAL_SERVER_ID, directory ?? base64Decode(params.dir), params.id)) setInput("");
             showToast("Messages restored");
-            refetchSession();
+            await sync.session.sync(id);
           } catch (err) {
             showToast(`Failed to redo messages: ${formatStartError(err)}`);
+          } finally {
+            setReverting(false);
           }
         },
       });
@@ -854,6 +823,7 @@ export function Session() {
   // The backend accepts any messageID, so reverting to an earlier message
   // implicitly removes everything after it.
   async function undoTurns(count: number) {
+    if (reverting()) return;
     const id = sessionId();
     if (!id) {
       showToast("No active session to undo");
@@ -866,26 +836,36 @@ export function Session() {
       showToast(count === 1 ? "No user message to undo" : `Only ${total} user message${total === 1 ? "" : "s"} to undo`);
       return;
     }
+    const route = sessionRouteKey(LOCAL_SERVER_ID, directory ?? base64Decode(params.dir), params.id);
+    const draftKey = sessionDraftKey(LOCAL_SERVER_ID, params.dir, id);
+    const textPart = target.parts.find((p) => p.type === "text") as
+      | { type: "text"; text?: string }
+      | undefined;
+    setReverting(true);
     try {
       // If processing, abort first (clears pendingQuestion too)
       if (processing()) {
         await handleAbort();
+        if (route !== sessionRouteKey(LOCAL_SERVER_ID, directory ?? base64Decode(params.dir), params.id)) return;
       }
       await client.session.revert({
         sessionID: id,
         messageID: target.id,
       });
-      // Restore the reverted message text into the input field
-      const textPart = target.parts.find((p) => p.type === "text") as
-        | { type: "text"; text?: string }
-        | undefined;
-      if (textPart?.text && inputRef) {
-        applyInputAndAutogrow(inputRef, textPart.text);
+      if (textPart?.text) {
+        if (route === sessionRouteKey(LOCAL_SERVER_ID, directory ?? base64Decode(params.dir), params.id)) {
+          setInput(textPart.text);
+          if (inputRef) applyInputAndAutogrow(inputRef, textPart.text);
+        } else {
+          storeDraft(draftKey, { text: textPart.text, files: [], images: [], height: "", drag: 0 });
+        }
       }
       showToast(count === 1 ? "Undone 1 turn" : `Undone ${count} turns`);
-      refetchSession();
+      await sync.session.sync(id);
     } catch (err) {
       showToast(`Failed to undo: ${formatStartError(err)}`);
+    } finally {
+      setReverting(false);
     }
   }
 
@@ -1100,28 +1080,9 @@ export function Session() {
         const id = sessionId();
         if (!id) return;
 
-        // Handle message part updates - clear optimistic message when user message is echoed
-        if (event.type === "message.part.updated") {
-          const part = event.properties.part as {
-            sessionID: string;
-            type: string;
-            text?: string;
-          };
-          if (part.sessionID !== id) return;
-
-          // Check if this is the backend echo of the user message we just sent
-          const pendingText = pendingUserMessageText();
-          if (
-            pendingText &&
-            part.type === "text" &&
-            part.text?.trim() === pendingText.trim()
-          ) {
-            console.log(
-              "[Session] User message echoed from server, clearing optimistic message",
-            );
-            setPendingUserMessageText(null);
-            setOptimisticMessage(null);
-          }
+        if (event.type === "message.updated") {
+          const info = event.properties.info as { id?: string; sessionID?: string } | undefined;
+          if (info?.sessionID === id && info.id === optimisticMessage()?.id) setOptimisticMessage(null);
         }
 
         // Handle status changes
@@ -1129,11 +1090,7 @@ export function Session() {
         if (statusEvent) {
           if (statusEvent.sessionID === id && statusEvent.status.type === "idle") {
             console.log("[Session] Status idle");
-            // Only clear optimistic message if no pending text or it was already matched
-            if (!pendingUserMessageText()) {
-              setOptimisticMessage(null);
-            }
-            setPendingUserMessageText(null);
+            setOptimisticMessage(null);
 
             // Reset local processing tracker after the session becomes idle.
             wasProcessing.value = false;
@@ -1146,7 +1103,8 @@ export function Session() {
 
         // Handle session updates
         if (event.type === "session.updated") {
-          refetchSession();
+          const info = event.properties.info as { id?: string } | undefined;
+          if (info?.id === id) refetchSession();
         }
     });
 
@@ -1187,14 +1145,16 @@ export function Session() {
   async function handleAbort() {
     const id = sessionId();
     if (!id) return;
+    const route = sessionRouteKey(LOCAL_SERVER_ID, directory ?? base64Decode(params.dir), params.id);
+    const q = pendingQuestion();
 
     try {
       console.log("[Session] Aborting session:", id);
       await client.session.abort({ sessionID: id, directory });
+      if (route !== sessionRouteKey(LOCAL_SERVER_ID, directory ?? base64Decode(params.dir), params.id)) return;
       setProcessing(false);
       // Only dismiss the question if it belongs to this session — aborting is
       // scoped to the current session and does not affect descendant sessions.
-      const q = pendingQuestion();
       if (q && q.sessionID === id) events.dismissQuestion(q.sessionID, q.id);
     } catch (e) {
       console.error("[Session] Failed to abort session:", e);
@@ -1325,15 +1285,15 @@ export function Session() {
     }
   }
 
-  function optimisticUserMessage(text: string, sid: string) {
+  function optimisticUserMessage(text: string, sid: string, messageID: string, partID: string) {
     return {
-      id: crypto.randomUUID(),
+      id: messageID,
       role: "user",
       parts: [
         {
-          id: crypto.randomUUID(),
+          id: partID,
           sessionID: sid,
-          messageID: "",
+          messageID,
           type: "text",
           text,
         },
@@ -1360,6 +1320,14 @@ export function Session() {
     const images = imageAttachments();
     if (!text && files.length === 0 && images.length === 0) return;
     if (loading()) return;
+    if (loadingHistory() || loadError()) {
+      setError("Wait for this session to finish loading before sending a message.");
+      return;
+    }
+    if (sync.session.get(sessionId() ?? "")?.parentID) {
+      setError("Sub-agent sessions are read-only. Continue the conversation in the parent session.");
+      return;
+    }
     if (inputBlocked()) {
       setError(
         pendingQuestion()
@@ -1387,8 +1355,10 @@ export function Session() {
     }
 
     const submitDirectory = directory ?? base64Decode(params.dir);
+    const submitDirSlug = params.dir;
     const originalID = sessionId();
-    const originalDraft = sessionDraftKey(LOCAL_SERVER_ID, params.dir, originalID);
+    const originalDraftID = originalID ?? draftID();
+    const originalDraft = sessionDraftKey(LOCAL_SERVER_ID, submitDirSlug, originalDraftID);
     const scope = {
       token: ++lifetime.submit,
       route: sessionRouteKey(LOCAL_SERVER_ID, submitDirectory, params.id),
@@ -1409,11 +1379,10 @@ export function Session() {
     // Clear saved draft for this session since the message was sent
     drafts.delete(originalDraft);
 
-    // Track pending user message text to match backend echoes
-    setPendingUserMessageText(text);
-
     // Optimistic update - show user message immediately while waiting for server
-    const userMessage = optimisticUserMessage(text || "(files attached)", sessionId() || "");
+    const messageID = ascendingID("msg");
+    const textPartID = ascendingID("prt");
+    const userMessage = optimisticUserMessage(text || "(files attached)", sessionId() || "", messageID, textPartID);
     setOptimisticMessage(userMessage);
 
     const needsSession = !originalID;
@@ -1422,8 +1391,8 @@ export function Session() {
       serverId: LOCAL_SERVER_ID,
       directory: submitDirectory,
     };
-    const saveDraft = () => {
-      drafts.set(originalDraft, {
+    const saveDraft = (id = originalDraftID) => {
+      storeDraft(sessionDraftKey(LOCAL_SERVER_ID, submitDirSlug, id), {
         text,
         files,
         images,
@@ -1431,10 +1400,9 @@ export function Session() {
         drag: 0,
       });
     };
-    const restoreComposer = () => {
-      saveDraft();
-      if (!current() || scope.route !== sessionRouteKey(LOCAL_SERVER_ID, submitDirectory, originalID)) return;
-      setPendingUserMessageText(null);
+    const restoreComposer = (id = originalID) => {
+      saveDraft(id);
+      if (!current()) return;
       setOptimisticMessage(null);
       setInput(text);
       setFileContext(files);
@@ -1442,7 +1410,6 @@ export function Session() {
       if (inputRef) applyInputAndAutogrow(inputRef, text);
     };
     let createdID: string | undefined;
-    let ownsCreated = false;
     try {
       let id = originalID;
 
@@ -1467,7 +1434,6 @@ export function Session() {
 
         id = data.id;
         createdID = id;
-        ownsCreated = res.isLeader;
         scope.sessionID = id;
         scope.route = sessionRouteKey(LOCAL_SERVER_ID, submitDirectory, id);
         setSessionId(id);
@@ -1479,9 +1445,9 @@ export function Session() {
       // Build parts array with text and file attachments
       // Always include a text part (even if empty) to ensure SSE reconciliation works
       const parts: (
-        | { type: "text"; text: string }
-        | { type: "file"; mime: string; url: string; filename: string }
-      )[] = [{ type: "text", text: text || "" }];
+        | { id: string; type: "text"; text: string }
+        | { id: string; type: "file"; mime: string; url: string; filename: string }
+      )[] = [{ id: textPartID, type: "text", text: text || "" }];
 
       // Add file parts from file context
       for (const file of files) {
@@ -1497,6 +1463,7 @@ export function Session() {
           .map((segment) => encodeURIComponent(segment))
           .join("/");
         parts.push({
+          id: ascendingID("prt"),
           type: "file",
           mime: "text/plain",
           url: `file://${encoded}`,
@@ -1507,6 +1474,7 @@ export function Session() {
       // Add image/PDF attachments from device uploads
       for (const img of images) {
         parts.push({
+          id: ascendingID("prt"),
           type: "file",
           mime: img.mime,
           url: img.dataUrl,
@@ -1518,12 +1486,14 @@ export function Session() {
       console.log("[Session] Sending message to session:", id);
       const promptPayload: {
         sessionID: string;
+        messageID: string;
         parts: typeof parts;
         agent: string;
         model?: { providerID: string; modelID: string };
         variant?: string;
       } = {
         sessionID: id,
+        messageID,
         parts,
         agent: providers.selectedAgent || "build",
       };
@@ -1544,27 +1514,13 @@ export function Session() {
       // Start processing - SSE events will handle updates and completion
       startProcessing();
     } catch (err) {
-      if (scope.token === lifetime.submit) saveDraft();
-      const active = current();
-      if (createdID && ownsCreated) {
-        const cleaned = await client.session
-          .delete({ sessionID: createdID })
-          .catch((error) => ({ error }));
-        if (cleaned && typeof cleaned === "object" && "error" in cleaned && cleaned.error) {
-          console.warn("[Session] Failed to cleanup session after send error:", cleaned.error);
-        }
-      }
-      if (!active || !current()) return;
-      if (createdID) {
-        scope.sessionID = originalID;
-        scope.route = sessionRouteKey(LOCAL_SERVER_ID, submitDirectory, originalID);
-        setSessionId(undefined);
-        navigate(`/${dirSlug()}/session`, { replace: true });
-      }
-      restoreComposer();
+      if (scope.token === lifetime.submit) saveDraft(createdID ?? originalID);
+      if (createdID) void sync.session.sync(createdID);
+      if (!current()) return;
+      restoreComposer(createdID ?? originalID);
       console.error("[Session] Error sending message:", err);
       const msg = needsSession
-        ? "Failed to create session or send message"
+        ? "Failed to send the first message"
         : "Failed to send message";
       setError(
         `${msg}: ${formatStartError(err)}`,
@@ -1572,272 +1528,6 @@ export function Session() {
     } finally {
       if (current()) setLoading(false);
     }
-  }
-
-  // Welcome screen component for when no session is selected
-  function WelcomeScreen() {
-    const pendingStartError = createMemo(() => {
-      const model = sessionModel();
-      return startSessionError({
-        loading: providers.loading,
-        providerCount: providers.providers.length,
-        model,
-        connected: providers.connected,
-      });
-    });
-    const welcomeError = createMemo(() => {
-      const pending = pendingStartError();
-      const current = error();
-      if (current) return current;
-      return pending;
-    });
-
-    return (
-      <div
-        class="flex flex-col h-full"
-        style={{ background: "var(--background-stronger)" }}
-      >
-        <div class="flex flex-col items-center justify-center flex-1 text-center px-6">
-          {/* OpenCode Logo */}
-          <div class="mb-8">
-            <svg
-              class="w-80 mx-auto opacity-60"
-              style={{ color: "var(--text-strong)" }}
-              viewBox="0 0 640 115"
-              fill="none"
-              xmlns="http://www.w3.org/2000/svg"
-            >
-              <g clip-path="url(#clip0_welcome)">
-                <mask
-                  id="mask0_welcome"
-                  style="mask-type:luminance"
-                  maskUnits="userSpaceOnUse"
-                  x="0"
-                  y="0"
-                  width="640"
-                  height="115"
-                >
-                  <path d="M640 0H0V115H640V0Z" fill="white" />
-                </mask>
-                <g mask="url(#mask0_welcome)">
-                  <path
-                    d="M49.2346 82.1433H16.4141V49.2861H49.2346V82.1433Z"
-                    fill="var(--icon-weak)"
-                  />
-                  <path
-                    d="M49.2308 32.8573H16.4103V82.143H49.2308V32.8573ZM65.641 98.5716H0V16.4287H65.641V98.5716Z"
-                    fill="var(--text-weak)"
-                  />
-                  <path
-                    d="M131.281 82.1433H98.4609V49.2861H131.281V82.1433Z"
-                    fill="var(--icon-weak)"
-                  />
-                  <path
-                    d="M98.4649 82.143H131.285V32.8573H98.4649V82.143ZM147.696 98.5716H98.4649V115H82.0547V16.4287H147.696V98.5716Z"
-                    fill="var(--text-weak)"
-                  />
-                  <path
-                    d="M229.746 65.7139V82.1424H180.516V65.7139H229.746Z"
-                    fill="var(--icon-weak)"
-                  />
-                  <path
-                    d="M229.743 65.7144H180.512V82.143H229.743V98.5716H164.102V16.4287H229.743V65.7144ZM180.512 49.2859H213.332V32.8573H180.512V49.2859Z"
-                    fill="var(--text-weak)"
-                  />
-                  <path
-                    d="M295.383 98.5718H262.562V49.2861H295.383V98.5718Z"
-                    fill="var(--icon-weak)"
-                  />
-                  <path
-                    d="M295.387 32.8573H262.567V98.5716H246.156V16.4287H295.387V32.8573ZM311.797 98.5716H295.387V32.8573H311.797V98.5716Z"
-                    fill="var(--text-weak)"
-                  />
-                  <path
-                    d="M393.848 82.1433H344.617V49.2861H393.848V82.1433Z"
-                    fill="var(--icon-weak)"
-                  />
-                  <path
-                    d="M393.844 32.8573H344.613V82.143H393.844V98.5716H328.203V16.4287H393.844V32.8573Z"
-                    fill="currentColor"
-                  />
-                  <path
-                    d="M459.485 82.1433H426.664V49.2861H459.485V82.1433Z"
-                    fill="var(--icon-weak)"
-                  />
-                  <path
-                    d="M459.489 32.8573H426.668V82.143H459.489V32.8573ZM475.899 98.5716H410.258V16.4287H475.899V98.5716Z"
-                    fill="currentColor"
-                  />
-                  <path
-                    d="M541.539 82.1433H508.719V49.2861H541.539V82.1433Z"
-                    fill="var(--icon-weak)"
-                  />
-                  <path
-                    d="M541.535 32.8571H508.715V82.1428H541.535V32.8571ZM557.946 98.5714H492.305V16.4286H541.535V0H557.946V98.5714Z"
-                    fill="currentColor"
-                  />
-                  <path
-                    d="M639.996 65.7139V82.1424H590.766V65.7139H639.996Z"
-                    fill="var(--icon-weak)"
-                  />
-                  <path
-                    d="M590.77 32.8573V49.2859H623.59V32.8573H590.77ZM640 65.7144H590.77V82.143H640V98.5716H574.359V16.4287H640V65.7144Z"
-                    fill="currentColor"
-                  />
-                </g>
-              </g>
-              <defs>
-                <clipPath id="clip0_welcome">
-                  <rect width="640" height="115" fill="white" />
-                </clipPath>
-              </defs>
-            </svg>
-          </div>
-
-          <Show when={branding.enabled}>
-            <div
-              class="flex items-center justify-center gap-2 mb-8"
-              style={{ color: "var(--text-weak)" }}
-            >
-              <span>Powered by</span>
-              <Show
-                when={branding.url}
-                fallback={
-                  <span class="font-medium" style={{ color: "var(--text-strong)" }}>
-                    {branding.name}
-                  </span>
-                }
-              >
-                <a
-                  href={branding.url}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  class="font-medium transition-opacity hover:opacity-80"
-                  style={{ color: "var(--text-interactive-base)" }}
-                >
-                  {branding.name}
-                </a>
-              </Show>
-            </div>
-          </Show>
-
-          {/* Action buttons */}
-          <div class="flex flex-col gap-3 w-full max-w-xs">
-            <Button
-              onClick={async () => {
-                if (creatingSession() || loading()) return;
-                console.log(
-                  "[Welcome] New Session clicked, directory:",
-                  directory,
-                  "dirSlug:",
-                  dirSlug(),
-                );
-                if (!directory) {
-                  console.error("[Welcome] No directory available");
-                  return;
-                }
-                setCreatingSession(true);
-                const token = ++lifetime.create;
-                const scope = { serverId: LOCAL_SERVER_ID, directory };
-                const route = sessionRouteKey(scope.serverId, scope.directory, params.id);
-                const current = () => lifetime.active && token === lifetime.create &&
-                  route === sessionRouteKey(LOCAL_SERVER_ID, directory, params.id);
-                try {
-                  console.log("[Welcome] Creating session...");
-                  const res = await createRootSession(client, {
-                    source: "session.welcome.createNewSession",
-                    scope,
-                  });
-                  if (!current()) {
-                    if (res.isLeader && res.data) await client.session.delete({ sessionID: res.data.id }).catch(() => undefined);
-                    return;
-                  }
-                  const data = res.data;
-                  console.log("[Welcome] Create response:", data);
-                  if (!data) {
-                    setError("Failed to create session: no session data returned.");
-                    return;
-                  }
-                  const url = `/${dirSlug()}/session/${data.id}`;
-                  console.log("[Welcome] Navigating to:", url);
-                  navigate(url);
-                } catch (e) {
-                  if (!current()) return;
-                  console.error("[Welcome] Failed to create session:", e);
-                  setError(`Failed to create session: ${formatStartError(e)}`);
-                } finally {
-                  if (current()) setCreatingSession(false);
-                }
-              }}
-              variant="ghost"
-              disabled={creatingSession() || loading()}
-              class="w-full"
-              size="sm"
-            >
-              <Plus class="w-4 h-4" />
-              <span>New Session</span>
-            </Button>
-
-            <Button
-              onClick={() => navigate(`/${dirSlug()}/settings`)}
-              variant="ghost"
-              class="w-full"
-              size="sm"
-            >
-              <Settings class="w-4 h-4" />
-              <span>Settings</span>
-            </Button>
-          </div>
-
-          {/* Instructions active indicator */}
-          <Show when={instructionsActive()}>
-            <button
-              type="button"
-              onClick={() => navigate(`/${dirSlug()}/settings#instructions`)}
-              class="mt-4 flex items-center gap-2 px-3 py-2 rounded-md text-sm transition-colors mx-auto"
-              style={{
-                border: "1px solid var(--border-base)",
-                color: "var(--text-base)",
-                background: "transparent",
-              }}
-              onMouseEnter={(e) => {
-                e.currentTarget.style.background = "var(--surface-inset)";
-                e.currentTarget.style.borderColor = "var(--interactive-base)";
-              }}
-              onMouseLeave={(e) => {
-                e.currentTarget.style.background = "transparent";
-                e.currentTarget.style.borderColor = "var(--border-base)";
-              }}
-            >
-              <BookOpen class="w-4 h-4" style={{ color: "var(--icon-success-base)" }} />
-              <span>Project instructions active</span>
-            </button>
-          </Show>
-
-          <Show when={welcomeError()}>
-            <div
-              class="mt-4 px-4 py-2 rounded-lg text-sm max-w-2xl"
-              role="status"
-              aria-live="polite"
-              aria-atomic="true"
-              style={{
-                background: "var(--status-danger-dim)",
-                color: "var(--status-danger-text)",
-              }}
-            >
-              {welcomeError()}
-            </div>
-          </Show>
-
-          <p
-            class="mt-10 text-sm"
-            style={{ color: "var(--text-weak)", opacity: 0.7 }}
-          >
-            Select a session from the sidebar or start a new one
-          </p>
-        </div>
-      </div>
-    );
   }
 
   // Chat view component
@@ -1881,17 +1571,17 @@ export function Session() {
 
           {/* Question Prompt - rendered outside timeline for proper focus.
               Uses session tree walk so child/grandchild questions are surfaced here. */}
-          <Show when={pendingQuestion()}>
+          <Show when={pendingQuestion()} keyed>
             {(q) => (
               <div
                 class="px-6 pb-4"
                 style={{ background: "var(--background-stronger)" }}
               >
                 <QuestionPrompt
-                  request={q()}
+                  request={q}
                   onReply={handleQuestionReply}
                   onReject={handleQuestionReject}
-                  fromSubAgent={q().sessionID !== sessionId()}
+                  fromSubAgent={q.sessionID !== sessionId()}
                 />
               </div>
             )}
@@ -2356,31 +2046,36 @@ export function Session() {
             onSelect={(item) => {
               const id = sessionId();
               if (!id) return;
+              const route = sessionRouteKey(LOCAL_SERVER_ID, directory ?? base64Decode(params.dir), params.id);
+              const selected = sync.messages(id).find((message) => message.info.id === item.id);
+              const restoredText = selected ? textFromParts(selected.parts, "\n") : "";
               setError(null);
               client.session
                 .fork({ sessionID: id, messageID: item.id })
-                .then((res) => {
+                .then(async (res) => {
                   if (!res.data) {
-                    setError("Failed to fork session");
+                    if (route === sessionRouteKey(LOCAL_SERVER_ID, directory ?? base64Decode(params.dir), params.id)) {
+                      setError("Failed to fork session");
+                    }
+                    return;
+                  }
+                  if (route !== sessionRouteKey(LOCAL_SERVER_ID, directory ?? base64Decode(params.dir), params.id)) {
+                    await client.session.delete({ sessionID: res.data.id }).catch(() => undefined);
                     return;
                   }
                   setError(null);
                   const forkedId = res.data.id;
-                  // Find the selected message text to restore in the new session's input
-                  const msgs = sync.messages(id);
-                  const selected = msgs.find((m) => m.info.id === item.id);
-                  const restoredText = selected
-                    ? textFromParts(selected.parts, "\n")
-                    : "";
+                  storeDraft(sessionDraftKey(LOCAL_SERVER_ID, params.dir, forkedId), {
+                    text: restoredText,
+                    files: [],
+                    images: [],
+                    height: "",
+                    drag: 0,
+                  });
                   navigate(`/${dirSlug()}/session/${forkedId}`);
-                  // Restore the message text into the new session's input after navigation
-                  if (inputRef) {
-                    requestAnimationFrame(() => {
-                      applyInputAndAutogrow(inputRef!, restoredText);
-                    });
-                  }
                 })
                 .catch((err: unknown) => {
+                  if (route !== sessionRouteKey(LOCAL_SERVER_ID, directory ?? base64Decode(params.dir), params.id)) return;
                   setError(
                     `Failed to fork session: ${formatStartError(err)}`,
                   );
@@ -2423,8 +2118,7 @@ export function Session() {
 
   // Use Show to reactively switch between welcome and chat views
   return (
-    <Show when={loadError()} fallback={
-      <Show when={sessionId()} fallback={<WelcomeScreen />}>
+      <Show when={loadError()} fallback={
         <div class="flex h-full overflow-hidden">
           {/* Main chat area */}
           <div class="flex-1 min-w-0 flex flex-col">
@@ -2478,8 +2172,7 @@ export function Session() {
             </aside>
           </Show>
         </div>
-      </Show>
-    }>
+      }>
       {(message) => (
         <div class="flex h-full items-center justify-center px-6" style={{ background: "var(--background-stronger)" }}>
           <div class="max-w-md text-center">

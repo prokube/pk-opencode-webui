@@ -1,5 +1,5 @@
-import { Router, Route, useNavigate, useParams } from "@solidjs/router"
-import { createEffect, createMemo, Show } from "solid-js"
+import { Router, Route, useLocation, useNavigate, useParams } from "@solidjs/router"
+import { createEffect, createMemo, ErrorBoundary, on, Show, type ParentProps } from "solid-js"
 import { BasePathProvider, useBasePath } from "./context/base-path"
 import { LOCAL_SERVER_ID, ServerProvider } from "./context/server"
 import { BrandingProvider } from "./context/branding"
@@ -42,16 +42,51 @@ function DirectoryIndex() {
   return null
 }
 
-function SessionIndex() {
-  const params = useParams<{ dir: string }>()
+function RecoveryBoundary(props: ParentProps & { session?: boolean; resetKey?: string }) {
+  let resetBoundary: (() => void) | undefined
+  createEffect(on(() => props.resetKey, () => resetBoundary?.(), { defer: true }))
+  return (
+    <ErrorBoundary fallback={(error, reset) => {
+      resetBoundary = reset
+      return (
+        <div class="h-full flex items-center justify-center p-6" style={{ background: "var(--background-stronger)" }}>
+          <div class="max-w-lg rounded-lg p-5 space-y-3" style={{ background: "var(--background-base)", border: "1px solid var(--border-base)" }}>
+            <h1 class="font-medium" style={{ color: "var(--text-strong)" }}>
+              {props.session ? "This session could not be displayed" : "The application encountered an error"}
+            </h1>
+            <p class="text-sm break-words" style={{ color: "var(--text-weak)" }}>
+              {error instanceof Error ? error.message : String(error)}
+            </p>
+            <div class="flex gap-2">
+              <button class="px-3 py-1.5 rounded text-sm" style={{ background: "var(--interactive-base)", color: "white" }} onClick={reset}>
+                Try again
+              </button>
+              <button class="px-3 py-1.5 rounded text-sm" style={{ background: "var(--surface-inset)", color: "var(--text-base)" }} onClick={() => window.location.reload()}>
+                Reload
+              </button>
+            </div>
+          </div>
+        </div>
+      )
+    }}>
+      {props.children}
+    </ErrorBoundary>
+  )
+}
+
+function SessionRoute() {
+  const params = useParams<{ dir: string; id?: string }>()
+  const location = useLocation()
   const navigate = useNavigate()
-  const href = createMemo(() => getLastSessionHref(params.dir))
+  const fresh = createMemo(() => new URLSearchParams(location.search).has("new"))
+  const href = createMemo(() => fresh() || params.id ? "session" : getLastSessionHref(params.dir))
   createEffect(() => {
     const next = href()
     if (next === "session") return
     navigate(next.replace(/^session\//, ""), { replace: true })
   })
-  return <Show when={href() === "session"}><Session /></Show>
+  const key = createMemo(() => `${params.dir}:${params.id ?? location.search}`)
+  return <Show when={href() === "session"}><RecoveryBoundary session resetKey={key()}><Session /></RecoveryBoundary></Show>
 }
 
 function AppRoutes() {
@@ -69,8 +104,7 @@ function AppRoutes() {
       {/* Directory-scoped routes */}
       <Route path="/:dir" component={DirectoryLayout}>
         <Route path="/" component={DirectoryIndex} />
-        <Route path="/session" component={SessionIndex} />
-        <Route path="/session/:id" component={Session} />
+        <Route path="/session/:id?" component={SessionRoute} />
         <Route path="/settings" component={Settings} />
       </Route>
     </Router>
@@ -95,8 +129,10 @@ function AppProviders() {
 
 export function App() {
   return (
-    <ServerProvider>
-      <AppProviders />
-    </ServerProvider>
+    <RecoveryBoundary>
+      <ServerProvider>
+        <AppProviders />
+      </ServerProvider>
+    </RecoveryBoundary>
   )
 }

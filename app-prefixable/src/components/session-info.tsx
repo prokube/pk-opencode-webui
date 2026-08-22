@@ -1,6 +1,6 @@
 import { createMemo, createSignal, createEffect, Show, onCleanup } from "solid-js"
 import { Portal } from "solid-js/web"
-import { useParams } from "@solidjs/router"
+import { A, useParams } from "@solidjs/router"
 import { useSync } from "../context/sync"
 import { useProviders } from "../context/providers"
 import { getContextTokens } from "../utils/tokens"
@@ -715,9 +715,9 @@ export function SessionInfo(props: SessionInfoProps) {
 
         {/* No provider warning */}
         <Show when={!props.sessionModel() && providers.connected.length === 0}>
-          <a href={`/${dirSlug()}/settings`} style={{ color: "var(--text-interactive-base)" }} class="hover:underline">
+          <A href={`/${dirSlug()}/settings`} style={{ color: "var(--text-interactive-base)" }} class="hover:underline">
             Connect a provider to start
-          </a>
+          </A>
         </Show>
 
         <Show when={!props.sessionModel() && providers.connected.length > 0}>

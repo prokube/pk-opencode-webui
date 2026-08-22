@@ -49,14 +49,14 @@ export function sessionDescendantIds(
  */
 function sessionTreeRequest<T>(
   sessions: Session[],
-  requests: Record<string, T | undefined>,
+  requests: Record<string, T[] | undefined>,
   sessionID?: string,
   children?: Map<string, string[]>,
 ) {
   if (!sessionID) return
 
   // Check the current session first (highest priority)
-  if (requests[sessionID] !== undefined) return requests[sessionID]
+  if (requests[sessionID]?.length) return requests[sessionID][0]
 
   const map = children ?? buildChildMap(sessions)
 
@@ -69,7 +69,7 @@ function sessionTreeRequest<T>(
     for (const child of list) {
       if (seen.has(child)) continue
       seen.add(child)
-      if (requests[child] !== undefined) return requests[child]
+      if (requests[child]?.length) return requests[child][0]
       queue.push(child)
     }
   }
@@ -80,7 +80,7 @@ function sessionTreeRequest<T>(
  */
 export function sessionQuestionRequest(
   sessions: Session[],
-  requests: Record<string, QuestionRequest | undefined>,
+  requests: Record<string, QuestionRequest[] | undefined>,
   sessionID?: string,
   children?: Map<string, string[]>,
 ) {
@@ -111,7 +111,7 @@ export function sessionPermissionRequests(
  */
 export function sessionHasQuestion(
   sessions: Session[],
-  requests: Record<string, QuestionRequest | undefined>,
+  requests: Record<string, QuestionRequest[] | undefined>,
   sessionID?: string,
   children?: Map<string, string[]>,
 ): boolean {

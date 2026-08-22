@@ -1,4 +1,4 @@
-import { createContext, useContext, createSignal, createMemo, createEffect, onMount, type ParentProps } from "solid-js"
+import { createContext, useContext, createSignal, createMemo, createEffect, onCleanup, onMount, type ParentProps } from "solid-js"
 import type { PermissionRequest } from "../sdk/client"
 import { useSDK } from "./sdk"
 import { useSync } from "./sync"
@@ -51,6 +51,7 @@ export function PermissionProvider(props: ParentProps) {
   const responded = new Set<string>()
   const autoAttempted = new Set<string>()
   const autoFailed = new Set<string>()
+  const confirmed = new Set<string>()
 
   // Load auto-accept state from localStorage safely
   onMount(() => {
@@ -67,15 +68,20 @@ export function PermissionProvider(props: ParentProps) {
     }
   })
 
-  function pruneResponded() {
-    if (responded.size <= RESPONDED_CAP) return
+  function prune(set: Set<string>) {
+    if (set.size <= RESPONDED_CAP) return
     // Remove oldest entries (first half) when cap exceeded
-    const entries = Array.from(responded)
+    const entries = Array.from(set)
     const toRemove = entries.slice(0, Math.floor(RESPONDED_CAP / 2))
-    for (const id of toRemove) {
-      responded.delete(id)
-    }
+    for (const id of toRemove) set.delete(id)
   }
+
+  const unsub = sync.subscribe((event) => {
+    if (event.type !== "permission.replied") return
+    confirmed.add(event.properties.requestID)
+    prune(confirmed)
+  })
+  onCleanup(unsub)
 
   function respond(id: string, response: "once" | "always" | "reject", perm?: PermissionRequest, auto = false) {
     const permission = perm ?? sync.pendingPermissions[id]
@@ -84,7 +90,7 @@ export function PermissionProvider(props: ParentProps) {
     if (!auto) autoFailed.delete(id)
 
     responded.add(id)
-    pruneResponded()
+    prune(responded)
     sync.dismissPermission(id)
 
     client.permission
@@ -96,12 +102,15 @@ export function PermissionProvider(props: ParentProps) {
       })
       .catch((error: unknown) => {
         console.error("[Permission] Failed to respond:", error)
-        if (auto) autoFailed.add(id)
+        if (auto) {
+          autoFailed.add(id)
+          prune(autoFailed)
+        }
         resetFailedPermissionResponse(
           permission,
           responded,
           autoAttempted,
-          () => !!sync.pendingPermissions[id],
+          () => confirmed.has(id) || !!sync.pendingPermissions[id],
           sync.setPermission,
         )
       })
@@ -117,6 +126,7 @@ export function PermissionProvider(props: ParentProps) {
         autoFailed.has(permission.id)
       ) continue
       autoAttempted.add(permission.id)
+      prune(autoAttempted)
       respond(permission.id, "once", permission, true)
     }
   })
