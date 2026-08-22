@@ -354,7 +354,7 @@ async function handleExtendedRoute(
         console.log("[ExtAPI] Removed MCP server from config:", serverName)
       } else {
         console.log("[ExtAPI] MCP server not found in config:", serverName)
-        return Response.json({ error: "Server not found in config" }, { status: 404 })
+        return Response.json({ success: true, removed: false })
       }
 
       // Write back (as plain JSON since we stripped comments).
@@ -366,7 +366,7 @@ async function handleExtendedRoute(
       await fs.promises.writeFile(configPath, output)
       console.log("[ExtAPI] Config saved")
 
-      return Response.json({ success: true })
+      return Response.json({ success: true, removed: true })
     } catch (e) {
       console.error("[ExtAPI] mcp delete error:", e)
       return internalError("failed to update MCP config")

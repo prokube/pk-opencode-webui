@@ -212,9 +212,9 @@ export function MCPProvider(props: ParentProps) {
 
       console.log("[MCP] Server removed from global config")
 
-      // Trigger a backend restart by updating config (this causes server.instance.disposed)
-      // The backend will reload the config file which now has the server removed
-      await client.global.config.update({ config: {} })
+      // Reload the backend after the extended endpoint updates the config file.
+      // An empty config patch is rejected by OpenCode as a bad request.
+      await client.global.dispose()
       console.log("[MCP] Triggered backend restart")
 
       // Wait for backend to restart and refresh

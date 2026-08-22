@@ -1,5 +1,17 @@
-import { describe, expect, test } from "bun:test"
+import { afterAll, describe, expect, test } from "bun:test"
+import { mkdtemp, rm } from "node:fs/promises"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
 import { handleExtendedEndpoint, isSameOriginRequest } from "../../shared/extended-api"
+
+const originalConfigDir = process.env.OPENCODE_CONFIG_DIR
+const configDirs: string[] = []
+
+afterAll(async () => {
+  if (originalConfigDir === undefined) delete process.env.OPENCODE_CONFIG_DIR
+  if (originalConfigDir !== undefined) process.env.OPENCODE_CONFIG_DIR = originalConfigDir
+  await Promise.all(configDirs.map((dir) => rm(dir, { recursive: true, force: true })))
+})
 
 describe("extended API security", () => {
   test("rejects cross-origin mutations", async () => {
@@ -45,5 +57,24 @@ describe("extended API security", () => {
       headers: { "Sec-Fetch-Site": "cross-site" },
     })
     expect(isSameOriginRequest(req)).toBe(false)
+  })
+
+  test("deletes MCP config entries idempotently", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "opencode-mcp-delete-"))
+    configDirs.push(dir)
+    process.env.OPENCODE_CONFIG_DIR = dir
+    const configPath = join(dir, "opencode.json")
+    await Bun.write(configPath, JSON.stringify({ mcp: { docs: { type: "remote", url: "https://example.com" } } }))
+    const url = new URL("https://ui.example/api/ext/mcp/docs")
+    const req = () => new Request(url, { method: "DELETE", headers: { Origin: url.origin } })
+
+    const removed = await handleExtendedEndpoint("/api/ext/mcp/docs", "DELETE", url, req())
+    const repeated = await handleExtendedEndpoint("/api/ext/mcp/docs", "DELETE", url, req())
+
+    expect(removed?.status).toBe(200)
+    expect(await removed?.json()).toEqual({ success: true, removed: true })
+    expect(repeated?.status).toBe(200)
+    expect(await repeated?.json()).toEqual({ success: true, removed: false })
+    expect(await Bun.file(configPath).json()).toEqual({ mcp: {} })
   })
 })
