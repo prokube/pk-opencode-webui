@@ -72,6 +72,7 @@ import { useProjectActivity } from "../context/project-activity";
 import { LOCAL_SERVER_ID } from "../context/server";
 import { legacyStorageValue, serverStorageKey, workspaceStorageKey } from "../utils/storage";
 import { sessionNeighbor } from "../utils/session-load";
+import { isSessionNotFound, mapWithConcurrency, selectSessionRange, selectedRootSessions, toggleSessionSelection } from "../utils/session-selection";
 
 // Storage keys
 const SIDEBAR_EXPANDED_KEY = "opencode.sidebarExpanded";
@@ -166,11 +167,14 @@ export function Layout(props: ParentProps) {
   );
   const [sidebarDragging, setSidebarDragging] = createSignal(false);
   const [menuOpenId, setMenuOpenId] = createSignal<string | null>(null);
-  const [confirmDeleteSession, setConfirmDeleteSession] = createSignal<Session | null>(null);
+  const [confirmDeleteSessions, setConfirmDeleteSessions] = createSignal<Session[]>([]);
   const [deleting, setDeleting] = createSignal(false);
   const [deleteError, setDeleteError] = createSignal<string | null>(null);
+  const [deleteProgress, setDeleteProgress] = createSignal(0);
   const [confirmArchiveSession, setConfirmArchiveSession] = createSignal<Session | null>(null);
   const [pinnedIds, setPinnedIds] = createSignal<string[]>([]);
+  const [selectedIds, setSelectedIds] = createSignal<Set<string>>(new Set());
+  const [selectionAnchor, setSelectionAnchor] = createSignal<string | null>(null);
   const [worktreeToast, setWorktreeToast] = createSignal<string | null>(null);
   const [worktreeToastVariant, setWorktreeToastVariant] = createSignal<"default" | "error">("default");
   const worktreeToastTimer = { id: undefined as ReturnType<typeof setTimeout> | undefined };
@@ -387,17 +391,38 @@ export function Layout(props: ParentProps) {
         id={`session-${session.id}`}
         class="group relative"
         role="option"
-        aria-selected={isActive(session.id)}
+        aria-selected={selectedIds().has(session.id)}
       >
+        <button
+          type="button"
+          class="absolute top-2.5 z-10 w-4 h-4 rounded border flex items-center justify-center text-[0.65rem]"
+          classList={{ "opacity-40 group-hover:opacity-100 group-focus-within:opacity-100": selectedIds().size === 0 && !selectedIds().has(session.id) }}
+          style={{
+            background: selectedIds().has(session.id) ? "var(--interactive-base)" : "var(--background-base)",
+            color: "white",
+            "border-color": selectedIds().has(session.id) ? "var(--interactive-base)" : "var(--border-base)",
+            left: pinned ? "20px" : "8px",
+          }}
+          aria-pressed={selectedIds().has(session.id)}
+          aria-label={`${selectedIds().has(session.id) ? "Deselect" : "Select"} session ${session.title || "Untitled"}`}
+          onClick={(event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            toggleSelectedSession(session.id, event.shiftKey);
+          }}
+        >
+          <Show when={selectedIds().has(session.id)}>✓</Show>
+        </button>
         <Show
           when={renamingId() === session.id}
           fallback={
             <A
               href={`/${dirSlug()}/session/${session.id}`}
+              aria-current={isActive(session.id) ? "page" : undefined}
               tabIndex={isActive(session.id) ? 0 : -1}
               class="flex items-center gap-2 py-2 rounded-md text-sm transition-colors"
               style={{
-                "padding-left": pinned ? "18px" : "10px",
+                "padding-left": pinned ? "42px" : "34px",
                 "padding-right": "10px",
                 color: isActive(session.id)
                   ? "var(--text-interactive-base)"
@@ -445,7 +470,7 @@ export function Layout(props: ParentProps) {
             class="flex items-center gap-2 py-1.5 rounded-md"
             style={{
               background: "var(--surface-inset)",
-              "padding-left": pinned ? "18px" : "10px",
+              "padding-left": pinned ? "42px" : "34px",
               "padding-right": "10px",
             }}
           >
@@ -641,7 +666,7 @@ export function Layout(props: ParentProps) {
                       setMenuOpenId(null);
                       setMenuFocusIndex(-1);
                       setDeleteError(null);
-                      setConfirmDeleteSession(session);
+                      setConfirmDeleteSessions([session]);
                     }}
                   >
                     <Trash2 class="w-3.5 h-3.5 shrink-0" />
@@ -738,6 +763,31 @@ export function Layout(props: ParentProps) {
     ...groupedSessions().flatMap((g) => g.sessions.map((s) => s.id)),
   ]);
 
+  const visibleSessionIds = createMemo(() => {
+    if (searchQuery().trim()) return searchResults().map((session) => session.id);
+    return [
+      ...flatSessionIds(),
+      ...(showArchived() ? archivedSessions().map((session) => session.id) : []),
+    ];
+  });
+
+  function toggleSelectedSession(id: string, range = false) {
+    const anchor = selectionAnchor();
+    setSelectedIds((current) => range && anchor
+      ? selectSessionRange(current, visibleSessionIds(), anchor, id)
+      : toggleSessionSelection(current, id));
+    setSelectionAnchor(id);
+  }
+
+  function selectVisibleSessions() {
+    setSelectedIds((current) => new Set([...current, ...visibleSessionIds()]));
+  }
+
+  function clearSessionSelection() {
+    setSelectedIds(new Set<string>());
+    setSelectionAnchor(null);
+  }
+
   // When focus enters the sidebar from outside, highlight the currently active session
   function handleSidebarFocus(e: FocusEvent) {
     // Ignore focus moves within the sidebar — only act when focus enters from outside
@@ -749,7 +799,7 @@ export function Layout(props: ParentProps) {
     // those DOM elements are unmounted and aria-activedescendant would dangle.
     if (searchQuery().trim()) return;
     const current = currentSessionId();
-    const ids = flatSessionIds();
+    const ids = visibleSessionIds();
     if (current && ids.includes(current)) {
       setFocusedId(current);
       scrollSessionIntoView(current);
@@ -777,6 +827,23 @@ export function Layout(props: ParentProps) {
       : (e.key === "ArrowDown" || e.key === "ArrowUp" ||
          e.key === "Home" || e.key === "End" || e.key === "Enter"));
     if ((tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || target.isContentEditable) && !isSearchNav) return;
+    if ((e.key === "Enter" || e.key === " ") && target.closest("button, a")) return;
+
+    if (e.key === " " && focusedId() && target.getAttribute("role") === "listbox") {
+      e.preventDefault();
+      toggleSelectedSession(focusedId()!, e.shiftKey);
+      return;
+    }
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "a" && target.closest('[aria-label="Sessions"]')) {
+      e.preventDefault();
+      selectVisibleSessions();
+      return;
+    }
+    if ((e.key === "Delete" || e.key === "Backspace") && selectedIds().size > 0 && target.closest('[aria-label="Sessions"]')) {
+      e.preventDefault();
+      openSelectedDelete();
+      return;
+    }
 
     // When search is active, provide keyboard navigation for search results
     if (searchQuery().trim()) {
@@ -862,7 +929,7 @@ export function Layout(props: ParentProps) {
       return;
     }
 
-    const ids = flatSessionIds();
+    const ids = visibleSessionIds();
     if (!ids.length) return;
 
     // If context menu is open, delegate to menu keyboard handler
@@ -1033,7 +1100,7 @@ export function Layout(props: ParentProps) {
     // Restore focusedId to the destination session (if navigating) or the
     // current session. If the preferred session isn't in the focusable list
     // (e.g. archived), clear focus rather than pointing at an unrelated session.
-    const ids = flatSessionIds();
+    const ids = visibleSessionIds();
     const preferred = nextSessionId ?? currentSessionId();
     const target = preferred
       ? (ids.includes(preferred) ? preferred : null)
@@ -1075,7 +1142,7 @@ export function Layout(props: ParentProps) {
         // those DOM elements are unmounted and aria-activedescendant would dangle.
         if (!searchQuery().trim()) {
           // Initialize focus state so the active session is highlighted
-          const ids = flatSessionIds();
+          const ids = visibleSessionIds();
           const current = currentSessionId();
           if (current && ids.includes(current)) {
             setFocusedId(current);
@@ -1455,44 +1522,70 @@ export function Layout(props: ParentProps) {
       });
   }
 
-  function deleteAndNavigate(session: Session) {
-    if (deleting()) return;
+  function knownSessions() {
+    const sessions = [...sync.sessions(), ...sync.archivedSessions(), ...searchResults()];
+    return [...new Map(sessions.map((session) => [session.id, session])).values()];
+  }
+
+  function openSelectedDelete() {
+    const roots = selectedRootSessions(knownSessions(), selectedIds());
+    if (!roots.length) return;
     setDeleteError(null);
+    setConfirmDeleteSessions(roots);
+  }
+
+  async function deleteSessions() {
+    const roots = confirmDeleteSessions();
+    if (deleting() || !roots.length) return;
+    setDeleteError(null);
+    setDeleteProgress(0);
     setDeleting(true);
 
-    // Compute neighbor before delete using visual order (flatSessionIds
-    // includes pinned sessions at the top, matching sidebar order).
-    // Archived sessions live in archivedSessions(), not flatSessionIds(),
-    // so guard against indexOf returning -1.
-    const isArchived = !!session.time?.archived;
-    const descendants = sessionDescendantIds(sync.sessions(), session.id, childMap());
+    const sessions = knownSessions();
+    const children = buildChildMap(sessions);
+    const descendants = new Map(roots.map((session) => [
+      session.id,
+      sessionDescendantIds(sessions, session.id, children),
+    ]));
     const activeID = currentSessionId();
-    const neighborId = (() => {
-      if (isArchived) return undefined;
-      const ids = flatSessionIds();
-      const idx = ids.indexOf(session.id);
-      if (idx === -1) return ids[0];
-      return ids[idx + 1] ?? ids[idx - 1];
-    })();
+    const results = await mapWithConcurrency(roots, 4, async (session) => {
+      try {
+        await client.session.delete({ sessionID: session.id, directory: session.directory ?? directory });
+        return { session, success: true as const };
+      } catch (error) {
+        if (isSessionNotFound(error)) return { session, success: true as const };
+        console.error("Failed to delete session:", session.id, error);
+        return { session, success: false as const };
+      } finally {
+        setDeleteProgress((count) => count + 1);
+      }
+    });
 
-    client.session.delete({ sessionID: session.id })
-      .then(() => {
-        setConfirmDeleteSession(null);
-        for (const id of descendants) {
-          sync.session.remove(id);
-          unpinSession(id);
-        }
-        if (activeID && descendants.has(activeID)) {
-          clearLastSession(descendants);
-          const target = session.parentID ?? neighborId;
-          navigate(target ? `/${dirSlug()}/session/${target}` : `/${dirSlug()}/session?new=${crypto.randomUUID()}`);
-        }
-      })
-      .catch((err: unknown) => {
-        console.error("Failed to delete session:", err);
-        setDeleteError("Failed to delete session. Please try again.");
-      })
-      .finally(() => setDeleting(false));
+    const successful = results.filter((result) => result.success).map((result) => result.session);
+    const failed = results.filter((result) => !result.success).map((result) => result.session);
+    const removed = new Set(successful.flatMap((session) => [...(descendants.get(session.id) ?? [session.id])]));
+    for (const id of removed) sync.session.remove(id);
+    if (removed.size) {
+      savePinnedIds(pinnedIds().filter((id) => !removed.has(id)));
+      clearLastSession(removed);
+      setSelectedIds((current) => new Set([...current].filter((id) => !removed.has(id))));
+    }
+
+    if (activeID && removed.has(activeID)) {
+      const target = flatSessionIds().find((id) => !removed.has(id));
+      navigate(target ? `/${dirSlug()}/session/${target}` : `/${dirSlug()}/session?new=${crypto.randomUUID()}`);
+    }
+
+    void sync.refresh().catch((error) => console.error("Failed to refresh sessions after deletion:", error));
+    setDeleting(false);
+    setDeleteProgress(0);
+    if (!failed.length) {
+      setConfirmDeleteSessions([]);
+      setDeleteError(null);
+      return;
+    }
+    setConfirmDeleteSessions(failed);
+    setDeleteError(`${successful.length} session${successful.length === 1 ? "" : "s"} deleted. ${failed.length} could not be deleted.`);
   }
 
   // Outside-click handler for session menus
@@ -1809,10 +1902,36 @@ export function Layout(props: ParentProps) {
             </div>
           </div>
 
+          <Show when={selectedIds().size > 0}>
+            <div
+              class="mx-2 mb-2 p-2 rounded-md flex items-center gap-2 text-xs"
+              style={{ background: "var(--surface-inset)", border: "1px solid var(--border-base)" }}
+              role="status"
+              aria-live="polite"
+            >
+              <span class="flex-1" style={{ color: "var(--text-base)" }}>{selectedIds().size} selected</span>
+              <button type="button" onClick={selectVisibleSessions} style={{ color: "var(--text-interactive-base)" }}>
+                Select visible
+              </button>
+              <button type="button" onClick={clearSessionSelection} style={{ color: "var(--text-weak)" }}>
+                Clear
+              </button>
+              <button
+                type="button"
+                onClick={openSelectedDelete}
+                class="px-2 py-1 rounded"
+                style={{ background: "var(--interactive-critical)", color: "white" }}
+              >
+                Delete
+              </button>
+            </div>
+          </Show>
+
           {/* Sessions List */}
           <div
             class="flex-1 overflow-y-auto px-2"
             role="listbox"
+            aria-multiselectable="true"
             aria-label="Sessions"
             aria-activedescendant={focusedId() ? `session-${focusedId()}` : undefined}
             tabIndex={0}
@@ -1840,14 +1959,37 @@ export function Layout(props: ParentProps) {
                       {(session, idx) => {
                         const focused = () => searchFocusIdx() === idx();
                         return (
+                          <div
+                            class="group relative"
+                            role="option"
+                            id={`session-${session.id}`}
+                            aria-selected={selectedIds().has(session.id)}
+                          >
+                          <button
+                            type="button"
+                            class="absolute left-2 top-2.5 z-10 w-4 h-4 rounded border flex items-center justify-center text-[0.65rem]"
+                            classList={{ "opacity-40 group-hover:opacity-100 group-focus-within:opacity-100": selectedIds().size === 0 && !selectedIds().has(session.id) }}
+                            style={{
+                              background: selectedIds().has(session.id) ? "var(--interactive-base)" : "var(--background-base)",
+                              color: "white",
+                              "border-color": selectedIds().has(session.id) ? "var(--interactive-base)" : "var(--border-base)",
+                            }}
+                            aria-pressed={selectedIds().has(session.id)}
+                            aria-label={`${selectedIds().has(session.id) ? "Deselect" : "Select"} session ${session.title || "Untitled"}`}
+                            onClick={(event) => {
+                              event.preventDefault();
+                              event.stopPropagation();
+                              toggleSelectedSession(session.id, event.shiftKey);
+                            }}
+                          >
+                            <Show when={selectedIds().has(session.id)}>✓</Show>
+                          </button>
                           <A
                             href={`/${dirSlug()}/session/${session.id}`}
                             onClick={() => clearSearch(session.id)}
-                            role="option"
-                            id={`session-${session.id}`}
-                            aria-selected={isActive(session.id)}
+                            aria-current={isActive(session.id) ? "page" : undefined}
                             tabIndex={-1}
-                            class="flex items-center gap-2 px-2.5 py-2 rounded-md text-sm transition-colors"
+                            class="flex items-center gap-2 pl-8 pr-2.5 py-2 rounded-md text-sm transition-colors"
                             style={{
                               color: isActive(session.id) || focused()
                                 ? "var(--text-interactive-base)"
@@ -1880,6 +2022,7 @@ export function Layout(props: ParentProps) {
                               {session.title || "Untitled"}
                             </span>
                           </A>
+                          </div>
                         );
                       }}
                     </For>
@@ -2042,10 +2185,35 @@ export function Layout(props: ParentProps) {
                     <div class="space-y-0.5 pb-2">
                       <For each={archivedSessions()}>
                         {(session) => (
-                           <div class="group relative">
+                           <div
+                             class="group relative"
+                             role="option"
+                             id={`session-${session.id}`}
+                             aria-selected={selectedIds().has(session.id)}
+                           >
+                            <button
+                              type="button"
+                              class="absolute left-2 top-2.5 z-10 w-4 h-4 rounded border flex items-center justify-center text-[0.65rem]"
+                              classList={{ "opacity-40 group-hover:opacity-100 group-focus-within:opacity-100": selectedIds().size === 0 && !selectedIds().has(session.id) }}
+                              style={{
+                                background: selectedIds().has(session.id) ? "var(--interactive-base)" : "var(--background-base)",
+                                color: "white",
+                                "border-color": selectedIds().has(session.id) ? "var(--interactive-base)" : "var(--border-base)",
+                              }}
+                              aria-pressed={selectedIds().has(session.id)}
+                              aria-label={`${selectedIds().has(session.id) ? "Deselect" : "Select"} session ${session.title || "Untitled"}`}
+                              onClick={(event) => {
+                                event.preventDefault();
+                                event.stopPropagation();
+                                toggleSelectedSession(session.id, event.shiftKey);
+                              }}
+                            >
+                              <Show when={selectedIds().has(session.id)}>✓</Show>
+                            </button>
                             <A
                               href={`/${dirSlug()}/session/${session.id}`}
-                              class="flex items-center gap-2 px-2.5 py-2 rounded-md text-sm transition-colors"
+                              aria-current={isActive(session.id) ? "page" : undefined}
+                              class="flex items-center gap-2 pl-8 pr-2.5 py-2 rounded-md text-sm transition-colors"
                               style={{
                                 color: isActive(session.id)
                                   ? "var(--text-interactive-base)"
@@ -2178,7 +2346,7 @@ export function Layout(props: ParentProps) {
                                         e.stopPropagation();
                                         setMenuOpenId(null);
                                         setDeleteError(null);
-                                        setConfirmDeleteSession(session);
+                                        setConfirmDeleteSessions([session]);
                                       }}
                                     >
                                       <Trash2 class="w-3.5 h-3.5 shrink-0" />
@@ -2465,23 +2633,22 @@ export function Layout(props: ParentProps) {
 
       {/* Delete confirmation dialog for sidebar sessions */}
       <ConfirmDialog
-        open={!!confirmDeleteSession()}
-        title="Delete session?"
-        message={`This will permanently delete "${confirmDeleteSession()?.title || "this session"}". This cannot be undone.`}
-        confirmLabel={deleting() ? "Deleting..." : "Delete"}
+        open={confirmDeleteSessions().length > 0}
+        title={confirmDeleteSessions().length === 1 ? "Delete session?" : `Delete ${confirmDeleteSessions().length} sessions?`}
+        message={confirmDeleteSessions().length === 1
+          ? `This will permanently delete "${confirmDeleteSessions()[0]?.title || "this session"}", its conversation history, and all sub-agent sessions. This cannot be undone.`
+          : `This will permanently delete the selected sessions, their conversation history, and all sub-agent sessions. Running work will be stopped. This cannot be undone.`}
+        confirmLabel={deleting() ? `Deleting ${deleteProgress()} of ${confirmDeleteSessions().length}...` : `Delete ${confirmDeleteSessions().length}`}
         confirmDisabled={deleting()}
         cancelDisabled={deleting()}
         cancelLabel="Cancel"
         variant="danger"
         error={deleteError() ?? undefined}
-        onConfirm={() => {
-          const session = confirmDeleteSession();
-          if (session) deleteAndNavigate(session);
-        }}
+        onConfirm={() => void deleteSessions()}
         onCancel={() => {
           if (deleting()) return;
           setDeleteError(null);
-          setConfirmDeleteSession(null);
+          setConfirmDeleteSessions([]);
         }}
       />
 
