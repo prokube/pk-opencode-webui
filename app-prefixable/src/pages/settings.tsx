@@ -45,6 +45,7 @@ export function Settings() {
   const [mcpLoading, setMcpLoading] = createSignal<string | null>(null)
   const [mcpDeleting, setMcpDeleting] = createSignal<string | null>(null)
   const [mcpToDelete, setMcpToDelete] = createSignal<string | null>(null)
+  const [mcpResult, setMcpResult] = createSignal<{ type: "success" | "error"; text: string } | null>(null)
   const { basePath } = useBasePath()
 
   // Provider search
@@ -607,10 +608,16 @@ Add your project-specific instructions here.
     if (!name) return
     setMcpToDelete(null)
     setMcpDeleting(name)
+    setMcpResult(null)
     try {
       await mcp.remove(name)
+      setMcpResult({ type: "success", text: `Removed MCP server "${name}".` })
     } catch (e) {
       console.error("[Settings] Failed to remove MCP server:", e)
+      setMcpResult({
+        type: "error",
+        text: e instanceof Error ? e.message : `Failed to remove MCP server "${name}".`,
+      })
     } finally {
       setMcpDeleting(null)
     }
@@ -1486,6 +1493,26 @@ Add your project-specific instructions here.
                 </p>
               </header>
 
+              <Show when={mcpResult()} keyed>
+                {(result) => (
+                  <div
+                    class="p-3 rounded-md text-sm flex items-center justify-between"
+                    role="status"
+                    style={{
+                      background: "var(--surface-inset)",
+                      border: "1px solid var(--border-base)",
+                      "border-left": `3px solid ${result.type === "success" ? "var(--icon-success-base)" : "var(--interactive-critical)"}`,
+                      color: result.type === "success" ? "var(--icon-success-base)" : "var(--interactive-critical)",
+                    }}
+                  >
+                    <span>{result.text}</span>
+                    <button onClick={() => setMcpResult(null)} aria-label="Dismiss message">
+                      <X class="w-4 h-4" />
+                    </button>
+                  </div>
+                )}
+              </Show>
+
               {/* Server List */}
               <section
                 class="rounded-lg overflow-hidden"
@@ -1644,7 +1671,9 @@ Add your project-specific instructions here.
                                 style={{ color: "var(--icon-critical-base)" }}
                                 title="Remove server"
                               >
-                                <Trash2 class="w-4 h-4" />
+                                <Show when={mcpDeleting() === name} fallback={<Trash2 class="w-4 h-4" />}>
+                                  <Spinner class="w-4 h-4" />
+                                </Show>
                               </button>
                             </div>
                           </div>

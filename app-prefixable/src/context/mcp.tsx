@@ -199,6 +199,11 @@ export function MCPProvider(props: ParentProps) {
         // Ignore disconnect errors - server might not be connected
       })
 
+      // Invalidate OpenCode's global config cache before editing the file
+      // through the extended endpoint. Disposing instances alone does not
+      // invalidate that cache, so the deleted server would otherwise return.
+      await client.global.config.update({ config: { mcp: { [name]: { enabled: false } } } })
+
       // Remove from global config using extended API endpoint
       // (We can't use the SDK because the backend does a deep merge and doesn't support deletion)
       const response = await fetch(`${url}/api/ext/mcp/${encodeURIComponent(name)}`, {
@@ -212,15 +217,18 @@ export function MCPProvider(props: ParentProps) {
 
       console.log("[MCP] Server removed from global config")
 
+      const remaining = Object.fromEntries(Object.entries(servers).filter(([key]) => key !== name))
+      setServers(reconcile(remaining))
+
       // Reload the backend after the extended endpoint updates the config file.
       // An empty config patch is rejected by OpenCode as a bad request.
       await client.global.dispose()
       console.log("[MCP] Triggered backend restart")
 
-      // Wait for backend to restart and refresh
-      // The server.connected event should also trigger a refresh, but we do it here too for reliability
-      await new Promise((resolve) => setTimeout(resolve, 1500))
+      // The server.connected event also refreshes, but await one here so the
+      // delete operation only completes after the visible state is current.
       await refresh()
+      if (servers[name]) throw new Error(`"${name}" is still configured by another config source`)
       console.log("[MCP] Refreshed after restart")
     } catch (e) {
       console.error("[MCP] Failed to remove server:", name, e)
