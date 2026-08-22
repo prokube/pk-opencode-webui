@@ -1,7 +1,5 @@
 import {
-  batch,
   createSignal,
-  createResource,
   Show,
   For,
   onMount,
@@ -13,16 +11,13 @@ import {
 } from "solid-js";
 import { useParams, useNavigate } from "@solidjs/router";
 import { Button } from "../components/ui/button";
-import { Spinner } from "../components/ui/spinner";
 import { useSDK } from "../context/sdk";
 import { sessionStatusEvent, useEvents } from "../context/events";
 import { useSync } from "../context/sync";
 import { useProviders } from "../context/providers";
-import { useMCP } from "../context/mcp";
 import { usePermission } from "../context/permission";
 import { useLayout } from "../context/layout";
 import { useBranding } from "../context/branding";
-import { useSavedPrompts, type PromptScope } from "../context/saved-prompts";
 import { useTerminal } from "../context/terminal";
 import { useConfig } from "../context/config";
 import { useCommand } from "../context/command";
@@ -37,33 +32,24 @@ import { SessionSidebar } from "../components/session-sidebar";
 import { ReviewPanel } from "../components/review-panel";
 import { SessionHeader } from "../components/session-header";
 import { ResizeHandle } from "../components/resize-handle";
-import { FollowupDock } from "../components/followup-dock";
 import { base64Encode, base64Decode } from "../utils/path";
-import type { Part, QuestionRequest, TextPart } from "../sdk/client";
+import type { Part, TextPart } from "../sdk/client";
 import type { DisplayMessage } from "../types/message";
-import { Plus, Settings, Paperclip, Upload, Bookmark, BookOpen } from "lucide-solid";
-import { Portal } from "solid-js/web";
+import { Plus, Settings, Paperclip, Upload, BookOpen } from "lucide-solid";
 import { ContextItems, type FileContext } from "../components/context-items";
 import { FilePickerDialog } from "../components/file-picker-dialog";
 import {
   ImageAttachments,
   type ImageAttachment,
 } from "../components/image-attachments";
-import {
-  migrateNotifySessionKey,
-  notifyEnabledForSession,
-  readNotifyMap,
-  writeNotifyMap,
-  writeNotifySessionEnabled,
-} from "../utils/notify";
-import { getSessionAlarm, resolveTelegramSourceId, setSessionAlarm } from "../utils/extended-api";
 import { sessionQuestionRequest } from "../utils/session-tree-request";
 import { createRootSession } from "../utils/root-session";
 import {
-  createSessionWithPrompt as createAndSendPrompt,
   formatStartError,
   startSessionError,
 } from "../utils/session-start";
+import { useServer } from "../context/server";
+import { workspaceStorageKey } from "../utils/storage";
 
 const ACCEPTED_TYPES = [
   "image/png",
@@ -99,44 +85,18 @@ function draftKey(dir: string, id?: string) {
   return `${dir}:${id ?? "__new__"}`;
 }
 
-interface FollowupItem {
-  id: string;
-  text: string;
-}
-
-function followupStorageKey(dir: string) {
-  return `opencode.followup.${dir}`;
-}
-
-function followupAutoSendStorageKey(dir: string) {
-  return `opencode.followup.auto-send.${dir}`;
-}
-
-function normalizeFollowupList(value: unknown) {
-  if (!Array.isArray(value)) return;
-  const next: FollowupItem[] = [];
-  for (const item of value) {
-    if (!item || typeof item !== "object" || Array.isArray(item)) continue;
-    const id = (item as { id?: unknown }).id;
-    const text = (item as { text?: unknown }).text;
-    if (typeof id !== "string" || typeof text !== "string") continue;
-    next.push({ id, text });
-  }
-  return next;
-}
-
 export function Session() {
   const params = useParams<{ dir: string; id?: string }>();
   const navigate = useNavigate();
-  const { client, directory, url } = useSDK();
+  const { client, directory } = useSDK();
+  const server = useServer();
+  const serverId = server.activeServerId();
   const events = useEvents();
   const sync = useSync();
   const providers = useProviders();
-  const mcp = useMCP();
   const permission = usePermission();
   const layout = useLayout();
   const branding = useBranding();
-  const savedPrompts = useSavedPrompts();
   const terminal = useTerminal();
   const appConfig = useConfig();
   const command = useCommand();
@@ -206,16 +166,6 @@ export function Session() {
   // Helper to get the current directory slug
   const dirSlug = createMemo(() =>
     directory ? base64Encode(directory) : params.dir,
-  );
-
-  // Saved prompt picker items for /prompt command
-  const promptPickerItems = createMemo(() =>
-    savedPrompts.prompts().map((p) => ({
-      id: p.id,
-      title: p.title,
-      description: p.text.length > 80 ? p.text.slice(0, 80) + "..." : p.text,
-      group: p.scope === "project" ? "Project" : "Global",
-    })),
   );
 
   const [input, setInput] = createSignal("");
@@ -318,33 +268,13 @@ export function Session() {
   const [showModelPicker, setShowModelPicker] = createSignal(false);
   const [showVariantPicker, setShowVariantPicker] = createSignal(false);
   const [showAgentPicker, setShowAgentPicker] = createSignal(false);
-  const [showPromptPicker, setShowPromptPicker] = createSignal(false);
-  const [promptPickerFilter, setPromptPickerFilter] = createSignal("");
   const [showFilePicker, setShowFilePicker] = createSignal(false);
   const [showForkPicker, setShowForkPicker] = createSignal(false);
-  const [showSavePrompt, setShowSavePrompt] = createSignal(false);
-  const [savePromptTitle, setSavePromptTitle] = createSignal("");
-  const [savePromptBody, setSavePromptBody] = createSignal("");
-  const [savePromptScope, setSavePromptScope] = createSignal<PromptScope>(
-    savedPrompts.canUseProjectScope() ? "project" : "global",
-  );
 
   const [fileContext, setFileContext] = createSignal<FileContext[]>([]);
   const [imageAttachments, setImageAttachments] = createSignal<
     ImageAttachment[]
   >([]);
-  const [followups, setFollowups] = createSignal<FollowupItem[]>([]);
-  const [followupSending, setFollowupSending] = createSignal<string | undefined>();
-  const [followupAutoSend, setFollowupAutoSend] = createSignal(
-    (() => {
-      const id = params.id;
-      if (!id) return true;
-      return readFollowupAutoSendMap()[id] ?? true;
-    })(),
-  );
-  const [followupAutoPaused, setFollowupAutoPaused] = createSignal<string | undefined>();
-  const [followupAutoPending, setFollowupAutoPending] = createSignal(false);
-  const followupAutoStatus = { previous: undefined as string | undefined };
   const [error, setError] = createSignal<string | null>(null);
   // Use session tree walk to find pending questions from this session or any descendant.
   // This surfaces child/grandchild session questions in the parent session view.
@@ -358,347 +288,8 @@ export function Session() {
   const pendingPermissions = createMemo(() => permission.pendingForSession(sessionId() ?? ""));
   const inputBlocked = createMemo(() => !!pendingQuestion() || pendingPermissions().length > 0);
 
-  function clearFollowupStorageKey(dir: string) {
-    if (typeof window === "undefined") return;
-    try {
-      window.localStorage.removeItem(followupStorageKey(dir));
-    } catch {
-      return;
-    }
-  }
-
-  function readFollowupMap(dir = params.dir) {
-    if (typeof window === "undefined") return {} as Record<string, FollowupItem[] | undefined>;
-    const key = followupStorageKey(dir);
-    try {
-      const raw = window.localStorage.getItem(key);
-      if (!raw) return {} as Record<string, FollowupItem[] | undefined>;
-      const parsed = JSON.parse(raw);
-      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-        clearFollowupStorageKey(dir);
-        return {} as Record<string, FollowupItem[] | undefined>;
-      }
-      const map = {} as Record<string, FollowupItem[] | undefined>;
-      for (const [id, value] of Object.entries(parsed)) {
-        const list = normalizeFollowupList(value);
-        if (!list) continue;
-        map[id] = list;
-      }
-      return map;
-    } catch {
-      clearFollowupStorageKey(dir);
-      return {} as Record<string, FollowupItem[] | undefined>;
-    }
-  }
-
-  function writeFollowupMap(map: Record<string, FollowupItem[] | undefined>, dir = params.dir) {
-    if (typeof window === "undefined") return;
-    try {
-      window.localStorage.setItem(followupStorageKey(dir), JSON.stringify(map));
-    } catch {
-      return;
-    }
-  }
-
-  function setSessionFollowups(id: string, list: FollowupItem[]) {
-    const map = readFollowupMap();
-    if (list.length === 0) delete map[id];
-    if (list.length > 0) map[id] = list;
-    writeFollowupMap(map);
-    setFollowups(list);
-  }
-
-  function clearFollowupAutoSendStorageKey(dir: string) {
-    if (typeof window === "undefined") return;
-    try {
-      window.localStorage.removeItem(followupAutoSendStorageKey(dir));
-    } catch {
-      return;
-    }
-  }
-
-  function readFollowupAutoSendMap(dir = params.dir) {
-    if (typeof window === "undefined") return {} as Record<string, boolean | undefined>;
-    const key = followupAutoSendStorageKey(dir);
-    try {
-      const raw = window.localStorage.getItem(key);
-      if (!raw) return {} as Record<string, boolean | undefined>;
-      const parsed = JSON.parse(raw);
-      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-        clearFollowupAutoSendStorageKey(dir);
-        return {} as Record<string, boolean | undefined>;
-      }
-      const map = {} as Record<string, boolean | undefined>;
-      for (const [id, value] of Object.entries(parsed)) {
-        if (value === false) map[id] = false;
-      }
-      return map;
-    } catch {
-      clearFollowupAutoSendStorageKey(dir);
-      return {} as Record<string, boolean | undefined>;
-    }
-  }
-
-  function writeFollowupAutoSendMap(map: Record<string, boolean | undefined>, dir = params.dir) {
-    if (typeof window === "undefined") return;
-    try {
-      window.localStorage.setItem(followupAutoSendStorageKey(dir), JSON.stringify(map));
-    } catch {
-      return;
-    }
-  }
-
-  function setSessionFollowupAutoSend(id: string, enabled: boolean) {
-    const map = readFollowupAutoSendMap();
-    if (enabled) delete map[id];
-    if (!enabled) map[id] = false;
-    writeFollowupAutoSendMap(map);
-    setFollowupAutoSend(enabled);
-    if (enabled) setFollowupAutoPaused(undefined);
-    if (!enabled) setFollowupAutoPending(false);
-  }
-
-  function queueAutoFollowupSend() {
-    if (!followupAutoSend()) return;
-    if (followups().length === 0) return;
-    setFollowupAutoPending(true);
-  }
-
-  function followupAutoDeferredMessage() {
-    if (inputBlocked()) {
-      return pendingQuestion()
-        ? "Auto send waiting: reply to the pending question above before sending queued followups."
-        : "Auto send waiting: resolve the pending permission request above before sending queued followups.";
-    }
-    const model = sessionModel();
-    if (!model) return "Auto send waiting: select a model to send queued followups.";
-    if (!providers.connected.includes(model.providerID)) {
-      return `Auto send waiting: provider "${model.providerID}" is not connected.`;
-    }
-    return undefined;
-  }
-
-  function isAutoFollowupStatusMessage(message: string | null | undefined) {
-    if (!message) return false;
-    return message.startsWith("Auto send waiting:") || message.startsWith("Auto send paused");
-  }
-
-  function clearAutoFollowupStatusError() {
-    if (!isAutoFollowupStatusMessage(error())) return;
-    setError(null);
-  }
-
-  function setAutoFollowupStatusError(message: string) {
-    const current = error();
-    if (current && !isAutoFollowupStatusMessage(current)) return;
-    setError(message);
-  }
-
-  function followupSessionAvailable(id: string) {
-    const status = events.status[id]?.type;
-    if (!status && !events.statusReady()) return false;
-    return status !== "busy" && status !== "retry";
-  }
-
-  function toggleFollowupAutoSend() {
-    const id = sessionId();
-    if (!id) return;
-    const enabled = !followupAutoSend();
-    setSessionFollowupAutoSend(id, enabled);
-    clearAutoFollowupStatusError();
-    if (!enabled) return;
-    if (!followupSessionAvailable(id)) return;
-    queueAutoFollowupSend();
-  }
-
-  function queueFollowup(text: string) {
-    const id = sessionId();
-    if (!id) return false;
-    const next = [...followups(), { id: crypto.randomUUID(), text }];
-    setSessionFollowups(id, next);
-    return true;
-  }
-
-  function removeFollowup(id: string) {
-    const sid = sessionId();
-    if (!sid) return;
-    setSessionFollowups(
-      sid,
-      followups().filter((item) => item.id !== id),
-    );
-  }
-
-  function moveFollowup(id: string, delta: -1 | 1) {
-    const sid = sessionId();
-    if (!sid) return;
-    const list = followups();
-    const index = list.findIndex((item) => item.id === id);
-    if (index < 0) return;
-    const nextIndex = index + delta;
-    if (nextIndex < 0 || nextIndex >= list.length) return;
-    const next = [...list];
-    const current = next[index];
-    next[index] = next[nextIndex];
-    next[nextIndex] = current;
-    setSessionFollowups(sid, next);
-  }
-
-  function reorderFollowup(from: string, to: string) {
-    const sid = sessionId();
-    if (!sid) return;
-    if (from === to) return;
-    const list = followups();
-    const fromIndex = list.findIndex((item) => item.id === from);
-    const toIndex = list.findIndex((item) => item.id === to);
-    if (fromIndex < 0 || toIndex < 0) return;
-    const next = [...list];
-    next.splice(fromIndex, 1);
-    next.splice(toIndex, 0, list[fromIndex]);
-    setSessionFollowups(sid, next);
-  }
-
   // Double-Escape to abort: track last Escape press timestamp
   const lastEsc = { ts: 0 };
-
-  // --- Notification toggle (per-session, persisted in localStorage + server) ---
-  const [notifyEnabled, setNotifyEnabled] = createSignal(
-    (() => {
-      const id = params.id;
-      if (!id) return false;
-      const dir = directory || base64Decode(params.dir);
-      const map = readNotifyMap();
-      if (migrateNotifySessionKey(map, id, dir)) writeNotifyMap(map);
-      return notifyEnabledForSession(map, id, dir);
-    })(),
-  );
-  const [notifyDenied, setNotifyDenied] = createSignal(false);
-  const [notifySourceId, setNotifySourceId] = createSignal<string | undefined>();
-  const [notifySourceReady, setNotifySourceReady] = createSignal(false);
-  const notifyVersion = { value: 0 };
-  const deniedTimer = { id: null as ReturnType<typeof setTimeout> | null };
-  onCleanup(() => { if (deniedTimer.id !== null) clearTimeout(deniedTimer.id) });
-
-  createEffect(() => {
-    const dir = directory || base64Decode(params.dir);
-    setNotifySourceReady(false);
-    let cancelled = false;
-    onCleanup(() => { cancelled = true });
-    resolveTelegramSourceId(url, dir).then((sourceId) => {
-      if (cancelled) return;
-      setNotifySourceId(sourceId);
-      setNotifySourceReady(true);
-    });
-  });
-
-  // Re-read notification state when session changes, and seed from server alarm state
-  createEffect(() => {
-    const id = params.id;
-    const sourceReady = notifySourceReady();
-    const sourceId = notifySourceId();
-    const dir = directory || base64Decode(params.dir);
-    setNotifyDenied(false);
-    if (!id) {
-      setNotifyEnabled(false);
-      return;
-    }
-    // Seed from localStorage first for instant UI
-    const map = readNotifyMap();
-    const migrated = migrateNotifySessionKey(map, id, dir);
-    if (migrated) writeNotifyMap(map);
-    const local = notifyEnabledForSession(map, id, dir);
-    setNotifyEnabled(local);
-    if (!sourceReady) return;
-    // Cancellation flag for stale responses
-    let cancelled = false;
-    const version = notifyVersion.value;
-    onCleanup(() => { cancelled = true });
-    // Then fetch server-side alarm state asynchronously
-    getSessionAlarm(url, id, sourceId).then((state) => {
-      // Skip if effect was cleaned up, session changed, or local state was updated
-      if (cancelled || !state || params.id !== id) return;
-      if (notifyVersion.value !== version) return;
-      setNotifyEnabled(state.enabled);
-      // Sync localStorage to match server truth
-      const map = readNotifyMap();
-      writeNotifySessionEnabled(map, id, state.enabled, dir);
-      writeNotifyMap(map);
-    });
-  });
-
-  /** Mirror bell toggle to server-side alarm state (fire-and-forget). */
-  function syncAlarmToServer(id: string, enabled: boolean) {
-    const sourceId = notifySourceId();
-    if (sourceId) {
-      setSessionAlarm(url, id, enabled, sourceId);
-      return;
-    }
-    const dir = directory || base64Decode(params.dir);
-    resolveTelegramSourceId(url, dir).then((resolved) => {
-      if (resolved) {
-        setNotifySourceId(resolved);
-        setSessionAlarm(url, id, enabled, resolved);
-        return;
-      }
-      console.warn("[session] skip setSessionAlarm: telegram source id unresolved", { id, dir });
-    });
-  }
-
-  function toggleNotify() {
-    const id = sessionId();
-    if (!id) return;
-
-    // Turning off
-    if (notifyEnabled()) {
-      const map = readNotifyMap();
-      const dir = directory || base64Decode(params.dir);
-      writeNotifySessionEnabled(map, id, false, dir);
-      writeNotifyMap(map);
-      notifyVersion.value += 1;
-      setNotifyEnabled(false);
-      setNotifyDenied(false);
-      syncAlarmToServer(id, false);
-      return;
-    }
-
-    // Turning on — check permission
-    if (typeof window === "undefined" || !("Notification" in window)) return;
-
-    const perm = Notification.permission;
-    if (perm === "granted") {
-      const map = readNotifyMap();
-      const dir = directory || base64Decode(params.dir);
-      writeNotifySessionEnabled(map, id, true, dir);
-      writeNotifyMap(map);
-      notifyVersion.value += 1;
-      setNotifyEnabled(true);
-      syncAlarmToServer(id, true);
-      return;
-    }
-    if (perm === "denied") {
-      setNotifyDenied(true);
-      if (deniedTimer.id !== null) clearTimeout(deniedTimer.id);
-      deniedTimer.id = setTimeout(() => setNotifyDenied(false), 4000);
-      return;
-    }
-    // permission === "default" — request
-    Notification.requestPermission().then((result) => {
-      if (result === "granted") {
-        const map = readNotifyMap();
-        const dir = directory || base64Decode(params.dir);
-        writeNotifySessionEnabled(map, id, true, dir);
-        writeNotifyMap(map);
-        notifyVersion.value += 1;
-        setNotifyEnabled(true);
-        syncAlarmToServer(id, true);
-        return;
-      }
-      if (result === "denied") {
-        setNotifyDenied(true);
-        if (deniedTimer.id !== null) clearTimeout(deniedTimer.id);
-        deniedTimer.id = setTimeout(() => setNotifyDenied(false), 4000);
-      }
-    });
-  }
 
   function cycleVariant() {
     if (variantItems().length === 0) return;
@@ -742,13 +333,6 @@ export function Session() {
 
     setSessionId(id);
     setPendingUserMessageText(null); // Clear pending text on session change
-    setFollowupSending(undefined);
-    setFollowups(id ? readFollowupMap()[id] ?? [] : []);
-    setFollowupAutoSend(id ? readFollowupAutoSendMap()[id] ?? true : true);
-    setFollowupAutoPaused(undefined);
-    setFollowupAutoPending(false);
-    followupAutoStatus.previous = undefined;
-
     // Restore draft for the new session (or clear if none saved)
     const saved = drafts.get(key);
     setInput(saved?.text ?? "");
@@ -759,7 +343,7 @@ export function Session() {
     setShowSlashPopover(false);
     setSlashQuery("");
     setSlashIndex(0);
-    wasProcessing.value = false; // Reset to avoid false notifications
+    wasProcessing.value = false;
     if (id) {
       // Use sync context to load session data - no local state needed
       setLoadingHistory(true);
@@ -871,72 +455,6 @@ export function Session() {
         .catch((err) => console.warn("[Session] Watchdog poll failed:", err));
     }, 60_000);
     onCleanup(() => clearTimeout(timer));
-  });
-
-  createEffect(() => {
-    const blocked = followupAutoPaused();
-    if (!blocked) return;
-    if (followups().some((item) => item.id === blocked)) return;
-    setFollowupAutoPaused(undefined);
-  });
-
-  createEffect(() => {
-    const sid = sessionId();
-    if (!sid) return;
-    const status = events.status[sid]?.type;
-    const prev = followupAutoStatus.previous;
-    followupAutoStatus.previous = status;
-    if (status !== "idle") return;
-    if (!prev || prev === "idle") return;
-    queueAutoFollowupSend();
-  });
-
-  createEffect(() => {
-    const sid = sessionId();
-    if (!sid) return;
-    if (!followupAutoSend()) return;
-    if (followupAutoPending()) return;
-    if (loading() || followupSending() || processing()) return;
-    if (!followupSessionAvailable(sid)) return;
-    const next = followups()[0];
-    if (!next) return;
-    if (followupAutoPaused() === next.id) return;
-    const deferred = followupAutoDeferredMessage();
-    if (deferred) {
-      setAutoFollowupStatusError(deferred);
-      return;
-    }
-    queueAutoFollowupSend();
-  });
-
-  createEffect(() => {
-    const sid = sessionId();
-    if (!sid) return;
-    if (!followupAutoPending()) return;
-    if (!followupAutoSend()) {
-      setFollowupAutoPending(false);
-      return;
-    }
-    if (loading() || followupSending() || processing()) return;
-    if (!followupSessionAvailable(sid)) return;
-    const next = followups()[0];
-    if (!next) {
-      setFollowupAutoPending(false);
-      return;
-    }
-    if (followupAutoPaused() === next.id) {
-      setFollowupAutoPending(false);
-      return;
-    }
-    const deferred = followupAutoDeferredMessage();
-    if (deferred) {
-      setAutoFollowupStatusError(deferred);
-      return;
-    }
-    batch(() => {
-      setFollowupAutoPending(false);
-      void sendFollowupNow(next.id, "auto");
-    });
   });
 
   // Get messages from sync context - reactive, automatically updated via SSE
@@ -1091,16 +609,6 @@ export function Session() {
         onSelect: () => {
           console.log("[Command] MCP dialog");
           setShowMCPDialog(true);
-        },
-      },
-      {
-        id: "prompt.pick",
-        title: "Insert Saved Prompt",
-        description: "Insert a saved prompt into the input",
-        slash: "prompt",
-        onSelect: () => {
-          setPromptPickerFilter("");
-          setShowPromptPicker(true);
         },
       },
       {
@@ -1357,17 +865,6 @@ export function Session() {
   function handleInputChange(value: string) {
     setInput(value);
 
-    // Detect `/prompt <search>` — auto-open prompt picker with filter
-    const promptMatch = value.match(/^\/prompt\s+(.*)$/i);
-    if (promptMatch) {
-      setInput("");
-      setShowSlashPopover(false);
-      setSlashQuery("");
-      setPromptPickerFilter(promptMatch[1].trim());
-      setShowPromptPicker(true);
-      return;
-    }
-
     // Detect slash command pattern: /command (no spaces — popover only for partial commands)
     const slashMatch = value.match(/^\/(\S*)$/);
     if (slashMatch) {
@@ -1434,10 +931,8 @@ export function Session() {
       showModelPicker() ||
       showVariantPicker() ||
       showAgentPicker() ||
-      showPromptPicker() ||
       showFilePicker() ||
-      showForkPicker() ||
-      showSavePrompt()
+      showForkPicker()
     ) return;
     if (!processing()) return;
 
@@ -1500,7 +995,7 @@ export function Session() {
       try {
         const dir = directory || base64Decode(params.dir);
         if (dir && typeof window !== "undefined") {
-          const key = `opencode.lastSession.${dir}`;
+          const key = workspaceStorageKey(serverId, dir, "lastSession");
           const stored = window.localStorage.getItem(key);
           if (stored === id) {
             window.localStorage.removeItem(key);
@@ -1516,7 +1011,7 @@ export function Session() {
     try {
       const dir = directory || base64Decode(params.dir);
       if (dir && typeof window !== "undefined") {
-        const key = `opencode.lastSession.${dir}`;
+        const key = workspaceStorageKey(serverId, dir, "lastSession");
         const stored = window.localStorage.getItem(key);
         if (stored === id) window.localStorage.removeItem(key);
       }
@@ -1536,7 +1031,7 @@ export function Session() {
     try {
       const dir = directory || base64Decode(params.dir);
       if (dir && typeof window !== "undefined") {
-        window.localStorage.setItem(`opencode.lastSession.${dir}`, id);
+        window.localStorage.setItem(workspaceStorageKey(serverId, dir, "lastSession"), id);
       }
     } catch (err) {
       console.warn("[Session] Failed to persist last session:", err);
@@ -1592,7 +1087,7 @@ export function Session() {
             }
             setPendingUserMessageText(null);
 
-            // Reset local processing tracker (notifications now handled globally in Layout)
+            // Reset local processing tracker after the session becomes idle.
             wasProcessing.value = false;
             setProcessing(false);
           } else if (statusEvent.sessionID === id) {
@@ -1611,7 +1106,7 @@ export function Session() {
   });
 
   // Question tracking is now handled via the global events.pendingQuestions store
-  // (seeded via HTTP and updated via SSE in EventProvider) combined with the
+  // (seeded via HTTP and updated via SSE in SyncProvider) combined with the
   // sessionQuestionRequest tree-walk memo defined above. This surfaces questions
   // from child/grandchild sessions automatically without per-session SSE subscriptions.
 
@@ -1798,104 +1293,6 @@ export function Session() {
     } satisfies DisplayMessage;
   }
 
-  async function sendFollowupNow(id: string, source: "auto" | "manual" = "manual") {
-    const dir = params.dir;
-    const sid = sessionId();
-    const busy = events.status[sid ?? ""]?.type;
-    const autoAttempt = source === "auto";
-    const fail = (message: string) => {
-      setError(message);
-    };
-    const blockedMessage = pendingQuestion()
-      ? "Reply to the pending question above before sending queued followups."
-      : "Resolve the pending permission request above before sending queued followups.";
-    const autoBlockedMessage = pendingQuestion()
-      ? "Auto send waiting: reply to the pending question above before sending queued followups."
-      : "Auto send waiting: resolve the pending permission request above before sending queued followups.";
-    if (!sid || followupSending() || loading() || processing()) return false;
-    if (busy === "busy" || busy === "retry") return false;
-    if (inputBlocked()) {
-      if (autoAttempt) {
-        fail(autoBlockedMessage);
-        return false;
-      }
-      fail(blockedMessage);
-      return false;
-    }
-    const model = sessionModel();
-    if (!model) {
-      if (autoAttempt) {
-        fail("Auto send waiting: select a model to send queued followups.");
-        return false;
-      }
-      fail("Please select a model before sending messages. Click the model button in the header.");
-      return false;
-    }
-    if (!providers.connected.includes(model.providerID)) {
-      if (autoAttempt) {
-        fail(`Auto send waiting: provider "${model.providerID}" is not connected.`);
-        return false;
-      }
-      fail(`Provider "${model.providerID}" is not connected. Please configure it in Settings.`);
-      return false;
-    }
-    const item = followups().find((entry) => entry.id === id);
-    if (!item) return false;
-    setFollowupSending(id);
-    if (followupAutoPaused() === id) setFollowupAutoPaused(undefined);
-    setError(null);
-    setPendingUserMessageText(item.text);
-    setOptimisticMessage(optimisticUserMessage(item.text, sid));
-
-    try {
-      const variant = providers.variant.current(sid, model, providers.selectedAgent);
-      const promptRes = await client.session.promptAsync({
-        sessionID: sid,
-        parts: [{ type: "text", text: item.text }],
-        agent: providers.selectedAgent || "build",
-        model,
-        variant,
-      });
-      if ("error" in promptRes && promptRes.error) {
-        throw new Error(formatStartError(promptRes.error));
-      }
-      const map = readFollowupMap(dir);
-      const next = (map[sid] ?? []).filter((entry) => entry.id !== id);
-      if (next.length === 0) delete map[sid];
-      if (next.length > 0) map[sid] = next;
-      writeFollowupMap(map, dir);
-      if (sessionId() === sid) setFollowups(next);
-      startProcessing();
-      return true;
-    } catch (err) {
-      const autoEnabled = followupAutoSend();
-      setPendingUserMessageText(null);
-      setOptimisticMessage(null);
-      if (autoEnabled) setFollowupAutoPaused(id);
-      const reason = err instanceof Error ? err.message : String(err);
-      if (autoAttempt) {
-        fail(`Auto send paused after queued followup failed: ${reason}`);
-        return false;
-      }
-      if (autoEnabled) {
-        fail(`Failed to send queued followup: ${reason}. Auto send paused to prevent immediate retry loops.`);
-        return false;
-      }
-      fail(`Failed to send queued followup: ${reason}`);
-      return false;
-    } finally {
-      setFollowupSending(undefined);
-    }
-  }
-
-  function editFollowup(id: string) {
-    if (followupSending() === id) return;
-    const item = followups().find((entry) => entry.id === id);
-    if (!item || !inputRef) return;
-    applyInputAndAutogrow(inputRef, item.text);
-    removeFollowup(id);
-  }
-
   async function sendMessage(e: SubmitEvent) {
     e.preventDefault();
     const text = input().trim();
@@ -1914,23 +1311,13 @@ export function Session() {
     const files = fileContext();
     const images = imageAttachments();
     if (!text && files.length === 0 && images.length === 0) return;
-    if (loading() || !!followupSending()) return;
+    if (loading()) return;
     if (inputBlocked()) {
       setError(
         pendingQuestion()
           ? "Reply to the pending question above before sending another message."
           : "Resolve the pending permission request above before sending another message.",
       );
-      return;
-    }
-
-    if (processing() && text && files.length === 0 && images.length === 0) {
-      if (!queueFollowup(text)) return;
-      setError(null);
-      setInput("");
-      setDragHeight(0);
-      if (inputRef) inputRef.style.height = "";
-      drafts.delete(draftKey(params.dir, sessionId()));
       return;
     }
 
@@ -2094,44 +1481,8 @@ export function Session() {
     }
   }
 
-  async function createSessionAndSendPrompt(text: string) {
-    if (creatingSession()) return;
-    const model = sessionModel();
-    const err = startSessionError({
-      loading: providers.loading,
-      providerCount: providers.providers.length,
-      model,
-      connected: providers.connected,
-    });
-    if (err) {
-      setError(err);
-      return;
-    }
-    if (!model) return;
-    setError(null);
-    setCreatingSession(true);
-    try {
-      const created = await createAndSendPrompt({
-        client,
-        text,
-        agent: providers.selectedAgent || "build",
-        model,
-        variant: providers.variant.current(undefined, model, providers.selectedAgent),
-      });
-      const sid = created.id;
-      setSessionId(sid);
-      providers.setSessionModel(sid, model);
-      navigate(`/${dirSlug()}/session/${sid}`, { replace: true });
-    } catch (err) {
-      setError(`Failed to create session or send saved prompt: ${formatStartError(err)}`);
-    } finally {
-      setCreatingSession(false);
-    }
-  }
-
   // Welcome screen component for when no session is selected
   function WelcomeScreen() {
-    const savedPrompts = useSavedPrompts();
     const pendingStartError = createMemo(() => {
       const model = sessionModel();
       return startSessionError({
@@ -2360,89 +1711,6 @@ export function Session() {
             </button>
           </Show>
 
-          {/* Saved Prompts */}
-          <Show when={savedPrompts.loading()}>
-            <div class="mt-8 w-full max-w-2xl flex items-center gap-2" style={{ color: "var(--text-weak)" }}>
-              <Spinner class="w-4 h-4" />
-              <span class="text-sm">Loading saved prompts...</span>
-            </div>
-          </Show>
-
-          <Show when={savedPrompts.error()}>
-            <div class="mt-8 w-full max-w-2xl text-sm" style={{ color: "var(--interactive-critical)" }}>
-              {savedPrompts.error()}
-            </div>
-          </Show>
-
-          <Show when={!savedPrompts.error() && savedPrompts.saveError()}>
-            <div class="mt-8 w-full max-w-2xl text-sm" style={{ color: "var(--interactive-critical)" }}>
-              {savedPrompts.saveError()}
-            </div>
-          </Show>
-
-          <Show when={!savedPrompts.loading() && !savedPrompts.error() && savedPrompts.prompts().length > 0}>
-            <div class="mt-8 w-full max-w-2xl">
-              <h3
-                class="text-sm font-medium mb-3 text-left"
-                style={{ color: "var(--text-weak)" }}
-              >
-                Saved Prompts
-              </h3>
-              <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-                <For each={savedPrompts.prompts()}>
-                  {(prompt) => (
-                    <button
-                      type="button"
-                      onClick={() => createSessionAndSendPrompt(prompt.text)}
-                      disabled={creatingSession()}
-                      class="p-3 rounded-lg text-left transition-colors"
-                      style={{
-                        background: "var(--background-base)",
-                        border: "1px solid var(--border-base)",
-                        opacity: creatingSession() ? 0.6 : 1,
-                        cursor: creatingSession() ? "not-allowed" : "pointer",
-                      }}
-                      onMouseEnter={(e) => {
-                        e.currentTarget.style.borderColor = "var(--interactive-base)";
-                        e.currentTarget.style.background = "var(--surface-inset)";
-                      }}
-                      onMouseLeave={(e) => {
-                        e.currentTarget.style.borderColor = "var(--border-base)";
-                        e.currentTarget.style.background = "var(--background-base)";
-                      }}
-                    >
-                      <div class="flex items-center gap-2">
-                        <div
-                          class="text-sm font-medium truncate"
-                          style={{ color: "var(--text-strong)" }}
-                        >
-                          {prompt.title}
-                        </div>
-                        <span
-                          class="text-[10px] px-1.5 py-0.5 rounded shrink-0"
-                          style={{
-                            background: "var(--surface-inset)",
-                            color: "var(--text-weak)",
-                          }}
-                        >
-                          {prompt.scope === "project" ? "Project" : "Global"}
-                        </span>
-                      </div>
-                      <div
-                        class="text-xs mt-1 line-clamp-2"
-                        style={{ color: "var(--text-weak)" }}
-                      >
-                        {prompt.text.length > 100
-                          ? prompt.text.slice(0, 100) + "..."
-                          : prompt.text}
-                      </div>
-                    </button>
-                  )}
-                </For>
-              </div>
-            </div>
-          </Show>
-
           <Show when={welcomeError()}>
             <div
               class="mt-4 px-4 py-2 rounded-lg text-sm max-w-2xl"
@@ -2492,9 +1760,6 @@ export function Session() {
           processing={processing()}
           onOpenMCPDialog={() => setShowMCPDialog(true)}
           onOpenVariantPicker={() => setShowVariantPicker(true)}
-          notifyEnabled={notifyEnabled()}
-          notifyDenied={notifyDenied()}
-          onToggleNotify={toggleNotify}
           instructionsActive={instructionsActive()}
           onOpenInstructions={() => navigate(`/${dirSlug()}/settings#instructions`)}
         />
@@ -2806,37 +2071,6 @@ export function Session() {
                 <div class="flex items-center px-2 py-1">
                   {/* Attach buttons */}
                   <div class="flex items-center gap-1 shrink-0">
-                    {/* Save as prompt button */}
-                    <Show when={input().trim()}>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          if (savedPrompts.loading() || savedPrompts.error()) return;
-                          const text = input().trim();
-                          if (!text) return;
-                          setSavePromptTitle(text.slice(0, 30));
-                          setSavePromptBody(text);
-                          setSavePromptScope(savedPrompts.canUseProjectScope() ? "project" : "global");
-                          setShowSavePrompt(true);
-                        }}
-                        disabled={savedPrompts.loading() || !!savedPrompts.error()}
-                        class="p-1.5 rounded transition-colors"
-                        style={{ color: "var(--text-weak)" }}
-                        onMouseEnter={(e) => {
-                          e.currentTarget.style.background =
-                            "var(--surface-inset)";
-                          e.currentTarget.style.color = "var(--text-strong)";
-                        }}
-                        onMouseLeave={(e) => {
-                          e.currentTarget.style.background = "transparent";
-                          e.currentTarget.style.color = "var(--text-weak)";
-                        }}
-                        title={savedPrompts.loading() ? "Saved prompts are still loading" : "Save as prompt"}
-                        aria-label="Save as prompt"
-                      >
-                        <Bookmark class="w-4 h-4" />
-                      </button>
-                    </Show>
                     {/* Upload from device button */}
                     <button
                       type="button"
@@ -2895,22 +2129,6 @@ export function Session() {
               </div>
             </form>
 
-            <Show when={!!sessionId() && followups().length > 0}>
-              <FollowupDock
-                items={followups()}
-                sending={followupSending()}
-                autoSend={followupAutoSend()}
-                processing={processing()}
-                loading={loading()}
-                onToggleAutoSend={toggleFollowupAutoSend}
-                onSend={sendFollowupNow}
-                onEdit={editFollowup}
-                onDelete={removeFollowup}
-                onMoveUp={(id) => moveFollowup(id, -1)}
-                onMoveDown={(id) => moveFollowup(id, 1)}
-                onReorder={reorderFollowup}
-              />
-            </Show>
           </div>
         </div>
 
@@ -3015,23 +2233,6 @@ export function Session() {
           />
         </Show>
 
-        {/* Saved Prompt Picker Dialog */}
-        <Show when={showPromptPicker()}>
-          <PickerDialog
-            title="Insert Saved Prompt"
-            placeholder="Filter prompts..."
-            emptyMessage={savedPrompts.loading() ? "Loading saved prompts..." : savedPrompts.error() || "No saved prompts. Add them in Settings."}
-            initialFilter={promptPickerFilter()}
-            items={promptPickerItems()}
-            onSelect={(item) => {
-              const found = savedPrompts.prompts().find((p) => p.id === item.id);
-              if (!found) return;
-              if (inputRef) applyInputAndAutogrow(inputRef, found.text);
-            }}
-            onClose={() => setShowPromptPicker(false)}
-          />
-        </Show>
-
         {/* File Picker Dialog */}
         <Show when={showFilePicker()}>
           <FilePickerDialog
@@ -3083,33 +2284,6 @@ export function Session() {
                 });
             }}
             onClose={() => setShowForkPicker(false)}
-          />
-        </Show>
-
-        {/* Save Prompt Dialog */}
-        <Show when={showSavePrompt()}>
-          <SavePromptDialog
-            title={savePromptTitle}
-            setTitle={setSavePromptTitle}
-            scope={savePromptScope}
-            setScope={setSavePromptScope}
-            canUseProjectScope={savedPrompts.canUseProjectScope()}
-            hasActiveProject={savedPrompts.hasActiveProject()}
-            saveDisabled={savedPrompts.loading() || !!savedPrompts.error()}
-            onSave={async () => {
-              if (savedPrompts.loading() || savedPrompts.error()) return;
-              const title = savePromptTitle().trim();
-              const body = savePromptBody();
-              if (!title || !body) return;
-              const ok = await savedPrompts.add(title, body, savePromptScope());
-              if (!ok) {
-                showToast(savedPrompts.saveError() || "Failed to save prompts. Please retry.");
-                return;
-              }
-              setShowSavePrompt(false);
-              showToast("Prompt saved");
-            }}
-            onClose={() => setShowSavePrompt(false)}
           />
         </Show>
 
@@ -3201,219 +2375,5 @@ export function Session() {
         </Show>
       </div>
     </Show>
-  );
-}
-
-function SavePromptDialog(props: {
-  title: () => string
-  setTitle: (v: string) => void
-  scope: () => PromptScope
-  setScope: (v: PromptScope) => void
-  canUseProjectScope: boolean
-  hasActiveProject: boolean
-  saveDisabled: boolean
-  onSave: () => void | Promise<void>
-  onClose: () => void
-}) {
-  const [container, setContainer] = createSignal<HTMLDivElement>();
-  const [saving, setSaving] = createSignal(false);
-  let titleRef: HTMLInputElement | undefined;
-
-  async function handleSave() {
-    if (saving()) return;
-    if (!props.title().trim() || props.saveDisabled) return;
-    setSaving(true);
-    try {
-      await props.onSave();
-    } finally {
-      setSaving(false);
-    }
-  }
-
-  createEffect(() => {
-    const el = container();
-    if (!el) return;
-
-    // Focus title input on open
-    titleRef?.focus();
-
-    function handleKey(e: KeyboardEvent) {
-      if (e.key === "Escape") {
-        e.preventDefault();
-        props.onClose();
-        return;
-      }
-      if (e.key !== "Tab") return;
-
-      const focusable = el!.querySelectorAll<HTMLElement>(
-        'input, textarea, button:not([disabled]), [tabindex]:not([tabindex="-1"])',
-      );
-      if (focusable.length === 0) return;
-
-      const first = focusable[0];
-      const last = focusable[focusable.length - 1];
-
-      if (e.shiftKey && document.activeElement === first) {
-        e.preventDefault();
-        last?.focus();
-      } else if (!e.shiftKey && document.activeElement === last) {
-        e.preventDefault();
-        first?.focus();
-      }
-    }
-
-    document.addEventListener("keydown", handleKey);
-    onCleanup(() => document.removeEventListener("keydown", handleKey));
-  });
-
-  return (
-    <Portal>
-      <div
-        class="fixed inset-0 z-[100] flex items-center justify-center"
-        style={{ background: "rgba(0,0,0,0.5)" }}
-        role="presentation"
-      >
-        <div
-          ref={setContainer}
-          role="dialog"
-          aria-modal="true"
-          aria-labelledby="save-prompt-dialog-title"
-          class="w-full max-w-sm rounded-lg shadow-xl overflow-hidden"
-          style={{
-            background: "var(--background-base)",
-            border: "1px solid var(--border-base)",
-          }}
-        >
-          <div
-            class="px-4 py-3"
-            style={{
-              "border-bottom": "1px solid var(--border-base)",
-            }}
-          >
-            <h2
-              id="save-prompt-dialog-title"
-              class="text-base font-medium"
-              style={{ color: "var(--text-strong)" }}
-            >
-              Save as Prompt
-            </h2>
-          </div>
-          <div class="p-4 space-y-3">
-            <div>
-              <label
-                class="block text-sm font-medium mb-1"
-                style={{ color: "var(--text-base)" }}
-              >
-                Title
-              </label>
-              <input
-                ref={titleRef}
-                type="text"
-                value={props.title()}
-                onInput={(e) =>
-                  props.setTitle(e.currentTarget.value)
-                }
-                placeholder="Prompt title"
-                class="w-full px-3 py-2 rounded-md text-sm"
-                style={{
-                  background: "var(--background-base)",
-                  border: "1px solid var(--border-base)",
-                  color: "var(--text-base)",
-                }}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") {
-                    e.preventDefault();
-                    void handleSave();
-                  }
-                }}
-              />
-            </div>
-            <p class="text-xs" style={{ color: "var(--text-weak)" }}>
-              The current input text will be saved as the prompt body.
-            </p>
-            <div>
-              <label
-                class="block text-xs font-medium mb-1"
-                style={{ color: "var(--text-base)" }}
-              >
-                Scope
-              </label>
-              <div class="flex gap-2" role="group" aria-label="Prompt scope">
-                <button
-                  type="button"
-                  onClick={() => props.setScope("global")}
-                  aria-pressed={props.scope() === "global"}
-                  class="flex-1 px-2.5 py-1 rounded-md text-xs font-medium transition-colors"
-                  style={{
-                    background: props.scope() === "global" ? "var(--interactive-base)" : "var(--surface-inset)",
-                    color: props.scope() === "global" ? "white" : "var(--text-base)",
-                    border: props.scope() === "global" ? "1px solid var(--interactive-base)" : "1px solid var(--border-base)",
-                  }}
-                >
-                  Global
-                </button>
-                <button
-                  type="button"
-                  onClick={() => props.setScope("project")}
-                  disabled={!props.canUseProjectScope}
-                  title={!props.canUseProjectScope ? "Open a project first to use project-scoped prompts" : undefined}
-                  aria-pressed={props.scope() === "project"}
-                  class="flex-1 px-2.5 py-1 rounded-md text-xs font-medium transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
-                  style={{
-                    background: props.scope() === "project" ? "var(--interactive-base)" : "var(--surface-inset)",
-                    color: props.scope() === "project" ? "white" : "var(--text-base)",
-                    border: props.scope() === "project" ? "1px solid var(--interactive-base)" : "1px solid var(--border-base)",
-                  }}
-                >
-                  Project
-                </button>
-              </div>
-              <Show when={props.scope() === "project"}>
-                <p class="text-xs mt-1" style={{ color: "var(--text-weak)" }}>
-                  {props.hasActiveProject
-                    ? "Project scope saves to this project only."
-                    : "Project scope saves to your most recent project."}
-                </p>
-              </Show>
-              <Show when={!props.canUseProjectScope}>
-                <p class="text-xs mt-1" style={{ color: "var(--text-weak)" }}>
-                  Open a project first to use project-scoped prompts.
-                </p>
-              </Show>
-            </div>
-          </div>
-          <div
-            class="px-4 py-3 flex justify-end gap-2"
-            style={{
-              "border-top": "1px solid var(--border-base)",
-            }}
-          >
-            <button
-              type="button"
-              onClick={props.onClose}
-              class="px-4 py-2 text-sm font-medium rounded-md transition-colors"
-              style={{
-                background: "var(--surface-inset)",
-                color: "var(--text-base)",
-              }}
-            >
-              Cancel
-            </button>
-            <button
-              type="button"
-              disabled={!props.title().trim() || props.saveDisabled || saving()}
-              onClick={() => void handleSave()}
-              class="px-4 py-2 text-sm font-medium rounded-md transition-colors disabled:opacity-50"
-              style={{
-                background: "var(--interactive-base)",
-                color: "white",
-              }}
-            >
-              {saving() ? "Saving..." : "Save"}
-            </button>
-          </div>
-        </div>
-      </div>
-    </Portal>
   );
 }

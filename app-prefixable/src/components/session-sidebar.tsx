@@ -2,6 +2,7 @@ import { createSignal, createEffect, createMemo, For, Show, onCleanup } from "so
 import { useSDK } from "../context/sdk"
 import { useEvents } from "../context/events"
 import { useProviders } from "../context/providers"
+import { useSync } from "../context/sync"
 import { getContextTokens } from "../utils/tokens"
 import { GitBranch, Check, Circle, Loader2, Zap } from "lucide-solid"
 
@@ -20,10 +21,10 @@ export function SessionSidebar(props: SessionSidebarProps) {
   const { client, directory } = useSDK()
   const events = useEvents()
   const providers = useProviders()
+  const sync = useSync()
 
   const [todos, setTodos] = createSignal<Todo[]>([])
   const [branch, setBranch] = createSignal<string | null>(null)
-  const [messages, setMessages] = createSignal<any[]>([])
 
   // Load git branch
   async function loadBranch() {
@@ -50,35 +51,22 @@ export function SessionSidebar(props: SessionSidebarProps) {
     }
   }
 
-  // Load messages for token calculation
-  async function loadMessages(sessionId: string) {
-    try {
-      const res = await client.session.messages({ sessionID: sessionId })
-      if (res.data) {
-        setMessages(res.data)
-      }
-    } catch (e) {
-      console.error("[SessionSidebar] Failed to load messages:", e)
-    }
-  }
-
   // Load data when sessionId changes
   createEffect(() => {
     const id = props.sessionId
     loadBranch()
     if (id) {
       loadTodos(id)
-      loadMessages(id)
     } else {
       setTodos([])
-      setMessages([])
     }
   })
 
   // Calculate context usage from last assistant message
   // Context usage = context tokens (input + cached), representing how much of the context window is used
   const contextUsage = createMemo(() => {
-    const msgs = messages()
+    const id = props.sessionId
+    const msgs = id ? sync.messages(id) : []
     if (!msgs.length) return null
 
     // Find last assistant message with tokens and extract model info
@@ -117,7 +105,7 @@ export function SessionSidebar(props: SessionSidebarProps) {
     return { tokens: contextTokens, limit, percentage, remaining }
   })
 
-  // Subscribe to todo and message updates
+  // Subscribe to todo and branch updates. Messages come from the central sync store.
   createEffect(() => {
     const id = props.sessionId
     if (!id) return
@@ -132,13 +120,6 @@ export function SessionSidebar(props: SessionSidebarProps) {
       if (event.type === "vcs.branch.updated") {
         const eventProps = event.properties as { branch: string }
         setBranch(eventProps.branch)
-      }
-      // Reload messages when assistant message completes (for token updates)
-      if (event.type === "message.updated") {
-        const eventProps = event.properties as { sessionID?: string; info?: { sessionID?: string } }
-        if ((eventProps.info?.sessionID ?? eventProps.sessionID) === id) {
-          loadMessages(id)
-        }
       }
     })
 

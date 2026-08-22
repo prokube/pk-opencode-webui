@@ -1,7 +1,8 @@
 import { describe, expect, test } from "bun:test"
-import { applyPartDelta, mergeMessageUpdate, mergePartUpdate, mergeSessionMessages } from "../src/context/sync"
-import type { MessageWithParts } from "../src/context/sync"
-import type { Message, Part } from "../src/sdk/client"
+import { applyPartDelta, mergeMessageUpdate, mergePartUpdate, mergeSessionMessages, reduceSyncLiveEvent, removeSyncSession, updateProviderConnected, upsertSyncSession } from "../src/context/sync"
+import type { MessageWithParts, SyncLiveState } from "../src/context/sync"
+import type { Message, Part, PermissionRequest, QuestionRequest, Session } from "../src/sdk/client"
+import { createEventBuffer } from "../src/utils/event-buffer"
 import { nextSSEReconnectDelay } from "../src/utils/sse"
 
 const user = (id: string, sessionID = "ses_1"): Message => ({
@@ -53,7 +54,50 @@ const runningTool = (id: string, messageID: string, start: number): Part => ({
 
 const message = (info: Message, parts: Part[]): MessageWithParts => ({ info, parts })
 
+const session = (id: string, archived?: number): Session => ({
+  id,
+  slug: id,
+  projectID: "project",
+  directory: "/workspace",
+  title: id,
+  version: "1",
+  time: { created: 1, updated: 1, archived },
+})
+
 describe("sync event helpers", () => {
+  test("upserts active sessions in id order", () => {
+    const updated = { ...session("ses_2"), title: "updated" }
+    const state = upsertSyncSession({ session: [session("ses_2")], archivedSession: [] }, updated)
+
+    expect(state.session).toEqual([updated])
+    expect(upsertSyncSession(state, session("ses_1")).session.map((item) => item.id)).toEqual(["ses_1", "ses_2"])
+  })
+
+  test("moves sessions between active and archived lists", () => {
+    const active = session("ses_1")
+    const archived = session("ses_1", 2)
+    const moved = upsertSyncSession({ session: [active], archivedSession: [] }, archived)
+
+    expect(moved.session).toEqual([])
+    expect(moved.archivedSession).toEqual([archived])
+    expect(upsertSyncSession(moved, active)).toEqual({ session: [active], archivedSession: [] })
+  })
+
+  test("removes sessions from active and archived lists", () => {
+    const state = { session: [session("ses_1")], archivedSession: [session("ses_2", 2)] }
+
+    expect(removeSyncSession(state, "ses_1")).toEqual({ session: [], archivedSession: state.archivedSession })
+    expect(removeSyncSession(state, "ses_2")).toEqual({ session: state.session, archivedSession: [] })
+  })
+
+  test("updates provider connection state without duplicating ids", () => {
+    const data = { all: [], connected: ["alpha"], default: {} }
+
+    expect(updateProviderConnected(data, "alpha", true)).toBe(data)
+    expect(updateProviderConnected(data, "beta", true).connected).toEqual(["alpha", "beta"])
+    expect(updateProviderConnected(data, "alpha", false).connected).toEqual([])
+  })
+
   test("message.updated inserts messages that are not loaded yet", () => {
     const messages = mergeMessageUpdate(undefined, user("msg_1"))
 
@@ -156,5 +200,132 @@ describe("sync event helpers", () => {
     const connectedAt = Date.now() - 11_000
 
     expect(nextSSEReconnectDelay(connectedAt, Date.now(), 30_000)).toBe(3000)
+  })
+
+  test("reduces status, question, and permission events into canonical live state", () => {
+    const question: QuestionRequest = {
+      id: "que_1",
+      sessionID: "ses_1",
+      questions: [],
+    }
+    const permission: PermissionRequest = {
+      id: "per_1",
+      sessionID: "ses_1",
+      permission: "edit",
+      patterns: [],
+      metadata: {},
+      always: [],
+    }
+    const initial: SyncLiveState = { status: {}, pendingQuestions: {}, pendingPermissions: {} }
+    const busy = reduceSyncLiveEvent(initial, {
+      type: "session.status",
+      properties: { sessionID: "ses_1", status: { type: "busy" } },
+    })
+    const asked = reduceSyncLiveEvent(busy, { type: "question.asked", properties: question })
+    const pending = reduceSyncLiveEvent(asked, { type: "permission.asked", properties: permission })
+
+    expect(pending.status.ses_1).toEqual({ type: "busy" })
+    expect(pending.pendingQuestions.ses_1).toEqual(question)
+    expect(pending.pendingPermissions.per_1).toEqual(permission)
+
+    const idle = reduceSyncLiveEvent(pending, {
+      type: "session.idle",
+      properties: { sessionID: "ses_1" },
+    })
+    const replied = reduceSyncLiveEvent(idle, {
+      type: "question.replied",
+      properties: { sessionID: "ses_1", requestID: "que_1" },
+    })
+    const cleared = reduceSyncLiveEvent(replied, {
+      type: "permission.replied",
+      properties: { sessionID: "ses_1", requestID: "per_1" },
+    })
+
+    expect(cleared.status.ses_1).toEqual({ type: "idle" })
+    expect(cleared.pendingQuestions.ses_1).toBeUndefined()
+    expect(cleared.pendingPermissions.per_1).toBeUndefined()
+  })
+
+  test("does not let a stale question reply clear a newer request", () => {
+    const question: QuestionRequest = {
+      id: "que_new",
+      sessionID: "ses_1",
+      questions: [],
+    }
+    const state: SyncLiveState = {
+      status: {},
+      pendingQuestions: { ses_1: question },
+      pendingPermissions: {},
+    }
+
+    const next = reduceSyncLiveEvent(state, {
+      type: "question.rejected",
+      properties: { sessionID: "ses_1", requestID: "que_old" },
+    })
+
+    expect(next).toBe(state)
+    expect(next.pendingQuestions.ses_1).toEqual(question)
+  })
+})
+
+describe("sync event buffer", () => {
+  test("releases buffered events in arrival order after completion", async () => {
+    const seen: number[] = []
+    const events = createEventBuffer<number>((event) => seen.push(event))
+
+    await events.during(async () => {
+      events.push(1)
+      events.push(2)
+      expect(seen).toEqual([])
+    })
+
+    expect(seen).toEqual([1, 2])
+  })
+
+  test("keeps only the newest events when the limit is reached", async () => {
+    const seen: number[] = []
+    const events = createEventBuffer<number>((event) => seen.push(event), 3)
+
+    await events.during(async () => {
+      events.push(1)
+      events.push(2)
+      events.push(3)
+      events.push(4)
+      events.push(5)
+    })
+
+    expect(seen).toEqual([3, 4, 5])
+  })
+
+  test("releases buffered events when the coordinated task fails", async () => {
+    const seen: string[] = []
+    const events = createEventBuffer<string>((event) => seen.push(event))
+
+    await expect(events.during(async () => {
+      events.push("live")
+      throw new Error("snapshot failed")
+    })).rejects.toThrow("snapshot failed")
+
+    expect(seen).toEqual(["live"])
+    events.push("after")
+    expect(seen).toEqual(["live", "after"])
+  })
+
+  test("applies live events after a stale snapshot", async () => {
+    const initial: SyncLiveState = { status: {}, pendingQuestions: {}, pendingPermissions: {} }
+    let state = initial
+    const events = createEventBuffer<{ type: string; properties?: unknown }>((event) => {
+      state = reduceSyncLiveEvent(state, event)
+    })
+
+    await events.during(async () => {
+      events.push({
+        type: "session.status",
+        properties: { sessionID: "ses_1", status: { type: "busy" } },
+      })
+      state = { ...state, status: { ses_1: { type: "idle" } } }
+    })
+
+    expect(state.status.ses_1).toEqual({ type: "busy" })
   })
 })

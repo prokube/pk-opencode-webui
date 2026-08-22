@@ -33,6 +33,13 @@ export default tseslint.config(
     }
   },
   {
+    files: ["src/**/*.tsx"],
+    rules: {
+      // Solid assigns variable refs through JSX, which this core rule cannot detect.
+      "no-unassigned-vars": "off"
+    }
+  },
+  {
     ignores: ["dist/**", "node_modules/**", "*.config.js", "src/sdk/**"]
   }
 )

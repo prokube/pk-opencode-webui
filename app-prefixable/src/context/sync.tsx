@@ -1,15 +1,25 @@
 import { createContext, useContext, createSignal, onCleanup, batch, type ParentProps } from "solid-js"
 import { createStore, reconcile, produce } from "solid-js/store"
-import type { Session, Message, Part, Provider } from "../sdk/client"
+import type {
+  Event,
+  Session,
+  Message,
+  Part,
+  ProviderListResponse,
+  SessionStatus,
+  QuestionRequest,
+  PermissionRequest,
+} from "../sdk/client"
 import { useSDK } from "./sdk"
 import { useServer } from "./server"
 import { createSSEParser, nextSSEReconnectDelay } from "../utils/sse"
+import { createEventBuffer } from "../utils/event-buffer"
 
-// Event type - looser than SDK type to handle all events
-type SyncEvent = {
-  type: string
-  properties: Record<string, unknown>
-}
+type LegacySyncEvent =
+  | { type: "message.created"; properties: MessageWithParts }
+  | { type: "provider.updated"; properties: ProviderData }
+
+type SyncEvent = Event | LegacySyncEvent
 
 type SyncEventHandler = (event: SyncEvent) => void
 
@@ -18,21 +28,23 @@ export type MessageWithParts = {
   parts: Part[]
 }
 
-type ProviderData = {
-  all: Provider[]
-  connected: string[]
-  default: Record<string, string>
-}
+export type ProviderData = ProviderListResponse
 
 type SyncStore = {
   ready: boolean
+  statusReady: boolean
   error: string | null
   session: Session[]
   archivedSession: Session[]
   message: Record<string, MessageWithParts[]>
   part: Record<string, Part[]>
   provider: ProviderData
+  status: Record<string, SessionStatus>
+  pendingQuestions: Record<string, QuestionRequest | undefined>
+  pendingPermissions: Record<string, PermissionRequest>
 }
+
+export type SyncLiveState = Pick<SyncStore, "status" | "pendingQuestions" | "pendingPermissions">
 
 interface SyncContextValue {
   data: SyncStore
@@ -43,11 +55,29 @@ interface SyncContextValue {
   messages: (sessionID: string) => MessageWithParts[]
   parts: (messageID: string) => Part[]
   providers: () => ProviderData
+  status: Record<string, SessionStatus>
+  statusReady: () => boolean
+  pendingQuestions: Record<string, QuestionRequest | undefined>
+  pendingPermissions: Record<string, PermissionRequest>
+  dismissQuestion: (sessionID: string, requestID: string) => void
+  setQuestion: (question: QuestionRequest) => void
+  dismissSessionStatus: (sessionID: string) => void
+  setSessionStatus: (sessionID: string, status: SessionStatus) => void
+  dismissPermission: (requestID: string) => void
+  setPermission: (permission: PermissionRequest) => void
   sseUnhealthy: () => boolean
   subscribe: (handler: SyncEventHandler) => () => void
   session: {
     sync: (sessionID: string) => Promise<boolean>
     get: (sessionID: string) => Session | undefined
+    upsert: (session: Session) => void
+    remove: (sessionID: string) => void
+  }
+  provider: {
+    invalidate: () => void
+    refresh: () => Promise<ProviderData | undefined>
+    updateConnected: (providerID: string, connected: boolean) => void
+    loading: () => boolean
   }
   refresh: () => Promise<void>
 }
@@ -138,6 +168,15 @@ export function mergeSessionMessages(existing: MessageWithParts[] | undefined, s
   return merged.sort((a, b) => cmp(a.info.id, b.info.id))
 }
 
+export function updateProviderConnected(data: ProviderData, providerID: string, connected: boolean) {
+  const current = data.connected.includes(providerID)
+  if (current === connected) return data
+  return {
+    ...data,
+    connected: connected ? [...data.connected, providerID] : data.connected.filter((id) => id !== providerID),
+  }
+}
+
 function messageUpdateParts(
   messages: MessageWithParts[],
   index: number | undefined,
@@ -171,6 +210,65 @@ function eventInfo<T>(props: Record<string, unknown>) {
   return (props.info ?? props) as T
 }
 
+export function reduceSyncLiveEvent(
+  state: SyncLiveState,
+  event: { type: string; properties?: unknown },
+): SyncLiveState {
+  const props = event.properties as Record<string, unknown> | undefined
+
+  if (event.type === "session.status") {
+    const sessionID = props?.sessionID
+    const status = props?.status
+    if (typeof sessionID !== "string" || !status) return state
+    return { ...state, status: { ...state.status, [sessionID]: status as SessionStatus } }
+  }
+
+  if (event.type === "session.idle") {
+    const sessionID = props?.sessionID
+    if (typeof sessionID !== "string") return state
+    return { ...state, status: { ...state.status, [sessionID]: { type: "idle" } } }
+  }
+
+  if (event.type === "question.asked") {
+    const question = event.properties as QuestionRequest
+    if (!question?.id || !question.sessionID) return state
+    return {
+      ...state,
+      pendingQuestions: { ...state.pendingQuestions, [question.sessionID]: question },
+    }
+  }
+
+  if (event.type === "question.replied" || event.type === "question.rejected") {
+    const sessionID = props?.sessionID
+    const requestID = props?.requestID
+    if (typeof sessionID !== "string") return state
+    const current = state.pendingQuestions[sessionID]
+    if (!current || (typeof requestID === "string" && current.id !== requestID)) return state
+    const pendingQuestions = { ...state.pendingQuestions }
+    delete pendingQuestions[sessionID]
+    return { ...state, pendingQuestions }
+  }
+
+  if (event.type === "permission.asked") {
+    const permission = event.properties as PermissionRequest
+    if (!permission?.id || !permission.sessionID) return state
+    return {
+      ...state,
+      pendingPermissions: { ...state.pendingPermissions, [permission.id]: permission },
+    }
+  }
+
+  if (event.type === "permission.replied") {
+    const requestID = props?.requestID
+    if (typeof requestID !== "string" || !state.pendingPermissions[requestID]) return state
+    const pendingPermissions = { ...state.pendingPermissions }
+    delete pendingPermissions[requestID]
+    return { ...state, pendingPermissions }
+  }
+
+  return state
+}
+
 function errorText(err: unknown) {
   if (err instanceof Error && err.message.trim()) return err.message
   return "Failed to bootstrap app state from API."
@@ -189,28 +287,79 @@ function binarySearch<T>(arr: T[], id: string, getId: (item: T) => string): { fo
   return { found: false, index: low }
 }
 
+export type SyncSessionState = Pick<SyncStore, "session" | "archivedSession">
+
+export function upsertSyncSession(state: SyncSessionState, session: Session): SyncSessionState {
+  const archived = !!session.time?.archived
+  const insert = (sessions: Session[]) => {
+    const next = sessions.filter((item) => item.id !== session.id)
+    const match = binarySearch(next, session.id, (item) => item.id)
+    next.splice(match.index, 0, session)
+    return next
+  }
+
+  return {
+    session: archived ? state.session.filter((item) => item.id !== session.id) : insert(state.session),
+    archivedSession: archived
+      ? insert(state.archivedSession)
+      : state.archivedSession.filter((item) => item.id !== session.id),
+  }
+}
+
+export function removeSyncSession(state: SyncSessionState, sessionID: string): SyncSessionState {
+  return {
+    session: state.session.filter((session) => session.id !== sessionID),
+    archivedSession: state.archivedSession.filter((session) => session.id !== sessionID),
+  }
+}
+
 export function SyncProvider(props: ParentProps) {
   const { client, directory, url: sdkUrl } = useSDK()
   const { authHeaders } = useServer()
 
   const [store, setStore] = createStore<SyncStore>({
     ready: false,
+    statusReady: !directory,
     error: null,
     session: [],
     archivedSession: [],
     message: {},
     part: {},
     provider: { all: [], connected: [], default: {} },
+    status: {},
+    pendingQuestions: {},
+    pendingPermissions: {},
   })
 
   const inflight = new Map<string, Promise<boolean>>()
   const handlers = new Set<SyncEventHandler>()
   const [sseUnhealthy, setSseUnhealthy] = createSignal(false)
+  const [providerLoading, setProviderLoading] = createSignal(false)
+  const events = createEventBuffer<SyncEvent>(handleEvent)
+  let bootstrapPromise: Promise<void> | undefined
+  let reconnectBootstrapPending = false
+  let providerRequests = 0
+  let providerVersion = 0
 
   // Connect to SSE endpoint using fetch (supports custom headers unlike EventSource)
   let abortController: AbortController | null = null
   let reconnectTimer: ReturnType<typeof setTimeout> | null = null
   let reconnectDelay = 3000
+
+  function applySessions(next: SyncSessionState) {
+    batch(() => {
+      setStore("session", reconcile(next.session, { key: "id" }))
+      setStore("archivedSession", reconcile(next.archivedSession, { key: "id" }))
+    })
+  }
+
+  function upsertSession(session: Session) {
+    applySessions(upsertSyncSession(store, session))
+  }
+
+  function removeSession(sessionID: string) {
+    applySessions(removeSyncSession(store, sessionID))
+  }
 
   async function connect() {
     if (abortController) return
@@ -234,10 +383,9 @@ export function SyncProvider(props: ParentProps) {
         throw new Error(`SSE connection failed: ${response.status}`)
       }
 
-      console.log("[Sync] Connected, bootstrapping...")
+      console.log("[Sync] Connected")
       connectedAt = Date.now()
       setSseUnhealthy(false)
-      if (!store.ready) bootstrap()
 
       const reader = response.body.getReader()
       const decoder = new TextDecoder()
@@ -245,7 +393,10 @@ export function SyncProvider(props: ParentProps) {
         try {
           const data = JSON.parse(rawData)
           const event = (data?.payload ?? data) as SyncEvent
-          if (event?.type) handleEvent(event)
+          if (event?.type) {
+            if (event.type === "server.connected" && bootstrapPromise) reconnectBootstrapPending = true
+            events.push(event)
+          }
         } catch (err) {
           console.error("[Sync] Parse error:", err)
         }
@@ -280,96 +431,46 @@ export function SyncProvider(props: ParentProps) {
   function handleEvent(event: SyncEvent) {
     const props = event.properties
 
+    const currentLive = {
+      status: store.status,
+      pendingQuestions: store.pendingQuestions,
+      pendingPermissions: store.pendingPermissions,
+    }
+    const live = directory ? reduceSyncLiveEvent(currentLive, event) : currentLive
+    batch(() => {
+      if (live.status !== store.status) setStore("status", reconcile(live.status))
+      if (live.pendingQuestions !== store.pendingQuestions) {
+        setStore("pendingQuestions", reconcile(live.pendingQuestions))
+      }
+      if (live.pendingPermissions !== store.pendingPermissions) {
+        setStore("pendingPermissions", reconcile(live.pendingPermissions))
+      }
+      if (directory && (event.type === "session.status" || event.type === "session.idle")) setStore("statusReady", true)
+    })
+
     // Session events
     if (event.type === "session.created") {
       const session = eventInfo<Session>(props)
       if (!session?.id) return
-      const target = session.time?.archived ? "archivedSession" : "session"
-      setStore(
-        target,
-        produce((draft: Session[]) => {
-          const match = binarySearch(draft, session.id, (s) => s.id)
-          if (!match.found) draft.splice(match.index, 0, session)
-        }),
-      )
+      upsertSession(session)
     }
 
     if (event.type === "session.updated") {
       const session = eventInfo<Session>(props)
       if (!session?.id) return
-      const wasArchived = binarySearch(store.archivedSession, session.id, (s) => s.id).found
-      const isArchived = !!session.time?.archived
-
-      // If archive status changed, move between lists
-      if (wasArchived && !isArchived) {
-        // Restored: remove from archived, add to active
-        setStore(
-          "archivedSession",
-          produce((draft: Session[]) => {
-            const match = binarySearch(draft, session.id, (s) => s.id)
-            if (match.found) draft.splice(match.index, 1)
-          }),
-        )
-        setStore(
-          "session",
-          produce((draft: Session[]) => {
-            const match = binarySearch(draft, session.id, (s) => s.id)
-            if (!match.found) draft.splice(match.index, 0, session)
-          }),
-        )
-      } else if (!wasArchived && isArchived) {
-        // Archived: remove from active, add to archived
-        setStore(
-          "session",
-          produce((draft: Session[]) => {
-            const match = binarySearch(draft, session.id, (s) => s.id)
-            if (match.found) draft.splice(match.index, 1)
-          }),
-        )
-        setStore(
-          "archivedSession",
-          produce((draft: Session[]) => {
-            const match = binarySearch(draft, session.id, (s) => s.id)
-            if (!match.found) draft.splice(match.index, 0, session)
-          }),
-        )
-      } else {
-        // No change in archive status, just update in place
-        const target = isArchived ? "archivedSession" : "session"
-        setStore(
-          target,
-          produce((draft: Session[]) => {
-            const match = binarySearch(draft, session.id, (s) => s.id)
-            if (match.found) draft[match.index] = session
-          }),
-        )
-      }
+      upsertSession(session)
     }
 
     if (event.type === "session.deleted") {
       const session = eventInfo<Session>(props)
       if (!session?.id) return
-      // Remove from both lists
-      setStore(
-        "session",
-        produce((draft: Session[]) => {
-          const match = binarySearch(draft, session.id, (s) => s.id)
-          if (match.found) draft.splice(match.index, 1)
-        }),
-      )
-      setStore(
-        "archivedSession",
-        produce((draft: Session[]) => {
-          const match = binarySearch(draft, session.id, (s) => s.id)
-          if (match.found) draft.splice(match.index, 1)
-        }),
-      )
+      removeSession(session.id)
       setStore("message", session.id, reconcile([]))
     }
 
     // Message part events - the main real-time update mechanism
     if (event.type === "message.part.updated") {
-      const part = props.part as Part
+      const part = event.properties.part
       if (!part?.sessionID || !part?.messageID) return
 
       // Update or insert the part
@@ -453,6 +554,7 @@ export function SyncProvider(props: ParentProps) {
     if (event.type === "provider.updated") {
       const data = props as unknown as ProviderData
       if (data) {
+        providerVersion += 1
         setStore("provider", data)
       }
     }
@@ -464,6 +566,14 @@ export function SyncProvider(props: ParentProps) {
         console.error("[Sync] Event subscriber failed:", err)
       }
     }
+
+    if (event.type === "server.connected") {
+      if (bootstrapPromise) {
+        reconnectBootstrapPending = true
+        return
+      }
+      void bootstrap()
+    }
   }
 
   function subscribe(handler: SyncEventHandler) {
@@ -471,30 +581,109 @@ export function SyncProvider(props: ParentProps) {
     return () => handlers.delete(handler)
   }
 
-  async function bootstrap() {
-    setStore("error", null)
-    try {
-      const [sessionsRes, providersRes] = await Promise.all([client.session.list(), client.provider.list()])
+  function bootstrap() {
+    if (bootstrapPromise) return bootstrapPromise
+    const providerVersionAtStart = providerVersion
+
+    const promise = events.during(async () => {
+      setStore("error", null)
+      const statusRequest = directory ? client.session.status({ directory }) : Promise.resolve(undefined)
+      const questionRequest = directory ? client.question.list({ directory }) : Promise.resolve(undefined)
+      const permissionRequest = directory ? client.permission.list({ directory }) : Promise.resolve(undefined)
+      const [sessionsResult, providersResult, statusResult, questionsResult, permissionsResult] = await Promise.allSettled([
+        client.session.list(),
+        client.provider.list(),
+        statusRequest,
+        questionRequest,
+        permissionRequest,
+      ])
 
       batch(() => {
-        const rawSessions = sessionsRes.data ?? []
-        const valid = rawSessions.filter((s: Session | undefined): s is Session => !!s?.id)
-        const sessions = valid.filter((s) => !s.time?.archived).sort((a, b) => cmp(a.id, b.id))
-        const archived = valid.filter((s) => !!s.time?.archived).sort((a, b) => cmp(a.id, b.id))
-        setStore("session", reconcile(sessions, { key: "id" }))
-        setStore("archivedSession", reconcile(archived, { key: "id" }))
-
-        if (providersRes.data) {
-          setStore("provider", providersRes.data as unknown as ProviderData)
+        if (sessionsResult.status === "fulfilled") {
+          const sessionsRes = sessionsResult.value
+          const rawSessions = sessionsRes.data ?? []
+          const valid = rawSessions.filter((s: Session | undefined): s is Session => !!s?.id)
+          const sessions = valid.filter((s) => !s.time?.archived).sort((a, b) => cmp(a.id, b.id))
+          const archived = valid.filter((s) => !!s.time?.archived).sort((a, b) => cmp(a.id, b.id))
+          setStore("session", reconcile(sessions, { key: "id" }))
+          setStore("archivedSession", reconcile(archived, { key: "id" }))
         }
 
+        if (providersResult.status === "fulfilled" && providerVersion === providerVersionAtStart) {
+          const providersRes = providersResult.value
+          if (providersRes.data) {
+            setStore("provider", providersRes.data as unknown as ProviderData)
+          }
+        }
+
+        if (statusResult.status === "fulfilled") {
+          const statuses = statusResult.value?.data ?? {}
+          setStore("status", reconcile(statuses as Record<string, SessionStatus>))
+        }
+
+        if (questionsResult.status === "fulfilled") {
+          const questions = questionsResult.value?.data ?? []
+          const pending = Object.fromEntries(
+            questions.filter((question) => !!question?.id && !!question.sessionID).map((question) => [question.sessionID, question]),
+          )
+          setStore("pendingQuestions", reconcile(pending))
+        }
+
+        if (permissionsResult.status === "fulfilled") {
+          const permissions = permissionsResult.value?.data ?? []
+          const pending = Object.fromEntries(
+            permissions.filter((permission) => !!permission?.id).map((permission) => [permission.id, permission]),
+          )
+          setStore("pendingPermissions", reconcile(pending))
+        }
+
+        setStore("statusReady", true)
         setStore("ready", true)
+
+        const coreError = sessionsResult.status === "rejected"
+          ? sessionsResult.reason
+          : providersResult.status === "rejected"
+            ? providersResult.reason
+            : undefined
+        if (coreError) setStore("error", errorText(coreError))
       })
 
+      if (sessionsResult.status === "rejected") console.error("[Sync] Failed to load sessions:", sessionsResult.reason)
+      if (providersResult.status === "rejected") console.error("[Sync] Failed to load providers:", providersResult.reason)
+      if (statusResult.status === "rejected") console.error("[Sync] Failed to load statuses:", statusResult.reason)
+      if (questionsResult.status === "rejected") console.error("[Sync] Failed to load questions:", questionsResult.reason)
+      if (permissionsResult.status === "rejected") console.error("[Sync] Failed to load permissions:", permissionsResult.reason)
+
       console.log("[Sync] Bootstrap complete, sessions:", store.session.length)
+    })
+
+    bootstrapPromise = promise
+    promise.finally(() => {
+      if (bootstrapPromise !== promise) return
+      bootstrapPromise = undefined
+      if (!reconnectBootstrapPending) return
+      reconnectBootstrapPending = false
+      void bootstrap()
+    })
+    return promise
+  }
+
+  async function refreshProvider() {
+    const version = ++providerVersion
+    providerRequests += 1
+    setProviderLoading(true)
+    try {
+      const res = await client.provider.list()
+      if (!res.data) return undefined
+      if (version !== providerVersion) return store.provider
+      setStore("provider", reconcile(res.data))
+      return res.data
     } catch (err) {
-      console.error("[Sync] Bootstrap failed:", err)
-      setStore("error", errorText(err))
+      console.error("[Sync] Failed to load providers:", err)
+      return undefined
+    } finally {
+      providerRequests -= 1
+      if (providerRequests === 0) setProviderLoading(false)
     }
   }
 
@@ -512,32 +701,7 @@ export function SyncProvider(props: ParentProps) {
         batch(() => {
           // Update session in appropriate list and remove from other list
           if (sessionRes.data) {
-            const session = sessionRes.data
-            const isArchived = !!session.time?.archived
-            const target = isArchived ? "archivedSession" : "session"
-            const other = isArchived ? "session" : "archivedSession"
-
-            // Remove from the other list to ensure session exists in exactly one list
-            setStore(
-              other,
-              produce((draft: Session[]) => {
-                const match = binarySearch(draft, sessionID, (s) => s.id)
-                if (match.found) draft.splice(match.index, 1)
-              }),
-            )
-
-            // Add/update in target list
-            setStore(
-              target,
-              produce((draft: Session[]) => {
-                const match = binarySearch(draft, sessionID, (s) => s.id)
-                if (match.found) {
-                  draft[match.index] = session
-                } else {
-                  draft.splice(match.index, 0, session)
-                }
-              }),
-            )
+            upsertSession(sessionRes.data)
           }
 
           // Merge messages - preserve newer SSE updates
@@ -569,11 +733,10 @@ export function SyncProvider(props: ParentProps) {
     return promise
   }
 
-  async function refresh() {
-    await bootstrap()
-  }
+  const refresh = () => bootstrap()
 
-  // Start connection
+  // REST state must not wait for the SSE response or handshake.
+  bootstrap()
   connect()
 
   onCleanup(() => {
@@ -597,6 +760,37 @@ export function SyncProvider(props: ParentProps) {
     messages: (sessionID: string) => store.message[sessionID] ?? [],
     parts: (messageID: string) => store.part[messageID] ?? [],
     providers: () => store.provider,
+    get status() {
+      return store.status
+    },
+    statusReady: () => store.statusReady,
+    get pendingQuestions() {
+      return store.pendingQuestions
+    },
+    get pendingPermissions() {
+      return store.pendingPermissions
+    },
+    dismissQuestion: (sessionID: string, requestID: string) => {
+      if (store.pendingQuestions[sessionID]?.id !== requestID) return
+      setStore("pendingQuestions", produce((pending) => {
+        delete pending[sessionID]
+      }))
+    },
+    setQuestion: (question: QuestionRequest) => setStore("pendingQuestions", question.sessionID, question),
+    dismissSessionStatus: (sessionID: string) => {
+      if (!store.status[sessionID]) return
+      setStore("status", produce((status) => {
+        delete status[sessionID]
+      }))
+    },
+    setSessionStatus: (sessionID: string, status: SessionStatus) => setStore("status", sessionID, status),
+    dismissPermission: (requestID: string) => {
+      if (!store.pendingPermissions[requestID]) return
+      setStore("pendingPermissions", produce((pending) => {
+        delete pending[requestID]
+      }))
+    },
+    setPermission: (permission: PermissionRequest) => setStore("pendingPermissions", permission.id, permission),
     sseUnhealthy,
     subscribe,
     session: {
@@ -608,6 +802,19 @@ export function SyncProvider(props: ParentProps) {
         const archived = binarySearch(store.archivedSession, sessionID, (s: Session) => s.id)
         return archived.found ? store.archivedSession[archived.index] : undefined
       },
+      upsert: upsertSession,
+      remove: removeSession,
+    },
+    provider: {
+      invalidate: () => {
+        providerVersion += 1
+      },
+      refresh: refreshProvider,
+      updateConnected: (providerID: string, connected: boolean) => {
+        providerVersion += 1
+        setStore("provider", updateProviderConnected(store.provider, providerID, connected))
+      },
+      loading: providerLoading,
     },
     refresh,
   }

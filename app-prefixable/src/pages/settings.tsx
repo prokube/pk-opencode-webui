@@ -1,5 +1,4 @@
 import { createSignal, For, Show, type JSX, createMemo, onMount, onCleanup, createEffect } from "solid-js"
-import { Portal } from "solid-js/web"
 import { Spinner } from "../components/ui/spinner"
 import { useProviders } from "../context/providers"
 import { useMCP } from "../context/mcp"
@@ -9,22 +8,15 @@ import { useConfig } from "../context/config"
 import { MCPAddDialog } from "../components/mcp-add-dialog"
 import { ConfirmDialog } from "../components/confirm-dialog"
 import { Button } from "../components/ui/button"
-import { Check, Copy, Plug, GitBranch, Server, Globe, ExternalLink, Key, Search, X, Trash2, BookmarkPlus, Pencil, Palette, Sun, Moon, Monitor, BookOpen, Plus, Save, Bell, Play, Settings2, Code, Shield, Cpu, Wrench, ChevronDown, ChevronRight, Info } from "lucide-solid"
-import { SOUND_OPTIONS, readNotificationSettings, writeNotificationSettings, playSound, primeAudioContext, NOTIFICATION_STORAGE_KEY, type NotificationSettings } from "../utils/notifications"
-import { useSavedPrompts, type PromptScope } from "../context/saved-prompts"
+import { Check, Copy, Plug, GitBranch, Server, Globe, ExternalLink, Key, Search, X, Trash2, Pencil, Palette, Sun, Moon, Monitor, BookOpen, Plus, Save, Settings2, Code, Shield, Cpu, Wrench, ChevronDown, ChevronRight, Info } from "lucide-solid"
 import { useTheme } from "../context/theme"
 import { useServer } from "../context/server"
 import { useOptionalPermission } from "../context/permission"
 import { ServerDialog } from "../components/server-dialog"
 import { SETTINGS_BASE_TABS } from "./settings-tabs"
-import { TelegramSettings } from "../components/telegram-settings"
-import { invalidateTelegramSourceIdCache, writeFile } from "../utils/extended-api"
-import { ALARM_CHANNELS_STORAGE_KEY, readAlarmChannels, writeAlarmChannels, type AlarmChannels } from "../utils/notify"
+import { writeFile } from "../utils/extended-api"
 import { OPENAI_BROWSER_OAUTH_UNSUPPORTED_MESSAGE, browserOAuthUnsupported, extractProviderAuthCode, providerOAuthMethodUnsupported } from "../utils/provider-auth"
-import type { TelegramHealthResponse, TelegramSettingsResponse } from "../utils/telegram-settings"
 import type { Config, PermissionActionConfig } from "../sdk/client"
-
-const TELEGRAM_ALARM_FIELD = "telegramAlarmChannelEnabled"
 
 // Connected via environment or built-in defaults, not removable by auth.remove.
 const NON_REMOVABLE_PROVIDER_IDS = new Set(["amazon-bedrock", "opencode"])
@@ -57,131 +49,12 @@ export function Settings() {
   const [mcpLoading, setMcpLoading] = createSignal<string | null>(null)
   const [mcpDeleting, setMcpDeleting] = createSignal<string | null>(null)
   const [mcpToDelete, setMcpToDelete] = createSignal<string | null>(null)
-
-  // Saved prompts
-  const savedPrompts = useSavedPrompts()
-  const [promptDialogOpen, setPromptDialogOpen] = createSignal(false)
-  const [editingPromptId, setEditingPromptId] = createSignal<string | null>(null)
-  const [promptTitle, setPromptTitle] = createSignal("")
-  const [promptText, setPromptText] = createSignal("")
-  const [promptScope, setPromptScope] = createSignal<PromptScope>("global")
-  const [promptToDelete, setPromptToDelete] = createSignal<string | null>(null)
-  const [promptSaveError, setPromptSaveError] = createSignal<string | null>(null)
-
-  // Notification settings
-  const [notificationSettings, setNotificationSettings] = createSignal<NotificationSettings>(readNotificationSettings())
-  const [alarmChannels, setAlarmChannels] = createSignal<AlarmChannels>(readAlarmChannels())
-  const [telegramAlarmReady, setTelegramAlarmReady] = createSignal(false)
-  const [telegramAlarmSaving, setTelegramAlarmSaving] = createSignal(false)
-  const [telegramAlarmHint, setTelegramAlarmHint] = createSignal("Telegram bridge health check has not run yet.")
-  const [telegramAlarmRestartRequired, setTelegramAlarmRestartRequired] = createSignal(false)
-  const telegramAlarmHintText = createMemo(() => {
-    const hint = telegramAlarmHint()
-    if (!telegramAlarmRestartRequired()) return hint
-    return `${hint} Restart Telegram bridge before this change takes effect.`
-  })
-
-  // Keep notificationSettings in sync with localStorage changes from other tabs
-  onMount(() => {
-    function handleStorage(e: StorageEvent) {
-      if (e.key === NOTIFICATION_STORAGE_KEY) setNotificationSettings(readNotificationSettings())
-      if (e.key === ALARM_CHANNELS_STORAGE_KEY) setAlarmChannels(readAlarmChannels())
-    }
-    window.addEventListener("storage", handleStorage)
-    onCleanup(() => window.removeEventListener("storage", handleStorage))
-  })
-
-  function updateNotificationSettings(patch: Partial<NotificationSettings>) {
-    const next = { ...notificationSettings(), ...patch }
-    setNotificationSettings(next)
-    writeNotificationSettings(next)
-  }
-
-  function updateAlarmChannels(patch: Partial<AlarmChannels>) {
-    const next = { ...alarmChannels(), ...patch }
-    setAlarmChannels(next)
-    writeAlarmChannels(next)
-  }
-
-  async function loadTelegramAlarmState() {
-    const [settingsRes, healthRes] = await Promise.all([
-      fetch(`${basePath.serverUrl}/api/ext/telegram/settings`).catch(() => null),
-      fetch(`${basePath.serverUrl}/api/ext/telegram/health`).catch(() => null),
-    ])
-
-    const settings = settingsRes?.ok
-      ? await settingsRes.json().catch(() => null) as TelegramSettingsResponse | null
-      : null
-    if (settings?.settings) {
-      updateAlarmChannels({ telegram: settings.settings.telegramAlarmChannelEnabled })
-    }
-
-    if (!healthRes?.ok) {
-      setTelegramAlarmReady(false)
-      setTelegramAlarmHint("Telegram bridge is not reachable. Configure the bridge on the Telegram tab, then refresh this page.")
-      return
-    }
-    const data = await healthRes.json().catch(() => null) as TelegramHealthResponse | null
-    const dependencyOk = data?.dependencies?.telegramApi?.status === "ok"
-      && data?.dependencies?.openCodeApi?.status === "ok"
-    const ready = data?.status === "healthy"
-      && !!data?.bridgeReachable
-      && data?.process?.status === "up"
-      && data?.config?.status === "ok"
-      && !!data?.config?.tokenConfigured
-      && dependencyOk
-    setTelegramAlarmReady(ready)
-    if (ready) {
-      setTelegramAlarmHint("Telegram channel is ready. This toggle controls proactive Telegram pings for bell-enabled sessions.")
-      return
-    }
-    const issues = (data?.messages || []).map((item) => item.text.trim()).filter(Boolean)
-    const summary = issues.length ? issues.join(" ") : "Telegram alarms need a healthy bridge, valid bot token, and passing dependency checks before they can be enabled."
-    const state = data?.status === "degraded" ? "degraded" : data?.status === "down" ? "down" : "not healthy"
-    setTelegramAlarmHint(`Telegram bridge is ${state}. ${summary}`)
-  }
-
-  async function toggleTelegramAlarmChannel() {
-    if (telegramAlarmSaving()) return
-    const current = alarmChannels().telegram
-    if (!telegramAlarmReady() && !current) return
-
-    setTelegramAlarmSaving(true)
-    const target = !current
-    const res = await fetch(`${basePath.serverUrl}/api/ext/telegram/settings`, {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ settings: { telegramAlarmChannelEnabled: target } }),
-    }).catch(() => null)
-    setTelegramAlarmSaving(false)
-
-    if (!res?.ok) {
-      setTelegramAlarmHint("Failed to update Telegram channel setting. Check Telegram tab configuration and retry.")
-      void loadTelegramAlarmState()
-      return
-    }
-
-    invalidateTelegramSourceIdCache(basePath.serverUrl)
-
-    const data = await res.json().catch(() => null) as (TelegramSettingsResponse & {
-      restartRequired?: boolean
-      restartRequiredFields?: string[]
-    }) | null
-    const enabled = data?.settings?.telegramAlarmChannelEnabled
-    if (typeof enabled === "boolean") {
-      updateAlarmChannels({ telegram: enabled })
-    }
-    const restartRequired = !!data?.restartRequired
-      || !!data?.restartRequiredFields?.includes(TELEGRAM_ALARM_FIELD)
-    setTelegramAlarmRestartRequired(restartRequired)
-    void loadTelegramAlarmState()
-  }
+  const { basePath } = useBasePath()
 
   // Provider search
   const [providerSearch, setProviderSearch] = createSignal("")
 
   // Instructions state
-  const basePath = useBasePath()
   const [instructionPaths, setInstructionPaths] = createSignal<string[]>([])
   const [instructionContents, setInstructionContents] = createSignal<Record<string, { content: string; exists: boolean }>>({})
   const [instructionEdits, setInstructionEdits] = createSignal<Record<string, string>>({})
@@ -260,9 +133,6 @@ export function Settings() {
       setInstructionLoaded(true)
       loadInstructions()
     }
-    if (tabId === "notifications") {
-      void loadTelegramAlarmState()
-    }
   }
 
   // Load SSH key on mount if starting on git tab
@@ -274,9 +144,6 @@ export function Settings() {
     if (activeTab() === "instructions" && directory && !instructionLoaded()) {
       setInstructionLoaded(true)
       loadInstructions()
-    }
-    if (activeTab() === "notifications") {
-      void loadTelegramAlarmState()
     }
   })
 
@@ -488,7 +355,7 @@ export function Settings() {
 
     setInstructionSaving(path)
     setInstructionError(null)
-    const ok = await writeFile(basePath.serverUrl, absolute, content)
+    const ok = await writeFile(url, absolute, content)
     setInstructionSaving(null)
     if (!ok) {
       setInstructionError(`Failed to save ${path}`)
@@ -531,7 +398,7 @@ Add your project-specific instructions here.
     const agentsData = existingAgents?.data as { content?: string } | undefined
     if (!agentsData?.content) {
       // File doesn't exist — write the template
-      const ok = await writeFile(basePath.serverUrl, agentsPath, template)
+      const ok = await writeFile(url, agentsPath, template)
       if (!ok) {
         setInstructionError("Failed to create AGENTS.md")
         setInstructionCreating(false)
@@ -689,7 +556,7 @@ Add your project-specific instructions here.
   }
 
   function oauthMethodUnsupported(providerID: string, label: string) {
-    return providerOAuthMethodUnsupported({ providerID, label, browserHostname: window.location.hostname, basePath: basePath.basePath })
+    return providerOAuthMethodUnsupported({ providerID, label, browserHostname: window.location.hostname, basePath })
   }
 
   async function handleOAuthComplete() {
@@ -753,92 +620,6 @@ Add your project-specific instructions here.
     }
   }
 
-  function openAddPromptDialog() {
-    if (savedPrompts.error()) return
-    setPromptSaveError(null)
-    setEditingPromptId(null)
-    setPromptTitle("")
-    setPromptText("")
-    setPromptScope(savedPrompts.canUseProjectScope() ? "project" : "global")
-    setPromptDialogOpen(true)
-  }
-
-  function openEditPromptDialog(id: string) {
-    const prompt = savedPrompts.prompts().find((p) => p.id === id)
-    if (!prompt) return
-    setPromptSaveError(null)
-    setEditingPromptId(id)
-    setPromptTitle(prompt.title)
-    setPromptText(prompt.text)
-    setPromptScope(prompt.scope)
-    setPromptDialogOpen(true)
-  }
-
-  async function savePromptDialog() {
-    if (savedPrompts.error()) return
-    const title = promptTitle().trim()
-    const text = promptText().trim()
-    if (!title || !text) return
-    setPromptSaveError(null)
-
-    const fail = (msg?: string) => {
-      setPromptSaveError(msg || savedPrompts.saveError() || "Failed to save prompts. Please retry.")
-    }
-
-    const editing = editingPromptId()
-    if (editing) {
-      const existing = savedPrompts.prompts().find((p) => p.id === editing)
-      if (existing && (existing.title !== title || existing.text !== text)) {
-        const ok = await savedPrompts.update(editing, { title, text })
-        if (!ok) {
-          fail()
-          return
-        }
-      }
-      if (existing && existing.scope !== promptScope()) {
-        // Scope changed — move across stores while preserving id/createdAt
-        // Update first so text/title changes are retained when moving to
-        // a non-active project store.
-        const ok = await savedPrompts.move(editing, promptScope())
-        if (!ok) {
-          fail()
-          return
-        }
-      }
-      if (!existing) {
-        const ok = await savedPrompts.add(title, text, promptScope())
-        if (!ok) {
-          fail()
-          return
-        }
-      }
-    } else {
-      const ok = await savedPrompts.add(title, text, promptScope())
-      if (!ok) {
-        fail()
-        return
-      }
-    }
-    setPromptDialogOpen(false)
-    setEditingPromptId(null)
-    setPromptTitle("")
-    setPromptText("")
-  }
-
-  function confirmPromptDelete() {
-    if (savedPrompts.error()) return
-    setPromptSaveError(null)
-    const id = promptToDelete()
-    if (!id) return
-    savedPrompts.remove(id).then((ok) => {
-      if (!ok) {
-        setPromptSaveError(savedPrompts.saveError() || "Failed to delete prompt. Please retry.")
-        return
-      }
-      setPromptToDelete(null)
-    })
-  }
-
   // Scope badge type for each tab
   type ScopeBadge = "Global" | "Project" | "Global + Project" | null
 
@@ -848,8 +629,6 @@ Add your project-specific instructions here.
       { id: "servers", label: "Servers", icon: () => <Globe class="w-4 h-4" />, scope: "Global" },
       { id: "git", label: "Git", icon: () => <GitBranch class="w-4 h-4" />, scope: "Global" },
       { id: "mcp", label: "MCP Servers", icon: () => <Server class="w-4 h-4" />, scope: "Global + Project" },
-      { id: "telegram", label: "Telegram", icon: () => <Cpu class="w-4 h-4" />, scope: "Global" },
-      { id: "prompts", label: "Prompts", icon: () => <BookmarkPlus class="w-4 h-4" />, scope: directory ? "Global + Project" : "Global" },
       { id: "instructions", label: "Instructions", icon: () => <BookOpen class="w-4 h-4" />, scope: directory ? "Project" : null },
     ]
     // Only show Project Config tab when a project directory is selected
@@ -857,7 +636,6 @@ Add your project-specific instructions here.
       base.push({ id: "config", label: "Project Config", icon: () => <Settings2 class="w-4 h-4" />, scope: "Project" })
     }
     base.push({ id: "appearance", label: "Appearance", icon: () => <Palette class="w-4 h-4" />, scope: null })
-    base.push({ id: "notifications", label: "Notifications", icon: () => <Bell class="w-4 h-4" />, scope: null })
     return base
   })
 
@@ -2071,148 +1849,6 @@ Add your project-specific instructions here.
             </div>
           </Show>
 
-          {/* Telegram Tab */}
-          <Show when={activeTab() === "telegram"}>
-            <TelegramSettings serverUrl={basePath.serverUrl} />
-          </Show>
-
-          {/* Prompts Tab */}
-          <Show when={activeTab() === "prompts"}>
-            <div class="space-y-6">
-              <header>
-                <h1 class="text-lg font-medium" style={{ color: "var(--text-strong)" }}>
-                  Saved Prompts
-                </h1>
-                <p class="text-sm mt-1" style={{ color: "var(--text-weak)" }}>
-                  Create reusable prompts for quick access from the welcome screen or /prompt command.
-                  {directory
-                    ? " Global prompts are available in all projects; project prompts are scoped to this project."
-                    : " Prompts shown here are available in all projects."}
-                </p>
-              </header>
-
-              <section
-                class="rounded-lg overflow-hidden"
-                style={{
-                  background: "var(--background-base)",
-                  border: "1px solid var(--border-base)",
-                }}
-              >
-                <div
-                  class="px-4 py-3 flex items-center justify-between"
-                  style={{ "border-bottom": "1px solid var(--border-base)" }}
-                >
-                  <h2 class="text-sm font-medium" style={{ color: "var(--text-strong)" }}>
-                    Prompts ({savedPrompts.prompts().length})
-                  </h2>
-                  <Button onClick={openAddPromptDialog} variant="primary" size="sm" disabled={savedPrompts.loading() || !!savedPrompts.error()}>
-                    + Add Prompt
-                  </Button>
-                </div>
-
-                <Show when={savedPrompts.error()}>
-                  <div class="px-4 py-3 text-sm" style={{ color: "var(--interactive-critical)", "border-bottom": "1px solid var(--border-base)" }}>
-                    {savedPrompts.error()}
-                  </div>
-                </Show>
-
-                <Show when={!savedPrompts.error() && (promptSaveError() || savedPrompts.saveError())}>
-                  <div class="px-4 py-3 text-sm" style={{ color: "var(--interactive-critical)", "border-bottom": "1px solid var(--border-base)" }}>
-                    {promptSaveError() || savedPrompts.saveError()}
-                  </div>
-                </Show>
-
-                <Show when={savedPrompts.loading()}>
-                  <div class="p-4">
-                    <div class="flex items-center gap-2" style={{ color: "var(--text-weak)" }}>
-                      <Spinner class="w-4 h-4" />
-                      <span class="text-sm">Loading saved prompts...</span>
-                    </div>
-                  </div>
-                </Show>
-
-                <Show when={!savedPrompts.loading() && !savedPrompts.error() && savedPrompts.prompts().length === 0}>
-                  <div class="p-6 text-center">
-                    <p class="text-sm" style={{ color: "var(--text-weak)" }}>
-                      No saved prompts yet.
-                    </p>
-                    <button
-                      onClick={openAddPromptDialog}
-                      disabled={savedPrompts.loading() || !!savedPrompts.error()}
-                      class="mt-2 text-sm hover:underline"
-                      style={{ color: "var(--text-interactive-base)" }}
-                    >
-                      Create your first prompt
-                    </button>
-                  </div>
-                </Show>
-
-                <Show when={!savedPrompts.loading() && !savedPrompts.error() && savedPrompts.prompts().length > 0}>
-                  <div class="divide-y" style={{ "border-color": "var(--border-base)" }}>
-                    <For each={savedPrompts.prompts()}>
-                      {(prompt) => (
-                        <div class="px-4 py-3 flex items-start justify-between gap-4">
-                          <div class="flex-1 min-w-0">
-                            <div class="flex items-center gap-2">
-                              <div class="font-medium text-sm truncate" style={{ color: "var(--text-strong)" }}>
-                                {prompt.title}
-                              </div>
-                              <span
-                                class="text-[10px] px-1.5 py-0.5 rounded shrink-0"
-                                style={{
-                                  background: "var(--surface-inset)",
-                                  color: "var(--text-weak)",
-                                }}
-                              >
-                                {prompt.scope === "project" ? "Project" : "Global"}
-                              </span>
-                            </div>
-                            <p
-                              class="text-xs mt-0.5 line-clamp-2"
-                              style={{ color: "var(--text-weak)" }}
-                            >
-                              {prompt.text.length > 120 ? prompt.text.slice(0, 120) + "..." : prompt.text}
-                            </p>
-                          </div>
-                          <div class="flex items-center gap-1 shrink-0">
-                            <button
-                              onClick={() => openEditPromptDialog(prompt.id)}
-                              disabled={!!savedPrompts.error()}
-                              class="p-1.5 rounded transition-colors"
-                              style={{ color: "var(--text-weak)" }}
-                              onMouseEnter={(e) => {
-                                e.currentTarget.style.background = "var(--surface-inset)"
-                                e.currentTarget.style.color = "var(--text-strong)"
-                              }}
-                              onMouseLeave={(e) => {
-                                e.currentTarget.style.background = "transparent"
-                                e.currentTarget.style.color = "var(--text-weak)"
-                              }}
-                              title="Edit prompt"
-                              aria-label="Edit prompt"
-                            >
-                              <Pencil class="w-4 h-4" />
-                            </button>
-                            <button
-                              onClick={() => setPromptToDelete(prompt.id)}
-                              disabled={!!savedPrompts.error()}
-                              class="p-1.5 rounded transition-colors opacity-50 hover:opacity-100"
-                              style={{ color: "var(--icon-critical-base)" }}
-                              title="Delete prompt"
-                              aria-label="Delete prompt"
-                            >
-                              <Trash2 class="w-4 h-4" />
-                            </button>
-                          </div>
-                        </div>
-                      )}
-                    </For>
-                  </div>
-                </Show>
-              </section>
-            </div>
-          </Show>
-
           {/* Instructions Tab */}
           <Show when={activeTab() === "instructions"}>
             <div class="space-y-6">
@@ -2507,203 +2143,6 @@ Add your project-specific instructions here.
             </div>
           </Show>
 
-          {/* Notifications Tab */}
-          <Show when={activeTab() === "notifications"}>
-            <div class="space-y-6">
-              <header>
-                <h1 class="text-lg font-medium" style={{ color: "var(--text-strong)" }}>
-                  Notifications
-                </h1>
-                <p class="text-sm mt-1" style={{ color: "var(--text-weak)" }}>
-                  Configure browser and Telegram alarm channels for notification-worthy events (task complete, permission request, agent question)
-                </p>
-              </header>
-
-              <section
-                class="rounded-lg overflow-hidden"
-                style={{
-                  background: "var(--background-base)",
-                  border: "1px solid var(--border-base)",
-                }}
-              >
-                <div class="px-4 py-3" style={{ "border-bottom": "1px solid var(--border-base)" }}>
-                  <h2 class="text-sm font-medium" style={{ color: "var(--text-strong)" }}>
-                    Alarm Channels
-                  </h2>
-                </div>
-
-                <div class="p-4 space-y-4">
-                  <div class="flex items-start justify-between gap-4">
-                    <div class="flex-1 min-w-0">
-                      <h3 class="text-sm font-medium" style={{ color: "var(--text-strong)" }}>
-                        Browser alarm channel
-                      </h3>
-                      <p class="text-xs mt-1" style={{ color: "var(--text-weak)" }}>
-                        Delivers tab flash and browser notifications for bell-enabled sessions. Sound playback still depends on Enable Sound below.
-                      </p>
-                    </div>
-                    <button
-                      type="button"
-                      onClick={() => updateAlarmChannels({ browser: !alarmChannels().browser })}
-                      class="relative w-10 h-5 rounded-full transition-colors"
-                      style={{
-                        background: alarmChannels().browser ? "var(--interactive-base)" : "var(--surface-inset)",
-                      }}
-                      role="switch"
-                      aria-checked={alarmChannels().browser}
-                      aria-label="Toggle browser alarm channel"
-                    >
-                      <div
-                        class="absolute top-0.5 w-4 h-4 rounded-full transition-all"
-                        style={{
-                          background: "var(--background-base)",
-                          left: alarmChannels().browser ? "calc(100% - 18px)" : "2px",
-                        }}
-                      />
-                    </button>
-                  </div>
-
-                  <div class="flex items-start justify-between gap-4">
-                    <div class="flex-1 min-w-0">
-                      <h3 class="text-sm font-medium" style={{ color: "var(--text-strong)" }}>
-                        Telegram alarm channel
-                      </h3>
-                      <p id="telegram-alarm-hint" class="text-xs mt-1" style={{ color: telegramAlarmReady() && !telegramAlarmRestartRequired() ? "var(--text-weak)" : "var(--icon-warning-base)" }}>
-                        {telegramAlarmHintText()}
-                      </p>
-                      <p id="telegram-alarm-fallback" class="text-xs mt-1" style={{ color: "var(--text-weak)" }}>
-                        If proactive alerts are missed or disabled, use <code class="px-1 py-0.5 rounded" style={{ background: "var(--surface-inset)" }}>/pending</code> in Telegram for fallback/history.
-                      </p>
-                    </div>
-                    <button
-                      type="button"
-                      onClick={() => void toggleTelegramAlarmChannel()}
-                      disabled={telegramAlarmSaving() || (!telegramAlarmReady() && !alarmChannels().telegram)}
-                      class="relative w-10 h-5 rounded-full transition-colors disabled:opacity-50"
-                      style={{
-                        background: alarmChannels().telegram ? "var(--interactive-base)" : "var(--surface-inset)",
-                      }}
-                      role="switch"
-                      aria-checked={alarmChannels().telegram}
-                      aria-label="Toggle Telegram alarm channel"
-                      aria-describedby="telegram-alarm-hint telegram-alarm-fallback"
-                    >
-                      <div
-                        class="absolute top-0.5 w-4 h-4 rounded-full transition-all"
-                        style={{
-                          background: "var(--background-base)",
-                          left: alarmChannels().telegram ? "calc(100% - 18px)" : "2px",
-                        }}
-                      />
-                    </button>
-                  </div>
-                </div>
-              </section>
-
-              <section
-                class="rounded-lg overflow-hidden"
-                style={{
-                  background: "var(--background-base)",
-                  border: "1px solid var(--border-base)",
-                }}
-              >
-                <div class="px-4 py-3 flex items-center justify-between" style={{ "border-bottom": "1px solid var(--border-base)" }}>
-                  <h2 class="text-sm font-medium" style={{ color: "var(--text-strong)" }}>
-                    Enable Sound
-                  </h2>
-                  <button
-                    onClick={() => {
-                      const enabling = !notificationSettings().enabled
-                      updateNotificationSettings({ enabled: enabling })
-                      if (enabling) primeAudioContext()
-                    }}
-                    class="relative w-10 h-5 rounded-full transition-colors"
-                    style={{
-                      background: notificationSettings().enabled ? "var(--interactive-base)" : "var(--surface-inset)",
-                    }}
-                    role="switch"
-                    aria-checked={notificationSettings().enabled}
-                    aria-label="Enable sound notifications"
-                  >
-                    <div
-                      class="absolute top-0.5 w-4 h-4 rounded-full transition-all"
-                      style={{
-                        background: "var(--background-base)",
-                        left: notificationSettings().enabled ? "calc(100% - 18px)" : "2px",
-                      }}
-                    />
-                  </button>
-                </div>
-
-                <div class="p-4">
-                  <p class="text-xs mb-3" style={{ color: "var(--text-weak)" }}>
-                    Sound only plays for sessions with the bell icon enabled. Enable the bell on individual sessions from the chat header.
-                  </p>
-
-                  <div class="space-y-2">
-                    <label class="block text-sm font-medium" style={{ color: "var(--text-base)" }}>
-                      Notification Sound
-                    </label>
-                    <div class="space-y-1">
-                      <For each={SOUND_OPTIONS}>
-                        {(option) => (
-                          <label
-                            for={`sound-option-${option.id}`}
-                            class="flex items-center justify-between px-3 py-2 rounded-md transition-colors cursor-pointer"
-                            style={{
-                              background: notificationSettings().sound === option.id ? "var(--surface-inset)" : "transparent",
-                              border: notificationSettings().sound === option.id ? "1px solid var(--interactive-base)" : "1px solid transparent",
-                            }}
-                            onMouseEnter={(e) => {
-                              if (notificationSettings().sound !== option.id) e.currentTarget.style.background = "var(--surface-inset)"
-                            }}
-                            onMouseLeave={(e) => {
-                              if (notificationSettings().sound !== option.id) e.currentTarget.style.background = "transparent"
-                            }}
-                          >
-                            <div class="flex items-center gap-3">
-                              <input
-                                id={`sound-option-${option.id}`}
-                                type="radio"
-                                name="sound"
-                                value={option.id}
-                                checked={notificationSettings().sound === option.id}
-                                class="accent-[var(--interactive-base)]"
-                                onChange={(e) => {
-                                  e.stopPropagation()
-                                  updateNotificationSettings({ sound: option.id })
-                                  playSound(option.id)
-                                }}
-                                onClick={(e) => e.stopPropagation()}
-                              />
-                              <span class="text-sm" style={{ color: "var(--text-base)" }}>{option.label}</span>
-                            </div>
-                            <button
-                              type="button"
-                              onClick={(e) => {
-                                e.preventDefault()
-                                e.stopPropagation()
-                                playSound(option.id)
-                              }}
-                              class="p-1 rounded transition-colors"
-                              style={{ color: "var(--icon-weak)" }}
-                              onMouseEnter={(e) => (e.currentTarget.style.color = "var(--icon-base)")}
-                              onMouseLeave={(e) => (e.currentTarget.style.color = "var(--icon-weak)")}
-                              title={`Preview ${option.label}`}
-                              aria-label={`Preview ${option.label} sound`}
-                            >
-                              <Play class="w-4 h-4" />
-                            </button>
-                          </label>
-                        )}
-                      </For>
-                    </div>
-                  </div>
-                </div>
-              </section>
-            </div>
-          </Show>
-
         </div>
       </div>
 
@@ -2735,36 +2174,6 @@ Add your project-specific instructions here.
         onCancel={() => setMcpToDelete(null)}
       />
 
-      {/* Prompt Add/Edit Dialog */}
-      <Show when={promptDialogOpen()}>
-        <PromptDialog
-          editing={editingPromptId()}
-          title={promptTitle}
-          setTitle={setPromptTitle}
-          text={promptText}
-          setText={setPromptText}
-          scope={promptScope}
-          setScope={setPromptScope}
-          canUseProjectScope={savedPrompts.canUseProjectScope()}
-          hasActiveProject={savedPrompts.hasActiveProject()}
-          saveDisabled={savedPrompts.loading() || !!savedPrompts.error()}
-          onSave={savePromptDialog}
-          onClose={() => setPromptDialogOpen(false)}
-          error={promptSaveError() || savedPrompts.saveError() || null}
-        />
-      </Show>
-
-      {/* Prompt Delete Confirmation */}
-      <ConfirmDialog
-        open={!!promptToDelete()}
-        title="Delete Prompt"
-        message="Are you sure you want to delete this saved prompt?"
-        confirmLabel="Delete"
-        variant="danger"
-        confirmDisabled={!!savedPrompts.error()}
-        onConfirm={confirmPromptDelete}
-        onCancel={() => setPromptToDelete(null)}
-      />
     </div>
   )
 }
@@ -2835,8 +2244,7 @@ function getPermissionPatterns(rule: unknown): Array<{ pattern: string; action: 
 function ProjectConfigTab() {
   const config = useConfig()
   const providers = useProviders()
-  const { directory } = useSDK()
-  const basePath = useBasePath()
+  const { directory, url } = useSDK()
   const [view, setView] = createSignal<"form" | "json">("form")
   const [jsonText, setJsonText] = createSignal("")
   const [saveError, setSaveError] = createSignal<string | null>(null)
@@ -3034,7 +2442,7 @@ function ProjectConfigTab() {
       setSaving(false)
       return false
     }
-    const ok = await writeFile(basePath.serverUrl, path, content)
+    const ok = await writeFile(url, path, content)
     setSaving(false)
     if (ok) {
       await config.refresh()
@@ -3566,225 +2974,4 @@ function actionColor(action: PermissionActionConfig): string {
   if (action === "allow") return "var(--icon-success-base)"
   if (action === "deny") return "var(--interactive-critical)"
   return "var(--icon-warning-base)"
-}
-
-function PromptDialog(props: {
-  editing: string | null
-  title: () => string
-  setTitle: (v: string) => void
-  text: () => string
-  setText: (v: string) => void
-  scope: () => PromptScope
-  setScope: (v: PromptScope) => void
-  canUseProjectScope: boolean
-  hasActiveProject: boolean
-  saveDisabled: boolean
-  onSave: () => void | Promise<void>
-  onClose: () => void
-  error: string | null
-}) {
-  const [container, setContainer] = createSignal<HTMLDivElement>()
-  const [saving, setSaving] = createSignal(false)
-  let titleRef: HTMLInputElement | undefined
-
-  async function handleSave() {
-    if (saving()) return
-    if (!props.title().trim() || !props.text().trim() || props.saveDisabled) return
-    setSaving(true)
-    try {
-      await props.onSave()
-    } finally {
-      setSaving(false)
-    }
-  }
-
-  createEffect(() => {
-    const el = container()
-    if (!el) return
-
-    // Focus title input on open
-    titleRef?.focus()
-
-    function handleKey(e: KeyboardEvent) {
-      if (e.key === "Escape") {
-        e.preventDefault()
-        props.onClose()
-        return
-      }
-      if (e.key !== "Tab") return
-
-      const focusable = el!.querySelectorAll<HTMLElement>(
-        'input, textarea, button:not([disabled]), [tabindex]:not([tabindex="-1"])',
-      )
-      if (focusable.length === 0) return
-
-      const first = focusable[0]
-      const last = focusable[focusable.length - 1]
-
-      if (e.shiftKey && document.activeElement === first) {
-        e.preventDefault()
-        last?.focus()
-      } else if (!e.shiftKey && document.activeElement === last) {
-        e.preventDefault()
-        first?.focus()
-      }
-    }
-
-    document.addEventListener("keydown", handleKey)
-    onCleanup(() => document.removeEventListener("keydown", handleKey))
-  })
-
-  return (
-    <Portal>
-      <div
-        class="fixed inset-0 z-[100] flex items-center justify-center"
-        style={{ background: "rgba(0,0,0,0.5)" }}
-        role="presentation"
-      >
-        <div
-          ref={setContainer}
-          role="dialog"
-          aria-modal="true"
-          aria-labelledby="prompt-dialog-title"
-          class="w-full max-w-md rounded-lg shadow-xl overflow-hidden"
-          style={{
-            background: "var(--background-base)",
-            border: "1px solid var(--border-base)",
-          }}
-        >
-          <div class="px-4 py-3" style={{ "border-bottom": "1px solid var(--border-base)" }}>
-            <h2 id="prompt-dialog-title" class="text-base font-medium" style={{ color: "var(--text-strong)" }}>
-              {props.editing ? "Edit Prompt" : "Add Prompt"}
-            </h2>
-          </div>
-          <div class="p-4 space-y-4">
-            <Show when={props.error}>
-              <div
-                class="px-3 py-2 rounded-md text-sm"
-                style={{
-                  background: "var(--surface-inset)",
-                  border: "1px solid var(--border-base)",
-                  "border-left": "3px solid var(--interactive-critical)",
-                  color: "var(--interactive-critical)",
-                }}
-              >
-                {props.error}
-              </div>
-            </Show>
-            <div>
-              <label class="block text-sm font-medium mb-1" style={{ color: "var(--text-base)" }}>
-                Title
-              </label>
-              <input
-                ref={titleRef}
-                type="text"
-                value={props.title()}
-                onInput={(e) => props.setTitle(e.currentTarget.value)}
-                placeholder="e.g. Code Review"
-                class="w-full px-3 py-2 rounded-md text-sm"
-                style={{
-                  background: "var(--background-base)",
-                  border: "1px solid var(--border-base)",
-                  color: "var(--text-base)",
-                }}
-              />
-            </div>
-            <div>
-              <label class="block text-sm font-medium mb-1" style={{ color: "var(--text-base)" }}>
-                Prompt Text
-              </label>
-              <textarea
-                value={props.text()}
-                onInput={(e) => props.setText(e.currentTarget.value)}
-                placeholder="Enter the prompt text..."
-                rows={6}
-                class="w-full px-3 py-2 rounded-md text-sm resize-y"
-                style={{
-                  background: "var(--background-base)",
-                  border: "1px solid var(--border-base)",
-                  color: "var(--text-base)",
-                  "min-height": "120px",
-                }}
-              />
-            </div>
-            <div>
-              <label class="block text-sm font-medium mb-1.5" style={{ color: "var(--text-base)" }}>
-                Scope
-              </label>
-              <div class="flex gap-2" role="group" aria-label="Prompt scope">
-                <button
-                  type="button"
-                  onClick={() => props.setScope("global")}
-                  aria-pressed={props.scope() === "global"}
-                  class="flex-1 px-3 py-1.5 rounded-md text-sm font-medium transition-colors"
-                  style={{
-                    background: props.scope() === "global" ? "var(--interactive-base)" : "var(--surface-inset)",
-                    color: props.scope() === "global" ? "white" : "var(--text-base)",
-                    border: props.scope() === "global" ? "1px solid var(--interactive-base)" : "1px solid var(--border-base)",
-                  }}
-                >
-                  Global
-                </button>
-                <button
-                  type="button"
-                  onClick={() => props.setScope("project")}
-                  disabled={!props.canUseProjectScope}
-                  title={!props.canUseProjectScope ? "Open a project first to use project-scoped prompts" : undefined}
-                  aria-pressed={props.scope() === "project"}
-                  class="flex-1 px-3 py-1.5 rounded-md text-sm font-medium transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
-                  style={{
-                    background: props.scope() === "project" ? "var(--interactive-base)" : "var(--surface-inset)",
-                    color: props.scope() === "project" ? "white" : "var(--text-base)",
-                    border: props.scope() === "project" ? "1px solid var(--interactive-base)" : "1px solid var(--border-base)",
-                  }}
-                >
-                  Project
-                </button>
-              </div>
-              <p class="text-xs mt-1.5" style={{ color: "var(--text-weak)" }}>
-                {props.scope() === "project"
-                  ? props.hasActiveProject
-                    ? "This prompt will only appear in this project."
-                    : "This prompt will only appear in your most recent project."
-                  : "This prompt will be available in all projects."}
-              </p>
-              <Show when={!props.canUseProjectScope}>
-                <p class="text-xs mt-1" style={{ color: "var(--text-weak)" }}>
-                  Open a project first to use project-scoped prompts.
-                </p>
-              </Show>
-            </div>
-          </div>
-          <div
-            class="px-4 py-3 flex justify-end gap-2"
-            style={{ "border-top": "1px solid var(--border-base)" }}
-          >
-            <button
-              type="button"
-              onClick={props.onClose}
-              class="px-4 py-2 text-sm font-medium rounded-md transition-colors"
-              style={{
-                background: "var(--surface-inset)",
-                color: "var(--text-base)",
-              }}
-            >
-              Cancel
-            </button>
-            <button
-              type="button"
-              onClick={() => void handleSave()}
-              disabled={!props.title().trim() || !props.text().trim() || props.saveDisabled || saving()}
-              class="px-4 py-2 text-sm font-medium rounded-md transition-colors disabled:opacity-50"
-              style={{
-                background: "var(--interactive-base)",
-                color: "white",
-              }}
-            >
-              {saving() ? "Saving..." : props.editing ? "Save Changes" : "Save"}
-            </button>
-          </div>
-        </div>
-      </div>
-    </Portal>
-  )
 }

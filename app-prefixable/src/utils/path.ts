@@ -95,7 +95,7 @@ export function base64Decode(value: string): string {
  * Returns the decoded directory string for project-scoped routes, or
  * `undefined` for global routes (home `/`, `/settings`, etc.).
  *
- * Shared by `useActiveDirectory` in app.tsx and `SavedPromptsProvider`.
+ * Used when directory-scoped routing must be derived outside router context.
  */
 export function deriveDirectoryFromPathname(): string | undefined {
   const basePath = getBasePath()

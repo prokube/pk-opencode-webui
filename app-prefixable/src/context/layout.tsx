@@ -4,8 +4,10 @@ import {
   createSignal,
   type ParentProps,
 } from "solid-js";
+import { useSDK } from "./sdk";
+import { useServer } from "./server";
+import { legacyStorageValue, workspaceStorageKey } from "../utils/storage";
 
-// Storage keys
 const LAYOUT_STORAGE_KEY = "opencode.layout";
 
 // Default values
@@ -84,40 +86,44 @@ function basename(path: string) {
   return idx === -1 ? path : path.slice(idx + 1);
 }
 
-function loadState(): LayoutState {
+function parseState(stored: string): LayoutState | undefined {
   try {
-    const stored = localStorage.getItem(LAYOUT_STORAGE_KEY);
-    if (stored) {
-      const parsed = JSON.parse(stored);
-      const tabs: FileTab[] = parsed.tabs ?? [];
-      const tabPaths = new Set(tabs.map((t) => t.path));
-      // Validate activeTab exists in tabs, otherwise reset to null
-      const activeTab =
-        parsed.activeTab && tabPaths.has(parsed.activeTab)
-          ? parsed.activeTab
-          : null;
-      return {
-        review: {
-          opened: parsed.review?.opened ?? false,
-          width: parsed.review?.width ?? DEFAULT_REVIEW_WIDTH,
-        },
-        info: {
-          opened: parsed.info?.opened ?? false,
-          width: parsed.info?.width ?? DEFAULT_INFO_WIDTH,
-        },
-        sidebar: {
-          width: parsed.sidebar?.width ?? DEFAULT_SIDEBAR_WIDTH,
-        },
-        reviewMode: isReviewMode(parsed.reviewMode)
-          ? parsed.reviewMode
-          : DEFAULT_REVIEW_MODE,
-        tabs,
-        activeTab,
-      };
-    }
-  } catch (e) {
-    console.error("[Layout] Failed to load state:", e);
+    const parsed: unknown = JSON.parse(stored);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return;
+    const value = parsed as Record<string, unknown>;
+    const rawTabs = Array.isArray(value.tabs) ? value.tabs : [];
+    const tabs = rawTabs.flatMap((item): FileTab[] => {
+      if (!item || typeof item !== "object" || Array.isArray(item)) return [];
+      const tab = item as Record<string, unknown>;
+      if (typeof tab.path !== "string" || typeof tab.name !== "string") return [];
+      return [{ path: tab.path, name: tab.name }];
+    });
+    const review = value.review && typeof value.review === "object" ? value.review as Record<string, unknown> : {};
+    const info = value.info && typeof value.info === "object" ? value.info as Record<string, unknown> : {};
+    const sidebar = value.sidebar && typeof value.sidebar === "object" ? value.sidebar as Record<string, unknown> : {};
+    const tabPaths = new Set(tabs.map((tab) => tab.path));
+    return {
+      review: {
+        opened: typeof review.opened === "boolean" ? review.opened : false,
+        width: typeof review.width === "number" && Number.isFinite(review.width) ? review.width : DEFAULT_REVIEW_WIDTH,
+      },
+      info: {
+        opened: typeof info.opened === "boolean" ? info.opened : false,
+        width: typeof info.width === "number" && Number.isFinite(info.width) ? info.width : DEFAULT_INFO_WIDTH,
+      },
+      sidebar: {
+        width: typeof sidebar.width === "number" && Number.isFinite(sidebar.width) ? sidebar.width : DEFAULT_SIDEBAR_WIDTH,
+      },
+      reviewMode: isReviewMode(value.reviewMode) ? value.reviewMode : DEFAULT_REVIEW_MODE,
+      tabs,
+      activeTab: typeof value.activeTab === "string" && tabPaths.has(value.activeTab) ? value.activeTab : null,
+    };
+  } catch {
+    return;
   }
+}
+
+function defaultState(): LayoutState {
   return {
     review: { opened: false, width: DEFAULT_REVIEW_WIDTH },
     info: { opened: false, width: DEFAULT_INFO_WIDTH },
@@ -128,16 +134,26 @@ function loadState(): LayoutState {
   };
 }
 
-function saveState(state: LayoutState) {
+function loadState(key: string, serverId: string): LayoutState {
   try {
-    localStorage.setItem(LAYOUT_STORAGE_KEY, JSON.stringify(state));
+    const current = localStorage.getItem(key);
+    const validCurrent = current && parseState(current) ? current : null;
+    if (current && !validCurrent) localStorage.removeItem(key);
+    const legacy = serverId === "local" ? [localStorage.getItem(LAYOUT_STORAGE_KEY)] : [];
+    const result = legacyStorageValue(serverId, validCurrent, legacy, (value) => parseState(value) !== undefined);
+    if (result.migrated && result.value) localStorage.setItem(key, result.value);
+    return result.value ? parseState(result.value) ?? defaultState() : defaultState();
   } catch (e) {
-    console.error("[Layout] Failed to save state:", e);
+    console.error("[Layout] Failed to load state:", e);
+    return defaultState();
   }
 }
 
 export function LayoutProvider(props: ParentProps) {
-  const initial = loadState();
+  const { directory } = useSDK();
+  const server = useServer();
+  const storageKey = workspaceStorageKey(server.activeServerId(), directory ?? "", "layout");
+  const initial = loadState(storageKey, server.activeServerId());
 
   // Review panel state
   const [reviewOpened, setReviewOpened] = createSignal(initial.review.opened);
@@ -169,14 +185,18 @@ export function LayoutProvider(props: ParentProps) {
 
   // Persist state on changes
   function persist() {
-    saveState({
-      review: { opened: reviewOpened(), width: reviewWidth() },
-      info: { opened: infoOpened(), width: infoWidth() },
-      sidebar: { width: sidebarWidth() },
-      reviewMode: reviewMode(),
-      tabs: fileTabs(),
-      activeTab: activeTab(),
-    });
+    try {
+      localStorage.setItem(storageKey, JSON.stringify({
+        review: { opened: reviewOpened(), width: reviewWidth() },
+        info: { opened: infoOpened(), width: infoWidth() },
+        sidebar: { width: sidebarWidth() },
+        reviewMode: reviewMode(),
+        tabs: fileTabs(),
+        activeTab: activeTab(),
+      }));
+    } catch (e) {
+      console.error("[Layout] Failed to save state:", e);
+    }
   }
 
   const value: LayoutContextValue = {

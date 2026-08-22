@@ -1,11 +1,5 @@
-import { Show } from "solid-js"
-import { Folder, ShieldAlert, CircleHelp, Loader2 } from "lucide-solid"
-import type { AlertKind } from "../context/global-events"
-
-export interface Project {
-  worktree: string
-  name?: string
-}
+import { Folder } from "lucide-solid"
+import type { Project } from "../context/projects"
 
 export function getFilename(path: string): string {
   return path.split("/").filter(Boolean).pop() || path
@@ -37,7 +31,6 @@ export function ProjectAvatar(props: {
   project: Project
   size?: "small" | "large"
   selected?: boolean
-  badge?: { kind: AlertKind; count: number }
 }) {
   const name = () => props.project.name || getFilename(props.project.worktree)
   const initials = () => getInitials(name())
@@ -58,49 +51,6 @@ export function ProjectAvatar(props: {
       >
         {initials() || <Folder class={iconSize()} />}
       </div>
-      <Show when={props.badge}>
-        {(b) => <AlertBadge kind={b().kind} count={b().count} />}
-      </Show>
-    </div>
-  )
-}
-
-function AlertBadge(props: { kind: AlertKind; count: number }) {
-  const color = () => {
-    if (props.kind === "permission") return "var(--interactive-base)"
-    if (props.kind === "question") return "var(--icon-warning-base)"
-    return "var(--text-weak)"
-  }
-
-  const Icon = () => {
-    if (props.kind === "permission") return <ShieldAlert class="w-2.5 h-2.5" />
-    if (props.kind === "question") return <CircleHelp class="w-2.5 h-2.5" />
-    return <Loader2 class="w-2.5 h-2.5 animate-spin" />
-  }
-
-  const label = () => {
-    const k = props.kind === "permission" ? "permission request" : props.kind === "question" ? "question" : "busy session"
-    return props.count === 1 ? `1 ${k}` : `${props.count} ${k}s`
-  }
-
-  return (
-    <div
-      class="absolute -top-1.5 -right-1.5 flex items-center gap-px rounded-full px-0.5 min-w-[1rem] h-4 justify-center"
-      title={label()}
-      aria-label={label()}
-      style={{
-        background: "var(--background-base)",
-        color: color(),
-        border: `1.5px solid ${color()}`,
-        "font-size": "9px",
-        "font-weight": "600",
-        "line-height": "1",
-      }}
-    >
-      <Icon />
-      <Show when={props.count > 1}>
-        <span aria-hidden="true">{props.count}</span>
-      </Show>
     </div>
   )
 }

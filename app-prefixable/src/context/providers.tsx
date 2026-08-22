@@ -3,24 +3,13 @@ import { createStore, produce } from "solid-js/store"
 import { useSDK } from "./sdk"
 import { useConfig } from "./config"
 import { cycleModelVariant, getConfiguredAgentVariant, resolveModelVariant } from "./model-variant"
+import { useServer } from "./server"
+import { useSync, type ProviderData } from "./sync"
+import { legacyStorageValue, serverStorageKey, workspaceStorageKey } from "../utils/storage"
 
-// Storage key prefix — scoped per project directory
 const MODELS_BY_AGENT_PREFIX = "opencode.modelsByAgent"
 const VARIANTS_BY_SESSION_PREFIX = "opencode.variantsBySession"
-// Legacy key (pre-namespacing) used for migration
 const LEGACY_MODELS_KEY = "opencode.modelsByAgent"
-
-function modelsStorageKey(directory?: string): string {
-  if (!directory) return LEGACY_MODELS_KEY
-  const normalized = directory.replace(/[\\/]+$/, "")
-  return `${MODELS_BY_AGENT_PREFIX}.${normalized}`
-}
-
-function variantsStorageKey(directory?: string): string {
-  if (!directory) return VARIANTS_BY_SESSION_PREFIX
-  const normalized = directory.replace(/[\\/]+$/, "")
-  return `${VARIANTS_BY_SESSION_PREFIX}.${normalized}`
-}
 
 // Validate that parsed localStorage data is a Record<string, ModelKey>
 function isValidModelsByAgent(value: unknown): value is Record<string, ModelKey> {
@@ -130,11 +119,25 @@ interface ProviderContextValue {
 
 const ProviderContext = createContext<ProviderContextValue>()
 
+export function normalizeProviderData(data: ProviderData): ProviderListData {
+  const all = data.all.map((provider) => ({
+    ...provider,
+    models: Object.fromEntries(
+      Object.entries(provider.models).map(([key, model]) => [key, { ...model, providerID: provider.id }]),
+    ),
+  }))
+  return { ...data, all }
+}
+
 export function ProviderProvider(props: ParentProps) {
-  const { client, global: globalClient, directory } = useSDK()
+  const { client, directory } = useSDK()
+  const server = useServer()
+  const sync = useSync()
   const cfg = useConfig()
-  const storageKey = modelsStorageKey(directory)
-  const variantKey = variantsStorageKey(directory)
+  const serverId = server.activeServerId()
+  const workspace = directory ?? ""
+  const storageKey = workspaceStorageKey(serverId, workspace, "modelsByAgent")
+  const variantKey = workspaceStorageKey(serverId, workspace, "variantsBySession")
 
   const [store, setStore] = createStore({
     modelsByAgent: {} as Record<string, ModelKey>,
@@ -149,54 +152,66 @@ export function ProviderProvider(props: ParentProps) {
   let modelsHydrated = false
   let variantsHydrated = false
 
-  // Load models from localStorage (directory-scoped key, with migration from legacy global key)
+  // Load models from localStorage, importing pre-server keys only for the local server.
   onMount(() => {
     try {
-      const stored = localStorage.getItem(storageKey)
-      let loaded = false
-      if (stored) {
+      const current = localStorage.getItem(storageKey)
+      const normalized = workspace.replace(/[\\/]+$/, "")
+      const scopedLegacy = serverId === "local" && directory
+        ? localStorage.getItem(`${MODELS_BY_AGENT_PREFIX}.${normalized}`)
+        : null
+      const migrationKey = serverStorageKey(serverId, "modelsByAgentLegacyMigrated")
+      const globalLegacy = serverId === "local" && directory && !scopedLegacy && localStorage.getItem(migrationKey) !== "true"
+        ? localStorage.getItem(LEGACY_MODELS_KEY)
+        : null
+      const legacy = serverId === "local" ? [scopedLegacy, globalLegacy] : []
+      const result = legacyStorageValue(serverId, current, legacy, (value) => {
         try {
-          const parsed = JSON.parse(stored)
-          if (isValidModelsByAgent(parsed)) {
-            setStore("modelsByAgent", parsed)
-            loaded = true
-          }
-        } catch (_) { /* invalid JSON, fall through to remove */ }
-        if (!loaded) localStorage.removeItem(storageKey)
-      }
-      // Migrate: if no per-directory data exists, copy from legacy global key
-      if (!loaded && directory) {
-        const legacy = localStorage.getItem(LEGACY_MODELS_KEY)
-        if (legacy) {
-          try {
-            const parsed = JSON.parse(legacy)
-            if (isValidModelsByAgent(parsed)) {
-              setStore("modelsByAgent", parsed)
-              localStorage.setItem(storageKey, legacy)
-              // Remove legacy key so other projects fall through to their opencode.json defaults
-              localStorage.removeItem(LEGACY_MODELS_KEY)
-            }
-          } catch (_) { /* legacy key corrupted, ignore */ }
+          return isValidModelsByAgent(JSON.parse(value))
+        } catch {
+          return false
         }
+      })
+      if (result.value) {
+        const parsed = JSON.parse(result.value)
+        if (isValidModelsByAgent(parsed)) setStore("modelsByAgent", parsed)
+        if (!isValidModelsByAgent(parsed)) localStorage.removeItem(storageKey)
       }
+      if (result.migrated && result.value) localStorage.setItem(storageKey, result.value)
+      if (result.migrated && globalLegacy) localStorage.setItem(migrationKey, "true")
     } catch (e) {
       console.error("Failed to load models from storage:", e)
     }
     modelsHydrated = true
 
     try {
-      const stored = localStorage.getItem(variantKey)
-      if (stored) {
+      const current = localStorage.getItem(variantKey)
+      const normalized = workspace.replace(/[\\/]+$/, "")
+      const scopedLegacy = serverId === "local" && directory
+        ? localStorage.getItem(`${VARIANTS_BY_SESSION_PREFIX}.${normalized}`)
+        : null
+      const migrationKey = serverStorageKey(serverId, "variantsBySessionLegacyMigrated")
+      const globalLegacy = serverId === "local" && directory && !scopedLegacy && localStorage.getItem(migrationKey) !== "true"
+        ? localStorage.getItem(VARIANTS_BY_SESSION_PREFIX)
+        : null
+      const legacy = serverId === "local" ? [scopedLegacy, globalLegacy] : []
+      const result = legacyStorageValue(serverId, current, legacy, (value) => {
         try {
-          const parsed = JSON.parse(stored)
-          const normalized = normalizeVariantsBySession(parsed)
-          if (normalized) {
-            setStore("sessionVariants", normalized)
-            variantsHydrated = true
-          }
-        } catch (_) { /* invalid JSON, fall through to remove */ }
-        if (!variantsHydrated) localStorage.removeItem(variantKey)
+          return normalizeVariantsBySession(JSON.parse(value)) !== undefined
+        } catch {
+          return false
+        }
+      })
+      if (result.value) {
+        const parsed = normalizeVariantsBySession(JSON.parse(result.value))
+        if (parsed) {
+          setStore("sessionVariants", parsed)
+          variantsHydrated = true
+        }
+        if (!parsed) localStorage.removeItem(variantKey)
       }
+      if (result.migrated && result.value) localStorage.setItem(variantKey, result.value)
+      if (result.migrated && globalLegacy) localStorage.setItem(migrationKey, "true")
     } catch (e) {
       console.error("Failed to load variants from storage:", e)
     }
@@ -225,44 +240,11 @@ export function ProviderProvider(props: ParentProps) {
     }
   })
 
-  function normalizeProviderData(data: ProviderListData) {
-    const all = data.all.map((provider) => ({
-      ...provider,
-      models: Object.fromEntries(
-        Object.entries(provider.models).map(([k, m]) => [k, { ...m, providerID: provider.id }])
-      ),
-    }))
-    return { ...data, all }
-  }
+  const providerData = () => normalizeProviderData(sync.providers())
 
-  // Fetch providers
-  const [providerData, { mutate: setProviderData, refetch: refetchProviders }] = createResource(async () => {
-    try {
-      const res = await client.provider.list()
-      const data = res.data as ProviderListData | undefined
-      if (!data) return undefined
-
-      if (directory) {
-        try {
-          const globalRes = await globalClient.provider.list()
-          const globalData = globalRes.data as ProviderListData | undefined
-          const stale = (globalData?.connected ?? []).some((id) => !data.connected.includes(id))
-          if (stale) {
-            await client.instance.dispose()
-            const refreshed = await client.provider.list()
-            const refreshedData = refreshed.data as ProviderListData | undefined
-            if (refreshedData) return normalizeProviderData(refreshedData)
-          }
-        } catch (e) {
-          console.warn("Failed to refresh stale directory provider state:", e)
-        }
-      }
-
-      return normalizeProviderData(data)
-    } catch (e) {
-      console.error("Failed to fetch providers:", e)
-      return undefined
-    }
+  onMount(() => {
+    if (!directory) return
+    void refreshProviderInstance()
   })
 
   // Auto-select default model/agent from project config, falling back to hardcoded defaults.
@@ -490,48 +472,23 @@ export function ProviderProvider(props: ParentProps) {
   }
 
   async function providerConnected(providerID: string): Promise<boolean | undefined> {
-    try {
-      const res = await client.provider.list()
-      const data = res.data as ProviderListData | undefined
-      return data?.connected.includes(providerID)
-    } catch (e) {
-      console.error("Failed to check provider connection:", e)
-      return undefined
-    }
+    return (await sync.provider.refresh())?.connected.includes(providerID)
   }
 
-  async function reloadProviders() {
+  async function refreshProviderInstance() {
+    sync.provider.invalidate()
     await client.instance.dispose()
-    return await refetchProviders()
-  }
-
-  async function reloadProviderConnected(providerID: string) {
-    return (await reloadProviders())?.connected.includes(providerID)
+    return sync.provider.refresh()
   }
 
   async function waitProviderConnected(providerID: string, expected: boolean) {
-    await client.instance.dispose()
+    await refreshProviderInstance()
     for (const delay of [0, 500, 1000, 2000, 3000, 5000, 8000]) {
       if (delay > 0) await new Promise((resolve) => setTimeout(resolve, delay))
-      const connected = (await refetchProviders())?.connected.includes(providerID)
-      if (connected === expected) {
-        updateProviderConnected(providerID, expected)
-        return connected
-      }
+      const connected = (await sync.provider.refresh())?.connected.includes(providerID)
+      if (connected === expected) return connected
     }
     return undefined
-  }
-
-  function updateProviderConnected(providerID: string, connected: boolean) {
-    setProviderData((data) => {
-      if (!data) return data
-      if (connected && data.connected.includes(providerID)) return data
-      if (!connected && !data.connected.includes(providerID)) return data
-      return {
-        ...data,
-        connected: connected ? [...data.connected, providerID] : data.connected.filter((id) => id !== providerID),
-      }
-    })
   }
 
   async function startOAuth(providerID: string, methodIndex: number): Promise<OAuthAuthorization | undefined> {
@@ -565,12 +522,12 @@ export function ProviderProvider(props: ParentProps) {
     } catch (e) {
       console.error("Completed OAuth, but failed to reload provider state:", e)
     }
-    updateProviderConnected(providerID, true)
+    sync.provider.updateConnected(providerID, true)
     return true
   }
 
   function refetch() {
-    refetchProviders()
+    sync.provider.refresh()
     refetchAgents()
   }
 
@@ -593,7 +550,7 @@ export function ProviderProvider(props: ParentProps) {
       return (agentsData() ?? []).filter((a) => !a.hidden)
     },
     get loading() {
-      return providerData.loading || agentsData.loading
+      return !sync.ready || sync.provider.loading() || agentsData.loading
     },
     get selectedModel() {
       // Return the model for the currently selected agent

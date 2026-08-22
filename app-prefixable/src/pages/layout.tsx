@@ -9,10 +9,9 @@ import {
   onCleanup,
   createEffect,
 } from "solid-js";
-import { A, useLocation, useNavigate, useParams } from "@solidjs/router";
-import { useBasePath } from "../context/base-path";
+import { A, useLocation, useNavigate } from "@solidjs/router";
 import { useSDK } from "../context/sdk";
-import { sessionStatusEvent, useEvents } from "../context/events";
+import { useEvents } from "../context/events";
 import { useProviders } from "../context/providers";
 import { useTerminal } from "../context/terminal";
 import { useLayout, SIDEBAR_MIN_WIDTH, SIDEBAR_MAX_WIDTH } from "../context/layout";
@@ -25,7 +24,6 @@ import {
   getFilename,
   OpenCodeLogo,
   ProjectAvatar,
-  type Project,
 } from "../components/shared";
 import type { Session } from "../sdk/client";
 import {
@@ -46,7 +44,6 @@ import {
   ShieldAlert,
   MoreHorizontal,
   Trash2,
-  Sparkles,
   Pin,
   PinOff,
   Search,
@@ -54,15 +51,10 @@ import {
 } from "lucide-solid";
 import { useSync } from "../context/sync";
 import { usePermission } from "../context/permission";
-import { useGlobalEvents } from "../context/global-events";
-import { useSavedPrompts, type PromptScope } from "../context/saved-prompts";
 import { useCommand, isDialogOpen } from "../context/command";
 import { ResizeHandle } from "../components/resize-handle";
 import { ConfirmDialog } from "../components/confirm-dialog";
 import { ShortcutReference } from "../components/shortcut-reference";
-import { CommandPalette } from "../components/command-palette";
-import { HintMode } from "../components/hint-mode";
-import { suggestSessionTitle } from "../utils/ai-rename";
 import {
   DragDropProvider,
   DragDropSensors,
@@ -74,28 +66,14 @@ import {
 import type { DragEvent as SolidDragEvent } from "@thisbeyond/solid-dnd";
 import { ConstrainDragXAxis } from "../utils/solid-dnd";
 
-import {
-  migrateNotifySessionKey,
-  notifyEnabledForSession,
-  readNotifyMap,
-  writeNotifyMap,
-  cleanupNotifyState,
-  NOTIFY_STORAGE_KEY,
-  readAlarmChannels,
-  ALARM_CHANNELS_STORAGE_KEY,
-} from "../utils/notify";
-import { readNotificationSettings, playSound, primeAudioContext, NOTIFICATION_STORAGE_KEY } from "../utils/notifications";
-import { dispatchStorageEvent } from "../utils/storage";
-import { sessionHasQuestion, buildChildMap, rootAncestorId } from "../utils/session-tree-request";
+import { useProjects } from "../context/projects";
+import { sessionHasQuestion, buildChildMap } from "../utils/session-tree-request";
 import { createRootSession } from "../utils/root-session";
-import {
-  createSessionWithPrompt as createAndSendPrompt,
-  formatStartError,
-  startSessionError,
-} from "../utils/session-start";
+import { formatStartError } from "../utils/session-start";
+import { useServer } from "../context/server";
+import { legacyStorageValue, serverStorageKey, workspaceStorageKey } from "../utils/storage";
 
 // Storage keys
-const PROJECTS_STORAGE_KEY = "opencode.projects";
 const SIDEBAR_EXPANDED_KEY = "opencode.sidebarExpanded";
 const SHOW_ARCHIVED_KEY = "opencode.showArchived";
 const PINNED_SESSIONS_PREFIX = "opencode.pinnedSessions.";
@@ -136,101 +114,6 @@ export function groupSessionsByDate(
     .map((label) => ({ label, sessions: groups[label] }));
 }
 
-function PromptDropdown(props: {
-  prompts: { id: string; title: string; text: string; scope: PromptScope }[];
-  activeIndex: number;
-  onSelect: (text: string) => void;
-  onClose: () => void;
-  onIndexChange: (index: number) => void;
-}) {
-  let ref: HTMLDivElement | undefined;
-
-  function handleKeyDown(e: KeyboardEvent) {
-    if (e.key === "Escape") {
-      e.preventDefault();
-      props.onClose();
-      return;
-    }
-    if (e.key === "ArrowDown") {
-      e.preventDefault();
-      props.onIndexChange(Math.min(props.activeIndex + 1, props.prompts.length - 1));
-      return;
-    }
-    if (e.key === "ArrowUp") {
-      e.preventDefault();
-      props.onIndexChange(Math.max(props.activeIndex - 1, 0));
-      return;
-    }
-    if (e.key === "Enter") {
-      e.preventDefault();
-      const selected = props.prompts[props.activeIndex];
-      if (selected) props.onSelect(selected.text);
-    }
-  }
-
-  // Scroll the active option into view when navigating with keyboard
-  createEffect(() => {
-    const _index = props.activeIndex;
-    const active = ref?.querySelector('[aria-selected="true"]') as HTMLElement | null;
-    if (active) active.scrollIntoView({ block: "nearest" });
-  });
-
-  onMount(() => {
-    function handleClickOutside(e: MouseEvent) {
-      if (ref && !ref.contains(e.target as Node)) {
-        props.onClose();
-      }
-    }
-    document.addEventListener("click", handleClickOutside);
-    onCleanup(() => document.removeEventListener("click", handleClickOutside));
-    ref?.focus();
-  });
-
-  return (
-    <div
-      ref={ref}
-      tabIndex={-1}
-      onKeyDown={handleKeyDown}
-      class="absolute left-0 right-0 mx-3 mt-1 z-50 rounded-lg border shadow-lg overflow-hidden"
-      style={{
-        background: "var(--background-stronger)",
-        "border-color": "var(--border-base)",
-      }}
-      role="listbox"
-      aria-label="Saved prompts"
-    >
-      <div class="max-h-48 overflow-y-auto py-1">
-        <For each={props.prompts}>
-          {(prompt, i) => (
-            <button
-              class="w-full text-left px-3 py-2 text-sm transition-colors flex items-center gap-2"
-              style={{
-                background: i() === props.activeIndex ? "var(--surface-inset)" : "transparent",
-                color: i() === props.activeIndex ? "var(--text-interactive-base)" : "var(--text-base)",
-              }}
-              role="option"
-              aria-selected={i() === props.activeIndex}
-              onMouseEnter={() => props.onIndexChange(i())}
-              onClick={() => props.onSelect(prompt.text)}
-            >
-              <span class="truncate">{prompt.title}</span>
-              <span
-                class="text-[10px] px-1 py-0.5 rounded shrink-0 ml-auto"
-                style={{
-                  background: i() === props.activeIndex ? "rgba(255,255,255,0.15)" : "var(--surface-inset)",
-                  color: i() === props.activeIndex ? "var(--text-interactive-base)" : "var(--text-weak)",
-                }}
-              >
-                {prompt.scope === "project" ? "Project" : "Global"}
-              </span>
-            </button>
-          )}
-        </For>
-      </div>
-    </div>
-  );
-}
-
 function SortablePinnedSession(props: {
   session: Session;
   render: (session: Session) => import("solid-js").JSX.Element;
@@ -257,23 +140,22 @@ function SortablePinnedSession(props: {
 
 export function Layout(props: ParentProps) {
   const { client, directory } = useSDK();
-  const { basePath } = useBasePath();
+  const server = useServer();
   const events = useEvents();
   const providers = useProviders();
   const terminal = useTerminal();
   const layout = useLayout();
   const sync = useSync();
   const permission = usePermission();
-  const globalEvents = useGlobalEvents();
-  const savedPrompts = useSavedPrompts();
   const command = useCommand();
+  const projects = useProjects();
   const location = useLocation();
   const navigate = useNavigate();
+  const serverId = server.activeServerId();
+  const sidebarExpandedKey = serverStorageKey(serverId, "sidebarExpanded");
+  const showArchivedKey = serverStorageKey(serverId, "showArchived");
+  const pinnedSessionsKey = directory ? workspaceStorageKey(serverId, directory, "pinnedSessions") : undefined;
 
-  const [sessions, setSessions] = createSignal<Session[]>([]);
-  const [loading, setLoading] = createSignal(true);
-  const [sessionLoadError, setSessionLoadError] = createSignal<string | null>(null);
-  const [projects, setProjects] = createSignal<Project[]>([]);
   const [sidebarExpanded, setSidebarExpanded] = createSignal(true);
   const [showArchived, setShowArchived] = createSignal(false);
   const [projectDialogOpen, setProjectDialogOpen] = createSignal(false);
@@ -284,14 +166,9 @@ export function Layout(props: ParentProps) {
   );
   const [sidebarDragging, setSidebarDragging] = createSignal(false);
   const [menuOpenId, setMenuOpenId] = createSignal<string | null>(null);
-  const [aiRenamingId, setAiRenamingId] = createSignal<string | null>(null);
-  const [renameError, setRenameError] = createSignal<{ id: string; msg: string } | null>(null);
-  const renameErrorTimer = { id: undefined as ReturnType<typeof setTimeout> | undefined };
   const [confirmDeleteSession, setConfirmDeleteSession] = createSignal<Session | null>(null);
   const [deleting, setDeleting] = createSignal(false);
   const [deleteError, setDeleteError] = createSignal<string | null>(null);
-  const [promptDropdownOpen, setPromptDropdownOpen] = createSignal(false);
-  const [promptDropdownIndex, setPromptDropdownIndex] = createSignal(0);
   const [confirmArchiveSession, setConfirmArchiveSession] = createSignal<Session | null>(null);
   const [pinnedIds, setPinnedIds] = createSignal<string[]>([]);
   const [creatingSession, setCreatingSession] = createSignal(false);
@@ -346,19 +223,13 @@ export function Layout(props: ParentProps) {
 
   // Load state from storage
   onMount(() => {
-    // Load projects
-    try {
-      const stored = localStorage.getItem(PROJECTS_STORAGE_KEY);
-      if (stored) {
-        setProjects(JSON.parse(stored));
-      }
-    } catch (e) {
-      console.error("Failed to load projects:", e);
-    }
-
     // Load sidebar state - default to open when a project is active
     try {
-      const expanded = localStorage.getItem(SIDEBAR_EXPANDED_KEY);
+      const current = localStorage.getItem(sidebarExpandedKey);
+      const legacy = serverId === "local" ? [localStorage.getItem(SIDEBAR_EXPANDED_KEY)] : [];
+      const result = legacyStorageValue(serverId, current, legacy, (value) => value === "true" || value === "false");
+      if (result.migrated && result.value) localStorage.setItem(sidebarExpandedKey, result.value);
+      const expanded = result.value;
       if (expanded !== null) {
         setSidebarExpanded(expanded === "true");
       } else if (directory) {
@@ -371,7 +242,11 @@ export function Layout(props: ParentProps) {
 
     // Load show archived state
     try {
-      const archived = localStorage.getItem(SHOW_ARCHIVED_KEY);
+      const current = localStorage.getItem(showArchivedKey);
+      const legacy = serverId === "local" ? [localStorage.getItem(SHOW_ARCHIVED_KEY)] : [];
+      const result = legacyStorageValue(serverId, current, legacy, (value) => value === "true" || value === "false");
+      if (result.migrated && result.value) localStorage.setItem(showArchivedKey, result.value);
+      const archived = result.value;
       if (archived !== null) {
         setShowArchived(archived === "true");
       }
@@ -380,9 +255,20 @@ export function Layout(props: ParentProps) {
     }
 
     // Load pinned sessions for current directory
-    if (directory) {
+    if (directory && pinnedSessionsKey) {
       try {
-        const stored = localStorage.getItem(PINNED_SESSIONS_PREFIX + directory);
+        const current = localStorage.getItem(pinnedSessionsKey);
+        const legacy = serverId === "local" ? [localStorage.getItem(PINNED_SESSIONS_PREFIX + directory)] : [];
+        const result = legacyStorageValue(serverId, current, legacy, (value) => {
+          try {
+            const parsed: unknown = JSON.parse(value);
+            return Array.isArray(parsed) && parsed.every((id) => typeof id === "string");
+          } catch {
+            return false;
+          }
+        });
+        if (result.migrated && result.value) localStorage.setItem(pinnedSessionsKey, result.value);
+        const stored = result.value;
         if (stored) {
           const parsed = JSON.parse(stored) as string[];
           if (Array.isArray(parsed)) setPinnedIds(parsed.slice(0, MAX_PINNED));
@@ -392,12 +278,11 @@ export function Layout(props: ParentProps) {
       }
     }
 
-    // Add current directory to projects if not present
+    // DirectoryLayout records the current project; keep its sidebar open here.
     if (directory) {
-      addProject(directory);
       // Ensure sidebar is open when navigating to a project
       setSidebarExpanded(true);
-      localStorage.setItem(SIDEBAR_EXPANDED_KEY, "true");
+      localStorage.setItem(sidebarExpandedKey, "true");
     }
 
     // Resize listener for responsive sidebar
@@ -408,23 +293,11 @@ export function Layout(props: ParentProps) {
     onCleanup(() => window.removeEventListener("resize", handleResize));
   });
 
-  function saveProjects(list: Project[]) {
-    setProjects(list);
-    const value = JSON.stringify(list);
-    try {
-      localStorage.setItem(PROJECTS_STORAGE_KEY, value);
-    } catch (e) {
-      console.error("Failed to save projects:", e);
-      return;
-    }
-    dispatchStorageEvent(PROJECTS_STORAGE_KEY, value);
-  }
-
   function toggleSidebar() {
     const next = !sidebarExpanded();
     setSidebarExpanded(next);
     try {
-      localStorage.setItem(SIDEBAR_EXPANDED_KEY, String(next));
+      localStorage.setItem(sidebarExpandedKey, String(next));
     } catch (e) {
       console.error("Failed to save sidebar state:", e);
     }
@@ -434,7 +307,7 @@ export function Layout(props: ParentProps) {
     const next = !showArchived();
     setShowArchived(next);
     try {
-      localStorage.setItem(SHOW_ARCHIVED_KEY, String(next));
+      localStorage.setItem(showArchivedKey, String(next));
     } catch (e) {
       console.error("Failed to save show archived state:", e);
     }
@@ -442,9 +315,9 @@ export function Layout(props: ParentProps) {
 
   function savePinnedIds(ids: string[]) {
     setPinnedIds(ids);
-    if (!directory) return;
+    if (!pinnedSessionsKey) return;
     try {
-      localStorage.setItem(PINNED_SESSIONS_PREFIX + directory, JSON.stringify(ids));
+      localStorage.setItem(pinnedSessionsKey, JSON.stringify(ids));
     } catch (e) {
       console.error("Failed to save pinned session IDs:", e);
     }
@@ -490,34 +363,27 @@ export function Layout(props: ParentProps) {
 
     const statusIcon = () => (
       <Show
-        when={aiRenamingId() === session.id}
+        when={permission.pendingForSession(session.id).length > 0}
         fallback={
           <Show
-            when={permission.pendingForSession(session.id).length > 0}
+            when={sessionHasQuestion(sync.sessions(), events.pendingQuestions, session.id, childMap())}
             fallback={
               <Show
-                when={sessionHasQuestion(sync.sessions(), events.pendingQuestions, session.id, childMap())}
-                fallback={
-                  <Show
-                    when={
-                      events.status[session.id]?.type === "busy" ||
-                      events.status[session.id]?.type === "retry"
-                    }
-                    fallback={<DefaultIcon class="w-4 h-4" />}
-                  >
-                    <Loader2 class="w-4 h-4 animate-spin" />
-                  </Show>
+                when={
+                  events.status[session.id]?.type === "busy" ||
+                  events.status[session.id]?.type === "retry"
                 }
+                fallback={<DefaultIcon class="w-4 h-4" />}
               >
-                <CircleHelp class="w-4 h-4" style={{ color: "var(--icon-warning-base)" }} />
+                <Loader2 class="w-4 h-4 animate-spin" />
               </Show>
             }
           >
-            <ShieldAlert class="w-4 h-4" style={{ color: "var(--interactive-base)" }} />
+            <CircleHelp class="w-4 h-4" style={{ color: "var(--icon-warning-base)" }} />
           </Show>
         }
       >
-        <Spinner class="w-4 h-4" style={{ color: "var(--text-interactive-base)" }} />
+        <ShieldAlert class="w-4 h-4" style={{ color: "var(--interactive-base)" }} />
       </Show>
     );
 
@@ -532,7 +398,6 @@ export function Layout(props: ParentProps) {
           when={renamingId() === session.id}
           fallback={
             <A
-              data-hint-target
               href={`/${dirSlug()}/session/${session.id}`}
               tabIndex={isActive(session.id) ? 0 : -1}
               class="flex items-center gap-2 py-2 rounded-md text-sm transition-colors"
@@ -577,11 +442,6 @@ export function Layout(props: ParentProps) {
                 <span class="block truncate">
                   {session.title || "Untitled"}
                 </span>
-                <Show when={renameError()?.id === session.id}>
-                  <span class="block text-xs truncate" style={{ color: "var(--text-critical-base)" }}>
-                    {renameError()?.msg}
-                  </span>
-                </Show>
               </span>
             </A>
           }
@@ -741,46 +601,18 @@ export function Layout(props: ParentProps) {
                     Rename
                   </button>
 
-                  {/* Rename with AI */}
-                  <button
-                    data-menu-item
-                    class="w-full flex items-center gap-2 px-3 py-1.5 text-sm text-left transition-colors"
-                    disabled={!!aiRenamingId()}
-                    style={{
-                      color: "var(--text-base)",
-                      opacity: aiRenamingId() ? 0.6 : 1,
-                      cursor: aiRenamingId() ? "not-allowed" : "pointer",
-                      background: menuFocusIndex() === idx(2) ? "var(--surface-inset)" : "transparent",
-                    }}
-                    role="menuitem"
-                    onMouseEnter={() => setMenuFocusIndex(idx(2))}
-                    onFocus={() => setMenuFocusIndex(idx(2))}
-                    onMouseLeave={(e) => { if (menuFocusIndex() !== idx(2)) e.currentTarget.style.background = "transparent" }}
-                    onClick={(e) => {
-                      e.preventDefault();
-                      e.stopPropagation();
-                      setMenuOpenId(null);
-                      setMenuFocusIndex(-1);
-                      handleAiRename(session);
-                    }}
-                    title={aiRenamingId() ? "AI rename in progress" : "Suggests a title based on conversation"}
-                  >
-                    <Sparkles class="w-3.5 h-3.5 shrink-0" style={{ color: "var(--icon-weak)" }} />
-                    Rename with AI
-                  </button>
-
                   {/* Archive */}
                   <button
                     data-menu-item
                     class="w-full flex items-center gap-2 px-3 py-1.5 text-sm text-left transition-colors"
                     style={{
                       color: "var(--text-base)",
-                      background: menuFocusIndex() === idx(3) ? "var(--surface-inset)" : "transparent",
+                      background: menuFocusIndex() === idx(2) ? "var(--surface-inset)" : "transparent",
                     }}
                     role="menuitem"
-                    onMouseEnter={() => setMenuFocusIndex(idx(3))}
-                    onFocus={() => setMenuFocusIndex(idx(3))}
-                    onMouseLeave={(e) => { if (menuFocusIndex() !== idx(3)) e.currentTarget.style.background = "transparent" }}
+                    onMouseEnter={() => setMenuFocusIndex(idx(2))}
+                    onFocus={() => setMenuFocusIndex(idx(2))}
+                    onMouseLeave={(e) => { if (menuFocusIndex() !== idx(2)) e.currentTarget.style.background = "transparent" }}
                     onClick={(e) => {
                       e.preventDefault();
                       e.stopPropagation();
@@ -802,12 +634,12 @@ export function Layout(props: ParentProps) {
                     class="w-full flex items-center gap-2 px-3 py-1.5 text-sm text-left transition-colors"
                     style={{
                       color: "var(--text-critical-base)",
-                      background: menuFocusIndex() === idx(4) ? "var(--surface-inset)" : "transparent",
+                      background: menuFocusIndex() === idx(3) ? "var(--surface-inset)" : "transparent",
                     }}
                     role="menuitem"
-                    onMouseEnter={() => setMenuFocusIndex(idx(4))}
-                    onFocus={() => setMenuFocusIndex(idx(4))}
-                    onMouseLeave={(e) => { if (menuFocusIndex() !== idx(4)) e.currentTarget.style.background = "transparent" }}
+                    onMouseEnter={() => setMenuFocusIndex(idx(3))}
+                    onFocus={() => setMenuFocusIndex(idx(3))}
+                    onMouseLeave={(e) => { if (menuFocusIndex() !== idx(3)) e.currentTarget.style.background = "transparent" }}
                     onClick={(e) => {
                       e.preventDefault();
                       e.stopPropagation();
@@ -829,24 +661,13 @@ export function Layout(props: ParentProps) {
     );
   }
 
-  function addProject(worktree: string) {
-    const existing = projects().find((p) => p.worktree === worktree);
-    if (!existing) {
-      saveProjects([...projects(), { worktree }]);
-    }
-  }
-
-  function removeProject(worktree: string) {
-    saveProjects(projects().filter((p) => p.worktree !== worktree));
-  }
-
   function handleProjectSelect(worktree: string) {
-    addProject(worktree);
+    projects.touch(worktree);
     navigate(`/${base64Encode(worktree)}/session`);
   }
 
   const currentProject = createMemo(() =>
-    projects().find((p) => p.worktree === directory),
+    projects.projects().find((p) => p.worktree === directory),
   );
 
   const projectName = createMemo(() => {
@@ -859,15 +680,15 @@ export function Layout(props: ParentProps) {
   const dirSlug = createMemo(() => (directory ? base64Encode(directory) : ""));
 
   const projectSessions = createMemo(() =>
-    sessions()
-      .filter((s) => s.directory === directory && !s.time?.archived)
+    sync.sessions()
+      .filter((s) => !s.parentID && s.directory === directory && !s.time?.archived)
       .sort((a, b) => (b.time?.updated || 0) - (a.time?.updated || 0)),
   );
 
   const archivedSessions = createMemo(() =>
     sync
       .archivedSessions()
-      .filter((s) => s.directory === directory)
+      .filter((s) => !s.parentID && s.directory === directory)
       .sort((a, b) => (b.time?.archived || 0) - (a.time?.archived || 0)),
   );
 
@@ -1159,43 +980,8 @@ export function Layout(props: ParentProps) {
     });
   }
 
-  function errorText(err: unknown) {
-    if (err instanceof Error && err.message.trim()) return err.message;
-    return "Session bootstrap failed. Check API connectivity and retry.";
-  }
-
-  let lastSessionsLoadAt = 0;
-
-  async function loadSessions() {
-    lastSessionsLoadAt = Date.now();
-    try {
-      const res = await client.session.list({ roots: true });
-      const data = res.data;
-      if (Array.isArray(data)) {
-        const valid = data.filter(
-          (s): s is Session =>
-            s && typeof s === "object" && typeof s.id === "string",
-        );
-        setSessions(valid);
-        setSessionLoadError(null);
-      } else {
-        setSessions([]);
-        setSessionLoadError(null);
-      }
-    } catch (e) {
-      console.error("Failed to load sessions:", e);
-      setSessions([]);
-      setSessionLoadError(errorText(e));
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  const sessionError = createMemo(() => sessionLoadError());
-
   function retrySessionBootstrap() {
-    setLoading(true);
-    void loadSessions();
+    void sync.refresh();
   }
 
   function handleSearchInput(query: string) {
@@ -1361,20 +1147,6 @@ export function Layout(props: ParentProps) {
   onMount(() => {
     command.register([
       {
-        id: "palette.open",
-        title: "Command Palette",
-        description: "Open the command palette",
-        keybind: "mod+k",
-        global: true,
-        passive: true,
-        onSelect: (e) => {
-          // Don't open palette from terminal (Cmd+K is used there for clearing)
-          if (e?.target instanceof HTMLElement && e.target.closest(".xterm")) return;
-          e?.preventDefault();
-          command.setPaletteOpen(!command.paletteOpen());
-        },
-      },
-      {
         id: "session.new",
         title: "New Session",
         description: "Create a new chat session",
@@ -1421,15 +1193,12 @@ export function Layout(props: ParentProps) {
         onSelect: () => navigateToSessionIndex(i + 1),
       })),
       {
-        id: "palette.projects",
+        id: "project.switch",
         title: "Switch Project",
-        description: "Open command palette filtered to projects",
+        description: "Open the project picker",
         keybind: "mod+shift+k",
         global: true,
-        onSelect: () => {
-          command.setPaletteFilter("# ");
-          command.setPaletteOpen(true);
-        },
+        onSelect: () => navigate("/"),
       },
       {
         id: "settings.open",
@@ -1474,7 +1243,7 @@ export function Layout(props: ParentProps) {
         global: true,
         passive: true,
         onSelect: (e) => {
-          if (isDialogOpen() || command.paletteOpen() || command.shortcutRefOpen()) return;
+          if (isDialogOpen() || command.shortcutRefOpen()) return;
           if (!showSidebar()) return;
           if (focusPanel("sidebar")) e?.preventDefault();
         },
@@ -1487,7 +1256,7 @@ export function Layout(props: ParentProps) {
         global: true,
         passive: true,
         onSelect: (e) => {
-          if (isDialogOpen() || command.paletteOpen() || command.shortcutRefOpen()) return;
+          if (isDialogOpen() || command.shortcutRefOpen()) return;
           if (focusPanel("chat")) e?.preventDefault();
         },
       },
@@ -1499,7 +1268,7 @@ export function Layout(props: ParentProps) {
         global: true,
         passive: true,
         onSelect: (e) => {
-          if (isDialogOpen() || command.paletteOpen() || command.shortcutRefOpen()) return;
+          if (isDialogOpen() || command.shortcutRefOpen()) return;
           if (terminal.opened() && focusPanel("terminal")) e?.preventDefault();
         },
       },
@@ -1511,7 +1280,7 @@ export function Layout(props: ParentProps) {
         global: true,
         passive: true,
         onSelect: (e) => {
-          if (isDialogOpen() || command.paletteOpen() || command.shortcutRefOpen()) return;
+          if (isDialogOpen() || command.shortcutRefOpen()) return;
           if (layout.review.opened() && focusPanel("review")) e?.preventDefault();
         },
       },
@@ -1527,8 +1296,6 @@ export function Layout(props: ParentProps) {
           if (isDialogOpen()) return;
           // Don't steal Escape from the shortcut reference overlay
           if (command.shortcutRefOpen()) return;
-          // Don't steal Escape from the command palette
-          if (command.paletteOpen()) return;
           // Don't steal Escape from handlers that already consumed it
           if (e?.defaultPrevented) return;
           // Don't steal Escape from the terminal (Escape is heavily used there)
@@ -1563,13 +1330,12 @@ export function Layout(props: ParentProps) {
     onCleanup(() => {
       window.removeEventListener("keydown", handleAltDigit);
       command.unregister([
-        "palette.open",
         "session.new",
         "session.archive",
         "session.next",
         "session.prev",
         ...Array.from({ length: 9 }, (_, i) => `session.jump.${i + 1}`),
-        "palette.projects",
+        "project.switch",
         "settings.open",
         "terminal.toggle",
         "sidebar.toggle",
@@ -1581,38 +1347,6 @@ export function Layout(props: ParentProps) {
         "focus.review",
         "focus.escape",
       ]);
-    });
-  });
-
-  onMount(() => {
-    loadSessions();
-
-    let sessionsTimer: number | undefined;
-    const unsub = events.subscribe((event) => {
-      if (event.type === "server.connected") {
-        if (Date.now() - lastSessionsLoadAt < 5000) return;
-        if (sessionsTimer !== undefined) clearTimeout(sessionsTimer);
-        sessionsTimer = window.setTimeout(() => {
-          sessionsTimer = undefined;
-          loadSessions();
-        }, 500);
-        return;
-      }
-      if (
-        event.type === "session.created" ||
-        event.type === "session.updated" ||
-        event.type === "session.deleted"
-      ) {
-        // Guard against child sessions — sidebar only shows root sessions
-        const info = (event.properties as { info: { parentID?: string } }).info;
-        if (info?.parentID) return;
-        loadSessions();
-      }
-    });
-
-    onCleanup(() => {
-      unsub();
-      if (sessionsTimer !== undefined) clearTimeout(sessionsTimer);
     });
   });
 
@@ -1655,251 +1389,6 @@ export function Layout(props: ParentProps) {
     ),
   );
 
-  // --- Global alarm monitoring for ALL sessions with bell enabled ---
-  // NOTE: Currently scoped to the active directory's SSE stream (EventProvider connects
-  // to `/event?directory=...`). Cross-project alarms would require subscribing to
-  // multiple directory streams or an unscoped endpoint — left for a future iteration.
-  // Track busy state per session so we detect genuine busy→idle transitions
-  const busyTracker: Record<string, boolean> = {};
-  // Track which individual permission/question requests already fired an alarm (keyed by request ID)
-  const firedPermission = new Set<string>();
-  const firedQuestion = new Set<string>();
-
-  // Cached notify map — avoids repeated localStorage reads + JSON.parse on every SSE event.
-  // Updated via storage events (including synthetic same-tab events dispatched by writeNotifyMap).
-  const [notifyCache, setNotifyCache] = createSignal(readNotifyMap());
-  const [notificationCache, setNotificationCache] = createSignal(readNotificationSettings());
-  const [alarmChannels, setAlarmChannels] = createSignal(readAlarmChannels());
-  onMount(() => {
-    function handleStorage(e: StorageEvent) {
-      if (e.key === NOTIFY_STORAGE_KEY) setNotifyCache(readNotifyMap());
-      if (e.key === NOTIFICATION_STORAGE_KEY) setNotificationCache(readNotificationSettings());
-      if (e.key === ALARM_CHANNELS_STORAGE_KEY) setAlarmChannels(readAlarmChannels());
-    }
-    window.addEventListener("storage", handleStorage);
-    onCleanup(() => window.removeEventListener("storage", handleStorage));
-
-    // Prime AudioContext on the first user gesture (when sound is enabled)
-    // so notification sounds work reliably after page reload. Listeners stay
-    // attached until priming succeeds so that enabling sound later still works.
-    function primeOnGesture() {
-      if (!notificationCache().enabled) return;
-      primeAudioContext();
-      window.removeEventListener("pointerdown", primeOnGesture);
-      window.removeEventListener("keydown", primeOnGesture);
-    }
-    window.addEventListener("pointerdown", primeOnGesture);
-    window.addEventListener("keydown", primeOnGesture);
-    onCleanup(() => {
-      window.removeEventListener("pointerdown", primeOnGesture);
-      window.removeEventListener("keydown", primeOnGesture);
-    });
-  });
-
-  // Tab title flash (works for any alarming session)
-  const titleFlash = { original: "", active: false };
-
-  function flashTitle() {
-    if (typeof document === "undefined") return;
-    if (titleFlash.active) return;
-    titleFlash.original = document.title;
-    titleFlash.active = true;
-    document.title = `* ${titleFlash.original}`;
-  }
-
-  function restoreTitle() {
-    if (typeof document === "undefined") return;
-    if (!titleFlash.active) return;
-    document.title = titleFlash.original;
-    titleFlash.active = false;
-  }
-
-  onMount(() => {
-    titleFlash.original = document.title;
-    function handleVisibility() {
-      if (!document.hidden) restoreTitle();
-    }
-    document.addEventListener("visibilitychange", handleVisibility);
-    onCleanup(() => {
-      document.removeEventListener("visibilitychange", handleVisibility);
-      restoreTitle();
-    });
-  });
-
-  function fireNotification(sessionID: string, title: string, body: string, tag: string) {
-    if (!alarmChannels().browser) return;
-
-    // Flash the tab title when the page is in the background, regardless of Notification permission
-    if (typeof document !== "undefined" && document.hidden) flashTitle();
-
-    // Play sound if enabled in settings
-    const settings = notificationCache();
-    if (settings.enabled) playSound(settings.sound);
-
-    if (typeof window === "undefined" || !("Notification" in window)) return;
-    if (Notification.permission !== "granted") return;
-
-    const n = new Notification(title, {
-      body,
-      requireInteraction: true,
-      tag,
-      icon: basePath + "favicon.svg",
-    });
-    n.onclick = () => {
-      window.focus();
-      n.close();
-      // Navigate to the alarming session using its actual directory
-      const sess = sync.session.get(sessionID);
-      const slug = sess ? base64Encode(sess.directory) : dirSlug();
-      navigate(`/${slug}/session/${sessionID}`);
-    };
-  }
-
-  function getSessionSummary(sessionID: string): string {
-    const msgs = sync.messages(sessionID);
-    // Iterate from end to find last assistant message without copying/reversing the array
-    let last: (typeof msgs)[number] | undefined;
-    for (let i = msgs.length - 1; i >= 0; i--) {
-      if (msgs[i].info.role === "assistant") { last = msgs[i]; break; }
-    }
-    if (!last) return "The agent has finished processing.";
-    const text = last.parts
-      .filter((p) => p.type === "text")
-      .map((p) => (p as { text?: string }).text ?? "")
-      .join("")
-      .trim();
-    if (!text) return "The agent has finished processing.";
-    const line = text.split("\n")[0];
-    return line.length > 120 ? line.slice(0, 120) + "..." : line;
-  }
-
-  // Seed busyTracker reactively from already-known statuses so sessions that were busy
-  // before we mounted (or before the status fetch resolved) still trigger notifications
-  // when they go idle. Only fill entries that aren't already tracked.
-  createEffect(() => {
-    for (const [sid, s] of Object.entries(events.status)) {
-      if ((s.type === "busy" || s.type === "retry") && !(sid in busyTracker)) {
-        busyTracker[sid] = true;
-      }
-    }
-  });
-
-  // Subscribe to session status events for all sessions
-  onMount(() => {
-    const alarmUnsub = events.subscribe((event) => {
-      // Track busy→idle transitions for all sessions
-      const statusEvent = sessionStatusEvent(event);
-      if (statusEvent) {
-        const sid = statusEvent.sessionID;
-        const type = statusEvent.status.type;
-        if (!sid || !type) return;
-
-        if (type === "busy" || type === "retry") {
-          busyTracker[sid] = true;
-          return;
-        }
-
-        if (type === "idle" && busyTracker[sid]) {
-          busyTracker[sid] = false;
-
-          const sess = sync.session.get(sid);
-          const nc = notifyCache();
-          const notifyDir = sess?.directory || directory;
-          const enabled = notifyEnabledForSession(nc, sid, notifyDir);
-          if (!enabled) return;
-          const next = { ...nc };
-          if (migrateNotifySessionKey(next, sid, notifyDir)) {
-            writeNotifyMap(next);
-            setNotifyCache(next);
-          }
-
-          const title = sess?.title || "Task complete";
-          fireNotification(sid, title, getSessionSummary(sid), `session-complete-${sid}`);
-        }
-        return;
-      }
-
-      // Permission request alarms (keyed by request ID so multiple requests per session each fire).
-      // For child/grandchild sessions, walk the parentID chain to find the root
-      // ancestor and check its bell state, mirroring the question alarm logic.
-      if (event.type === "permission.asked") {
-        const props = event.properties as { id?: string; sessionID?: string };
-        const sid = props.sessionID;
-        const rid = props.id;
-        if (!sid || !rid) return;
-        if (firedPermission.has(rid)) return;
-
-        const sess = sync.session.get(sid);
-        const nc = notifyCache();
-        const bellSid = rootAncestorId(sync.session.get, sid);
-        const bell = sync.session.get(bellSid);
-        const bellDir = bell?.directory || sess?.directory || directory;
-        const enabled = notifyEnabledForSession(nc, bellSid, bellDir);
-        if (!enabled) return;
-        const next = { ...nc };
-        if (migrateNotifySessionKey(next, bellSid, bellDir)) {
-          writeNotifyMap(next);
-          setNotifyCache(next);
-        }
-        firedPermission.add(rid);
-
-        const title = sess?.title || "Permission needed";
-        fireNotification(sid, title, "A tool needs your approval to continue.", `session-permission-${rid}`);
-        return;
-      }
-
-      // Clear permission dedup on reply
-      if (event.type === "permission.replied") {
-        const props = event.properties as { requestID?: string };
-        if (props.requestID) firedPermission.delete(props.requestID);
-        return;
-      }
-
-      // Agent question alarms (keyed by request ID).
-      // For child/grandchild sessions, walk the parentID chain to find the root
-      // ancestor and check its bell state. Browser notifications always fire when
-      // the bell is enabled — the in-app question dock handles inline display
-      // separately without suppressing OS-level notifications.
-      if (event.type === "question.asked") {
-        const props = event.properties as { id?: string; sessionID?: string };
-        const sid = props.sessionID;
-        const rid = props.id;
-        if (!sid || !rid) return;
-        if (firedQuestion.has(rid)) return;
-
-        // Walk up the parentID chain to find the root ancestor for bell state.
-        // If the session is not yet in the sync store (bootstrap still in
-        // progress), rootAncestorId falls back to the session's own ID which
-        // is a reasonable best-effort during the brief bootstrap window.
-        const sess = sync.session.get(sid);
-        const nc = notifyCache();
-        const bellSid = rootAncestorId(sync.session.get, sid);
-        const bell = sync.session.get(bellSid);
-        const bellDir = bell?.directory || sess?.directory || directory;
-        const enabled = notifyEnabledForSession(nc, bellSid, bellDir);
-        if (!enabled) return;
-        const next = { ...nc };
-        if (migrateNotifySessionKey(next, bellSid, bellDir)) {
-          writeNotifyMap(next);
-          setNotifyCache(next);
-        }
-        firedQuestion.add(rid);
-
-        const title = sess?.title || "Question from agent";
-        fireNotification(sid, title, "The agent has a question and is waiting for your response.", `session-question-${rid}`);
-        return;
-      }
-
-      // Clear question dedup on reply/reject
-      if (event.type === "question.replied" || event.type === "question.rejected") {
-        const props = event.properties as { requestID?: string };
-        if (props.requestID) firedQuestion.delete(props.requestID);
-      }
-    });
-
-    onCleanup(alarmUnsub);
-  });
-
   async function createNewSession() {
     if (!directory) return;
     if (creatingSession()) return;
@@ -1916,12 +1405,7 @@ export function Layout(props: ParentProps) {
         setSessionStartError(`Failed to create session: ${msg}`);
         return;
       }
-      if (res.isLeader) {
-        setSessions((prev) => {
-          if (prev.some((s) => s.id === data.id)) return prev;
-          return [data as Session, ...prev];
-        });
-      }
+      sync.session.upsert(data);
       navigate(`/${dirSlug()}/session/${data.id}`);
     } catch (e) {
       console.error("Failed to create session:", e);
@@ -1931,76 +1415,35 @@ export function Layout(props: ParentProps) {
     }
   }
 
-  async function createSessionWithPrompt(text: string) {
-    if (!directory) return;
-    setPromptDropdownOpen(false);
-    if (creatingSession()) return;
-    const model = providers.selectedModel;
-    const err = startSessionError({
-      loading: providers.loading,
-      providerCount: providers.providers.length,
-      model,
-      connected: providers.connected,
-    });
-    if (err) {
-      setSessionStartError(err);
-      return;
-    }
-    if (!model) return;
-    setSessionStartError(null);
-    setCreatingSession(true);
-    try {
-      const res = await createAndSendPrompt({
-        client,
-        text,
-        agent: providers.selectedAgent || "build",
-        model,
-        variant: providers.variant.current(undefined, model, providers.selectedAgent),
-      });
-      providers.setSessionModel(res.id, model);
-      setSessions((prev) => {
-        if (prev.some((s) => s.id === res.id)) return prev;
-        return [res, ...prev];
-      });
-      navigate(`/${dirSlug()}/session/${res.id}`);
-    } catch (e) {
-      console.error("Failed to create session for prompt:", e);
-      setSessionStartError(`Failed to create session or send saved prompt: ${formatStartError(e)}`);
-    } finally {
-      setCreatingSession(false);
-    }
-  }
-
   async function restoreSession(session: Session) {
+    const restored = { ...session, time: { ...session.time, archived: 0 } };
+    sync.session.upsert(restored);
     try {
-      await client.session.update({
+      const res = await client.session.update({
         sessionID: session.id,
         // Send 0 instead of undefined — JSON.stringify strips undefined values,
         // so the server would never see the field and skip the unarchive.
         time: { archived: 0 },
       });
-      // Session restoration will be reflected via SSE events updating sync context
+      sync.session.upsert(res.data ?? restored);
     } catch (e) {
       console.error("Failed to restore session:", e);
+      sync.session.upsert(session);
+      void sync.refresh();
     }
   }
 
   function renameSession(session: Session, title: string) {
     const trimmed = title.trim();
     if (!trimmed || trimmed === session.title) return;
-    // Optimistic local update
-    setSessions((prev) =>
-      prev.map((s) => (s.id === session.id ? { ...s, title: trimmed } : s)),
-    );
+    const renamed = { ...session, title: trimmed };
+    sync.session.upsert(renamed);
     client.session.update({ sessionID: session.id, title: trimmed })
+      .then((res) => sync.session.upsert(res.data ?? renamed))
       .catch((err: unknown) => {
         console.error("Failed to rename session:", err);
-        // Revert on failure
-        setSessions((prev) =>
-          prev.map((s) =>
-            s.id === session.id ? { ...s, title: session.title } : s,
-          ),
-        );
+        sync.session.upsert(session);
+        void sync.refresh();
       });
   }
 
@@ -2009,17 +1452,15 @@ export function Layout(props: ParentProps) {
     const index = ids.indexOf(session.id);
     const neighborId = ids[index + 1] ?? ids[index - 1];
 
-    // Optimistic remove from sidebar list
-    setSessions((prev) => prev.filter((s) => s.id !== session.id));
-
-    // Clean up notification toggle state
-    cleanupNotifyState(session.id, session.directory);
+    const archived = { ...session, time: { ...session.time, archived: Date.now() } };
+    sync.session.upsert(archived);
 
     client.session.update({
       sessionID: session.id,
       time: { archived: Date.now() },
     })
-      .then(() => {
+      .then((res) => {
+        sync.session.upsert(res.data ?? archived);
         // Unpin only after successful archive
         unpinSession(session.id);
         // Navigate only after successful archive
@@ -2029,12 +1470,8 @@ export function Layout(props: ParentProps) {
       })
       .catch((err: unknown) => {
         console.error("Failed to archive session:", err);
-        // Revert — add session back at original index
-        setSessions((prev) => {
-          const copy = [...prev];
-          copy.splice(index < 0 ? 0 : index, 0, session);
-          return copy;
-        });
+        sync.session.upsert(session);
+        void sync.refresh();
       });
   }
 
@@ -2059,8 +1496,7 @@ export function Layout(props: ParentProps) {
     client.session.delete({ sessionID: session.id })
       .then(() => {
         setConfirmDeleteSession(null);
-        setSessions(prev => prev.filter(s => s.id !== session.id));
-        cleanupNotifyState(session.id, session.directory);
+        sync.session.remove(session.id);
         unpinSession(session.id);
         if (isActive(session.id)) {
           navigate(neighborId ? `/${dirSlug()}/session/${neighborId}` : `/${dirSlug()}/session`);
@@ -2071,48 +1507,6 @@ export function Layout(props: ParentProps) {
         setDeleteError("Failed to delete session. Please try again.");
       })
       .finally(() => setDeleting(false));
-  }
-
-  function showRenameError(sessionId: string, message = "Rename failed") {
-    if (renameErrorTimer.id !== undefined) clearTimeout(renameErrorTimer.id);
-    setRenameError({ id: sessionId, msg: message });
-    renameErrorTimer.id = setTimeout(() => {
-      setRenameError((prev) => prev?.id === sessionId ? null : prev);
-      renameErrorTimer.id = undefined;
-    }, 3000);
-  }
-
-  function handleAiRename(session: Session) {
-    if (aiRenamingId()) return;
-    setMenuOpenId(null);
-    setAiRenamingId(session.id);
-
-    // Sidebar sessions that aren't currently open may not have messages synced.
-    // Fetch from the API when the local cache is empty.
-    const cached = sync.messages(session.id);
-    const pending = cached.length > 0
-      ? Promise.resolve(cached)
-      : client.session.messages({ sessionID: session.id }).then((res) => res.data ?? []);
-
-    pending
-      .then((msgs) => {
-        if (!msgs.length) {
-          showRenameError(session.id, "No messages to rename");
-          setAiRenamingId(null);
-          return;
-        }
-        return suggestSessionTitle(client, session.id, msgs, providers.selectedModel, providers.selectedAgent);
-      })
-      .then((suggestion) => {
-        if (!suggestion) return;
-        setEditTitle(suggestion);
-        setRenamingId(session.id);
-      })
-      .catch((err: unknown) => {
-        console.error("AI rename failed:", err);
-        showRenameError(session.id);
-      })
-      .finally(() => setAiRenamingId(null));
   }
 
   // Outside-click handler for session menus
@@ -2130,10 +1524,6 @@ export function Layout(props: ParentProps) {
     onCleanup(() => document.removeEventListener("click", handler, { capture: true }));
   });
 
-  onCleanup(() => {
-    if (renameErrorTimer.id !== undefined) clearTimeout(renameErrorTimer.id);
-  });
-
   function isActive(sessionId: string) {
     return location.pathname.includes(sessionId);
   }
@@ -2148,10 +1538,11 @@ export function Layout(props: ParentProps) {
     // Also ensure sidebar is expanded when selecting a project
     setSidebarExpanded(true);
     try {
-      localStorage.setItem(SIDEBAR_EXPANDED_KEY, "true");
+      localStorage.setItem(sidebarExpandedKey, "true");
     } catch (e) {
       console.error("Failed to save sidebar state:", e);
     }
+    projects.touch(worktree);
     navigate(`/${base64Encode(worktree)}/session`);
   }
 
@@ -2191,10 +1582,9 @@ export function Layout(props: ParentProps) {
 
         {/* Project icons */}
         <div class="flex-1 flex flex-col items-center gap-2 overflow-y-auto w-full px-2 py-3">
-          <For each={projects()}>
+          <For each={projects.projects()}>
             {(project) => (
               <div
-                data-hint-target
                 onClick={() => navigateToProject(project.worktree)}
                 class="group relative cursor-pointer"
                 title={project.name || getFilename(project.worktree)}
@@ -2203,17 +1593,16 @@ export function Layout(props: ParentProps) {
                   project={project}
                   size="large"
                   selected={project.worktree === directory}
-                  badge={project.worktree !== directory ? globalEvents.badge(project.worktree) : undefined}
                 />
                 <button
                   onClick={(e) => {
                     e.stopPropagation();
-                    removeProject(project.worktree);
+                    projects.remove(project.worktree);
                     if (
                       project.worktree === directory &&
-                      projects().length > 1
+                      projects.projects().length > 1
                     ) {
-                      const next = projects().find(
+                      const next = projects.projects().find(
                         (p) => p.worktree !== project.worktree,
                       );
                       if (next) navigateToProject(next.worktree);
@@ -2233,7 +1622,6 @@ export function Layout(props: ParentProps) {
 
           {/* Add project button */}
           <button
-            data-hint-target
             onClick={() => setProjectDialogOpen(true)}
             class="w-10 h-10 rounded-lg flex items-center justify-center transition-colors"
             style={{
@@ -2258,7 +1646,6 @@ export function Layout(props: ParentProps) {
           style={{ "border-top": "1px solid var(--border-base)" }}
         >
           <button
-            data-hint-target
             onClick={() => terminal.toggle(directory)}
             class="w-10 h-10 rounded-lg flex items-center justify-center transition-colors"
             style={{
@@ -2274,7 +1661,6 @@ export function Layout(props: ParentProps) {
             <SquareTerminal class="w-5 h-5" />
           </button>
           <button
-            data-hint-target
             onClick={() => navigate(`/${dirSlug()}/settings`)}
             class="w-10 h-10 rounded-lg flex items-center justify-center transition-colors"
             style={{
@@ -2353,46 +1739,18 @@ export function Layout(props: ParentProps) {
             </button>
           </div>
 
-          {/* New Session Button (split button with saved prompts dropdown) */}
+          {/* New Session Button */}
           <div class="px-3 py-2 relative">
-            <div class="flex w-full">
-              <Button
-                data-hint-target
-                onClick={createNewSession}
-                variant="ghost"
-                class={`flex-1 justify-start ${!savedPrompts.loading() && savedPrompts.prompts().length > 0 ? "rounded-r-none" : ""}`}
-                disabled={creatingSession()}
-                size="sm"
-              >
-                <Plus class="w-4 h-4" />
-                <span>New Session</span>
-              </Button>
-              <Show when={!savedPrompts.loading() && savedPrompts.prompts().length > 0}>
-                <button
-                  disabled={creatingSession()}
-                  on:click={(e) => {
-                    e.stopPropagation();
-                    setPromptDropdownIndex(0);
-                    setPromptDropdownOpen(!promptDropdownOpen());
-                  }}
-                  class="inline-flex items-center px-1.5 rounded-r-xl border-2 border-l-0 border-transparent bg-transparent text-[var(--text-base)] hover:bg-[var(--surface-inset)] hover:text-[var(--text-interactive-base)] transition-all"
-                  title="New session from saved prompt"
-                  aria-haspopup="listbox"
-                  aria-expanded={promptDropdownOpen()}
-                >
-                  <ChevronDown class="w-3.5 h-3.5" />
-                </button>
-              </Show>
-            </div>
-            <Show when={promptDropdownOpen()}>
-              <PromptDropdown
-                prompts={savedPrompts.prompts()}
-                activeIndex={promptDropdownIndex()}
-                onSelect={(text) => createSessionWithPrompt(text)}
-                onClose={() => setPromptDropdownOpen(false)}
-                onIndexChange={(i) => setPromptDropdownIndex(i)}
-              />
-            </Show>
+            <Button
+              onClick={createNewSession}
+              variant="ghost"
+              class="w-full justify-start"
+              disabled={creatingSession()}
+              size="sm"
+            >
+              <Plus class="w-4 h-4" />
+              <span>New Session</span>
+            </Button>
             <Show when={sessionStartError()}>
               <div
                 class="mt-2 px-3 py-2 rounded-md text-xs"
@@ -2473,7 +1831,7 @@ export function Layout(props: ParentProps) {
             aria-activedescendant={focusedId() ? `session-${focusedId()}` : undefined}
             tabIndex={0}
           >
-            <Show when={loading() && !searchQuery().trim()}>
+            <Show when={!sync.ready && !searchQuery().trim()}>
               <div
                 class="flex flex-col items-center justify-center py-8 gap-2"
                 style={{ color: "var(--text-weak)" }}
@@ -2553,9 +1911,9 @@ export function Layout(props: ParentProps) {
             </Show>
 
             {/* Normal Session List */}
-            <Show when={!loading() && !searchQuery().trim()}>
+            <Show when={sync.ready && !searchQuery().trim()}>
               <Show
-                when={!sessionError() || hasSessions()}
+                when={!sync.bootstrapError || hasSessions()}
                 fallback={
                   <div
                     class="mx-1 my-3 rounded-md border p-3"
@@ -2571,7 +1929,7 @@ export function Layout(props: ParentProps) {
                       <AlertTriangle class="w-4 h-4 mt-0.5 shrink-0" style={{ color: "var(--text-critical-base)" }} />
                       <div class="min-w-0">
                         <p class="text-sm font-medium">Could not load sessions</p>
-                        <p class="text-xs mt-1" style={{ color: "var(--text-weak)" }}>{sessionError()}</p>
+                        <p class="text-xs mt-1" style={{ color: "var(--text-weak)" }}>{sync.bootstrapError}</p>
                         <div class="mt-3">
                           <Button size="sm" variant="secondary" onClick={retrySessionBootstrap}>
                             Retry
@@ -3159,12 +2517,6 @@ export function Layout(props: ParentProps) {
 
       {/* Keyboard shortcut reference overlay */}
       <ShortcutReference />
-
-      {/* Command palette overlay */}
-      <CommandPalette />
-
-      {/* Vimium-style hint mode overlay */}
-      <HintMode />
 
       {/* Directory-wide worktree event toast */}
       <Show when={worktreeToast()}>

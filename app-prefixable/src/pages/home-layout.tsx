@@ -1,35 +1,33 @@
-import { type ParentProps, createSignal, For, onMount, onCleanup, Show } from "solid-js"
+import { type ParentProps, createSignal, For, onCleanup, Show } from "solid-js"
 import { useNavigate } from "@solidjs/router"
 import { createOpencodeClient } from "../sdk/client"
 import { base64Encode } from "../utils/path"
 import { useServer } from "../context/server"
-import { SDKProvider } from "../context/sdk"
-import { EventProvider } from "../context/events"
-import { SyncProvider } from "../context/sync"
-import { ProviderProvider } from "../context/providers"
-import { MCPProvider } from "../context/mcp"
-import { ConfigProvider } from "../context/config"
-import { useGlobalEvents } from "../context/global-events"
+import { CoreProviders } from "../context/core-providers"
 import { ProjectDialog } from "../components/project-dialog"
 import { Terminal } from "../components/terminal"
-import { getFilename, OpenCodeLogo, ProjectAvatar, type Project } from "../components/shared"
+import { getFilename, OpenCodeLogo, ProjectAvatar } from "../components/shared"
 import { Spinner } from "../components/ui/spinner"
 import { Plus, X, Settings, SquareTerminal, ChevronDown } from "lucide-solid"
-import { dispatchStorageEvent } from "../utils/storage"
-
-// Storage key
-const PROJECTS_STORAGE_KEY = "opencode.projects"
+import { useProjects } from "../context/projects"
 
 /**
  * Layout for the home screen (no active project).
  * Shows the left sidebar strip with projects, but no sessions panel.
  */
 export function HomeLayout(props: ParentProps) {
+  return (
+    <CoreProviders>
+      <HomeContent>{props.children}</HomeContent>
+    </CoreProviders>
+  )
+}
+
+function HomeContent(props: ParentProps) {
   const navigate = useNavigate()
-  const globalEvents = useGlobalEvents()
   const { serverUrl, authHeaders } = useServer()
 
-  const [projects, setProjects] = createSignal<Project[]>([])
+  const projects = useProjects()
   const [projectDialogOpen, setProjectDialogOpen] = createSignal(false)
 
   // Terminal state
@@ -40,17 +38,6 @@ export function HomeLayout(props: ParentProps) {
 
   // Client for PTY operations
   const client = createOpencodeClient({ baseUrl: serverUrl(), headers: authHeaders(), throwOnError: false })
-
-  onMount(() => {
-    try {
-      const stored = localStorage.getItem(PROJECTS_STORAGE_KEY)
-      if (stored) {
-        setProjects(JSON.parse(stored))
-      }
-    } catch (e) {
-      console.error("Failed to load projects:", e)
-    }
-  })
 
   // Cleanup PTY on unmount
   onCleanup(() => {
@@ -104,47 +91,19 @@ export function HomeLayout(props: ParentProps) {
     }
   }
 
-  function saveProjects(list: Project[]) {
-    setProjects(list)
-    const value = JSON.stringify(list)
-    try {
-      localStorage.setItem(PROJECTS_STORAGE_KEY, value)
-    } catch (e) {
-      console.error("Failed to save projects:", e)
-      return
-    }
-    dispatchStorageEvent(PROJECTS_STORAGE_KEY, value)
-  }
-
-  function addProject(worktree: string) {
-    const existing = projects().find((p) => p.worktree === worktree)
-    if (!existing) {
-      saveProjects([...projects(), { worktree }])
-    }
-  }
-
-  function removeProject(worktree: string) {
-    saveProjects(projects().filter((p) => p.worktree !== worktree))
-  }
-
   function handleProjectSelect(worktree: string) {
-    addProject(worktree)
+    projects.touch(worktree)
     navigate(`/${base64Encode(worktree)}/session`)
   }
 
   function navigateToProject(worktree: string) {
+    projects.touch(worktree)
     navigate(`/${base64Encode(worktree)}/session`)
   }
 
   return (
-    <SDKProvider>
-      <SyncProvider>
-        <EventProvider>
-          <ConfigProvider>
-            <ProviderProvider>
-              <MCPProvider>
-            <div class="flex h-screen" style={{ background: "var(--background-stronger)" }}>
-              {/* Project Dialog */}
+    <div class="flex h-screen" style={{ background: "var(--background-stronger)" }}>
+      {/* Project Dialog */}
               <ProjectDialog
                 open={projectDialogOpen()}
                 onClose={() => setProjectDialogOpen(false)}
@@ -168,18 +127,18 @@ export function HomeLayout(props: ParentProps) {
 
                 {/* Project icons */}
                 <div class="flex-1 flex flex-col items-center gap-2 overflow-y-auto w-full px-2 py-3">
-                  <For each={projects()}>
+                  <For each={projects.projects()}>
                     {(project) => (
                       <div
                         onClick={() => navigateToProject(project.worktree)}
                         class="group relative cursor-pointer"
                         title={project.name || getFilename(project.worktree)}
                       >
-                        <ProjectAvatar project={project} size="large" selected={false} badge={globalEvents.badge(project.worktree)} />
+                        <ProjectAvatar project={project} size="large" selected={false} />
                         <button
                           onClick={(e) => {
                             e.stopPropagation()
-                            removeProject(project.worktree)
+                            projects.remove(project.worktree)
                           }}
                           class="absolute -top-1 -right-1 w-4 h-4 rounded-full hidden group-hover:flex items-center justify-center"
                           style={{ background: "var(--surface-strong)", color: "var(--text-base)" }}
@@ -318,12 +277,6 @@ export function HomeLayout(props: ParentProps) {
                   </div>
                 </Show>
               </div>
-            </div>
-              </MCPProvider>
-            </ProviderProvider>
-          </ConfigProvider>
-        </EventProvider>
-      </SyncProvider>
-    </SDKProvider>
+    </div>
   )
 }

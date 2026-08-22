@@ -60,7 +60,9 @@ function loadCredentials(): Record<string, ServerAuth> {
   try {
     const stored = sessionStorage.getItem(SERVERS_CREDS_KEY)
     if (stored) return JSON.parse(stored)
-  } catch {}
+  } catch {
+    // Storage can be unavailable in private browsing contexts.
+  }
   return {}
 }
 
@@ -108,7 +110,9 @@ function loadServers(): ServerConfig[] {
         return parsed
       }
     }
-  } catch {}
+  } catch {
+    // Fall back to the runtime-configured local server.
+  }
   return [createDefaultServer()]
 }
 
@@ -142,7 +146,9 @@ export function ServerProvider(props: ParentProps) {
   // Validate activeId against server list
   const validatedActiveId = initialServers.some((s) => s.id === initialActiveId) ? initialActiveId : "local"
   if (validatedActiveId !== initialActiveId) {
-    try { localStorage.setItem(ACTIVE_SERVER_KEY, validatedActiveId) } catch {}
+    try { localStorage.setItem(ACTIVE_SERVER_KEY, validatedActiveId) } catch {
+      // The in-memory selection still remains valid.
+    }
   }
 
   const [servers, setServers] = createSignal<ServerConfig[]>(initialServers)
@@ -177,7 +183,9 @@ export function ServerProvider(props: ParentProps) {
         if (s.auth.type !== "none") creds[s.id] = s.auth
       }
       sessionStorage.setItem(SERVERS_CREDS_KEY, JSON.stringify(creds))
-    } catch {}
+    } catch {
+      // Persisting server metadata is best-effort.
+    }
   }
 
   function activeServer() {
@@ -224,7 +232,9 @@ export function ServerProvider(props: ParentProps) {
     save(servers().filter((s) => s.id !== id))
     if (activeId() === id) {
       setActiveId("local")
-      try { localStorage.setItem(ACTIVE_SERVER_KEY, "local") } catch {}
+      try { localStorage.setItem(ACTIVE_SERVER_KEY, "local") } catch {
+        // The in-memory selection still changes.
+      }
     }
   }
 
@@ -232,7 +242,9 @@ export function ServerProvider(props: ParentProps) {
     const exists = servers().some((s) => s.id === id)
     const nextId = exists ? id : "local"
     setActiveId(nextId)
-    try { localStorage.setItem(ACTIVE_SERVER_KEY, nextId) } catch {}
+    try { localStorage.setItem(ACTIVE_SERVER_KEY, nextId) } catch {
+      // The in-memory selection still changes.
+    }
   }
 
   return (

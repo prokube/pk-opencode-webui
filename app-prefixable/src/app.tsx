@@ -1,30 +1,36 @@
 import { Router, Route, useNavigate, useParams } from "@solidjs/router"
-import { createEffect, createSignal, onMount, onCleanup, For, type Accessor } from "solid-js"
+import { createEffect, For } from "solid-js"
 import { BasePathProvider, useBasePath } from "./context/base-path"
 import { ServerProvider, useServer } from "./context/server"
 import { BrandingProvider } from "./context/branding"
 import { ThemeProvider } from "./context/theme"
 import { CommandProvider } from "./context/command"
-import { RecentProjectsProvider } from "./context/recent-projects"
-import { SavedPromptsProvider } from "./context/saved-prompts"
-import { GlobalEventsProvider } from "./context/global-events"
+import { ProjectsProvider } from "./context/projects"
 import { DirectoryLayout } from "./pages/directory-layout"
 import { HomeLayout } from "./pages/home-layout"
 import { Session } from "./pages/session"
 import { Settings } from "./pages/settings"
 import { ProjectPicker } from "./pages/project-picker"
-import { base64Decode, deriveDirectoryFromPathname } from "./utils/path"
-import type { Project } from "./components/shared"
+import { base64Decode } from "./utils/path"
+import { legacyStorageValue, workspaceStorageKey } from "./utils/storage"
 
-const PROJECTS_STORAGE_KEY = "opencode.projects"
+function validSessionId(value: string) {
+  return !!value && !value.includes("..") && !/[/\\]/.test(value)
+}
 
-function getLastSessionHref(encodedDir: string): string {
+function getLastSessionHref(encodedDir: string, serverId: string): string {
   try {
     const dir = base64Decode(encodedDir)
-    const last = typeof window !== "undefined"
-      ? window.localStorage.getItem(`opencode.lastSession.${dir}`)
-      : null
-    if (!last || last.includes("..") || /[/\\]/.test(last)) return "session"
+    if (typeof window === "undefined") return "session"
+    const key = workspaceStorageKey(serverId, dir, "lastSession")
+    const current = window.localStorage.getItem(key)
+    const legacy = serverId === "local"
+      ? [window.localStorage.getItem(`opencode.lastSession.${dir}`)]
+      : []
+    const result = legacyStorageValue(serverId, current, legacy, validSessionId)
+    if (result.migrated && result.value) window.localStorage.setItem(key, result.value)
+    const last = result.value
+    if (!last || !validSessionId(last)) return "session"
     return `session/${last}`
   } catch {
     return "session"
@@ -34,14 +40,16 @@ function getLastSessionHref(encodedDir: string): string {
 function DirectoryIndex() {
   const params = useParams<{ dir: string }>()
   const navigate = useNavigate()
-  createEffect(() => navigate(getLastSessionHref(params.dir), { replace: true }))
+  const server = useServer()
+  createEffect(() => navigate(getLastSessionHref(params.dir, server.activeServerId()), { replace: true }))
   return null
 }
 
 function SessionIndex() {
   const params = useParams<{ dir: string }>()
   const navigate = useNavigate()
-  const href = getLastSessionHref(params.dir)
+  const server = useServer()
+  const href = getLastSessionHref(params.dir, server.activeServerId())
   if (href === "session") return <Session />
   const id = href.replace(/^session\//, "")
   createEffect(() => navigate(id, { replace: true }))
@@ -71,103 +79,21 @@ function AppRoutes() {
   )
 }
 
-/**
- * Reads the active directory from window.location (outside Router context).
- * Re-evaluates on popstate and on history.pushState/history.replaceState navigation.
- */
-function useRouteState() {
-  const [dir, setDir] = createSignal<string | undefined>(
-    typeof window === "undefined" ? undefined : deriveDirectoryFromPathname(),
-  )
-  const [pathname, setPathname] = createSignal(
-    typeof window === "undefined" ? "" : window.location.pathname,
-  )
-
-  onMount(() => {
-    function update() {
-      setDir(deriveDirectoryFromPathname())
-      setPathname(window.location.pathname)
-    }
-
-    update()
-
-    // Patch pushState/replaceState to detect SolidJS Router navigations
-    // instead of polling with setInterval
-    const origPushState = history.pushState.bind(history)
-    const origReplaceState = history.replaceState.bind(history)
-    history.pushState = (...args) => { origPushState(...args); update() }
-    history.replaceState = (...args) => { origReplaceState(...args); update() }
-    window.addEventListener("popstate", update)
-
-    onCleanup(() => {
-      history.pushState = origPushState
-      history.replaceState = origReplaceState
-      window.removeEventListener("popstate", update)
-    })
-  })
-
-  return {
-    activeDirectory: dir,
-    pathname,
-  }
-}
-
-function useProjectsList() {
-  const [projects, setProjects] = createSignal<Project[]>([])
-
-  function load() {
-    try {
-      const stored = localStorage.getItem(PROJECTS_STORAGE_KEY)
-      if (stored) {
-        const parsed = JSON.parse(stored)
-        setProjects(Array.isArray(parsed) ? parsed : [])
-      } else {
-        setProjects([])
-      }
-    } catch {
-      setProjects([])
-    }
-  }
-
-  onMount(() => {
-    load()
-    function onStorage(e: StorageEvent) {
-      if (e.key === PROJECTS_STORAGE_KEY) load()
-    }
-    window.addEventListener("storage", onStorage)
-    onCleanup(() => window.removeEventListener("storage", onStorage))
-  })
-
-  return projects
-}
-
-function AppWithServer(props: {
-  projects: () => Project[]
-  activeDirectory: Accessor<string | undefined>
-  pathname: Accessor<string>
-}) {
-  const { serverUrl, activeServerKey } = useServer()
+function AppWithServer() {
+  const { activeServerKey } = useServer()
 
   // Key by server config to force full remount when switching or editing servers
   return (
     <For each={[activeServerKey()]}>
       {() => (
-        <BasePathProvider serverUrl={serverUrl()}>
+        <BasePathProvider>
           <ThemeProvider>
             <BrandingProvider>
-              <RecentProjectsProvider>
-                <SavedPromptsProvider directory={props.activeDirectory}>
-                  <GlobalEventsProvider
-                    projects={props.projects}
-                    activeDirectory={props.activeDirectory}
-                    pathname={props.pathname}
-                  >
-                    <CommandProvider>
-                      <AppRoutes />
-                    </CommandProvider>
-                  </GlobalEventsProvider>
-                </SavedPromptsProvider>
-              </RecentProjectsProvider>
+              <ProjectsProvider>
+                <CommandProvider>
+                  <AppRoutes />
+                </CommandProvider>
+              </ProjectsProvider>
             </BrandingProvider>
           </ThemeProvider>
         </BasePathProvider>
@@ -177,16 +103,9 @@ function AppWithServer(props: {
 }
 
 export function App() {
-  const projects = useProjectsList()
-  const route = useRouteState()
-
   return (
     <ServerProvider>
-      <AppWithServer
-        projects={projects}
-        activeDirectory={route.activeDirectory}
-        pathname={route.pathname}
-      />
+      <AppWithServer />
     </ServerProvider>
   )
 }
