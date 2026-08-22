@@ -28,6 +28,10 @@ interface CommandContextValue {
   getKeyboardShortcuts: () => Command[]
   shortcutRefOpen: () => boolean
   setShortcutRefOpen: (open: boolean) => void
+  paletteOpen: () => boolean
+  openPalette: (query?: string) => void
+  closePalette: () => void
+  paletteQuery: () => string
 }
 
 const CommandContext = createContext<CommandContextValue>()
@@ -93,6 +97,18 @@ export function isDialogOpen(): boolean {
 export function CommandProvider(props: ParentProps) {
   const [commands, setCommands] = createSignal<Command[]>([])
   const [shortcutRefOpen, setShortcutRefOpen] = createSignal(false)
+  const [paletteOpen, setPaletteOpen] = createSignal(false)
+  const [paletteQuery, setPaletteQuery] = createSignal("")
+
+  function openPalette(query = "") {
+    setPaletteQuery(query)
+    setPaletteOpen(true)
+  }
+
+  function closePalette() {
+    setPaletteOpen(false)
+    setPaletteQuery("")
+  }
 
   function register(newCommands: Command[]) {
     setCommands((prev) => {
@@ -166,9 +182,21 @@ export function CommandProvider(props: ParentProps) {
     }
     window.addEventListener("keydown", onQuestionMark)
 
+    function onPalette(e: KeyboardEvent) {
+      if (!(e.metaKey || e.ctrlKey) || e.key.toLowerCase() !== "k") return
+      if (e.shiftKey || e.altKey) return
+      if ((e.target as HTMLElement | null)?.closest(".xterm")) return
+      if (isDialogOpen() && !paletteOpen()) return
+      e.preventDefault()
+      if (paletteOpen()) closePalette()
+      else openPalette()
+    }
+    window.addEventListener("keydown", onPalette)
+
     onCleanup(() => {
       unsub()
       window.removeEventListener("keydown", onQuestionMark)
+      window.removeEventListener("keydown", onPalette)
     })
   })
 
@@ -184,6 +212,10 @@ export function CommandProvider(props: ParentProps) {
     getKeyboardShortcuts,
     shortcutRefOpen,
     setShortcutRefOpen,
+    paletteOpen,
+    openPalette,
+    closePalette,
+    paletteQuery,
   }
 
   return <CommandContext.Provider value={value}>{props.children}</CommandContext.Provider>

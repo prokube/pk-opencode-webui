@@ -1,4 +1,4 @@
-import { type ParentProps, createSignal, For, onCleanup, Show } from "solid-js"
+import { type ParentProps, createSignal, For, onCleanup, onMount, Show } from "solid-js"
 import { useNavigate } from "@solidjs/router"
 import { createOpencodeClient } from "../sdk/client"
 import { base64Encode } from "../utils/path"
@@ -11,6 +11,8 @@ import { Spinner } from "../components/ui/spinner"
 import { Plus, X, Settings, SquareTerminal, ChevronDown } from "lucide-solid"
 import { useProjects } from "../context/projects"
 import { useProjectActivity } from "../context/project-activity"
+import { CommandPalette } from "../components/command-palette"
+import { useCommand } from "../context/command"
 
 /**
  * Layout for the home screen (no active project).
@@ -30,6 +32,7 @@ function HomeContent(props: ParentProps) {
 
   const projects = useProjects()
   const activity = useProjectActivity()
+  const command = useCommand()
   const [projectDialogOpen, setProjectDialogOpen] = createSignal(false)
 
   // Terminal state
@@ -39,6 +42,24 @@ function HomeContent(props: ParentProps) {
   const [terminalHeight, setTerminalHeight] = createSignal(300)
   let disposed = false
   let terminalOperation = 0
+
+  onMount(() => {
+    command.register([
+      {
+        id: "project.open",
+        title: "Open Project",
+        description: "Choose or add a project",
+        onSelect: () => setProjectDialogOpen(true),
+      },
+      {
+        id: "settings.open",
+        title: "Open Settings",
+        description: "Configure providers and application settings",
+        onSelect: () => navigate("/settings"),
+      },
+    ])
+    onCleanup(() => command.unregister(["project.open", "settings.open"]))
+  })
 
   // Client for PTY operations
   const client = createOpencodeClient({ baseUrl: serverUrl(), headers: authHeaders(), throwOnError: false })
@@ -116,6 +137,7 @@ function HomeContent(props: ParentProps) {
 
   return (
     <div class="flex h-screen" style={{ background: "var(--background-stronger)" }}>
+      <CommandPalette />
       {/* Project Dialog */}
               <ProjectDialog
                 open={projectDialogOpen()}

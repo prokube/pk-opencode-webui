@@ -73,6 +73,7 @@ import { LOCAL_SERVER_ID } from "../context/server";
 import { legacyStorageValue, serverStorageKey, workspaceStorageKey } from "../utils/storage";
 import { sessionNeighbor } from "../utils/session-load";
 import { isSessionNotFound, mapWithConcurrency, selectSessionRange, selectedRootSessions, toggleSessionSelection } from "../utils/session-selection";
+import { CommandPalette } from "../components/command-palette";
 
 // Storage keys
 const SIDEBAR_EXPANDED_KEY = "opencode.sidebarExpanded";
@@ -2669,6 +2670,7 @@ export function Layout(props: ParentProps) {
       />
 
       {/* Keyboard shortcut reference overlay */}
+      <CommandPalette />
       <ShortcutReference />
 
       {/* Directory-wide worktree event toast */}
