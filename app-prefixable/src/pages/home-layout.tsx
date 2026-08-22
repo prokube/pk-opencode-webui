@@ -169,7 +169,7 @@ function HomeContent(props: ParentProps) {
                         class="group relative cursor-pointer"
                         title={project.name || getFilename(project.worktree)}
                       >
-                        <ProjectAvatar project={project} size="large" selected={false} working={activity.working(project.worktree)} />
+                        <ProjectAvatar project={project} size="large" selected={false} badge={activity.badge(project.worktree)} />
                         <button
                           onClick={(e) => {
                             e.stopPropagation()

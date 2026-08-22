@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { reduceProjectActivity } from "../src/context/project-activity"
+import { projectActivityBadge, reduceProjectActivity } from "../src/context/project-activity"
 
 describe("project activity", () => {
   test("tracks status and idle events per directory", () => {
@@ -36,5 +36,12 @@ describe("project activity", () => {
       type: "message.part.updated",
       properties: { sessionID: "ses_1" },
     })).toBe(state)
+  })
+
+  test("prioritizes permissions, then questions, then running sessions", () => {
+    const statuses = { ses_1: { type: "busy" as const }, ses_2: { type: "retry" as const, attempt: 1, message: "wait", next: 1 } }
+    expect(projectActivityBadge(statuses, 2, 3)).toEqual({ type: "permission", count: 3 })
+    expect(projectActivityBadge(statuses, 2, 0)).toEqual({ type: "question", count: 2 })
+    expect(projectActivityBadge(statuses, 0, 0)).toEqual({ type: "working", count: 2 })
   })
 })

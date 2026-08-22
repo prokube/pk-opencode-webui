@@ -188,6 +188,9 @@ export function Layout(props: ParentProps) {
   const searchTimer = { id: undefined as ReturnType<typeof setTimeout> | undefined };
   let searchInputRef: HTMLInputElement | undefined;
 
+  createEffect(() => projectActivity.setActive(directory));
+  onCleanup(() => projectActivity.setActive(undefined));
+
   onCleanup(() => {
     if (worktreeToastTimer.id !== undefined) clearTimeout(worktreeToastTimer.id);
   });
@@ -694,6 +697,13 @@ export function Layout(props: ParentProps) {
     Object.values(events.status).some((status) => status.type === "busy" || status.type === "retry") ||
     (!!directory && projectActivity.working(directory)),
   );
+  const currentProjectBadge = createMemo(() => {
+    const pendingPermissions = permission.pending().length
+    if (pendingPermissions) return { type: "permission" as const, count: pendingPermissions }
+    const pendingQuestions = Object.values(events.pendingQuestions).reduce((count, items) => count + (items?.length ?? 0), 0)
+    if (pendingQuestions) return { type: "question" as const, count: pendingQuestions }
+    if (currentProjectWorking()) return { type: "working" as const, count: 1 }
+  });
 
   const projectName = createMemo(() => {
     const project = currentProject();
@@ -1684,9 +1694,9 @@ export function Layout(props: ParentProps) {
                   project={project}
                   size="large"
                   selected={project.worktree === directory}
-                  working={project.worktree === directory
-                    ? currentProjectWorking()
-                    : projectActivity.working(project.worktree)}
+                  badge={project.worktree === directory
+                    ? currentProjectBadge()
+                    : projectActivity.badge(project.worktree)}
                 />
                 <button
                   onClick={(e) => {
@@ -1807,7 +1817,7 @@ export function Layout(props: ParentProps) {
             style={{ "border-bottom": "1px solid var(--border-base)" }}
           >
             <Show when={currentProject()}>
-              {(project) => <ProjectAvatar project={project()} size="small" working={currentProjectWorking()} />}
+              {(project) => <ProjectAvatar project={project()} size="small" badge={currentProjectBadge()} />}
             </Show>
             <div class="min-w-0 flex-1">
               <div

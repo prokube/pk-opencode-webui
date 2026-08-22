@@ -1,5 +1,6 @@
-import { Folder, Loader2 } from "lucide-solid"
+import { CircleHelp, Folder, Loader2, ShieldAlert } from "lucide-solid"
 import type { Project } from "../context/projects"
+import type { ProjectActivityBadge } from "../context/project-activity"
 
 export function getFilename(path: string): string {
   return path.split("/").filter(Boolean).pop() || path
@@ -32,11 +33,17 @@ export function ProjectAvatar(props: {
   size?: "small" | "large"
   selected?: boolean
   working?: boolean
+  badge?: ProjectActivityBadge
 }) {
   const name = () => props.project.name || getFilename(props.project.worktree)
   const initials = () => getInitials(name())
   const size = () => (props.size === "large" ? "w-10 h-10" : "w-8 h-8")
   const iconSize = () => (props.size === "large" ? "w-5 h-5" : "w-4 h-4")
+  const activityLabel = () => props.badge?.type === "permission"
+    ? `${props.badge.count} permission request${props.badge.count === 1 ? "" : "s"}`
+    : props.badge?.type === "question"
+      ? `${props.badge.count} pending question${props.badge.count === 1 ? "" : "s"}`
+      : "Project has a running session"
 
   // pkui button style: white bg, gray border, brand color when selected/hovered
   return (
@@ -52,14 +59,24 @@ export function ProjectAvatar(props: {
       >
         {initials() || <Folder class={iconSize()} />}
       </div>
-      {props.working && (
+      {(props.badge || props.working) && (
         <span
           class="absolute -right-1 -bottom-1 w-5 h-5 rounded-full flex items-center justify-center"
           style={{ background: "var(--background-base)", border: "1px solid var(--border-base)" }}
-          title="A session is running in this project"
-          aria-label="Project has a running session"
+          title={activityLabel()}
+          aria-label={activityLabel()}
+          role="status"
         >
-          <Loader2 class="w-3 h-3 animate-spin" style={{ color: "var(--interactive-base)" }} />
+          {props.badge?.type === "permission"
+            ? <ShieldAlert class="w-3 h-3" style={{ color: "var(--interactive-base)" }} />
+            : props.badge?.type === "question"
+              ? <CircleHelp class="w-3 h-3" style={{ color: "var(--icon-warning-base)" }} />
+              : <Loader2 class="w-3 h-3 animate-spin" style={{ color: "var(--interactive-base)" }} />}
+          {props.badge && props.badge.count > 1 && (
+            <span class="absolute -top-1.5 -right-1.5 min-w-3 h-3 px-0.5 rounded-full text-[8px] leading-3 text-center" style={{ background: "var(--interactive-critical)", color: "white" }}>
+              {Math.min(props.badge.count, 9)}{props.badge.count > 9 ? "+" : ""}
+            </span>
+          )}
         </span>
       )}
     </div>
