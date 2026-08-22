@@ -25,6 +25,7 @@ import { MCPDialog } from "../components/mcp-dialog";
 import { MCPAddDialog } from "../components/mcp-add-dialog";
 import { PickerDialog } from "../components/picker-dialog";
 import { QuestionPrompt } from "../components/question-prompt";
+import { FollowupDock } from "../components/followup-dock";
 import { PermissionPrompt } from "../components/permission-prompt";
 import { SessionInfo } from "../components/session-info";
 import { SessionSidebar } from "../components/session-sidebar";
@@ -53,6 +54,7 @@ import {
   sessionDraftKey,
   sessionRouteKey,
 } from "../utils/session-load";
+import { canDispatchFollowup, followupStorageKey, parseFollowups, parseLegacyFollowupMap, type FollowupItem } from "../utils/followups";
 
 const ACCEPTED_TYPES = [
   "image/png",
@@ -185,6 +187,9 @@ export function Session() {
   const [loadingHistory, setLoadingHistory] = createSignal(false);
   const [reverting, setReverting] = createSignal(false);
   const [loadError, setLoadError] = createSignal<string | null>(null);
+  const [followups, setFollowups] = createSignal<FollowupItem[]>([]);
+  const [dispatchingFollowup, setDispatchingFollowup] = createSignal(false);
+  const [pausedFollowups, setPausedFollowups] = createSignal<Set<string>>(new Set());
   const lifetime = { active: true, load: 0, create: 0, submit: 0 };
   onCleanup(() => {
     lifetime.active = false;
@@ -192,6 +197,63 @@ export function Session() {
     lifetime.create += 1;
     lifetime.submit += 1;
   });
+
+  function saveFollowups(items: FollowupItem[], id = sessionId(), updateView = id === sessionId()) {
+    if (!id) return false;
+    try {
+      localStorage.setItem(followupStorageKey(LOCAL_SERVER_ID, directory ?? base64Decode(params.dir), id), JSON.stringify(items));
+      if (updateView) setFollowups(items);
+      if (!items.length) setFollowupPaused(false, id);
+      return true;
+    } catch {
+      setError("Could not persist the follow-up queue.");
+      return false;
+    }
+  }
+
+  function followupPaused(id = sessionId()) {
+    return !!id && pausedFollowups().has(id);
+  }
+
+  function setFollowupPaused(paused: boolean, id = sessionId()) {
+    if (!id) return;
+    setPausedFollowups((current) => {
+      const next = new Set(current);
+      if (paused) next.add(id);
+      if (!paused) next.delete(id);
+      return next;
+    });
+  }
+
+  createEffect(on(() => `${directory ?? params.dir}:${sessionId() ?? ""}:${sessionModel()?.providerID ?? ""}/${sessionModel()?.modelID ?? ""}`, () => {
+    const id = sessionId();
+    const model = sessionModel();
+    if (!id || !model) {
+      setFollowups([]);
+      return;
+    }
+    try {
+      const key = followupStorageKey(LOCAL_SERVER_ID, directory ?? base64Decode(params.dir), id);
+      const defaults = {
+        agent: providers.selectedAgent || "build",
+        model,
+        variant: providers.variant.current(id, model, providers.selectedAgent),
+      };
+      const current = localStorage.getItem(key);
+      const legacyKey = `opencode.followup.${params.dir}`;
+      const legacyRaw = current ? null : localStorage.getItem(legacyKey);
+      const legacy = parseLegacyFollowupMap(legacyRaw, id, defaults);
+      const items = current ? parseFollowups(current, defaults) : legacy.items;
+      setFollowups(items);
+      localStorage.setItem(key, JSON.stringify(items));
+      if (legacyRaw && legacy.items.length) {
+        if (legacy.remaining) localStorage.setItem(legacyKey, legacy.remaining);
+        else localStorage.removeItem(legacyKey);
+      }
+    } catch {
+      setFollowups([]);
+    }
+  }));
 
   // Find the Nth-from-last user message (1-indexed: 1 = last, 2 = second-to-last)
   function getNthLastUserMsg(msgs: DisplayMessage[], n: number) {
@@ -401,6 +463,7 @@ export function Session() {
     }
 
     setSessionId(id);
+    if (!preservesSubmission) setOptimisticMessage(null);
     // Restore draft for the new session (or clear if none saved)
     const saved = drafts.get(key);
     setInput(saved?.text ?? "");
@@ -801,6 +864,7 @@ export function Session() {
           if (!id) return;
           if (reverting()) return;
           const route = sessionRouteKey(LOCAL_SERVER_ID, directory ?? base64Decode(params.dir), params.id);
+          setFollowupPaused(true);
           setReverting(true);
           try {
             await client.session.unrevert({ sessionID: id });
@@ -841,6 +905,7 @@ export function Session() {
     const textPart = target.parts.find((p) => p.type === "text") as
       | { type: "text"; text?: string }
       | undefined;
+    setFollowupPaused(true);
     setReverting(true);
     try {
       // If processing, abort first (clears pendingQuestion too)
@@ -1148,6 +1213,7 @@ export function Session() {
     const route = sessionRouteKey(LOCAL_SERVER_ID, directory ?? base64Decode(params.dir), params.id);
     const q = pendingQuestion();
 
+    setFollowupPaused(true, id);
     try {
       console.log("[Session] Aborting session:", id);
       await client.session.abort({ sessionID: id, directory });
@@ -1301,12 +1367,12 @@ export function Session() {
     } satisfies DisplayMessage;
   }
 
-  async function sendMessage(e: SubmitEvent) {
-    e.preventDefault();
-    const text = input().trim();
+  async function sendMessage(e?: SubmitEvent, queued?: FollowupItem) {
+    e?.preventDefault();
+    const text = queued?.text ?? input().trim();
 
     // Intercept `/undo N` — revert N user turns at once (explicit submit only)
-    const undoMatch = text.match(/^\/undo\s+(\d+)$/i);
+    const undoMatch = queued ? null : text.match(/^\/undo\s+(\d+)$/i);
     if (undoMatch) {
       const n = parseInt(undoMatch[1], 10);
       if (n > 0) {
@@ -1316,8 +1382,8 @@ export function Session() {
       }
     }
 
-    const files = fileContext();
-    const images = imageAttachments();
+    const files = queued ? [] : fileContext();
+    const images = queued ? [] : imageAttachments();
     if (!text && files.length === 0 && images.length === 0) return;
     if (loading()) return;
     if (loadingHistory() || loadError()) {
@@ -1338,7 +1404,7 @@ export function Session() {
     }
 
     // Require explicit model selection to avoid OpenCode auto-selecting a broken provider
-    const model = sessionModel();
+    const model = queued?.model ?? sessionModel();
     if (!model) {
       setError(
         "Please select a model before sending messages. Click the model button in the header.",
@@ -1354,9 +1420,35 @@ export function Session() {
       return;
     }
 
+    const currentID = sessionId();
+    const status = currentID ? events.status[currentID]?.type : undefined;
+    if (!queued && currentID && (processing() || status === "busy" || status === "retry")) {
+      if (files.length || images.length) {
+        setError("Attachments cannot be queued while the session is running. They remain in the composer.");
+        return;
+      }
+      const item: FollowupItem = {
+        id: crypto.randomUUID(),
+        messageID: ascendingID("msg"),
+        text,
+        agent: providers.selectedAgent || "build",
+        model,
+        variant: providers.variant.current(currentID, model, providers.selectedAgent),
+        createdAt: Date.now(),
+      };
+      if (!saveFollowups([...followups(), item], currentID)) return;
+      setInput("");
+      setDragHeight(0);
+      if (inputRef) inputRef.style.height = "";
+      drafts.delete(sessionDraftKey(LOCAL_SERVER_ID, params.dir, currentID));
+      setError(null);
+      return;
+    }
+
     const submitDirectory = directory ?? base64Decode(params.dir);
     const submitDirSlug = params.dir;
     const originalID = sessionId();
+    const queuedItems = queued ? followups() : [];
     const originalDraftID = originalID ?? draftID();
     const originalDraft = sessionDraftKey(LOCAL_SERVER_ID, submitDirSlug, originalDraftID);
     const scope = {
@@ -1380,7 +1472,7 @@ export function Session() {
     drafts.delete(originalDraft);
 
     // Optimistic update - show user message immediately while waiting for server
-    const messageID = ascendingID("msg");
+    const messageID = queued?.messageID ?? ascendingID("msg");
     const textPartID = ascendingID("prt");
     const userMessage = optimisticUserMessage(text || "(files attached)", sessionId() || "", messageID, textPartID);
     setOptimisticMessage(userMessage);
@@ -1495,25 +1587,34 @@ export function Session() {
         sessionID: id,
         messageID,
         parts,
-        agent: providers.selectedAgent || "build",
+        agent: (queued?.agent ?? providers.selectedAgent) || "build",
       };
 
       if (model) {
         promptPayload.model = model;
       }
 
-      promptPayload.variant = providers.variant.current(id, model, providers.selectedAgent);
+      promptPayload.variant = queued?.variant ?? providers.variant.current(id, model, providers.selectedAgent);
 
       const promptRes = await client.session.promptAsync(promptPayload);
-      if (!current()) return;
       if ("error" in promptRes && promptRes.error) {
         throw new Error(formatStartError(promptRes.error));
       }
+      if (queued) saveFollowups(queuedItems.filter((item) => item.id !== queued.id), id, current());
+      if (!current()) return;
       console.log("[Session] Prompt response:", promptRes);
 
       // Start processing - SSE events will handle updates and completion
       startProcessing();
     } catch (err) {
+      if (queued) {
+        saveFollowups(queuedItems.map((item) => item.id === queued.id ? { ...item, failed: true } : item), originalID, current());
+        if (current()) {
+          setOptimisticMessage(null);
+          setError(`Failed to send queued follow-up: ${formatStartError(err)}`);
+        }
+        return;
+      }
       if (scope.token === lifetime.submit) saveDraft(createdID ?? originalID);
       if (createdID) void sync.session.sync(createdID);
       if (!current()) return;
@@ -1529,6 +1630,56 @@ export function Session() {
       if (current()) setLoading(false);
     }
   }
+
+  function retryFollowup(id: string) {
+    if (dispatchingFollowup()) return;
+    setFollowupPaused(false);
+    saveFollowups(followups().map((item) => item.id === id ? { ...item, failed: false } : item));
+  }
+
+  function deleteFollowup(id: string) {
+    if (dispatchingFollowup()) return;
+    saveFollowups(followups().filter((item) => item.id !== id));
+  }
+
+  function editFollowup(id: string) {
+    if (dispatchingFollowup()) return;
+    const item = followups().find((candidate) => candidate.id === id);
+    if (!item) return;
+    if (input().trim() || fileContext().length || imageAttachments().length) {
+      setError("Clear or send the current composer draft before editing a queued follow-up.");
+      return;
+    }
+    setInput(item.text);
+    if (inputRef) applyInputAndAutogrow(inputRef, item.text);
+    deleteFollowup(id);
+    inputRef?.focus();
+  }
+
+  createEffect(() => {
+    const id = sessionId();
+    const item = followups()[0];
+    const status = id ? events.status[id]?.type : undefined;
+    const eligible = canDispatchFollowup({
+      ready: events.statusReady(),
+      working: status === "busy" || status === "retry",
+      processing: processing(),
+      loading: loading(),
+      blocked: inputBlocked(),
+      historyLoading: loadingHistory(),
+      loadError: !!loadError(),
+      child: !!sync.session.get(id ?? "")?.parentID,
+      composerEmpty: !input().trim() && fileContext().length === 0 && imageAttachments().length === 0,
+      dispatching: dispatchingFollowup(),
+      paused: followupPaused(),
+      reverting: reverting(),
+      providerConnected: !!item && providers.connected.includes(item.model.providerID),
+      item,
+    });
+    if (!eligible) return;
+    setDispatchingFollowup(true);
+    queueMicrotask(() => void sendMessage(undefined, item).finally(() => setDispatchingFollowup(false)));
+  });
 
   // Chat view component
   function ChatView() {
@@ -1612,6 +1763,16 @@ export function Session() {
             </div>
           </Show>
         </div>
+
+        <FollowupDock
+          items={followups()}
+          sending={dispatchingFollowup()}
+          paused={followupPaused()}
+          onResume={() => setFollowupPaused(false)}
+          onRetry={retryFollowup}
+          onEdit={editFollowup}
+          onDelete={deleteFollowup}
+        />
 
         {/* Input */}
         <div
