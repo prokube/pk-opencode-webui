@@ -8,13 +8,14 @@ import { useConfig } from "../context/config"
 import { MCPAddDialog } from "../components/mcp-add-dialog"
 import { ConfirmDialog } from "../components/confirm-dialog"
 import { Button } from "../components/ui/button"
-import { Check, Copy, Plug, GitBranch, Server, ExternalLink, Key, Search, X, Trash2, Pencil, Palette, Sun, Moon, Monitor, BookOpen, Plus, Save, Settings2, Shield, Cpu, Wrench, ChevronDown, ChevronRight, Info } from "lucide-solid"
+import { Check, Copy, Plug, GitBranch, Server, ExternalLink, Key, Search, X, Trash2, Pencil, Palette, Sun, Moon, Monitor, BookOpen, Plus, Save, Settings2, Shield, Cpu, Wrench, ChevronDown, ChevronRight, Info, Bookmark } from "lucide-solid"
 import { useTheme } from "../context/theme"
 import { useOptionalPermission } from "../context/permission"
 import { SETTINGS_BASE_TABS } from "./settings-tabs"
 import { writeFile } from "../utils/extended-api"
 import { OPENAI_BROWSER_OAUTH_UNSUPPORTED_MESSAGE, browserOAuthUnsupported, extractProviderAuthCode, providerOAuthMethodUnsupported } from "../utils/provider-auth"
 import type { Config, PermissionActionConfig } from "../sdk/client"
+import { SavedPromptsSettings } from "../components/saved-prompts-settings"
 
 // Connected via environment or built-in defaults, not removable by auth.remove.
 const NON_REMOVABLE_PROVIDER_IDS = new Set(["amazon-bedrock", "opencode"])
@@ -631,6 +632,7 @@ Add your project-specific instructions here.
       { id: "providers", label: "Providers", icon: () => <Plug class="w-4 h-4" />, scope: "Global + Project" },
       { id: "git", label: "Git", icon: () => <GitBranch class="w-4 h-4" />, scope: "Global" },
       { id: "mcp", label: "MCP Servers", icon: () => <Server class="w-4 h-4" />, scope: "Global + Project" },
+      { id: "prompts", label: "Prompts", icon: () => <Bookmark class="w-4 h-4" />, scope: directory ? "Global + Project" : "Global" },
       { id: "instructions", label: "Instructions", icon: () => <BookOpen class="w-4 h-4" />, scope: directory ? "Project" : null },
     ]
     // Only show Project Config tab when a project directory is selected
@@ -2047,6 +2049,10 @@ Add your project-specific instructions here.
               </Show>
               </Show>
             </div>
+          </Show>
+
+          <Show when={activeTab() === "prompts"}>
+            <SavedPromptsSettings directory={directory} />
           </Show>
 
           {/* Project Config Tab */}

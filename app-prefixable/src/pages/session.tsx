@@ -55,6 +55,7 @@ import {
   sessionRouteKey,
 } from "../utils/session-load";
 import { canDispatchFollowup, followupStorageKey, parseFollowups, parseLegacyFollowupMap, type FollowupItem } from "../utils/followups";
+import { useSavedPrompts } from "../context/saved-prompts";
 
 const ACCEPTED_TYPES = [
   "image/png",
@@ -105,6 +106,7 @@ export function Session() {
   const terminal = useTerminal();
   const appConfig = useConfig();
   const command = useCommand();
+  const savedPrompts = useSavedPrompts();
 
   const [sessionId, setSessionId] = createSignal(params.id);
 
@@ -348,6 +350,7 @@ export function Session() {
   const [showAgentPicker, setShowAgentPicker] = createSignal(false);
   const [showFilePicker, setShowFilePicker] = createSignal(false);
   const [showForkPicker, setShowForkPicker] = createSignal(false);
+  const [showPromptPicker, setShowPromptPicker] = createSignal(false);
 
   const [fileContext, setFileContext] = createSignal<FileContext[]>([]);
   const [imageAttachments, setImageAttachments] = createSignal<
@@ -688,6 +691,13 @@ export function Session() {
         onSelect: () => {
           setShowAgentPicker(true);
         },
+      },
+      {
+        id: "prompt.choose",
+        title: "Saved Prompt",
+        description: "Insert a saved prompt into the composer",
+        slash: "prompt",
+        onSelect: () => setShowPromptPicker(true),
       },
       {
         id: "mcp.manage",
@@ -1041,6 +1051,7 @@ export function Session() {
       showModelPicker() ||
       showVariantPicker() ||
       showAgentPicker() ||
+      showPromptPicker() ||
       showFilePicker() ||
       showForkPicker()
     ) return;
@@ -2184,6 +2195,27 @@ export function Session() {
               providers.setSelectedAgent(item.id);
             }}
             onClose={() => setShowAgentPicker(false)}
+          />
+        </Show>
+
+        <Show when={showPromptPicker()}>
+          <PickerDialog
+            title="Insert Saved Prompt"
+            placeholder="Filter saved prompts..."
+            emptyMessage={savedPrompts.loading() ? "Loading saved prompts..." : "No saved prompts. Add one in Settings > Prompts."}
+            items={savedPrompts.prompts().map((prompt) => ({
+              id: prompt.id,
+              title: prompt.title,
+              description: prompt.text.length > 100 ? `${prompt.text.slice(0, 100)}...` : prompt.text,
+              group: prompt.scope === "project" ? "Project" : "Global",
+              groupKey: prompt.scope,
+            }))}
+            onSelect={(item) => {
+              const prompt = savedPrompts.prompts().find((candidate) => candidate.id === item.id);
+              if (!prompt || !inputRef) return;
+              applyInputAndAutogrow(inputRef, prompt.text);
+            }}
+            onClose={() => setShowPromptPicker(false)}
           />
         </Show>
 

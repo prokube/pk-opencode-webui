@@ -4,6 +4,7 @@ import { MCPProvider } from "./mcp"
 import { ProviderProvider } from "./providers"
 import { SDKProvider } from "./sdk"
 import { SyncProvider } from "./sync"
+import { SavedPromptsProvider } from "./saved-prompts"
 
 export function CoreProviders(props: ParentProps & { directory?: string }) {
   return (
@@ -11,7 +12,9 @@ export function CoreProviders(props: ParentProps & { directory?: string }) {
       <SyncProvider>
         <ConfigProvider>
           <ProviderProvider>
-            <MCPProvider>{props.children}</MCPProvider>
+            <MCPProvider>
+              <SavedPromptsProvider>{props.children}</SavedPromptsProvider>
+            </MCPProvider>
           </ProviderProvider>
         </ConfigProvider>
       </SyncProvider>

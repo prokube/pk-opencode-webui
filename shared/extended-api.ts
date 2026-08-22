@@ -87,6 +87,218 @@ function getConfigDir(): string {
   return process.env.OPENCODE_CONFIG_DIR || nodePath.join(homeDir, ".config", "opencode")
 }
 
+export interface StoredPrompt {
+  id: string
+  title: string
+  text: string
+  createdAt: number
+  scope: "global" | "project"
+}
+
+type PromptScope = StoredPrompt["scope"]
+
+function parseCreatedAt(value: unknown): number | null {
+  if (typeof value === "number" && Number.isFinite(value)) return value
+  if (typeof value !== "string" || !value.trim()) return null
+  const numeric = Number(value)
+  if (Number.isFinite(numeric)) return numeric
+  const timestamp = Date.parse(value)
+  return Number.isNaN(timestamp) ? null : timestamp
+}
+
+function parsePrompt(item: unknown, scope: PromptScope): StoredPrompt | null {
+  if (!item || typeof item !== "object") return null
+  const row = item as Record<string, unknown>
+  if (typeof row.id !== "string" || !row.id) return null
+  const title = typeof row.title === "string" ? row.title : typeof row.name === "string" ? row.name : null
+  const text = typeof row.text === "string" ? row.text : typeof row.prompt === "string" ? row.prompt : typeof row.content === "string" ? row.content : null
+  const createdAt = parseCreatedAt(row.createdAt ?? row.created ?? row.timestamp)
+  if (title === null || text === null || createdAt === null) return null
+  return { id: row.id, title, text, createdAt, scope }
+}
+
+export function parsePromptList(raw: string, scope: PromptScope, strict = false): StoredPrompt[] {
+  const parsed = JSON.parse(raw) as unknown
+  const row = parsed && typeof parsed === "object" ? parsed as Record<string, unknown> : undefined
+  const prompts = row?.prompts
+  const list = Array.isArray(parsed)
+    ? parsed
+    : Array.isArray(prompts)
+      ? prompts
+      : prompts && typeof prompts === "object" && Array.isArray((prompts as Record<string, unknown>)[scope])
+        ? (prompts as Record<string, unknown>)[scope] as unknown[]
+        : Array.isArray(row?.[scope])
+          ? row[scope] as unknown[]
+          : null
+  if (!list) throw new Error(`invalid saved prompts format for ${scope}`)
+  const parsedItems = list.map((item) => parsePrompt(item, scope))
+  if (strict && parsedItems.some((item) => !item)) {
+    throw new PromptMutationError(`invalid ${scope} saved prompt entry`, 409)
+  }
+  return parsedItems.filter((item): item is StoredPrompt => !!item)
+}
+
+async function readPromptFile(path: string, scope: PromptScope, strict = false) {
+  try {
+    return parsePromptList(await fs.promises.readFile(path, "utf-8"), scope, strict)
+  } catch (e) {
+    const code = typeof e === "object" && e && "code" in e ? (e as { code?: string }).code : undefined
+    if (code === "ENOENT") return []
+    throw e
+  }
+}
+
+async function writePromptFile(path: string, prompts: StoredPrompt[]) {
+  await fs.promises.mkdir(nodePath.dirname(path), { recursive: true })
+  const tmp = `${path}.tmp-${process.pid}-${crypto.randomUUID()}`
+  try {
+    await fs.promises.writeFile(tmp, JSON.stringify(prompts, null, 2), "utf-8")
+    await fs.promises.rename(tmp, path)
+  } catch (e) {
+    await fs.promises.rm(tmp, { force: true }).catch(() => undefined)
+    throw e
+  }
+}
+
+async function projectPromptFile(directory: string, create: boolean) {
+  const parent = nodePath.join(directory, ".opencode")
+  const directoryReal = await fs.promises.realpath(directory)
+  if (create) await fs.promises.mkdir(parent, { recursive: true })
+  const stat = await fs.promises.lstat(parent).catch((e) => {
+    const code = typeof e === "object" && e && "code" in e ? (e as { code?: string }).code : undefined
+    if (code === "ENOENT" && !create) return null
+    throw e
+  })
+  if (!stat) return nodePath.join(directoryReal, ".opencode", "saved-prompts.json")
+  const parentReal = await fs.promises.realpath(parent)
+  if (!stat.isDirectory() || stat.isSymbolicLink() || !isPathWithinRoot(parentReal, directoryReal)) {
+    throw new PromptMutationError("project prompt directory is not safe", 403)
+  }
+  const file = nodePath.join(parentReal, "saved-prompts.json")
+  const fileStat = await fs.promises.lstat(file).catch((e) => {
+    const code = typeof e === "object" && e && "code" in e ? (e as { code?: string }).code : undefined
+    if (code === "ENOENT") return null
+    throw e
+  })
+  if (fileStat?.isSymbolicLink()) throw new PromptMutationError("project prompt file is not safe", 403)
+  return file
+}
+
+let promptMutationQueue = Promise.resolve()
+
+function queuePromptMutation<T>(run: () => Promise<T>) {
+  const result = promptMutationQueue.catch(() => undefined).then(run)
+  promptMutationQueue = result.then(() => undefined, () => undefined)
+  return result
+}
+
+function validPromptId(id: string) {
+  return id.length > 0 && id.length <= 200 && !id.includes("/") && !id.includes("\\")
+}
+
+class PromptMutationError extends Error {
+  constructor(message: string, readonly status: number) {
+    super(message)
+  }
+}
+
+type PromptFiles = { global: string; project: string | null; directory: string | null }
+
+async function promptFiles(url: URL): Promise<PromptFiles | Response> {
+  const directory = url.searchParams.get("directory")
+  const validated = directory ? await validatePath(directory, getAllowedRoot()) : null
+  if (directory && !validated) return Response.json({ error: "directory must be within allowed directory" }, { status: 403 })
+  try {
+    return {
+      global: nodePath.join(getConfigDir(), "saved-prompts.json"),
+      project: validated ? await projectPromptFile(validated, false) : null,
+      directory: validated,
+    }
+  } catch (e) {
+    if (e instanceof PromptMutationError) return Response.json({ error: e.message }, { status: e.status })
+    console.error("[ExtAPI] saved prompts path error:", e)
+    return internalError("failed to resolve saved prompts path")
+  }
+}
+
+type PromptState = { global: StoredPrompt[]; project: StoredPrompt[] }
+
+async function readPrompts(files: PromptFiles, strict = false): Promise<PromptState> {
+  const [global, project] = await Promise.all([
+    readPromptFile(files.global, "global", strict),
+    files.project ? readPromptFile(files.project, "project", strict) : Promise.resolve([]),
+  ])
+  if (strict) {
+    const ids = [...global, ...project].map((prompt) => prompt.id)
+    if (new Set(ids).size !== ids.length) throw new PromptMutationError("saved prompt IDs must be unique", 409)
+  }
+  return { global, project }
+}
+
+async function writePromptScope(files: PromptFiles, scope: PromptScope, prompts: StoredPrompt[]) {
+  if (scope === "global") return writePromptFile(files.global, prompts)
+  if (!files.directory) throw new PromptMutationError("project directory is required", 400)
+  return writePromptFile(await projectPromptFile(files.directory, true), prompts)
+}
+
+async function mutatePrompts(
+  files: PromptFiles,
+  update: (state: PromptState) => PromptScope[],
+) {
+  try {
+    return await queuePromptMutation(async () => {
+      const state = await readPrompts(files, true)
+      const previous = { global: [...state.global], project: [...state.project] }
+      const changed = update(state)
+      if (changed.length === 2) {
+        const destination = changed[1]
+        const source = changed[0]
+        await writePromptScope(files, destination, state[destination])
+        try {
+          await writePromptScope(files, source, state[source])
+        } catch (e) {
+          await writePromptScope(files, destination, previous[destination]).catch(() => undefined)
+          throw e
+        }
+        return Response.json(state)
+      }
+      if (changed.includes("global")) await writePromptScope(files, "global", state.global)
+      if (changed.includes("project")) await writePromptScope(files, "project", state.project)
+      return Response.json(state)
+    })
+  } catch (e) {
+    if (e instanceof PromptMutationError) return Response.json({ error: e.message }, { status: e.status })
+    console.error("[ExtAPI] saved prompts mutation error:", e)
+    return internalError("failed to save prompts")
+  }
+}
+
+function promptBodyError(body: unknown, partial = false) {
+  if (!body || typeof body !== "object" || Array.isArray(body)) return "request body must be an object"
+  const row = body as Record<string, unknown>
+  if (!partial || "title" in row) {
+    if (typeof row.title !== "string" || !row.title.trim() || row.title.length > 200) return "title must be between 1 and 200 characters"
+  }
+  if (!partial || "text" in row) {
+    if (typeof row.text !== "string" || !row.text.trim() || row.text.length > 100_000) return "text must be between 1 and 100000 characters"
+  }
+  if (!partial || "scope" in row) {
+    if (row.scope !== "global" && row.scope !== "project") return "scope must be global or project"
+  }
+  if (partial && !("title" in row) && !("text" in row) && !("scope" in row)) return "title, text, or scope is required"
+}
+
+function promptId(path: string) {
+  const raw = path.slice("/api/ext/saved-prompts/".length)
+  if (!raw || raw.includes("/")) return null
+  try {
+    const id = decodeURIComponent(raw)
+    return validPromptId(id) ? id : null
+  } catch {
+    return null
+  }
+}
+
 function internalError(message: string): Response {
   return Response.json({ error: message }, { status: 500 })
 }
@@ -195,6 +407,84 @@ async function handleExtendedRoute(
   url: URL,
   req: Request,
 ): Promise<Response | undefined> {
+  if (path === "/api/ext/saved-prompts" && method === "GET") {
+    const files = await promptFiles(url)
+    if (files instanceof Response) return files
+    try {
+      return Response.json(await readPrompts(files))
+    } catch (e) {
+      console.error("[ExtAPI] saved prompts read error:", e)
+      return internalError("failed to read saved prompts")
+    }
+  }
+
+  if (path === "/api/ext/saved-prompts" && method === "POST") {
+    const files = await promptFiles(url)
+    if (files instanceof Response) return files
+    const body = await req.json().catch(() => null)
+    const error = promptBodyError(body)
+    if (error) return Response.json({ error }, { status: 400 })
+    const row = body as { title: string; text: string; scope: PromptScope }
+    if (row.scope === "project" && !files.project) {
+      return Response.json({ error: "directory is required for project prompts" }, { status: 400 })
+    }
+    const prompt: StoredPrompt = {
+      id: crypto.randomUUID(),
+      title: row.title.trim(),
+      text: row.text,
+      createdAt: Date.now(),
+      scope: row.scope,
+    }
+    return mutatePrompts(files, (state) => {
+      state[row.scope].unshift(prompt)
+      return [row.scope]
+    })
+  }
+
+  if (path.startsWith("/api/ext/saved-prompts/") && (method === "PATCH" || method === "DELETE")) {
+    const id = promptId(path)
+    if (!id) return Response.json({ error: "invalid prompt id" }, { status: 400 })
+    const files = await promptFiles(url)
+    if (files instanceof Response) return files
+
+    if (method === "DELETE") {
+      return mutatePrompts(files, (state) => {
+        const scope = (["project", "global"] as const).find((key) => state[key].some((item) => item.id === id))
+        if (!scope) throw new PromptMutationError("prompt not found", 404)
+        state[scope] = state[scope].filter((item) => item.id !== id)
+        return [scope]
+      })
+    }
+
+    const body = await req.json().catch(() => null)
+    const error = promptBodyError(body, true)
+    if (error) return Response.json({ error }, { status: 400 })
+    const row = body as { title?: string; text?: string; scope?: PromptScope }
+    if (row.scope === "project" && !files.project) {
+      return Response.json({ error: "directory is required for project prompts" }, { status: 400 })
+    }
+    return mutatePrompts(files, (state) => {
+      const source = (["project", "global"] as const).find((key) => state[key].some((item) => item.id === id))
+      if (!source) throw new PromptMutationError("prompt not found", 404)
+      const index = state[source].findIndex((item) => item.id === id)
+      const current = state[source][index]
+      const scope = row.scope ?? source
+      const prompt = {
+        ...current,
+        ...(row.title === undefined ? {} : { title: row.title.trim() }),
+        ...(row.text === undefined ? {} : { text: row.text }),
+        scope,
+      }
+      if (scope === source) {
+        state[source][index] = prompt
+        return [source]
+      }
+      state[source].splice(index, 1)
+      state[scope].unshift(prompt)
+      return [source, scope]
+    })
+  }
+
   // POST /api/ext/mkdir - Create directory recursively
   if (path === "/api/ext/mkdir" && method === "POST") {
     try {
