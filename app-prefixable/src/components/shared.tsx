@@ -1,4 +1,4 @@
-import { Folder } from "lucide-solid"
+import { Folder, Loader2 } from "lucide-solid"
 import type { Project } from "../context/projects"
 
 export function getFilename(path: string): string {
@@ -31,6 +31,7 @@ export function ProjectAvatar(props: {
   project: Project
   size?: "small" | "large"
   selected?: boolean
+  working?: boolean
 }) {
   const name = () => props.project.name || getFilename(props.project.worktree)
   const initials = () => getInitials(name())
@@ -51,6 +52,16 @@ export function ProjectAvatar(props: {
       >
         {initials() || <Folder class={iconSize()} />}
       </div>
+      {props.working && (
+        <span
+          class="absolute -right-1 -bottom-1 w-5 h-5 rounded-full flex items-center justify-center"
+          style={{ background: "var(--background-base)", border: "1px solid var(--border-base)" }}
+          title="A session is running in this project"
+          aria-label="Project has a running session"
+        >
+          <Loader2 class="w-3 h-3 animate-spin" style={{ color: "var(--interactive-base)" }} />
+        </span>
+      )}
     </div>
   )
 }

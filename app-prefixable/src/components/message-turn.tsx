@@ -647,6 +647,9 @@ export function MessageTurn(props: {
 
   const childState = (childID: string | undefined) => {
     if (!childID) return "waiting"
+    const status = sync.status[childID]?.type
+    if (status === "busy" || status === "retry") return "running"
+    if (sync.statusReady()) return "open"
     const messages = sync.messages(childID)
     for (let i = messages.length - 1; i >= 0; i--) {
       const info = messages[i].info

@@ -1,4 +1,4 @@
-import type { PermissionRequest, QuestionRequest, Session } from "../sdk/client"
+import type { PermissionRequest, QuestionRequest, Session, SessionStatus } from "../sdk/client"
 
 /**
  * Build a parent->children lookup map from a session list.
@@ -38,6 +38,22 @@ export function sessionDescendantIds(
     }
   }
   return result
+}
+
+export function sessionIsWorking(status: SessionStatus | undefined) {
+  return status?.type === "busy" || status?.type === "retry"
+}
+
+export function sessionTreeIsWorking(
+  sessions: Session[],
+  statuses: Record<string, SessionStatus>,
+  sessionID?: string,
+  children?: Map<string, string[]>,
+) {
+  for (const id of sessionDescendantIds(sessions, sessionID, children)) {
+    if (sessionIsWorking(statuses[id])) return true
+  }
+  return false
 }
 
 /**

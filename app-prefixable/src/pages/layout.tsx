@@ -67,7 +67,8 @@ import type { DragEvent as SolidDragEvent } from "@thisbeyond/solid-dnd";
 import { ConstrainDragXAxis } from "../utils/solid-dnd";
 
 import { useProjects } from "../context/projects";
-import { sessionHasQuestion, buildChildMap, sessionDescendantIds } from "../utils/session-tree-request";
+import { sessionHasQuestion, buildChildMap, sessionDescendantIds, sessionTreeIsWorking } from "../utils/session-tree-request";
+import { useProjectActivity } from "../context/project-activity";
 import { LOCAL_SERVER_ID } from "../context/server";
 import { legacyStorageValue, serverStorageKey, workspaceStorageKey } from "../utils/storage";
 import { sessionNeighbor } from "../utils/session-load";
@@ -147,6 +148,7 @@ export function Layout(props: ParentProps) {
   const permission = usePermission();
   const command = useCommand();
   const projects = useProjects();
+  const projectActivity = useProjectActivity();
   const location = useLocation();
   const navigate = useNavigate();
   const serverId = LOCAL_SERVER_ID;
@@ -365,10 +367,7 @@ export function Layout(props: ParentProps) {
             when={sessionHasQuestion(sync.sessions(), events.pendingQuestions, session.id, childMap())}
             fallback={
               <Show
-                when={
-                  events.status[session.id]?.type === "busy" ||
-                  events.status[session.id]?.type === "retry"
-                }
+                when={sessionTreeIsWorking(sync.sessions(), events.status, session.id, childMap())}
                 fallback={<DefaultIcon class="w-4 h-4" />}
               >
                 <Loader2 class="w-4 h-4 animate-spin" />
@@ -664,6 +663,10 @@ export function Layout(props: ParentProps) {
 
   const currentProject = createMemo(() =>
     projects.projects().find((p) => p.worktree === directory),
+  );
+  const currentProjectWorking = createMemo(() =>
+    Object.values(events.status).some((status) => status.type === "busy" || status.type === "retry") ||
+    (!!directory && projectActivity.working(directory)),
   );
 
   const projectName = createMemo(() => {
@@ -1587,6 +1590,9 @@ export function Layout(props: ParentProps) {
                   project={project}
                   size="large"
                   selected={project.worktree === directory}
+                  working={project.worktree === directory
+                    ? currentProjectWorking()
+                    : projectActivity.working(project.worktree)}
                 />
                 <button
                   onClick={(e) => {
@@ -1707,7 +1713,7 @@ export function Layout(props: ParentProps) {
             style={{ "border-bottom": "1px solid var(--border-base)" }}
           >
             <Show when={currentProject()}>
-              {(project) => <ProjectAvatar project={project()} size="small" />}
+              {(project) => <ProjectAvatar project={project()} size="small" working={currentProjectWorking()} />}
             </Show>
             <div class="min-w-0 flex-1">
               <div

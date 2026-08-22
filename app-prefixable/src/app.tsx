@@ -6,6 +6,7 @@ import { BrandingProvider } from "./context/branding"
 import { ThemeProvider } from "./context/theme"
 import { CommandProvider } from "./context/command"
 import { ProjectsProvider } from "./context/projects"
+import { ProjectActivityProvider } from "./context/project-activity"
 import { DirectoryLayout } from "./pages/directory-layout"
 import { HomeLayout } from "./pages/home-layout"
 import { Session } from "./pages/session"
@@ -117,9 +118,11 @@ function AppProviders() {
       <ThemeProvider>
         <BrandingProvider>
           <ProjectsProvider>
-            <CommandProvider>
-              <AppRoutes />
-            </CommandProvider>
+            <ProjectActivityProvider>
+              <CommandProvider>
+                <AppRoutes />
+              </CommandProvider>
+            </ProjectActivityProvider>
           </ProjectsProvider>
         </BrandingProvider>
       </ThemeProvider>

@@ -10,6 +10,7 @@ import { getFilename, OpenCodeLogo, ProjectAvatar } from "../components/shared"
 import { Spinner } from "../components/ui/spinner"
 import { Plus, X, Settings, SquareTerminal, ChevronDown } from "lucide-solid"
 import { useProjects } from "../context/projects"
+import { useProjectActivity } from "../context/project-activity"
 
 /**
  * Layout for the home screen (no active project).
@@ -28,6 +29,7 @@ function HomeContent(props: ParentProps) {
   const { serverUrl, authHeaders } = useServer()
 
   const projects = useProjects()
+  const activity = useProjectActivity()
   const [projectDialogOpen, setProjectDialogOpen] = createSignal(false)
 
   // Terminal state
@@ -145,7 +147,7 @@ function HomeContent(props: ParentProps) {
                         class="group relative cursor-pointer"
                         title={project.name || getFilename(project.worktree)}
                       >
-                        <ProjectAvatar project={project} size="large" selected={false} />
+                        <ProjectAvatar project={project} size="large" selected={false} working={activity.working(project.worktree)} />
                         <button
                           onClick={(e) => {
                             e.stopPropagation()
