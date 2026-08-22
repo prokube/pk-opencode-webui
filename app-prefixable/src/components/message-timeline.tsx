@@ -259,7 +259,7 @@ export function MessageTimeline(props: {
     <div
       ref={containerRef}
       onScroll={handleScroll}
-      class="flex-1 overflow-y-auto p-6"
+      class="flex-1 min-h-0 overflow-y-auto p-6"
       style={{ background: "var(--background-stronger)" }}
     >
       {/* Loading history indicator */}
@@ -426,7 +426,7 @@ export function FlatMessageList(props: { messages: DisplayMessage[]; processing:
     <div
       ref={containerRef}
       onScroll={handleScroll}
-      class="flex-1 overflow-y-auto p-6 space-y-4"
+      class="flex-1 min-h-0 overflow-y-auto p-6 space-y-4"
       style={{ background: "var(--background-stronger)" }}
     >
       <Show when={props.loadingHistory}>

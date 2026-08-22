@@ -1574,7 +1574,7 @@ export function Session() {
           <Show when={pendingQuestion()} keyed>
             {(q) => (
               <div
-                class="px-6 pb-4"
+                class="px-6 pb-4 shrink-0 min-h-0 overflow-y-auto"
                 style={{ background: "var(--background-stronger)" }}
               >
                 <QuestionPrompt
