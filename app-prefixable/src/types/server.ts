@@ -3,13 +3,16 @@ export interface ServerConfig {
   name: string
   url: string
   auth: ServerAuth
-  isDefault?: boolean
 }
 
 export type ServerAuth =
   | { type: "none" }
   | { type: "api-key"; key: string }
   | { type: "basic"; username: string; password: string }
+
+export function isLocalServer(server: Pick<ServerConfig, "id">) {
+  return server.id === "local"
+}
 
 export function getAuthHeaders(auth: ServerAuth): Record<string, string> {
   switch (auth.type) {

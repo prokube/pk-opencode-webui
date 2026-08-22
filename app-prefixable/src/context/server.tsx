@@ -1,5 +1,5 @@
 import { createContext, useContext, createSignal, type ParentProps, type Accessor } from "solid-js"
-import { type ServerConfig, type ServerAuth, getAuthHeaders } from "../types/server"
+import { type ServerConfig, type ServerAuth, getAuthHeaders, isLocalServer } from "../types/server"
 import { getServerUrl } from "../utils/path"
 
 const SERVERS_KEY = "opencode.servers"           // localStorage: metadata (no secrets)
@@ -25,7 +25,6 @@ function createDefaultServer(): ServerConfig {
     name: "Local Server",
     url: getServerUrl(),
     auth,
-    isDefault: true,
   }
 }
 
@@ -103,7 +102,6 @@ function loadServers(): ServerConfig[] {
               url: defaultServer.url,
               auth: defaultServer.auth,
               name: defaultServer.name,
-              isDefault: defaultServer.isDefault,
             }
           }
         }
@@ -197,7 +195,7 @@ export function ServerProvider(props: ParentProps) {
     const auth = getAuthHeaders(s.auth)
     // For remote servers, add proxy target header so the local server
     // can forward the request to the correct remote URL
-    if (!s.isDefault) {
+    if (!isLocalServer(s)) {
       return { ...auth, "X-Proxy-Target": s.url }
     }
     return auth
@@ -206,7 +204,7 @@ export function ServerProvider(props: ParentProps) {
   function serverUrl() {
     const s = activeServer()
     // Remote servers go through the local proxy to avoid CORS issues
-    if (!s.isDefault) {
+    if (!isLocalServer(s)) {
       return getServerUrl() + "/__proxy"
     }
     return s.url

@@ -1,5 +1,12 @@
 import { describe, test, expect } from "bun:test";
-import { getAuthHeaders, type ServerAuth } from "../src/types/server";
+import { getAuthHeaders, isLocalServer, type ServerAuth } from "../src/types/server";
+
+describe("isLocalServer", () => {
+  test("classifies the stable local id regardless of persisted metadata", () => {
+    expect(isLocalServer({ id: "local" })).toBe(true);
+    expect(isLocalServer({ id: "remote-local-name" })).toBe(false);
+  });
+});
 
 describe("getAuthHeaders", () => {
   test("type 'none' returns empty headers", () => {

@@ -1,7 +1,7 @@
 import { createSignal, createEffect, onCleanup, Show, For } from "solid-js"
 import { Portal } from "solid-js/web"
 import { useServer } from "../context/server"
-import { getAuthHeaders, type ServerConfig, type ServerAuth } from "../types/server"
+import { getAuthHeaders, isLocalServer, type ServerConfig, type ServerAuth } from "../types/server"
 import { X, Plus, Trash2, Pencil, Server, Wifi, WifiOff } from "lucide-solid"
 import { Button } from "./ui/button"
 import { Spinner } from "./ui/spinner"
@@ -124,7 +124,7 @@ export function ServerDialog(props: Props) {
       const controller = new AbortController()
       timer = setTimeout(() => controller.abort(), 5000)
       // Route through proxy for remote servers to avoid CORS
-      const isRemote = !s.isDefault
+      const isRemote = !isLocalServer(s)
       const testUrl = isRemote
         ? `${server.serverUrl()}/session`
         : `${s.url}/session`
@@ -268,7 +268,7 @@ export function ServerDialog(props: Props) {
                           >
                             Test
                           </button>
-                          <Show when={!s.isDefault}>
+                          <Show when={!isLocalServer(s)}>
                             <button
                               onClick={() => startEdit(s)}
                               class="p-1.5 rounded-md transition-colors"
