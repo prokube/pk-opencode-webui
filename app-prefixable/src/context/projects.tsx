@@ -1,4 +1,4 @@
-import { createContext, createMemo, createSignal, onCleanup, type ParentProps, useContext } from "solid-js"
+import { createContext, createMemo, createSignal, onCleanup, type ParentProps, untrack, useContext } from "solid-js"
 import { useServer } from "./server"
 import { serverStorageKey } from "../utils/storage"
 
@@ -166,26 +166,28 @@ export function ProjectsProvider(props: ParentProps) {
 
   function add(worktree: string, name?: string) {
     const normalized = normalize(worktree)
-    if (!normalized || projects().some((item) => item.worktree === normalized)) return
-    save([...projects(), { worktree: normalized, ...(name ? { name } : {}), lastOpened: Date.now() }])
+    const current = untrack(projects)
+    if (!normalized || current.some((item) => item.worktree === normalized)) return
+    save([...current, { worktree: normalized, ...(name ? { name } : {}), lastOpened: Date.now() }])
   }
 
   function touch(worktree: string, name?: string) {
     const normalized = normalize(worktree)
     if (!normalized) return
-    const existing = projects().find((item) => item.worktree === normalized)
+    const current = untrack(projects)
+    const existing = current.find((item) => item.worktree === normalized)
     if (!existing) {
-      save([...projects(), { worktree: normalized, ...(name ? { name } : {}), lastOpened: Date.now() }])
+      save([...current, { worktree: normalized, ...(name ? { name } : {}), lastOpened: Date.now() }])
       return
     }
-    save(projects().map((item) => item.worktree === normalized
+    save(current.map((item) => item.worktree === normalized
       ? { ...item, ...(name ? { name } : {}), lastOpened: Date.now() }
       : item))
   }
 
   function remove(worktree: string) {
     const normalized = normalize(worktree)
-    save(projects().filter((item) => item.worktree !== normalized))
+    save(untrack(projects).filter((item) => item.worktree !== normalized))
   }
 
   function clear() {

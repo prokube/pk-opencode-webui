@@ -1,4 +1,4 @@
-import { type ParentProps, createMemo, createEffect, For } from "solid-js"
+import { type ParentProps, createMemo, createEffect, For, on } from "solid-js"
 import { useParams, Navigate } from "@solidjs/router"
 import { TerminalProvider } from "../context/terminal"
 import { PermissionProvider } from "../context/permission"
@@ -45,12 +45,11 @@ export function DirectoryLayout(props: ParentProps) {
   })
 
   // Add to recent projects when directory changes
-  createEffect(() => {
-    const dir = directory()
+  createEffect(on(directory, (dir) => {
     if (dir) {
       projects.touch(dir)
     }
-  })
+  }))
 
   // Use For with a single-element array keyed by directory to force remount
   // This ensures all providers are recreated when switching projects
