@@ -1,6 +1,5 @@
 const CHARS = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
-let lastTimestamp = 0
-let counter = 0
+let lastValue = 0n
 
 function randomBase62(length: number) {
   const bytes = crypto.getRandomValues(new Uint8Array(length))
@@ -8,11 +7,7 @@ function randomBase62(length: number) {
 }
 
 export function ascendingID(prefix: "msg" | "prt", timestamp = Date.now()) {
-  if (timestamp !== lastTimestamp) {
-    lastTimestamp = timestamp
-    counter = 0
-  }
-  counter += 1
-  const value = BigInt(timestamp) * 0x1000n + BigInt(counter)
-  return `${prefix}_${value.toString(16).padStart(12, "0")}${randomBase62(14)}`
+  const base = BigInt(timestamp) * 0x1000n
+  lastValue = (base > lastValue ? base : lastValue) + 1n
+  return `${prefix}_${lastValue.toString(16).padStart(16, "0")}${randomBase62(14)}`
 }

@@ -55,7 +55,7 @@ export function createEventBuffer<T>(consume: (event: T) => void, options: Event
 
   function release() {
     if (!queue) return
-    while (queue.length > 0) consume(queue.shift()!)
+    for (let index = 0; index < queue.length; index += 1) consume(queue[index])
     queue = undefined
     sizes = undefined
     bytes = 0
