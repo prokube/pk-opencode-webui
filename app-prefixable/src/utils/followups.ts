@@ -30,7 +30,11 @@ export function parseFollowups(value: string | null, defaults?: { agent: string;
       if (!item || typeof item !== "object") return []
       const entry = item as Partial<FollowupItem>
       if (typeof entry.text !== "string" || !entry.text.trim()) return []
-      const model = entry.model?.providerID && entry.model.modelID ? entry.model : defaults?.model
+      const stored = entry.model
+      const model = stored && typeof stored.providerID === "string" && stored.providerID.trim() &&
+        typeof stored.modelID === "string" && stored.modelID.trim()
+        ? stored
+        : defaults?.model
       if (!model) return []
       return [{
         id: typeof entry.id === "string" ? entry.id : crypto.randomUUID(),

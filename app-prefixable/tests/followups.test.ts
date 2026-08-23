@@ -11,6 +11,15 @@ describe("follow-ups", () => {
     expect(items[0].model).toEqual(model)
   })
 
+  test("replaces malformed persisted models with current defaults", () => {
+    const items = parseFollowups(JSON.stringify([
+      { text: "wrong type", model: { providerID: 1, modelID: "old" } },
+      { text: "empty ID", model: { providerID: "provider", modelID: "" } },
+    ]), { agent: "build", model })
+
+    expect(items.map((item) => item.model)).toEqual([model, model])
+  })
+
   test("extracts one session from the released legacy queue map", () => {
     const migrated = parseLegacyFollowupMap(JSON.stringify({ ses_1: [{ id: "one", text: "continue" }], ses_2: [{ id: "two", text: "keep" }] }), "ses_1", { agent: "build", model })
     expect(migrated.items.map((item) => item.text)).toEqual(["continue"])
