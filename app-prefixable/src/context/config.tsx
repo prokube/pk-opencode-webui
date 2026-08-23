@@ -112,8 +112,9 @@ export function ConfigProvider(props: ParentProps) {
       const data = res.data as Config | undefined
       if (data) {
         lastUpdateAt = Date.now()
-        setGlobal(reconcile(data))
-        return data
+        const next = mergeConfigState(global as Config, data)
+        setGlobal(reconcile(next))
+        return next
       }
       return null
     } catch (e) {
