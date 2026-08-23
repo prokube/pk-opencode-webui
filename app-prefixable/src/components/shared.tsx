@@ -43,7 +43,9 @@ export function ProjectAvatar(props: {
     ? `${props.badge.count} permission request${props.badge.count === 1 ? "" : "s"}`
     : props.badge?.type === "question"
       ? `${props.badge.count} pending question${props.badge.count === 1 ? "" : "s"}`
-      : "Project has a running session"
+      : props.badge
+        ? `${props.badge.count} running session${props.badge.count === 1 ? "" : "s"}`
+        : "Project has a running session"
 
   // pkui button style: white bg, gray border, brand color when selected/hovered
   return (
@@ -73,7 +75,10 @@ export function ProjectAvatar(props: {
               ? <CircleHelp class="w-3 h-3" style={{ color: "var(--icon-warning-base)" }} />
               : <Loader2 class="w-3 h-3 animate-spin" style={{ color: "var(--interactive-base)" }} />}
           {props.badge && props.badge.count > 1 && (
-            <span class="absolute -top-1.5 -right-1.5 min-w-3 h-3 px-0.5 rounded-full text-[8px] leading-3 text-center" style={{ background: "var(--interactive-critical)", color: "white" }}>
+            <span
+              class="absolute -top-1.5 -right-1.5 min-w-3 h-3 px-0.5 rounded-full text-[8px] leading-3 text-center"
+              style={{ background: props.badge.type === "working" ? "var(--interactive-base)" : "var(--interactive-critical)", color: "white" }}
+            >
               {Math.min(props.badge.count, 9)}{props.badge.count > 9 ? "+" : ""}
             </span>
           )}
