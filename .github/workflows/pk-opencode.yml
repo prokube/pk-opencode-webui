@@ -75,7 +75,7 @@ jobs:
             -t $LATEST_TAG \
             -f docker/kubeflow/Dockerfile \
             --platform linux/amd64 \
-            --build-arg OPENCODE_VERSION=1.15.7 \
+            --build-arg OPENCODE_VERSION=1.18.21 \
             --build-arg S6_OVERLAY_VERSION=3.1.6.2 \
             --build-arg KF_EXAMPLES_REPO=https://github.com/prokube-ai/kubeflow-examples.git \
             --label "org.opencontainers.image.title=OpenCode Prefixable UI" \

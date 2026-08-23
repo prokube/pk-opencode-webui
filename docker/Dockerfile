@@ -39,7 +39,7 @@ RUN apk add --no-cache \
 # via `opencode serve` or for CLI access within the container)
 # Pin version to ensure reproducible builds. Update by changing OPENCODE_VERSION.
 # Check releases at: https://github.com/anomalyco/opencode/releases
-ARG OPENCODE_VERSION=1.15.7
+ARG OPENCODE_VERSION=1.18.21
 ENV SHELL=/bin/bash
 RUN curl -fsSL https://opencode.ai/install | bash -s -- --version "${OPENCODE_VERSION}" && \
     mv /root/.opencode/bin/opencode /usr/local/bin/opencode && \
