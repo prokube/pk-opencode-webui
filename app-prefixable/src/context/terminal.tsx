@@ -38,9 +38,10 @@ export function TerminalProvider(props: ParentProps) {
   let disposed = false
 
   function drop(id: string) {
-    setSessions((prev) => prev.filter((session) => session.id !== id))
+    const remaining = sessions().filter((session) => session.id !== id)
+    setSessions(remaining)
     if (active() !== id) return
-    const next = sessions()[0]?.id ?? null
+    const next = remaining[0]?.id ?? null
     setActive(next)
     if (!next) setOpened(false)
   }
