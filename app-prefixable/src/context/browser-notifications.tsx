@@ -139,7 +139,7 @@ export function BrowserNotificationsProvider(props: ParentProps) {
       if (!tag || !navigator.locks) deliver()
       if (tag && navigator.locks) void navigator.locks.request(`opencode-notification:${tag}`, { ifAvailable: true }, (lock) => {
         if (lock) deliver()
-      })
+      }).catch(deliver)
       return true
     },
   }
