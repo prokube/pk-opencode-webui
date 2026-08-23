@@ -2,7 +2,6 @@ import { useNavigate } from "@solidjs/router"
 import { useSDK } from "../context/sdk"
 import { base64Encode } from "../utils/path"
 import { createRootSession } from "../utils/root-session"
-import { LOCAL_SERVER_ID } from "../context/server"
 import { Plus, Settings } from "lucide-solid"
 import { Button } from "../components/ui/button"
 import { onCleanup } from "solid-js"
@@ -64,11 +63,9 @@ export function Home() {
   async function createNewSession() {
     if (!directory) return
     const token = ++lifetime.create
-    const scope = { serverId: LOCAL_SERVER_ID, directory }
     try {
       const res = await createRootSession(client, {
         source: "home.createNewSession",
-        scope,
       })
       if (!lifetime.active || token !== lifetime.create) {
         if (res.data) await client.session.delete({ sessionID: res.data.id }).catch(() => undefined)

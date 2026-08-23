@@ -16,11 +16,6 @@ export interface RootSessionResult {
   isLeader: boolean;
 }
 
-export interface RootSessionScope {
-  serverId: string;
-  directory: string;
-}
-
 declare global {
   interface Window {
     __opencodeRootSessionTrace?: RootSessionTrace[];
@@ -44,7 +39,7 @@ function trace(entry: RootSessionTrace) {
 
 export function createRootSession(
   client: SessionCreateClient,
-  opts: { source: string; scope: RootSessionScope },
+  opts: { source: string },
 ): Promise<RootSessionResult> {
   trace({
     source: opts.source,

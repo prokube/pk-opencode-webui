@@ -28,15 +28,12 @@ describe("createRootSession", () => {
 
     const first = createRootSession(client, {
       source: "test.first",
-      scope: { serverId: "server-a", directory: "/workspace" },
     });
     const joined = createRootSession(client, {
       source: "test.joined",
-      scope: { serverId: "server-a", directory: "/workspace" },
     });
     const other = createRootSession(client, {
       source: "test.other",
-      scope: { serverId: "server-b", directory: "/workspace" },
     });
 
     expect(requests).toHaveLength(3);

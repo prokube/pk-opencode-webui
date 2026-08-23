@@ -124,8 +124,9 @@ const server = Bun.serve<{ target: string }>({
             return withNoStoreHeaders(normalizeProxiedResponse(response))
           }
 
+          const proxied = proxyEventResponse(response, req.signal, upstream)
           req.signal.removeEventListener("abort", abort)
-          return proxyEventResponse(response, req.signal, upstream)
+          return proxied
         } catch (e) {
           req.signal.removeEventListener("abort", abort)
           console.error("[Proxy] SSE connection error:", e)

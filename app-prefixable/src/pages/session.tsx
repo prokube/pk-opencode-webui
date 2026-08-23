@@ -1512,10 +1512,6 @@ export function Session() {
 
     const needsSession = !originalID;
     const createToken = needsSession ? ++lifetime.create : 0;
-    const createScope = {
-      serverId: LOCAL_SERVER_ID,
-      directory: submitDirectory,
-    };
     const saveDraft = (id = originalDraftID) => {
       storeDraft(sessionDraftKey(LOCAL_SERVER_ID, submitDirSlug, id), {
         text,
@@ -1542,7 +1538,6 @@ export function Session() {
         console.log("[Session] Creating new session...");
         const res = await createRootSession(client, {
           source: "session.send.createIfMissing",
-          scope: createScope,
         });
         if (!current() || createToken !== lifetime.create) {
           saveDraft();
