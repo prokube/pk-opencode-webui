@@ -285,6 +285,8 @@ function promptBodyError(body: unknown, partial = false) {
   if (!partial || "scope" in row) {
     if (row.scope !== "global" && row.scope !== "project") return "scope must be global or project"
   }
+  if ("id" in row && (typeof row.id !== "string" || !validPromptId(row.id))) return "id is invalid"
+  if ("createdAt" in row && (typeof row.createdAt !== "number" || !Number.isFinite(row.createdAt))) return "createdAt is invalid"
   if (partial && !("title" in row) && !("text" in row) && !("scope" in row)) return "title, text, or scope is required"
 }
 
@@ -424,18 +426,23 @@ async function handleExtendedRoute(
     const body = await req.json().catch(() => null)
     const error = promptBodyError(body)
     if (error) return Response.json({ error }, { status: 400 })
-    const row = body as { title: string; text: string; scope: PromptScope }
+    const row = body as { title: string; text: string; scope: PromptScope; id?: string; createdAt?: number }
     if (row.scope === "project" && !files.project) {
       return Response.json({ error: "directory is required for project prompts" }, { status: 400 })
     }
     const prompt: StoredPrompt = {
-      id: crypto.randomUUID(),
+      id: row.id ?? crypto.randomUUID(),
       title: row.title.trim(),
       text: row.text,
-      createdAt: Date.now(),
+      createdAt: row.createdAt ?? Date.now(),
       scope: row.scope,
     }
     return mutatePrompts(files, (state) => {
+      const existing = [...state.global, ...state.project].find((item) => item.id === prompt.id)
+      if (existing) {
+        if (existing.title === prompt.title && existing.text === prompt.text && existing.createdAt === prompt.createdAt && existing.scope === prompt.scope) return []
+        throw new PromptMutationError("prompt id already exists", 409)
+      }
       state[row.scope].unshift(prompt)
       return [row.scope]
     })

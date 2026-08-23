@@ -18,6 +18,18 @@ export function BrowserNotificationEvents() {
     return sync.session.get(sessionID)?.title ?? sessionID
   }
 
+  function rootSessionID(sessionID: string) {
+    const seen = new Set<string>()
+    const current = { id: sessionID }
+    while (!seen.has(current.id)) {
+      seen.add(current.id)
+      const parent = sync.session.get(current.id)?.parentID
+      if (!parent) return current.id
+      current.id = parent
+    }
+    return sessionID
+  }
+
   function alert(key: string, run: () => void) {
     if (alerted.has(key)) return
     alerted.add(key)
@@ -59,7 +71,7 @@ export function BrowserNotificationEvents() {
     }
     if (event.type === "question.asked") {
       const request = event.properties
-      alert(`question:${request.id}`, () => notifications.notify("agent", "Question", `${title(request.sessionID)} has a question`, directory, request.sessionID, `opencode:question:${directory}:${request.id}`))
+      alert(`question:${request.id}`, () => notifications.notify("agent", "Question", `${title(request.sessionID)} has a question`, directory, request.sessionID, `opencode:question:${directory}:${request.id}`, rootSessionID(request.sessionID)))
       return
     }
     if (event.type !== "permission.asked") return
@@ -68,7 +80,7 @@ export function BrowserNotificationEvents() {
     const timer = setTimeout(() => {
       timers.delete(key)
       if (!sync.pendingPermissions[request.id]) return
-      alert(key, () => notifications.notify("permissions", "Permission required", `${title(request.sessionID)} needs permission`, directory, request.sessionID, `opencode:permission:${directory}:${request.id}`))
+      alert(key, () => notifications.notify("permissions", "Permission required", `${title(request.sessionID)} needs permission`, directory, request.sessionID, `opencode:permission:${directory}:${request.id}`, rootSessionID(request.sessionID)))
     }, 0)
     timers.set(key, timer)
   })

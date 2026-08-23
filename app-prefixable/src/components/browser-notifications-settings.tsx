@@ -34,6 +34,14 @@ export function BrowserNotificationsSettings() {
           <BellOff class="w-4 h-4 mt-0.5 shrink-0" /> Notifications are blocked. Allow them in your browser's site settings to enable delivery.
         </div>
       </Show>
+      <Show when={notifications.legacyCount() > 0}>
+        <div class="px-4 py-3 flex items-center justify-between gap-4" style={{ "border-bottom": "1px solid var(--border-base)" }}>
+          <p class="text-xs" style={{ color: "var(--text-weak)" }}>
+            {notifications.legacyCount()} per-session alert{notifications.legacyCount() === 1 ? " remains" : "s remain"} enabled from the previous version.
+          </p>
+          <Button size="sm" onClick={notifications.clearLegacy}>Disable legacy alerts</Button>
+        </div>
+      </Show>
 
       <Show when={notifications.supported()}>
         <For each={rows}>

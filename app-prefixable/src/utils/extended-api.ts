@@ -137,7 +137,7 @@ export function readSavedPrompts(serverUrl: string, directory?: string) {
   return savedPromptRequest(serverUrl, directory)
 }
 
-export function createSavedPrompt(serverUrl: string, directory: string | undefined, prompt: { title: string; text: string; scope: PromptScope }) {
+export function createSavedPrompt(serverUrl: string, directory: string | undefined, prompt: { title: string; text: string; scope: PromptScope; id?: string; createdAt?: number }) {
   return savedPromptRequest(serverUrl, directory, {
     method: "POST",
     headers: { "Content-Type": "application/json" },

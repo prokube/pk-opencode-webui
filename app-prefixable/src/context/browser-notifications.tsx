@@ -3,20 +3,27 @@ import { useBasePath } from "./base-path"
 import { base64Encode } from "../utils/path"
 import {
   DEFAULT_BROWSER_NOTIFICATION_SETTINGS,
+  initialBrowserNotificationSettings,
+  legacyBrowserEnabled,
   parseBrowserNotificationSettings,
+  parseLegacyNotificationMap,
   shouldShowBrowserNotification,
   type BrowserNotificationSettings,
 } from "../utils/browser-notifications"
 
 const STORAGE_KEY = "opencode.browserNotifications"
 const NOTIFIED_KEY = "opencode.browserNotifications.delivered"
+const LEGACY_NOTIFY_KEY = "opencode.sessionNotify"
+const LEGACY_CHANNELS_KEY = "opencode.alarmChannels"
 interface BrowserNotificationsContextValue {
   supported: () => boolean
   permission: () => NotificationPermission | "unsupported"
   settings: () => BrowserNotificationSettings
   request: () => Promise<NotificationPermission | "unsupported">
   set: (key: keyof BrowserNotificationSettings, enabled: boolean) => void
-  notify: (category: keyof BrowserNotificationSettings, title: string, body: string, directory: string, sessionID?: string, tag?: string) => boolean
+  legacyCount: () => number
+  clearLegacy: () => void
+  notify: (category: keyof BrowserNotificationSettings, title: string, body: string, directory: string, sessionID?: string, tag?: string, preferenceSessionID?: string) => boolean
 }
 
 const BrowserNotificationsContext = createContext<BrowserNotificationsContextValue>()
@@ -26,8 +33,12 @@ export function BrowserNotificationsProvider(props: ParentProps) {
   const supported = () => typeof window !== "undefined" && "Notification" in window
   const [permission, setPermission] = createSignal<NotificationPermission | "unsupported">("unsupported")
   const [settings, setSettings] = createSignal(DEFAULT_BROWSER_NOTIFICATION_SETTINGS)
+  const [legacy, setLegacy] = createSignal<Record<string, boolean>>({})
+  const [legacyBrowser, setLegacyBrowser] = createSignal(true)
+  const [configured, setConfigured] = createSignal(false)
 
   function persist(next: BrowserNotificationSettings) {
+    setConfigured(true)
     setSettings(next)
     try {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(next))
@@ -52,14 +63,31 @@ export function BrowserNotificationsProvider(props: ParentProps) {
   onMount(() => {
     setPermission(supported() ? Notification.permission : "unsupported")
     try {
-      setSettings(parseBrowserNotificationSettings(localStorage.getItem(STORAGE_KEY)))
+      const stored = localStorage.getItem(STORAGE_KEY)
+      const previous = parseLegacyNotificationMap(localStorage.getItem(LEGACY_NOTIFY_KEY))
+      const channelRaw = localStorage.getItem(LEGACY_CHANNELS_KEY)
+      const browser = legacyBrowserEnabled(channelRaw)
+      setConfigured(!!stored)
+      setLegacy(previous)
+      setLegacyBrowser(browser)
+      setSettings(initialBrowserNotificationSettings(stored, previous, browser, channelRaw !== null))
     } catch {
       setSettings(DEFAULT_BROWSER_NOTIFICATION_SETTINGS)
     }
     const refreshPermission = () => setPermission(supported() ? Notification.permission : "unsupported")
     const syncSettings = (event: StorageEvent) => {
-      if (event.key !== STORAGE_KEY) return
-      setSettings(parseBrowserNotificationSettings(event.newValue))
+      if (event.key === STORAGE_KEY) {
+        setConfigured(event.newValue !== null)
+        setSettings(parseBrowserNotificationSettings(event.newValue))
+      }
+      if (event.key === LEGACY_NOTIFY_KEY) {
+        setLegacy(parseLegacyNotificationMap(event.newValue))
+        if (!configured()) setSettings({ agent: false, permissions: false, errors: false })
+      }
+      if (event.key === LEGACY_CHANNELS_KEY) {
+        setLegacyBrowser(legacyBrowserEnabled(event.newValue))
+        if (!configured()) setSettings({ agent: false, permissions: false, errors: false })
+      }
     }
     window.addEventListener("focus", refreshPermission)
     window.addEventListener("storage", syncSettings)
@@ -80,8 +108,19 @@ export function BrowserNotificationsProvider(props: ParentProps) {
       return next
     },
     set: (key, enabled) => persist({ ...settings(), [key]: enabled }),
-    notify: (category, title, body, directory, sessionID, tag) => {
-      if (!settings()[category] || !supported()) return false
+    legacyCount: () => Object.keys(legacy()).length,
+    clearLegacy: () => {
+      setLegacy({})
+      try {
+        localStorage.removeItem(LEGACY_NOTIFY_KEY)
+      } catch {
+        // The in-memory preference still takes effect for this tab.
+      }
+    },
+    notify: (category, title, body, directory, sessionID, tag, preferenceSessionID) => {
+      const target = preferenceSessionID ?? sessionID
+      const legacyEnabled = category !== "errors" && legacyBrowser() && !!target && (legacy()[`${directory}::${target}`] === true || legacy()[target] === true)
+      if ((!settings()[category] && !legacyEnabled) || !supported()) return false
       if (!shouldShowBrowserNotification(Notification.permission, document.visibilityState, document.hasFocus())) return false
       const deliver = () => {
         if (tag && !claim(tag)) return

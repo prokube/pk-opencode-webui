@@ -4,6 +4,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { handleExtendedEndpoint, parsePromptList } from "../../shared/extended-api"
 import { parseSavedPromptState, readSavedPrompts } from "../src/utils/extended-api"
+import { legacyPromptKeys } from "../src/context/saved-prompts"
 
 const originalRoot = process.env.OPENCODE_WORKSPACE_ROOT
 const originalConfig = process.env.OPENCODE_CONFIG_DIR
@@ -40,6 +41,12 @@ afterAll(async () => {
 })
 
 describe("saved prompt parsing", () => {
+  test("finds legacy global and normalized project storage keys", () => {
+    expect(legacyPromptKeys("/workspace/project///")).toEqual([
+      "opencode.savedPrompts",
+      "opencode.savedPrompts./workspace/project",
+    ])
+  })
   test("reads historical arrays and wrappers while skipping malformed rows", () => {
     expect(parsePromptList(JSON.stringify([
       { id: "one", name: "Legacy", prompt: "Text", created: "1713000000000" },
@@ -92,6 +99,16 @@ describe("saved prompt API", () => {
     const read = await request("/api/ext/saved-prompts")
     const state = await read?.json() as { global: Array<{ title: string }> }
     expect(state.global.map((prompt) => prompt.title).sort()).toEqual(["One", "Two"])
+  })
+
+  test("idempotently preserves IDs and timestamps during legacy migration", async () => {
+    const body = { id: "legacy-id", title: "Legacy", text: "Body", createdAt: 123, scope: "global" }
+    const first = await request("/api/ext/saved-prompts", "POST", body)
+    const second = await request("/api/ext/saved-prompts", "POST", body)
+    expect(first?.status).toBe(200)
+    expect(second?.status).toBe(200)
+    const state = await second?.json() as { global: Array<{ id: string; createdAt: number }> }
+    expect(state.global.filter((prompt) => prompt.id === body.id)).toEqual([{ id: body.id, title: body.title, text: body.text, createdAt: body.createdAt, scope: body.scope }])
   })
 
   test("updates, moves, and deletes one prompt without replacing unrelated prompts", async () => {

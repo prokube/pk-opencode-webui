@@ -1,6 +1,9 @@
 import { describe, expect, test } from "bun:test"
 import {
   DEFAULT_BROWSER_NOTIFICATION_SETTINGS,
+  initialBrowserNotificationSettings,
+  legacyBrowserEnabled,
+  parseLegacyNotificationMap,
   parseBrowserNotificationSettings,
   shouldShowBrowserNotification,
 } from "../src/utils/browser-notifications"
@@ -17,6 +20,18 @@ describe("browser notification settings", () => {
       permissions: false,
       errors: false,
     })
+  })
+
+  test("does not broaden legacy per-session opt-ins", () => {
+    const legacy = parseLegacyNotificationMap('{"/workspace::ses_one":true,"ses_two":false}')
+    expect(legacy).toEqual({ "/workspace::ses_one": true })
+    expect(initialBrowserNotificationSettings(null, legacy)).toEqual({ agent: false, permissions: false, errors: false })
+    expect(initialBrowserNotificationSettings(null, {}, false)).toEqual({ agent: false, permissions: false, errors: false })
+    expect(initialBrowserNotificationSettings(null, {}, true, true)).toEqual({ agent: false, permissions: false, errors: false })
+    expect(legacyBrowserEnabled('"invalid"')).toBe(false)
+    expect(legacyBrowserEnabled('{"browser":"false"}')).toBe(false)
+    expect(legacyBrowserEnabled('{"browser":true}')).toBe(true)
+    expect(initialBrowserNotificationSettings(null, {})).toEqual(DEFAULT_BROWSER_NOTIFICATION_SETTINGS)
   })
 })
 

@@ -74,6 +74,20 @@ export function ProjectActivityProvider(props: ParentProps) {
     return new Set(projects.projects().map((project) => project.worktree).filter((directory) => directory !== active()))
   }
 
+  async function rootSessionID(directory: string, sessionID: string, options: () => { signal: AbortSignal }) {
+    const seen = new Set<string>()
+    const current = { id: sessionID }
+    while (!seen.has(current.id)) {
+      seen.add(current.id)
+      const session = await client.session.get({ sessionID: current.id, directory }, options()).catch(() => undefined)
+      if (!session?.data) return undefined
+      const parent = session?.data?.parentID
+      if (!parent) return current.id
+      current.id = parent
+    }
+    return sessionID
+  }
+
   async function refresh(directory: string) {
     const token = {}
     refreshes.set(directory, token)
@@ -115,17 +129,28 @@ export function ProjectActivityProvider(props: ParentProps) {
       }))
     }
     if (disposed || refreshes.get(directory) !== token) return
-    attention.set(directory, currentAttention)
     if (previousAttention) {
-      for (const request of question?.data ?? []) {
-        if (previousAttention.questions.has(request.id)) continue
-        notifications.notify("agent", "Question", "A background session has a question", directory, request.sessionID, `opencode:question:${directory}:${request.id}`)
-      }
-      for (const request of permission?.data ?? []) {
-        if (previousAttention.permissions.has(request.id)) continue
-        notifications.notify("permissions", "Permission required", "A background session needs permission", directory, request.sessionID, `opencode:permission:${directory}:${request.id}`)
-      }
+      await Promise.all((question?.data ?? []).filter((request) => !previousAttention.questions.has(request.id)).map(async (request) => {
+        const root = await rootSessionID(directory, request.sessionID, options)
+        if (disposed || refreshes.get(directory) !== token) return
+        if (!root) {
+          currentAttention.questions.delete(request.id)
+          return
+        }
+        notifications.notify("agent", "Question", "A background session has a question", directory, request.sessionID, `opencode:question:${directory}:${request.id}`, root)
+      }))
+      await Promise.all((permission?.data ?? []).filter((request) => !previousAttention.permissions.has(request.id)).map(async (request) => {
+        const root = await rootSessionID(directory, request.sessionID, options)
+        if (disposed || refreshes.get(directory) !== token) return
+        if (!root) {
+          currentAttention.permissions.delete(request.id)
+          return
+        }
+        notifications.notify("permissions", "Permission required", "A background session needs permission", directory, request.sessionID, `opencode:permission:${directory}:${request.id}`, root)
+      }))
     }
+    if (disposed || refreshes.get(directory) !== token) return
+    attention.set(directory, currentAttention)
     setStatuses((current) => ({
       ...current,
       [directory]: Object.fromEntries(Object.entries(next).concat([...failed].map((sessionID) => [sessionID, previous?.[sessionID] ?? { type: "busy" }]))),
