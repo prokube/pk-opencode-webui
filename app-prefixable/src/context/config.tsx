@@ -28,6 +28,7 @@ export function mergeConfigState<T>(current: T, patch: T): T {
   if (Array.isArray(current) || Array.isArray(patch)) return patch
   const result = { ...current } as Record<string, unknown>
   for (const [key, value] of Object.entries(patch as Record<string, unknown>)) {
+    if (key === "__proto__" || key === "constructor" || key === "prototype") continue
     const previous = result[key]
     result[key] = previous && value && typeof previous === "object" && typeof value === "object" &&
       !Array.isArray(previous) && !Array.isArray(value)
