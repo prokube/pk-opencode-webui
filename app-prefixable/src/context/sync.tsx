@@ -122,6 +122,33 @@ export function applyPartDelta(part: Part, field: string, delta: string) {
   return { ...part, text: `${part.text ?? ""}${delta}` }
 }
 
+function applyPartDeltaInPlace(parts: Part[] | undefined, partID: string, field: string, delta: string) {
+  if (!parts) return
+  const index = parts.findIndex((part) => part.id === partID)
+  if (index === -1) return
+  parts[index] = applyPartDelta(parts[index], field, delta)
+}
+
+function updateMessagePartInPlace(messages: MessageWithParts[] | undefined, messageID: string, part: Part) {
+  if (!messages?.length) return
+  const index = messages.findIndex((message) => message.info.id === messageID)
+  if (index === -1) return
+  messages[index].parts = mergePartUpdate(messages[index].parts, part)
+}
+
+function applyMessagePartDeltaInPlace(
+  messages: MessageWithParts[] | undefined,
+  messageID: string,
+  partID: string,
+  field: string,
+  delta: string,
+) {
+  if (!messages?.length) return
+  const index = messages.findIndex((message) => message.info.id === messageID)
+  if (index === -1) return
+  applyPartDeltaInPlace(messages[index].parts, partID, field, delta)
+}
+
 function toolRank(part: Extract<Part, { type: "tool" }>) {
   if (part.state.status === "pending") return 0
   if (part.state.status === "running") return 1
@@ -936,18 +963,11 @@ export function SyncProvider(props: ParentProps) {
       setStore("part", part.messageID, (existing: Part[] | undefined) => mergePartUpdate(existing, part))
 
       // Update parts in existing messages only - don't synthesize messages from parts
-      setStore("message", part.sessionID, (msgs: MessageWithParts[]) => {
-        if (!msgs || msgs.length === 0) return msgs
-
-        const msgIdx = msgs.findIndex((m) => m.info.id === part.messageID)
-        if (msgIdx === -1) return msgs
-
-        // Update existing message parts
-        return msgs.map((m, i) => {
-          if (i !== msgIdx) return m
-          return { ...m, parts: mergePartUpdate(m.parts, part) }
-        })
-      })
+      if (store.message[part.sessionID]) {
+        setStore("message", part.sessionID, produce((messages: MessageWithParts[]) => {
+          updateMessagePartInPlace(messages, part.messageID, part)
+        }))
+      }
       touchSessionCache(part.sessionID)
       evictSessionCaches(part.sessionID)
     }
@@ -961,18 +981,14 @@ export function SyncProvider(props: ParentProps) {
       sessionRequests.touchPart(delta.sessionID, delta.messageID, delta.partID)
 
       if (store.part[delta.messageID]) {
-        setStore("part", delta.messageID, (existing: Part[]) =>
-          existing.map((p) => (p.id === delta.partID ? applyPartDelta(p, field, text) : p)),
-        )
+        setStore("part", delta.messageID, produce((parts: Part[]) => {
+          applyPartDeltaInPlace(parts, delta.partID!, field, text)
+        }))
       }
 
       if (store.message[delta.sessionID]) {
-        setStore("message", delta.sessionID, (messages: MessageWithParts[]) => messages.map((m) => {
-          if (m.info.id !== delta.messageID) return m
-          return {
-            ...m,
-            parts: m.parts.map((p) => (p.id === delta.partID ? applyPartDelta(p, field, text) : p)),
-          }
+        setStore("message", delta.sessionID, produce((messages: MessageWithParts[]) => {
+          applyMessagePartDeltaInPlace(messages, delta.messageID!, delta.partID!, field, text)
         }))
       }
       touchSessionCache(delta.sessionID)

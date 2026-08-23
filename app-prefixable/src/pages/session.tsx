@@ -287,6 +287,43 @@ export function Session() {
     return msgs.slice(0, revertIndex);
   }
 
+  const displayMessageCache = new Map<string, { source: ReturnType<typeof sync.messages>[number]; display: DisplayMessage }>();
+
+  function displayMessage(message: ReturnType<typeof sync.messages>[number]) {
+    const cached = displayMessageCache.get(message.info.id);
+    if (cached?.source === message) return cached.display;
+
+    const display = {
+      get id() {
+        return message.info.id;
+      },
+      get role() {
+        return message.info.role;
+      },
+      get parts() {
+        return message.parts;
+      },
+      get error() {
+        return message.info.role === "assistant" ? message.info.error : undefined;
+      },
+      get time() {
+        return message.info.time;
+      },
+      get modelID() {
+        return message.info.role === "assistant" ? message.info.modelID : undefined;
+      },
+      get providerID() {
+        return message.info.role === "assistant" ? message.info.providerID : undefined;
+      },
+      get tokens() {
+        return message.info.role === "assistant" ? message.info.tokens : undefined;
+      },
+    } satisfies DisplayMessage;
+
+    displayMessageCache.set(message.info.id, { source: message, display });
+    return display;
+  }
+
   function assistantFinished(id: string) {
     const msgs = visibleSyncMessages(id);
     const last = msgs[msgs.length - 1]?.info;
@@ -591,27 +628,12 @@ export function Session() {
   const syncMessages = createMemo(() => {
     const id = sessionId();
     if (!id) return [];
-    return visibleSyncMessages(id).map((msg) => {
-      const info = msg.info;
-      if (info.role === "assistant") {
-        return {
-          id: info.id,
-          role: info.role,
-          parts: msg.parts,
-          error: info.error,
-          time: { created: info.time.created, completed: info.time.completed },
-          modelID: info.modelID,
-          providerID: info.providerID,
-          tokens: info.tokens,
-        };
-      }
-      return {
-        id: info.id,
-        role: info.role,
-        parts: msg.parts,
-        time: { created: info.time.created },
-      };
-    });
+    const result = visibleSyncMessages(id).map(displayMessage);
+    const visible = new Set(result.map((message) => message.id));
+    for (const key of displayMessageCache.keys()) {
+      if (!visible.has(key)) displayMessageCache.delete(key);
+    }
+    return result;
   });
 
   // Includes optimistic message if present and not yet in sync

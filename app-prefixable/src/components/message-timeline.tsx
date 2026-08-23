@@ -20,6 +20,18 @@ type TurnRef = {
   assistantIds: string[]
 }
 
+type MessageStructure = {
+  id: string
+  role: DisplayMessage["role"]
+  error: boolean
+  parts: string[]
+}
+
+type TurnRefState = {
+  structure: MessageStructure[]
+  refs: TurnRef[]
+}
+
 // Compute turn-level timing from user and assistant message timestamps
 function computeTurnTime(user: DisplayMessage, assistants: DisplayMessage[]): Turn["time"] {
   const started = user.time?.created
@@ -71,10 +83,38 @@ function hasStructuredContent(message: DisplayMessage): boolean {
   return message.parts.some((p) => p.type === "tool" || p.type === "text" || p.type === "reasoning")
 }
 
-function timelineStructure(messages: DisplayMessage[]) {
-  return messages
-    .map((msg) => `${msg.id}:${msg.role}:${msg.error ? 1 : 0}:${msg.parts.map((p) => p.type).join(",")}`)
-    .join("|")
+function messageStructure(messages: DisplayMessage[]) {
+  return messages.map((message) => ({
+    id: message.id,
+    role: message.role,
+    error: !!message.error,
+    parts: message.parts.map((part) => part.type),
+  }))
+}
+
+function sameTimelineStructure(previous: MessageStructure[], next: MessageStructure[]) {
+  if (previous.length !== next.length) return false
+  for (let index = 0; index < next.length; index += 1) {
+    const left = previous[index]
+    const right = next[index]
+    if (left.id !== right.id || left.role !== right.role || left.error !== right.error) return false
+    if (left.parts.length !== right.parts.length) return false
+    for (let part = 0; part < right.parts.length; part += 1) {
+      if (left.parts[part] !== right.parts[part]) return false
+    }
+  }
+  return true
+}
+
+function messageGrowth(message: DisplayMessage) {
+  return message.parts.reduce((size, part) => {
+    if (part.type === "text" || part.type === "reasoning") return size + part.text.length
+    if (part.type !== "tool") return size + 1
+    if (part.state.status === "pending") return size + part.state.raw.length
+    if (part.state.status === "running") return size + (part.state.title?.length ?? 0)
+    if (part.state.status === "completed") return size + part.state.title.length + part.state.output.length
+    return size + part.state.error.length
+  }, message.parts.length)
 }
 
 export function MessageTimeline(props: {
@@ -104,8 +144,6 @@ export function MessageTimeline(props: {
   const [userScrolledUp, setUserScrolledUp] = createSignal(false)
   // Track previous turn IDs for session switch detection
   const [prevTurnIds, setPrevTurnIds] = createSignal<Set<string>>(new Set())
-  const structure = createMemo(() => timelineStructure(props.messages))
-
   const messageById = createMemo(() => {
     const map = new Map<string, DisplayMessage>()
     for (const msg of props.messages) map.set(msg.id, msg)
@@ -113,11 +151,13 @@ export function MessageTimeline(props: {
   })
 
   // Convert messages to turn references only when structure changes.
-  const turnRefs = createMemo(() => {
-    structure()
-    const filtered = untrack(() => props.messages).filter(hasStructuredContent)
-    return messagesToTurnRefs(filtered)
+  const turnRefState = createMemo<TurnRefState>((previous) => {
+    const messages = props.messages
+    const structure = messageStructure(messages)
+    if (previous && sameTimelineStructure(previous.structure, structure)) return previous
+    return { structure, refs: messagesToTurnRefs(messages.filter(hasStructuredContent)) }
   })
+  const turnRefs = () => turnRefState().refs
 
   function resolveTurn(ref: TurnRef): Turn | undefined {
     const map = messageById()
@@ -143,8 +183,18 @@ export function MessageTimeline(props: {
     return all.slice(Math.max(0, all.length - count))
   })
 
-  const renderedTurns = createMemo(() => {
-    return renderedTurnRefs().flatMap((ref) => resolveTurn(ref) ?? [])
+  const renderedTurns = createMemo<Turn[]>((previous = []) => {
+    const cached = new Map(previous.map((turn) => [turn.id, turn]))
+    return renderedTurnRefs().flatMap((ref) => {
+      const next = resolveTurn(ref)
+      if (!next) return []
+      const current = cached.get(next.id)
+      if (!current || current.userMessage !== next.userMessage) return [next]
+      if (current.assistantMessages.length !== next.assistantMessages.length) return [next]
+      if (current.assistantMessages.some((message, index) => message !== next.assistantMessages[index])) return [next]
+      if (current.time?.started !== next.time?.started || current.time?.completed !== next.time?.completed) return [next]
+      return [current]
+    })
   })
 
   // Check if there are more turns to load
@@ -215,10 +265,9 @@ export function MessageTimeline(props: {
 
   // Auto-scroll when messages change (if not scrolled up)
   createEffect(() => {
-    // Track dependencies
-    const msgCount = props.messages.length
-    const isProcessing = props.processing
-    // Scroll to bottom for new content
+    const last = props.messages.at(-1)
+    if (!last && !props.processing) return
+    if (last) messageGrowth(last)
     scrollToBottom()
   })
 
