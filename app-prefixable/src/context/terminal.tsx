@@ -82,7 +82,10 @@ export function TerminalProvider(props: ParentProps) {
       const res = await client.pty.create({ cwd })
       console.log("[Terminal] PTY create response:", res)
       if (res.data) {
-        if (disposed) return res.data.id
+        if (disposed) {
+          await client.pty.remove({ ptyID: res.data.id }).catch(() => undefined)
+          return null
+        }
         const session: PTYSession = {
           id: res.data.id,
           title: `Terminal ${sessions().length + 1}`,

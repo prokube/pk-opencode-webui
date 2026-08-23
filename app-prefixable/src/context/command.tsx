@@ -13,7 +13,7 @@ export interface Command {
   global?: boolean
   /** When true, preventDefault is NOT called automatically — the handler receives the event */
   passive?: boolean
-  /** When true, the command is hidden from the shortcut reference */
+  /** When true, the command is hidden from command discovery surfaces */
   hidden?: boolean
   onSelect: (e?: KeyboardEvent) => void
 }
