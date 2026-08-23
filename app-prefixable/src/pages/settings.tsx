@@ -516,7 +516,7 @@ Add your project-specific instructions here.
           code,
         })
         // Open the authorization URL
-        window.open(result.url, "_blank")
+        window.open(result.url, "_blank", "noopener,noreferrer")
       } else {
         // Auto method (device flow) - show code immediately, then start polling
         setOauthPending({
@@ -529,7 +529,7 @@ Add your project-specific instructions here.
         })
 
         // Open the authorization URL
-        window.open(result.url, "_blank")
+        window.open(result.url, "_blank", "noopener,noreferrer")
 
         // Start the callback immediately - it will poll until user authorizes
         // This call blocks until authorization succeeds or fails
@@ -1616,9 +1616,10 @@ Add your project-specific instructions here.
                                   onClick={async () => {
                                     setMcpLoading(name)
                                     const popup = window.open("about:blank", "_blank")
+                                    if (popup) popup.opener = null
                                     const connected = await mcp.startAuth(name, (url) => {
                                       if (popup) popup.location.href = url
-                                      if (!popup) window.open(url, "_blank")
+                                      if (!popup) window.open(url, "_blank", "noopener,noreferrer")
                                     })
                                     if (!connected) popup?.close()
                                     setMcpLoading(null)

@@ -31,9 +31,10 @@ export function MCPDialog(props: Props) {
       await mcp.disconnect(name)
     } else if (status?.status === "needs_auth") {
       const popup = window.open("about:blank", "_blank")
+      if (popup) popup.opener = null
       const connected = await mcp.startAuth(name, (url) => {
         if (popup) popup.location.href = url
-        if (!popup) window.open(url, "_blank")
+        if (!popup) window.open(url, "_blank", "noopener,noreferrer")
       })
       if (!connected) popup?.close()
     } else {
