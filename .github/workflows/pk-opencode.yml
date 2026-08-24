@@ -102,7 +102,14 @@ jobs:
           echo "COMMIT_TAG=$COMMIT_TAG" >> "$GITHUB_ENV"
 
       - name: Generate summary
+        env:
+          LATEST_TAG: ${{ env.LATEST_TAG }}
         run: |
+          LATEST_ROW=""
+          if [[ -n "$LATEST_TAG" ]]; then
+            LATEST_ROW="| latest | \`$LATEST_TAG\` |"
+          fi
+
           cat <<EOF > summary.md
           ## Docker Image Published
 
@@ -111,6 +118,7 @@ jobs:
           ### Image Tags
           | Tag | URL |
           |-----|-----|
+          $LATEST_ROW
           | version | \`${{ env.VERSION_TAG }}\` |
           | commit | \`${{ env.COMMIT_TAG }}\` |
 
@@ -118,6 +126,7 @@ jobs:
           <summary>Full image URLs for copy/paste</summary>
 
           \`\`\`
+          $LATEST_TAG
           ${{ env.VERSION_TAG }}
           ${{ env.COMMIT_TAG }}
           \`\`\`
