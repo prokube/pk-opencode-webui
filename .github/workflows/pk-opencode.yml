@@ -8,7 +8,7 @@ on:
 
 env:
   IMAGE_NAME: pk-opencode
-  IMAGE_PUSH_PATH: "${{ secrets.GCP_ARTIFACT_REGISTRY_PATH }}"
+  IMAGE_PUSH_PATH: "${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && 'europe-west3-docker.pkg.dev/prokube/releases' || 'europe-west3-docker.pkg.dev/prokube-internal/prokube-customer' }}"
 
 jobs:
   build-prefixable-image:
@@ -66,13 +66,12 @@ jobs:
       - name: Build and push image
         run: |
           # GCP Artifact Registry tags
-          LATEST_TAG="${{ env.IMAGE_PUSH_PATH }}/${{ env.IMAGE_NAME }}:latest"
           VERSION_TAG="${{ env.IMAGE_PUSH_PATH }}/${{ env.IMAGE_NAME }}:${{ env.DOCKER_TAG }}"
           COMMIT_TAG="${{ env.IMAGE_PUSH_PATH }}/${{ env.IMAGE_NAME }}:commit-${{ github.sha }}"
 
           # Build the Kubeflow image
           docker build \
-            -t $LATEST_TAG \
+            -t "$VERSION_TAG" \
             -f docker/kubeflow/Dockerfile \
             --platform linux/amd64 \
             --build-arg OPENCODE_VERSION=1.15.7 \
@@ -85,18 +84,22 @@ jobs:
             .
 
           # Tag for different versions
-          docker tag $LATEST_TAG $VERSION_TAG
-          docker tag $LATEST_TAG $COMMIT_TAG
+          docker tag "$VERSION_TAG" "$COMMIT_TAG"
 
           # Push to GCP Artifact Registry
-          docker push $LATEST_TAG
-          docker push $VERSION_TAG
-          docker push $COMMIT_TAG
+          docker push "$VERSION_TAG"
+          docker push "$COMMIT_TAG"
+
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            LATEST_TAG="${{ env.IMAGE_PUSH_PATH }}/${{ env.IMAGE_NAME }}:latest"
+            docker tag "$VERSION_TAG" "$LATEST_TAG"
+            docker push "$LATEST_TAG"
+            echo "LATEST_TAG=$LATEST_TAG" >> "$GITHUB_ENV"
+          fi
 
           # Save tags for summary
-          echo "LATEST_TAG=$LATEST_TAG" >> $GITHUB_ENV
-          echo "VERSION_TAG=$VERSION_TAG" >> $GITHUB_ENV
-          echo "COMMIT_TAG=$COMMIT_TAG" >> $GITHUB_ENV
+          echo "VERSION_TAG=$VERSION_TAG" >> "$GITHUB_ENV"
+          echo "COMMIT_TAG=$COMMIT_TAG" >> "$GITHUB_ENV"
 
       - name: Generate summary
         run: |
@@ -108,7 +111,6 @@ jobs:
           ### Image Tags
           | Tag | URL |
           |-----|-----|
-          | latest | \`${{ env.LATEST_TAG }}\` |
           | version | \`${{ env.VERSION_TAG }}\` |
           | commit | \`${{ env.COMMIT_TAG }}\` |
 
@@ -116,7 +118,6 @@ jobs:
           <summary>Full image URLs for copy/paste</summary>
 
           \`\`\`
-          ${{ env.LATEST_TAG }}
           ${{ env.VERSION_TAG }}
           ${{ env.COMMIT_TAG }}
           \`\`\`
