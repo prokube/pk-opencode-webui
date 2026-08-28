@@ -8,7 +8,7 @@ on:
 
 env:
   IMAGE_NAME: pk-opencode
-  IMAGE_PUSH_PATH: "${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/') && 'europe-west3-docker.pkg.dev/prokube/releases' || 'europe-west3-docker.pkg.dev/prokube-internal/prokube-dev' }}"
+  IMAGE_PUSH_PATH: "${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/') && 'europe-west3-docker.pkg.dev/prokube/releases' || 'europe-west3-docker.pkg.dev/prokube/development' }}"
 
 jobs:
   build-prefixable-image:
