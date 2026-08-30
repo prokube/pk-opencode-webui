@@ -8,7 +8,9 @@ on:
 
 env:
   IMAGE_NAME: pk-opencode
-  IMAGE_PUSH_PATH: "${{ secrets.GCP_ARTIFACT_REGISTRY_PATH }}"
+  IMAGE_PUSH_PATH: "${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && 'europe-west3-docker.pkg.dev/prokube/releases' || 'europe-west3-docker.pkg.dev/prokube/development' }}"
+  IS_RELEASE: "${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') }}"
+  RELEASE_TAG: "${{ github.ref_name }}"
 
 jobs:
   build-prefixable-image:
@@ -27,10 +29,8 @@ jobs:
       - name: Generate dynamic version
         id: version
         run: |
-          CURRENT_TAG=$(git tag --points-at HEAD | head -n 1)
-
-          if [ -n "$CURRENT_TAG" ]; then
-            VERSION="${CURRENT_TAG}"
+          if [[ "$IS_RELEASE" == "true" ]]; then
+            VERSION="$RELEASE_TAG"
           else
             LATEST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "v0.0.0")
             SHORT_COMMIT=$(git rev-parse --short HEAD)
@@ -66,13 +66,11 @@ jobs:
       - name: Build and push image
         run: |
           # GCP Artifact Registry tags
-          LATEST_TAG="${{ env.IMAGE_PUSH_PATH }}/${{ env.IMAGE_NAME }}:latest"
           VERSION_TAG="${{ env.IMAGE_PUSH_PATH }}/${{ env.IMAGE_NAME }}:${{ env.DOCKER_TAG }}"
-          COMMIT_TAG="${{ env.IMAGE_PUSH_PATH }}/${{ env.IMAGE_NAME }}:commit-${{ github.sha }}"
 
           # Build the Kubeflow image
           docker build \
-            -t $LATEST_TAG \
+            -t "$VERSION_TAG" \
             -f docker/kubeflow/Dockerfile \
             --platform linux/amd64 \
             --build-arg OPENCODE_VERSION=1.15.7 \
@@ -84,22 +82,36 @@ jobs:
             --label "org.opencontainers.image.revision=${{ github.sha }}" \
             .
 
-          # Tag for different versions
-          docker tag $LATEST_TAG $VERSION_TAG
-          docker tag $LATEST_TAG $COMMIT_TAG
-
           # Push to GCP Artifact Registry
-          docker push $LATEST_TAG
-          docker push $VERSION_TAG
-          docker push $COMMIT_TAG
+          docker push "$VERSION_TAG"
+
+          if [[ "$IS_RELEASE" != "true" ]]; then
+            COMMIT_TAG="${{ env.IMAGE_PUSH_PATH }}/${{ env.IMAGE_NAME }}:commit-${{ github.sha }}"
+            LATEST_TAG="${{ env.IMAGE_PUSH_PATH }}/${{ env.IMAGE_NAME }}:latest"
+            docker tag "$VERSION_TAG" "$COMMIT_TAG"
+            docker tag "$VERSION_TAG" "$LATEST_TAG"
+            docker push "$COMMIT_TAG"
+            docker push "$LATEST_TAG"
+            echo "COMMIT_TAG=$COMMIT_TAG" >> "$GITHUB_ENV"
+            echo "LATEST_TAG=$LATEST_TAG" >> "$GITHUB_ENV"
+          fi
 
           # Save tags for summary
-          echo "LATEST_TAG=$LATEST_TAG" >> $GITHUB_ENV
-          echo "VERSION_TAG=$VERSION_TAG" >> $GITHUB_ENV
-          echo "COMMIT_TAG=$COMMIT_TAG" >> $GITHUB_ENV
+          echo "VERSION_TAG=$VERSION_TAG" >> "$GITHUB_ENV"
 
       - name: Generate summary
         run: |
+          TAG_ROWS="| version | \`$VERSION_TAG\` |"
+          IMAGE_URLS="$VERSION_TAG"
+          if [[ -n "$COMMIT_TAG" ]]; then
+            TAG_ROWS="$TAG_ROWS
+          | commit | \`$COMMIT_TAG\` |
+          | latest | \`$LATEST_TAG\` |"
+            IMAGE_URLS="$IMAGE_URLS
+          $COMMIT_TAG
+          $LATEST_TAG"
+          fi
+
           cat <<EOF > summary.md
           ## Docker Image Published
 
@@ -108,17 +120,13 @@ jobs:
           ### Image Tags
           | Tag | URL |
           |-----|-----|
-          | latest | \`${{ env.LATEST_TAG }}\` |
-          | version | \`${{ env.VERSION_TAG }}\` |
-          | commit | \`${{ env.COMMIT_TAG }}\` |
+          $TAG_ROWS
 
           <details>
           <summary>Full image URLs for copy/paste</summary>
 
           \`\`\`
-          ${{ env.LATEST_TAG }}
-          ${{ env.VERSION_TAG }}
-          ${{ env.COMMIT_TAG }}
+          $IMAGE_URLS
           \`\`\`
           </details>
           EOF
@@ -162,7 +170,7 @@ jobs:
 
   create-release:
     needs: build-prefixable-image
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     permissions:
       contents: write
