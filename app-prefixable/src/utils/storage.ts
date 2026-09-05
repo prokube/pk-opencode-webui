@@ -20,3 +20,29 @@ export function dispatchStorageEvent(key: string, value: string | null) {
     } catch { /* ignore */ }
   }
 }
+
+function encodeScope(value: string) {
+  return encodeURIComponent(value)
+}
+
+export function serverStorageKey(serverId: string, name: string) {
+  return `opencode.server.${encodeScope(serverId)}.${name}`
+}
+
+export function workspaceStorageKey(serverId: string, directory: string, name: string) {
+  return `opencode.server.${encodeScope(serverId)}.workspace.${encodeScope(directory)}.${name}`
+}
+
+export function legacyStorageValue(
+  serverId: string,
+  current: string | null,
+  legacy: readonly (string | null)[],
+  validate: (value: string) => boolean,
+) {
+  if (current !== null) return { value: current, migrated: false }
+  if (serverId !== "local") return { value: null, migrated: false }
+  const value = legacy.find((item): item is string => item !== null && validate(item))
+  return value === undefined
+    ? { value: null, migrated: false }
+    : { value, migrated: true }
+}

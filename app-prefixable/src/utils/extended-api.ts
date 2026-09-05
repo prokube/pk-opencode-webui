@@ -62,272 +62,97 @@ export async function writeFile(serverUrl: string, path: string, content: string
   return true
 }
 
-export interface StoredPrompt {
+export type PromptScope = "global" | "project"
+
+export interface SavedPrompt {
   id: string
   title: string
   text: string
   createdAt: number
-  scope: "global" | "project"
+  scope: PromptScope
 }
 
-interface SavedPromptsPayload {
-  global: StoredPrompt[]
-  project: StoredPrompt[]
+export interface SavedPromptState {
+  global: SavedPrompt[]
+  project: SavedPrompt[]
 }
 
-interface SavedPromptsResponse {
-  prompts?: { global?: unknown[]; project?: unknown[] }
-  global?: unknown[] | { prompts?: unknown[] }
-  project?: unknown[] | { prompts?: unknown[] }
-  errors?: { global?: string; project?: string }
-}
-
-function validatePromptList(items: unknown[], field: "global" | "project"): StoredPrompt[] {
-  const prompts: StoredPrompt[] = []
-  for (let i = 0; i < items.length; i++) {
-    const item = items[i]
-    const prompt = toStoredPrompt(item, field)
-    if (!prompt) {
-      console.warn(`[extended-api] skipped invalid saved prompt at ${field}[${i}]`)
-      continue
-    }
-    prompts.push(prompt)
-  }
-  return prompts
-}
-
-function parseCreatedAt(value: unknown): number | null {
+function parseCreatedAt(value: unknown) {
   if (typeof value === "number" && Number.isFinite(value)) return value
-  if (typeof value !== "string") return null
-  const trimmed = value.trim()
-  if (!trimmed) return null
-  const numeric = Number(trimmed)
+  if (typeof value !== "string" || !value.trim()) return null
+  const numeric = Number(value)
   if (Number.isFinite(numeric)) return numeric
-  const timestamp = Date.parse(trimmed)
-  if (!Number.isNaN(timestamp)) return timestamp
-  return null
+  const timestamp = Date.parse(value)
+  return Number.isNaN(timestamp) ? null : timestamp
 }
 
-function toStoredPrompt(item: unknown, fallbackScope: "global" | "project"): StoredPrompt | null {
-  if (!item || typeof item !== "object") return null
-  const row = item as Record<string, unknown>
-  const id = typeof row.id === "string" ? row.id : null
-  if (id === null) return null
+function parsePrompt(value: unknown, scope: PromptScope): SavedPrompt | null {
+  if (!value || typeof value !== "object") return null
+  const row = value as Record<string, unknown>
   const title = typeof row.title === "string" ? row.title : typeof row.name === "string" ? row.name : null
-  if (title === null) return null
-  const text =
-    typeof row.text === "string"
-      ? row.text
-      : typeof row.prompt === "string"
-        ? row.prompt
-        : typeof row.content === "string"
-          ? row.content
-          : null
-  if (text === null) return null
+  const text = typeof row.text === "string" ? row.text : typeof row.prompt === "string" ? row.prompt : typeof row.content === "string" ? row.content : null
   const createdAt = parseCreatedAt(row.createdAt ?? row.created ?? row.timestamp)
-  if (createdAt === null) return null
-  const scope = row.scope === "global" || row.scope === "project" ? row.scope : fallbackScope
-  return { id, title, text, createdAt, scope }
+  if (typeof row.id !== "string" || !row.id || title === null || text === null || createdAt === null) return null
+  return { id: row.id, title, text, createdAt, scope }
 }
 
-function readPromptArray(data: SavedPromptsResponse, field: "global" | "project"): unknown[] | null {
-  const direct = data[field]
-  if (Array.isArray(direct)) return direct
-  if (direct && typeof direct === "object") {
-    const nested = (direct as { prompts?: unknown }).prompts
+function promptArray(value: unknown, scope: PromptScope) {
+  if (Array.isArray(value)) return value
+  if (!value || typeof value !== "object") return null
+  const row = value as Record<string, unknown>
+  if (Array.isArray(row.prompts)) return row.prompts
+  if (Array.isArray(row[scope])) return row[scope] as unknown[]
+  if (row.prompts && typeof row.prompts === "object") {
+    const nested = (row.prompts as Record<string, unknown>)[scope]
     if (Array.isArray(nested)) return nested
   }
-  const nested = data.prompts?.[field]
-  if (Array.isArray(nested)) return nested
   return null
 }
 
-export async function readSavedPrompts(serverUrl: string, directory?: string): Promise<SavedPromptsPayload> {
-  const params = new URLSearchParams()
-  if (directory) params.set("directory", directory)
-  const suffix = params.toString() ? `?${params.toString()}` : ""
-  const res = await fetch(`${serverUrl}/api/ext/saved-prompts${suffix}`).catch(() => null)
-  if (!res) throw new Error("failed to fetch saved prompts")
-  if (!res.ok) throw new Error(`saved prompts read failed: ${res.status}`)
-  const data = (await res.json().catch(() => null)) as SavedPromptsResponse | null
-  if (!data || typeof data !== "object") throw new Error("invalid saved prompts response")
-  const global = readPromptArray(data, "global")
-  const project = readPromptArray(data, "project")
+export function parseSavedPromptState(value: unknown): SavedPromptState {
+  if (!value || typeof value !== "object") throw new Error("invalid saved prompts response")
+  const row = value as Record<string, unknown>
+  const global = promptArray(row.global ?? value, "global")
+  const project = promptArray(row.project ?? value, "project")
   if (!global || !project) throw new Error("invalid saved prompts response")
-  if (data.errors?.global || data.errors?.project) {
-    console.warn("[extended-api] saved prompts response includes read warnings", data.errors)
-  }
   return {
-    global: validatePromptList(global, "global"),
-    project: validatePromptList(project, "project"),
+    global: global.map((item) => parsePrompt(item, "global")).filter((item): item is SavedPrompt => !!item),
+    project: project.map((item) => parsePrompt(item, "project")).filter((item): item is SavedPrompt => !!item),
   }
 }
 
-export async function writeSavedPrompts(
-  serverUrl: string,
-  directory: string | undefined,
-  global: StoredPrompt[],
-  project: StoredPrompt[],
-): Promise<boolean> {
-  const params = new URLSearchParams()
-  if (directory) params.set("directory", directory)
-  const suffix = params.toString() ? `?${params.toString()}` : ""
-  const res = await fetch(`${serverUrl}/api/ext/saved-prompts${suffix}`, {
-    method: "PUT",
+function savedPromptUrl(serverUrl: string, directory?: string, id?: string) {
+  const path = `${serverUrl}/api/ext/saved-prompts${id ? `/${encodeURIComponent(id)}` : ""}`
+  if (!directory) return path
+  return `${path}?${new URLSearchParams({ directory })}`
+}
+
+async function savedPromptRequest(serverUrl: string, directory: string | undefined, init?: RequestInit, id?: string) {
+  const res = await fetch(savedPromptUrl(serverUrl, directory, id), init).catch(() => null)
+  if (!res?.ok) throw new Error(`saved prompts request failed: ${res?.status ?? "network"}`)
+  return parseSavedPromptState(await res.json())
+}
+
+export function readSavedPrompts(serverUrl: string, directory?: string) {
+  return savedPromptRequest(serverUrl, directory)
+}
+
+export function createSavedPrompt(serverUrl: string, directory: string | undefined, prompt: { title: string; text: string; scope: PromptScope; id?: string; createdAt?: number }) {
+  return savedPromptRequest(serverUrl, directory, {
+    method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ global, project }),
-  }).catch(() => null)
-  return !!res?.ok
+    body: JSON.stringify(prompt),
+  })
 }
 
-export interface SessionAlarmState {
-  sessionId: string
-  sourceId: string
-  enabled: boolean
-}
-
-const TELEGRAM_SOURCE_ID_CACHE_TTL_MS = 30_000
-
-const telegramSourceIdCache = new Map<string, { sourceId: string; expiresAt: number }>()
-const telegramSourceIdPending = new Map<string, Promise<string | undefined>>()
-const telegramSourceIdGeneration = new Map<string, number>()
-
-function sourceCacheKey(serverUrl: string, directory: string) {
-  return `${serverUrl}::${directory}`
-}
-
-function bumpSourceGeneration(key: string) {
-  telegramSourceIdGeneration.set(key, (telegramSourceIdGeneration.get(key) ?? 0) + 1)
-}
-
-export function invalidateTelegramSourceIdCache(serverUrl?: string, directory?: string) {
-  const url = serverUrl?.trim()
-  const dir = directory?.trim()
-  if (!url) {
-    telegramSourceIdCache.clear()
-    telegramSourceIdPending.clear()
-    telegramSourceIdGeneration.clear()
-    return
-  }
-  if (!dir) {
-    const keys = new Set<string>()
-    for (const key of telegramSourceIdCache.keys()) {
-      if (!key.startsWith(`${url}::`)) continue
-      keys.add(key)
-      telegramSourceIdCache.delete(key)
-    }
-    for (const key of telegramSourceIdPending.keys()) {
-      if (!key.startsWith(`${url}::`)) continue
-      keys.add(key)
-      telegramSourceIdPending.delete(key)
-    }
-    for (const key of telegramSourceIdGeneration.keys()) {
-      if (!key.startsWith(`${url}::`)) continue
-      keys.add(key)
-    }
-    for (const key of keys) bumpSourceGeneration(key)
-    return
-  }
-  const key = sourceCacheKey(url, dir)
-  bumpSourceGeneration(key)
-  telegramSourceIdCache.delete(key)
-  telegramSourceIdPending.delete(key)
-}
-
-function sourceFromSettings(data: unknown, directory?: string) {
-  if (!data || typeof data !== "object") return
-  const settings = (data as { settings?: unknown }).settings
-  if (!settings || typeof settings !== "object") return
-  const multiSourceEnabled = (settings as { multiSourceEnabled?: unknown }).multiSourceEnabled
-  if (multiSourceEnabled !== true) return "default"
-  if (!directory) return
-  const rootDirectory = (settings as { directory?: unknown }).directory
-  if (typeof rootDirectory === "string" && rootDirectory === directory) {
-    return "default"
-  }
-  const sources = (settings as { sources?: unknown }).sources
-  if (!Array.isArray(sources)) return
-  const match = sources.find((item) => {
-    if (!item || typeof item !== "object") return false
-    const source = item as { id?: unknown; directory?: unknown; enabled?: unknown }
-    if (source.enabled === false) return false
-    if (typeof source.id !== "string") return false
-    if (typeof source.directory !== "string") return false
-    return source.directory === directory
-  }) as { id?: string } | undefined
-  if (!match?.id) return
-  return match.id
-}
-
-export async function resolveTelegramSourceId(serverUrl: string, directory?: string): Promise<string | undefined> {
-  const dir = directory?.trim()
-  if (!dir) return
-  const key = sourceCacheKey(serverUrl, dir)
-  const cached = telegramSourceIdCache.get(key)
-  if (cached && cached.expiresAt > Date.now()) return cached.sourceId
-  if (cached) telegramSourceIdCache.delete(key)
-  const pending = telegramSourceIdPending.get(key)
-  if (pending) return pending
-  const generation = telegramSourceIdGeneration.get(key) ?? 0
-  const next = fetch(`${serverUrl}/api/ext/telegram/settings`)
-    .then(async (res) => {
-      if (!res.ok) return
-      const data = (await res.json().catch(() => null)) as unknown
-      const sourceId = sourceFromSettings(data, dir)
-      if (!sourceId) return
-      if ((telegramSourceIdGeneration.get(key) ?? 0) !== generation) return
-      telegramSourceIdCache.set(key, { sourceId, expiresAt: Date.now() + TELEGRAM_SOURCE_ID_CACHE_TTL_MS })
-      return sourceId
-    })
-    .catch(() => undefined)
-    .finally(() => {
-      telegramSourceIdPending.delete(key)
-    })
-  telegramSourceIdPending.set(key, next)
-  return next
-}
-
-/** Read session alarm state from the server (Telegram bridge). Returns null on failure. */
-export async function getSessionAlarm(serverUrl: string, sessionId: string, sourceId?: string): Promise<SessionAlarmState | null> {
-  const params = new URLSearchParams({ sessionId })
-  const source = sourceId?.trim()
-  if (source) params.set("sourceId", source)
-  const res = await fetch(`${serverUrl}/api/ext/telegram/session-alarm?${params}`).catch(() => null)
-  if (!res) {
-    console.warn("[extended-api] getSessionAlarm: network error for session", sessionId)
-    return null
-  }
-  if (!res.ok) {
-    console.warn("[extended-api] getSessionAlarm failed:", res.status)
-    return null
-  }
-  const data = (await res.json().catch(() => null)) as { sessionId?: string; enabled?: boolean } | null
-  if (!data || typeof data.enabled !== "boolean") {
-    console.warn("[extended-api] getSessionAlarm: invalid response data")
-    return null
-  }
-  return {
-    sessionId: data.sessionId || sessionId,
-    sourceId: typeof (data as { sourceId?: unknown }).sourceId === "string" ? (data as { sourceId: string }).sourceId : source || "default",
-    enabled: data.enabled,
-  }
-}
-
-/** Update session alarm state on the server (Telegram bridge). Returns true on success. */
-export async function setSessionAlarm(serverUrl: string, sessionId: string, enabled: boolean, sourceId?: string): Promise<boolean> {
-  const source = sourceId?.trim()
-  const res = await fetch(`${serverUrl}/api/ext/telegram/session-alarm`, {
-    method: "PUT",
+export function updateSavedPrompt(serverUrl: string, directory: string | undefined, id: string, patch: Partial<Pick<SavedPrompt, "title" | "text" | "scope">>) {
+  return savedPromptRequest(serverUrl, directory, {
+    method: "PATCH",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(source ? { sessionId, sourceId: source, enabled } : { sessionId, enabled }),
-  }).catch(() => null)
-  if (!res) {
-    console.warn("[extended-api] setSessionAlarm: network error for session", sessionId)
-    return false
-  }
-  if (!res.ok) {
-    console.warn("[extended-api] setSessionAlarm failed:", res.status)
-    return false
-  }
-  return true
+    body: JSON.stringify(patch),
+  }, id)
+}
+
+export function deleteSavedPrompt(serverUrl: string, directory: string | undefined, id: string) {
+  return savedPromptRequest(serverUrl, directory, { method: "DELETE" }, id)
 }

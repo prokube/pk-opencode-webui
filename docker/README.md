@@ -18,6 +18,8 @@ docker build -f docker/Dockerfile -t opencode-web .
 
 ### Run
 
+The browser always uses the UI server's same-origin, prefix-aware URL. `API_URL` is a trusted deployment setting used only by the UI server; there is no client-selectable remote proxy target or browser-side backend credential support. Protect the UI and its `/api/ext/*` routes with authenticated ingress, and keep the OpenCode backend reachable only from the UI server.
+
 The UI server requires the OpenCode API server to be running. You can either:
 
 1. Run them separately:
@@ -70,35 +72,6 @@ A full-featured image for Kubeflow Notebooks that includes:
 - Automatic home directory setup for PVCs
 
 See [kubeflow/README.md](kubeflow/README.md) for details.
-
-## Telegram Bridge (optional)
-
-Both Docker images now include an optional Telegram bridge runtime at `/opt/opencode-ui/telegram-bridge.ts`.
-
-The bridge forwards Telegram text messages to OpenCode sessions and sends responses back to Telegram.
-
-### Bridge environment variables
-
-| Variable | Default | Description |
-|---|---|---|
-| `TELEGRAM_BRIDGE_ENABLED` | `false` | Enable bridge process (Kubeflow s6 service only) |
-| `TELEGRAM_BOT_TOKEN` | _(required)_ | Telegram bot token from BotFather |
-| `TELEGRAM_MODE` | `polling` | Bridge mode: `polling` or `webhook` |
-| `OPENCODE_API_URL` | `API_URL` or `http://127.0.0.1:4096` | OpenCode API base URL |
-| `OPENCODE_DIRECTORY` | _(empty)_ | Optional OpenCode directory for session requests |
-| `TELEGRAM_BRIDGE_PORT` | `4097` | Webhook listener port (webhook mode only) |
-| `TELEGRAM_WEBHOOK_PATH` | `/webhook` | Webhook endpoint path |
-| `TELEGRAM_WEBHOOK_URL` | _(empty)_ | Public webhook URL to register with Telegram |
-| `TELEGRAM_WEBHOOK_SECRET` | _(empty)_ | Secret token validated from Telegram webhook header |
-
-### Webhook deployment notes
-
-When `TELEGRAM_MODE=webhook`, the bridge runs an HTTP listener inside the container and Telegram must be able to reach it from the public internet.
-
-- Expose `TELEGRAM_BRIDGE_PORT` through your platform ingress/load balancer.
-- Route the public webhook path to the bridge service, including any path prefix from your gateway.
-- Set `TELEGRAM_WEBHOOK_URL` to the full public URL Telegram should call (for example, `https://example.com/telegram/webhook`).
-- Use `TELEGRAM_WEBHOOK_SECRET` and configure your proxy to forward `x-telegram-bot-api-secret-token` unchanged.
 
 ### Build
 

@@ -1,7 +1,5 @@
 import {
-  batch,
   createSignal,
-  createResource,
   Show,
   For,
   onMount,
@@ -13,16 +11,12 @@ import {
 } from "solid-js";
 import { useParams, useNavigate } from "@solidjs/router";
 import { Button } from "../components/ui/button";
-import { Spinner } from "../components/ui/spinner";
 import { useSDK } from "../context/sdk";
 import { sessionStatusEvent, useEvents } from "../context/events";
 import { useSync } from "../context/sync";
 import { useProviders } from "../context/providers";
-import { useMCP } from "../context/mcp";
 import { usePermission } from "../context/permission";
 import { useLayout } from "../context/layout";
-import { useBranding } from "../context/branding";
-import { useSavedPrompts, type PromptScope } from "../context/saved-prompts";
 import { useTerminal } from "../context/terminal";
 import { useConfig } from "../context/config";
 import { useCommand } from "../context/command";
@@ -31,39 +25,37 @@ import { MCPDialog } from "../components/mcp-dialog";
 import { MCPAddDialog } from "../components/mcp-add-dialog";
 import { PickerDialog } from "../components/picker-dialog";
 import { QuestionPrompt } from "../components/question-prompt";
+import { FollowupDock } from "../components/followup-dock";
 import { PermissionPrompt } from "../components/permission-prompt";
 import { SessionInfo } from "../components/session-info";
 import { SessionSidebar } from "../components/session-sidebar";
 import { ReviewPanel } from "../components/review-panel";
 import { SessionHeader } from "../components/session-header";
 import { ResizeHandle } from "../components/resize-handle";
-import { FollowupDock } from "../components/followup-dock";
 import { base64Encode, base64Decode } from "../utils/path";
-import type { Part, QuestionRequest, TextPart } from "../sdk/client";
+import type { Part, TextPart } from "../sdk/client";
 import type { DisplayMessage } from "../types/message";
-import { Plus, Settings, Paperclip, Upload, Bookmark, BookOpen } from "lucide-solid";
-import { Portal } from "solid-js/web";
+import { Paperclip, Upload } from "lucide-solid";
 import { ContextItems, type FileContext } from "../components/context-items";
 import { FilePickerDialog } from "../components/file-picker-dialog";
 import {
   ImageAttachments,
   type ImageAttachment,
 } from "../components/image-attachments";
-import {
-  migrateNotifySessionKey,
-  notifyEnabledForSession,
-  readNotifyMap,
-  writeNotifyMap,
-  writeNotifySessionEnabled,
-} from "../utils/notify";
-import { getSessionAlarm, resolveTelegramSourceId, setSessionAlarm } from "../utils/extended-api";
 import { sessionQuestionRequest } from "../utils/session-tree-request";
+import { ascendingID } from "../utils/id";
 import { createRootSession } from "../utils/root-session";
+import { formatStartError } from "../utils/session-start";
+import { LOCAL_SERVER_ID } from "../context/server";
+import { workspaceStorageKey } from "../utils/storage";
 import {
-  createSessionWithPrompt as createAndSendPrompt,
-  formatStartError,
-  startSessionError,
-} from "../utils/session-start";
+  archivedLastSession,
+  requestSession,
+  sessionDraftKey,
+  sessionRouteKey,
+} from "../utils/session-load";
+import { canDispatchFollowup, followupStorageKey, parseFollowups, parseLegacyFollowupMap, type FollowupItem } from "../utils/followups";
+import { useSavedPrompts } from "../context/saved-prompts";
 
 const ACCEPTED_TYPES = [
   "image/png",
@@ -92,54 +84,28 @@ interface SessionDraft {
   drag: number;
 }
 const drafts = new Map<string, SessionDraft>();
+const DRAFT_LIMIT = 40;
 
-// Composite key for the drafts Map so drafts are scoped to a directory+session
-// pair. Uses "__new__" as sentinel when there is no session id yet.
-function draftKey(dir: string, id?: string) {
-  return `${dir}:${id ?? "__new__"}`;
+function storeDraft(key: string, draft: SessionDraft) {
+  drafts.delete(key);
+  drafts.set(key, draft);
+  while (drafts.size > DRAFT_LIMIT) drafts.delete(drafts.keys().next().value!);
 }
 
-interface FollowupItem {
-  id: string;
-  text: string;
-}
-
-function followupStorageKey(dir: string) {
-  return `opencode.followup.${dir}`;
-}
-
-function followupAutoSendStorageKey(dir: string) {
-  return `opencode.followup.auto-send.${dir}`;
-}
-
-function normalizeFollowupList(value: unknown) {
-  if (!Array.isArray(value)) return;
-  const next: FollowupItem[] = [];
-  for (const item of value) {
-    if (!item || typeof item !== "object" || Array.isArray(item)) continue;
-    const id = (item as { id?: unknown }).id;
-    const text = (item as { text?: unknown }).text;
-    if (typeof id !== "string" || typeof text !== "string") continue;
-    next.push({ id, text });
-  }
-  return next;
-}
-
+// Draft keys include server, directory, and session. "__new__" represents a new-session draft.
 export function Session() {
   const params = useParams<{ dir: string; id?: string }>();
   const navigate = useNavigate();
-  const { client, directory, url } = useSDK();
+  const { client, directory } = useSDK();
   const events = useEvents();
   const sync = useSync();
   const providers = useProviders();
-  const mcp = useMCP();
   const permission = usePermission();
   const layout = useLayout();
-  const branding = useBranding();
-  const savedPrompts = useSavedPrompts();
   const terminal = useTerminal();
   const appConfig = useConfig();
   const command = useCommand();
+  const savedPrompts = useSavedPrompts();
 
   const [sessionId, setSessionId] = createSignal(params.id);
 
@@ -207,17 +173,6 @@ export function Session() {
   const dirSlug = createMemo(() =>
     directory ? base64Encode(directory) : params.dir,
   );
-
-  // Saved prompt picker items for /prompt command
-  const promptPickerItems = createMemo(() =>
-    savedPrompts.prompts().map((p) => ({
-      id: p.id,
-      title: p.title,
-      description: p.text.length > 80 ? p.text.slice(0, 80) + "..." : p.text,
-      group: p.scope === "project" ? "Project" : "Global",
-    })),
-  );
-
   const [input, setInput] = createSignal("");
   const [dragHeight, setDragHeight] = createSignal(0); // 0 = no manual drag, positive = user-set minimum
   const [optimisticMessage, setOptimisticMessage] =
@@ -225,7 +180,79 @@ export function Session() {
   const [loading, setLoading] = createSignal(false);
   const [processing, setProcessing] = createSignal(false);
   const [loadingHistory, setLoadingHistory] = createSignal(false);
-  const [creatingSession, setCreatingSession] = createSignal(false);
+  const [reverting, setReverting] = createSignal(false);
+  const [loadError, setLoadError] = createSignal<string | null>(null);
+  const [followups, setFollowups] = createSignal<FollowupItem[]>([]);
+  const [dispatchingFollowup, setDispatchingFollowup] = createSignal(false);
+  const [pausedFollowups, setPausedFollowups] = createSignal<Set<string>>(new Set());
+  const activeDraft = { key: sessionDraftKey(LOCAL_SERVER_ID, params.dir, params.id) };
+  const inputResize = { frame: undefined as number | undefined };
+  const lifetime = { active: true, load: 0, create: 0, submit: 0 };
+  onCleanup(() => {
+    saveComposerDraft(activeDraft.key);
+    if (inputResize.frame !== undefined) cancelAnimationFrame(inputResize.frame);
+    lifetime.active = false;
+    lifetime.load += 1;
+    lifetime.create += 1;
+    lifetime.submit += 1;
+  });
+
+  function saveFollowups(items: FollowupItem[], id = sessionId(), updateView = id === sessionId()) {
+    if (!id) return false;
+    try {
+      localStorage.setItem(followupStorageKey(LOCAL_SERVER_ID, directory ?? base64Decode(params.dir), id), JSON.stringify(items));
+      if (updateView) setFollowups(items);
+      if (!items.length) setFollowupPaused(false, id);
+      return true;
+    } catch {
+      setError("Could not persist the follow-up queue.");
+      return false;
+    }
+  }
+
+  function followupPaused(id = sessionId()) {
+    return !!id && pausedFollowups().has(id);
+  }
+
+  function setFollowupPaused(paused: boolean, id = sessionId()) {
+    if (!id) return;
+    setPausedFollowups((current) => {
+      const next = new Set(current);
+      if (paused) next.add(id);
+      if (!paused) next.delete(id);
+      return next;
+    });
+  }
+
+  createEffect(on(() => `${directory ?? params.dir}:${sessionId() ?? ""}:${sessionModel()?.providerID ?? ""}/${sessionModel()?.modelID ?? ""}`, () => {
+    const id = sessionId();
+    const model = sessionModel();
+    if (!id || !model) {
+      setFollowups([]);
+      return;
+    }
+    try {
+      const key = followupStorageKey(LOCAL_SERVER_ID, directory ?? base64Decode(params.dir), id);
+      const defaults = {
+        agent: providers.selectedAgent || "build",
+        model,
+        variant: providers.variant.current(id, model, providers.selectedAgent),
+      };
+      const current = localStorage.getItem(key);
+      const legacyKey = `opencode.followup.${params.dir}`;
+      const legacyRaw = current ? null : localStorage.getItem(legacyKey);
+      const legacy = parseLegacyFollowupMap(legacyRaw, id, defaults);
+      const items = current ? parseFollowups(current, defaults) : legacy.items;
+      setFollowups(items);
+      localStorage.setItem(key, JSON.stringify(items));
+      if (legacyRaw && legacy.items.length) {
+        if (legacy.remaining) localStorage.setItem(legacyKey, legacy.remaining);
+        else localStorage.removeItem(legacyKey);
+      }
+    } catch {
+      setFollowups([]);
+    }
+  }));
 
   // Find the Nth-from-last user message (1-indexed: 1 = last, 2 = second-to-last)
   function getNthLastUserMsg(msgs: DisplayMessage[], n: number) {
@@ -257,6 +284,43 @@ export function Session() {
     return msgs.slice(0, revertIndex);
   }
 
+  const displayMessageCache = new Map<string, { source: ReturnType<typeof sync.messages>[number]; display: DisplayMessage }>();
+
+  function displayMessage(message: ReturnType<typeof sync.messages>[number]) {
+    const cached = displayMessageCache.get(message.info.id);
+    if (cached?.source === message) return cached.display;
+
+    const display = {
+      get id() {
+        return message.info.id;
+      },
+      get role() {
+        return message.info.role;
+      },
+      get parts() {
+        return message.parts;
+      },
+      get error() {
+        return message.info.role === "assistant" ? message.info.error : undefined;
+      },
+      get time() {
+        return message.info.time;
+      },
+      get modelID() {
+        return message.info.role === "assistant" ? message.info.modelID : undefined;
+      },
+      get providerID() {
+        return message.info.role === "assistant" ? message.info.providerID : undefined;
+      },
+      get tokens() {
+        return message.info.role === "assistant" ? message.info.tokens : undefined;
+      },
+    } satisfies DisplayMessage;
+
+    displayMessageCache.set(message.info.id, { source: message, display });
+    return display;
+  }
+
   function assistantFinished(id: string) {
     const msgs = visibleSyncMessages(id);
     const last = msgs[msgs.length - 1]?.info;
@@ -276,13 +340,22 @@ export function Session() {
     el.style.height = `${Math.min(maxInputHeight(), desired)}px`;
   }
 
+  function scheduleInputHeight(el: HTMLTextAreaElement) {
+    if (inputResize.frame !== undefined) return;
+    inputResize.frame = requestAnimationFrame(() => {
+      inputResize.frame = undefined;
+      if (!el.isConnected) return;
+      clampInputHeight(el);
+    });
+  }
+
   // Set textarea value, trigger auto-grow, and focus — bypasses input handler
   // to avoid slash-command detection when restored text starts with "/"
   function applyInputAndAutogrow(el: HTMLTextAreaElement, text: string) {
     setInput(text);
     const nativeSet = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")?.set;
     nativeSet?.call(el, text);
-    clampInputHeight(el);
+    scheduleInputHeight(el);
     requestAnimationFrame(() => el.focus());
   }
 
@@ -318,387 +391,28 @@ export function Session() {
   const [showModelPicker, setShowModelPicker] = createSignal(false);
   const [showVariantPicker, setShowVariantPicker] = createSignal(false);
   const [showAgentPicker, setShowAgentPicker] = createSignal(false);
-  const [showPromptPicker, setShowPromptPicker] = createSignal(false);
-  const [promptPickerFilter, setPromptPickerFilter] = createSignal("");
   const [showFilePicker, setShowFilePicker] = createSignal(false);
   const [showForkPicker, setShowForkPicker] = createSignal(false);
-  const [showSavePrompt, setShowSavePrompt] = createSignal(false);
-  const [savePromptTitle, setSavePromptTitle] = createSignal("");
-  const [savePromptBody, setSavePromptBody] = createSignal("");
-  const [savePromptScope, setSavePromptScope] = createSignal<PromptScope>(
-    savedPrompts.canUseProjectScope() ? "project" : "global",
-  );
+  const [showPromptPicker, setShowPromptPicker] = createSignal(false);
 
   const [fileContext, setFileContext] = createSignal<FileContext[]>([]);
   const [imageAttachments, setImageAttachments] = createSignal<
     ImageAttachment[]
   >([]);
-  const [followups, setFollowups] = createSignal<FollowupItem[]>([]);
-  const [followupSending, setFollowupSending] = createSignal<string | undefined>();
-  const [followupAutoSend, setFollowupAutoSend] = createSignal(
-    (() => {
-      const id = params.id;
-      if (!id) return true;
-      return readFollowupAutoSendMap()[id] ?? true;
-    })(),
-  );
-  const [followupAutoPaused, setFollowupAutoPaused] = createSignal<string | undefined>();
-  const [followupAutoPending, setFollowupAutoPending] = createSignal(false);
-  const followupAutoStatus = { previous: undefined as string | undefined };
   const [error, setError] = createSignal<string | null>(null);
   // Use session tree walk to find pending questions from this session or any descendant.
   // This surfaces child/grandchild session questions in the parent session view.
   const pendingQuestion = createMemo(() =>
     sessionQuestionRequest(sync.sessions(), events.pendingQuestions, sessionId()) ?? null,
   );
-  const [pendingUserMessageText, setPendingUserMessageText] = createSignal<
-    string | null
-  >(null);
-
   const pendingPermissions = createMemo(() => permission.pendingForSession(sessionId() ?? ""));
-  const inputBlocked = createMemo(() => !!pendingQuestion() || pendingPermissions().length > 0);
-
-  function clearFollowupStorageKey(dir: string) {
-    if (typeof window === "undefined") return;
-    try {
-      window.localStorage.removeItem(followupStorageKey(dir));
-    } catch {
-      return;
-    }
-  }
-
-  function readFollowupMap(dir = params.dir) {
-    if (typeof window === "undefined") return {} as Record<string, FollowupItem[] | undefined>;
-    const key = followupStorageKey(dir);
-    try {
-      const raw = window.localStorage.getItem(key);
-      if (!raw) return {} as Record<string, FollowupItem[] | undefined>;
-      const parsed = JSON.parse(raw);
-      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-        clearFollowupStorageKey(dir);
-        return {} as Record<string, FollowupItem[] | undefined>;
-      }
-      const map = {} as Record<string, FollowupItem[] | undefined>;
-      for (const [id, value] of Object.entries(parsed)) {
-        const list = normalizeFollowupList(value);
-        if (!list) continue;
-        map[id] = list;
-      }
-      return map;
-    } catch {
-      clearFollowupStorageKey(dir);
-      return {} as Record<string, FollowupItem[] | undefined>;
-    }
-  }
-
-  function writeFollowupMap(map: Record<string, FollowupItem[] | undefined>, dir = params.dir) {
-    if (typeof window === "undefined") return;
-    try {
-      window.localStorage.setItem(followupStorageKey(dir), JSON.stringify(map));
-    } catch {
-      return;
-    }
-  }
-
-  function setSessionFollowups(id: string, list: FollowupItem[]) {
-    const map = readFollowupMap();
-    if (list.length === 0) delete map[id];
-    if (list.length > 0) map[id] = list;
-    writeFollowupMap(map);
-    setFollowups(list);
-  }
-
-  function clearFollowupAutoSendStorageKey(dir: string) {
-    if (typeof window === "undefined") return;
-    try {
-      window.localStorage.removeItem(followupAutoSendStorageKey(dir));
-    } catch {
-      return;
-    }
-  }
-
-  function readFollowupAutoSendMap(dir = params.dir) {
-    if (typeof window === "undefined") return {} as Record<string, boolean | undefined>;
-    const key = followupAutoSendStorageKey(dir);
-    try {
-      const raw = window.localStorage.getItem(key);
-      if (!raw) return {} as Record<string, boolean | undefined>;
-      const parsed = JSON.parse(raw);
-      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-        clearFollowupAutoSendStorageKey(dir);
-        return {} as Record<string, boolean | undefined>;
-      }
-      const map = {} as Record<string, boolean | undefined>;
-      for (const [id, value] of Object.entries(parsed)) {
-        if (value === false) map[id] = false;
-      }
-      return map;
-    } catch {
-      clearFollowupAutoSendStorageKey(dir);
-      return {} as Record<string, boolean | undefined>;
-    }
-  }
-
-  function writeFollowupAutoSendMap(map: Record<string, boolean | undefined>, dir = params.dir) {
-    if (typeof window === "undefined") return;
-    try {
-      window.localStorage.setItem(followupAutoSendStorageKey(dir), JSON.stringify(map));
-    } catch {
-      return;
-    }
-  }
-
-  function setSessionFollowupAutoSend(id: string, enabled: boolean) {
-    const map = readFollowupAutoSendMap();
-    if (enabled) delete map[id];
-    if (!enabled) map[id] = false;
-    writeFollowupAutoSendMap(map);
-    setFollowupAutoSend(enabled);
-    if (enabled) setFollowupAutoPaused(undefined);
-    if (!enabled) setFollowupAutoPending(false);
-  }
-
-  function queueAutoFollowupSend() {
-    if (!followupAutoSend()) return;
-    if (followups().length === 0) return;
-    setFollowupAutoPending(true);
-  }
-
-  function followupAutoDeferredMessage() {
-    if (inputBlocked()) {
-      return pendingQuestion()
-        ? "Auto send waiting: reply to the pending question above before sending queued followups."
-        : "Auto send waiting: resolve the pending permission request above before sending queued followups.";
-    }
-    const model = sessionModel();
-    if (!model) return "Auto send waiting: select a model to send queued followups.";
-    if (!providers.connected.includes(model.providerID)) {
-      return `Auto send waiting: provider "${model.providerID}" is not connected.`;
-    }
-    return undefined;
-  }
-
-  function isAutoFollowupStatusMessage(message: string | null | undefined) {
-    if (!message) return false;
-    return message.startsWith("Auto send waiting:") || message.startsWith("Auto send paused");
-  }
-
-  function clearAutoFollowupStatusError() {
-    if (!isAutoFollowupStatusMessage(error())) return;
-    setError(null);
-  }
-
-  function setAutoFollowupStatusError(message: string) {
-    const current = error();
-    if (current && !isAutoFollowupStatusMessage(current)) return;
-    setError(message);
-  }
-
-  function followupSessionAvailable(id: string) {
-    const status = events.status[id]?.type;
-    if (!status && !events.statusReady()) return false;
-    return status !== "busy" && status !== "retry";
-  }
-
-  function toggleFollowupAutoSend() {
-    const id = sessionId();
-    if (!id) return;
-    const enabled = !followupAutoSend();
-    setSessionFollowupAutoSend(id, enabled);
-    clearAutoFollowupStatusError();
-    if (!enabled) return;
-    if (!followupSessionAvailable(id)) return;
-    queueAutoFollowupSend();
-  }
-
-  function queueFollowup(text: string) {
-    const id = sessionId();
-    if (!id) return false;
-    const next = [...followups(), { id: crypto.randomUUID(), text }];
-    setSessionFollowups(id, next);
-    return true;
-  }
-
-  function removeFollowup(id: string) {
-    const sid = sessionId();
-    if (!sid) return;
-    setSessionFollowups(
-      sid,
-      followups().filter((item) => item.id !== id),
-    );
-  }
-
-  function moveFollowup(id: string, delta: -1 | 1) {
-    const sid = sessionId();
-    if (!sid) return;
-    const list = followups();
-    const index = list.findIndex((item) => item.id === id);
-    if (index < 0) return;
-    const nextIndex = index + delta;
-    if (nextIndex < 0 || nextIndex >= list.length) return;
-    const next = [...list];
-    const current = next[index];
-    next[index] = next[nextIndex];
-    next[nextIndex] = current;
-    setSessionFollowups(sid, next);
-  }
-
-  function reorderFollowup(from: string, to: string) {
-    const sid = sessionId();
-    if (!sid) return;
-    if (from === to) return;
-    const list = followups();
-    const fromIndex = list.findIndex((item) => item.id === from);
-    const toIndex = list.findIndex((item) => item.id === to);
-    if (fromIndex < 0 || toIndex < 0) return;
-    const next = [...list];
-    next.splice(fromIndex, 1);
-    next.splice(toIndex, 0, list[fromIndex]);
-    setSessionFollowups(sid, next);
-  }
+  const inputBlocked = createMemo(() =>
+    !!pendingQuestion() || pendingPermissions().length > 0 || loadingHistory() || !!loadError() ||
+    !!sync.session.get(sessionId() ?? "")?.parentID,
+  );
 
   // Double-Escape to abort: track last Escape press timestamp
   const lastEsc = { ts: 0 };
-
-  // --- Notification toggle (per-session, persisted in localStorage + server) ---
-  const [notifyEnabled, setNotifyEnabled] = createSignal(
-    (() => {
-      const id = params.id;
-      if (!id) return false;
-      const dir = directory || base64Decode(params.dir);
-      const map = readNotifyMap();
-      if (migrateNotifySessionKey(map, id, dir)) writeNotifyMap(map);
-      return notifyEnabledForSession(map, id, dir);
-    })(),
-  );
-  const [notifyDenied, setNotifyDenied] = createSignal(false);
-  const [notifySourceId, setNotifySourceId] = createSignal<string | undefined>();
-  const [notifySourceReady, setNotifySourceReady] = createSignal(false);
-  const notifyVersion = { value: 0 };
-  const deniedTimer = { id: null as ReturnType<typeof setTimeout> | null };
-  onCleanup(() => { if (deniedTimer.id !== null) clearTimeout(deniedTimer.id) });
-
-  createEffect(() => {
-    const dir = directory || base64Decode(params.dir);
-    setNotifySourceReady(false);
-    let cancelled = false;
-    onCleanup(() => { cancelled = true });
-    resolveTelegramSourceId(url, dir).then((sourceId) => {
-      if (cancelled) return;
-      setNotifySourceId(sourceId);
-      setNotifySourceReady(true);
-    });
-  });
-
-  // Re-read notification state when session changes, and seed from server alarm state
-  createEffect(() => {
-    const id = params.id;
-    const sourceReady = notifySourceReady();
-    const sourceId = notifySourceId();
-    const dir = directory || base64Decode(params.dir);
-    setNotifyDenied(false);
-    if (!id) {
-      setNotifyEnabled(false);
-      return;
-    }
-    // Seed from localStorage first for instant UI
-    const map = readNotifyMap();
-    const migrated = migrateNotifySessionKey(map, id, dir);
-    if (migrated) writeNotifyMap(map);
-    const local = notifyEnabledForSession(map, id, dir);
-    setNotifyEnabled(local);
-    if (!sourceReady) return;
-    // Cancellation flag for stale responses
-    let cancelled = false;
-    const version = notifyVersion.value;
-    onCleanup(() => { cancelled = true });
-    // Then fetch server-side alarm state asynchronously
-    getSessionAlarm(url, id, sourceId).then((state) => {
-      // Skip if effect was cleaned up, session changed, or local state was updated
-      if (cancelled || !state || params.id !== id) return;
-      if (notifyVersion.value !== version) return;
-      setNotifyEnabled(state.enabled);
-      // Sync localStorage to match server truth
-      const map = readNotifyMap();
-      writeNotifySessionEnabled(map, id, state.enabled, dir);
-      writeNotifyMap(map);
-    });
-  });
-
-  /** Mirror bell toggle to server-side alarm state (fire-and-forget). */
-  function syncAlarmToServer(id: string, enabled: boolean) {
-    const sourceId = notifySourceId();
-    if (sourceId) {
-      setSessionAlarm(url, id, enabled, sourceId);
-      return;
-    }
-    const dir = directory || base64Decode(params.dir);
-    resolveTelegramSourceId(url, dir).then((resolved) => {
-      if (resolved) {
-        setNotifySourceId(resolved);
-        setSessionAlarm(url, id, enabled, resolved);
-        return;
-      }
-      console.warn("[session] skip setSessionAlarm: telegram source id unresolved", { id, dir });
-    });
-  }
-
-  function toggleNotify() {
-    const id = sessionId();
-    if (!id) return;
-
-    // Turning off
-    if (notifyEnabled()) {
-      const map = readNotifyMap();
-      const dir = directory || base64Decode(params.dir);
-      writeNotifySessionEnabled(map, id, false, dir);
-      writeNotifyMap(map);
-      notifyVersion.value += 1;
-      setNotifyEnabled(false);
-      setNotifyDenied(false);
-      syncAlarmToServer(id, false);
-      return;
-    }
-
-    // Turning on — check permission
-    if (typeof window === "undefined" || !("Notification" in window)) return;
-
-    const perm = Notification.permission;
-    if (perm === "granted") {
-      const map = readNotifyMap();
-      const dir = directory || base64Decode(params.dir);
-      writeNotifySessionEnabled(map, id, true, dir);
-      writeNotifyMap(map);
-      notifyVersion.value += 1;
-      setNotifyEnabled(true);
-      syncAlarmToServer(id, true);
-      return;
-    }
-    if (perm === "denied") {
-      setNotifyDenied(true);
-      if (deniedTimer.id !== null) clearTimeout(deniedTimer.id);
-      deniedTimer.id = setTimeout(() => setNotifyDenied(false), 4000);
-      return;
-    }
-    // permission === "default" — request
-    Notification.requestPermission().then((result) => {
-      if (result === "granted") {
-        const map = readNotifyMap();
-        const dir = directory || base64Decode(params.dir);
-        writeNotifySessionEnabled(map, id, true, dir);
-        writeNotifyMap(map);
-        notifyVersion.value += 1;
-        setNotifyEnabled(true);
-        syncAlarmToServer(id, true);
-        return;
-      }
-      if (result === "denied") {
-        setNotifyDenied(true);
-        if (deniedTimer.id !== null) clearTimeout(deniedTimer.id);
-        deniedTimer.id = setTimeout(() => setNotifyDenied(false), 4000);
-      }
-    });
-  }
 
   function cycleVariant() {
     if (variantItems().length === 0) return;
@@ -708,47 +422,93 @@ export function Session() {
   // Track whether the agent was genuinely processing (not initial load)
   const wasProcessing = { value: false };
 
-  function finishProcessing() {
+  function finishProcessing(id = sessionId()) {
     setOptimisticMessage(null);
-    setPendingUserMessageText(null);
     wasProcessing.value = false;
     setProcessing(false);
+    if (id) events.setSessionStatus(id, { type: "idle" });
+  }
+
+  async function loadSession(id: string, route: string) {
+    const token = ++lifetime.load;
+    const current = () => lifetime.active && token === lifetime.load &&
+      route === sessionDraftKey(LOCAL_SERVER_ID, params.dir, params.id);
+    try {
+      const loaded = await requestSession(
+        (params, options) => client.session.get(params, options),
+        id,
+      );
+      if (!current()) return;
+      const res = loaded.response;
+      const result = loaded.result;
+      if (result === "not-found") {
+        setLoadingHistory(false);
+        clearLastSession(id);
+        navigate(`/${dirSlug()}/session`, { replace: true });
+        return;
+      }
+      if (result === "error" || !res?.data) {
+        if ("error" in loaded) console.error("[Session] Failed to load session:", loaded.error);
+        setLoadingHistory(false);
+        setLoadError("Failed to load this session. Check your connection and try again.");
+        return;
+      }
+      if (isArchivedLastSession(res.data)) {
+        clearLastSession(id);
+        setLoadingHistory(false);
+        navigate(`/${dirSlug()}/session`, { replace: true });
+        return;
+      }
+      sync.session.upsert(res.data);
+      const synced = await sync.session.sync(id);
+      if (!current()) return;
+      setLoadingHistory(false);
+      if (!synced) {
+        setLoadError("Failed to load this session. Check your connection and try again.");
+        return;
+      }
+      if (providers.getSessionModel(id)) return;
+      const msgs = visibleSyncMessages(id);
+      for (let i = msgs.length - 1; i >= 0; i--) {
+        const info = msgs[i].info;
+        if (info.role !== "assistant" || !info.providerID || !info.modelID) continue;
+        providers.setSessionModel(id, { providerID: info.providerID, modelID: info.modelID });
+        break;
+      }
+    } catch (err) {
+      if (!current()) return;
+      console.error("[Session] Failed to load session:", err);
+      setLoadingHistory(false);
+      setLoadError("Failed to load this session. Check your connection and try again.");
+    }
   }
 
   // Keep sessionId in sync with URL params and sync session data.
   // Track the composite dir+id key so the effect fires on directory changes too,
   // preventing drafts from leaking across projects when id stays undefined.
-  createEffect(on(() => draftKey(params.dir, params.id), (key, prevKey) => {
+  function saveComposerDraft(key: string) {
+    const text = untrack(input);
+    const files = untrack(fileContext);
+    const images = untrack(imageAttachments);
+    const meaningful = text.trim().length > 0 || files.length > 0 || images.length > 0;
+    if (!meaningful) {
+      drafts.delete(key);
+      return;
+    }
+    storeDraft(key, { text, files, images, height: inputRef?.style.height ?? "", drag: untrack(dragHeight) });
+  }
+
+  createEffect(on(() => sessionDraftKey(LOCAL_SERVER_ID, params.dir, params.id), (key, prevKey) => {
     const id = params.id;
+    const preservesSubmission = !!id && untrack(sessionId) === id && untrack(loading);
     console.log("[Session] URL param changed:", key);
 
     // Save draft from the previous session before switching.
-    // Read signals via untrack() so they aren't tracked dependencies.
-    if (prevKey && prevKey !== key) {
-      const text = untrack(input);
-      const files = untrack(fileContext);
-      const images = untrack(imageAttachments);
-      const meaningful =
-        text.trim().length > 0 ||
-        (files && files.length > 0) ||
-        (images && images.length > 0);
-
-      if (meaningful) {
-        drafts.set(prevKey, { text, files, images, height: inputRef?.style.height ?? "", drag: untrack(dragHeight) });
-      } else {
-        drafts.delete(prevKey);
-      }
-    }
+    if (prevKey && prevKey !== key) saveComposerDraft(prevKey);
+    activeDraft.key = key;
 
     setSessionId(id);
-    setPendingUserMessageText(null); // Clear pending text on session change
-    setFollowupSending(undefined);
-    setFollowups(id ? readFollowupMap()[id] ?? [] : []);
-    setFollowupAutoSend(id ? readFollowupAutoSendMap()[id] ?? true : true);
-    setFollowupAutoPaused(undefined);
-    setFollowupAutoPending(false);
-    followupAutoStatus.previous = undefined;
-
+    if (!preservesSubmission) setOptimisticMessage(null);
     // Restore draft for the new session (or clear if none saved)
     const saved = drafts.get(key);
     setInput(saved?.text ?? "");
@@ -759,31 +519,26 @@ export function Session() {
     setShowSlashPopover(false);
     setSlashQuery("");
     setSlashIndex(0);
-    wasProcessing.value = false; // Reset to avoid false notifications
+    wasProcessing.value = false;
+    if (!preservesSubmission) setLoading(false);
     if (id) {
-      // Use sync context to load session data - no local state needed
       setLoadingHistory(true);
+      setLoadError(null);
       setProcessing(false); // Reset processing state for new session
-      sync.session.sync(id).then((synced) => {
-        if (!synced) return;
-        setLoadingHistory(false);
-        // Initialize per-session model from existing messages if not already set
-        if (!providers.getSessionModel(id)) {
-          const msgs = visibleSyncMessages(id);
-          for (let i = msgs.length - 1; i >= 0; i--) {
-            const info = msgs[i].info;
-            if (info.role === "assistant" && info.providerID && info.modelID) {
-              providers.setSessionModel(id, { providerID: info.providerID, modelID: info.modelID });
-              break;
-            }
-          }
-        }
-      });
+      void loadSession(id, key);
     } else {
+      lifetime.load += 1;
       setLoadingHistory(false);
+      setLoadError(null);
       setProcessing(false);
     }
   }));
+
+  createEffect(() => {
+    const id = sessionId();
+    if (!id) return;
+    onCleanup(sync.session.retain(id));
+  });
 
   // Mirror processing state from the global status store so status emitted
   // before this page mounts still initializes the busy indicator correctly.
@@ -873,98 +628,17 @@ export function Session() {
     onCleanup(() => clearTimeout(timer));
   });
 
-  createEffect(() => {
-    const blocked = followupAutoPaused();
-    if (!blocked) return;
-    if (followups().some((item) => item.id === blocked)) return;
-    setFollowupAutoPaused(undefined);
-  });
-
-  createEffect(() => {
-    const sid = sessionId();
-    if (!sid) return;
-    const status = events.status[sid]?.type;
-    const prev = followupAutoStatus.previous;
-    followupAutoStatus.previous = status;
-    if (status !== "idle") return;
-    if (!prev || prev === "idle") return;
-    queueAutoFollowupSend();
-  });
-
-  createEffect(() => {
-    const sid = sessionId();
-    if (!sid) return;
-    if (!followupAutoSend()) return;
-    if (followupAutoPending()) return;
-    if (loading() || followupSending() || processing()) return;
-    if (!followupSessionAvailable(sid)) return;
-    const next = followups()[0];
-    if (!next) return;
-    if (followupAutoPaused() === next.id) return;
-    const deferred = followupAutoDeferredMessage();
-    if (deferred) {
-      setAutoFollowupStatusError(deferred);
-      return;
-    }
-    queueAutoFollowupSend();
-  });
-
-  createEffect(() => {
-    const sid = sessionId();
-    if (!sid) return;
-    if (!followupAutoPending()) return;
-    if (!followupAutoSend()) {
-      setFollowupAutoPending(false);
-      return;
-    }
-    if (loading() || followupSending() || processing()) return;
-    if (!followupSessionAvailable(sid)) return;
-    const next = followups()[0];
-    if (!next) {
-      setFollowupAutoPending(false);
-      return;
-    }
-    if (followupAutoPaused() === next.id) {
-      setFollowupAutoPending(false);
-      return;
-    }
-    const deferred = followupAutoDeferredMessage();
-    if (deferred) {
-      setAutoFollowupStatusError(deferred);
-      return;
-    }
-    batch(() => {
-      setFollowupAutoPending(false);
-      void sendFollowupNow(next.id, "auto");
-    });
-  });
-
   // Get messages from sync context - reactive, automatically updated via SSE
   // Cache the base messages array to avoid recreating on every call
   const syncMessages = createMemo(() => {
     const id = sessionId();
     if (!id) return [];
-    return visibleSyncMessages(id).map((msg) => {
-      const info = msg.info;
-      if (info.role === "assistant") {
-        return {
-          id: info.id,
-          role: info.role,
-          parts: msg.parts,
-          error: info.error,
-          time: { created: info.time.created, completed: info.time.completed },
-          modelID: info.modelID,
-          providerID: info.providerID,
-          tokens: info.tokens,
-        };
-      }
-      return {
-        id: info.id,
-        role: info.role,
-        parts: msg.parts,
-        time: { created: info.time.created },
-      };
-    });
+    const result = visibleSyncMessages(id).map(displayMessage);
+    const visible = new Set(result.map((message) => message.id));
+    for (const key of displayMessageCache.keys()) {
+      if (!visible.has(key)) displayMessageCache.delete(key);
+    }
+    return result;
   });
 
   // Includes optimistic message if present and not yet in sync
@@ -974,25 +648,7 @@ export function Session() {
 
     // Add optimistic message if it exists and isn't already in sync
     const opt = optimisticMessage();
-    if (opt) {
-      // Check if the pending user message text matches any message in sync
-      const pendingText = pendingUserMessageText();
-      if (pendingText) {
-        const alreadyInSync = syncMsgs.some((m) => {
-          if (m.role !== "user") return false;
-          // Check all text parts for a match
-          return m.parts
-            .filter((p) => p.type === "text")
-            .some(
-              (p) =>
-                (p as { text?: string }).text?.trim() === pendingText.trim(),
-            );
-        });
-        if (!alreadyInSync) {
-          return [...syncMsgs, opt];
-        }
-      }
-    }
+    if (opt && !syncMsgs.some((message) => message.id === opt.id)) return [...syncMsgs, opt];
     return syncMsgs;
   });
   let inputRef: HTMLTextAreaElement | undefined;
@@ -1022,27 +678,7 @@ export function Session() {
         description: "Create a new chat session",
         slash: "new",
         onSelect: async () => {
-          if (creatingSession()) return;
-          console.log("[Command] New session - creating...");
-          setCreatingSession(true);
-          try {
-            const res = await createRootSession(client, {
-              source: "session.command.new",
-              scope: directory,
-            });
-            const data = res.data;
-            if (!data) {
-              const msg = formatStartError((res as { error?: unknown }).error);
-              showToast(`Failed to create session: ${msg}`);
-              return;
-            }
-            console.log("[Command] Created session:", data.id);
-            navigate(`/${dirSlug()}/session/${data.id}`);
-          } catch (err) {
-            showToast(`Failed to create session: ${formatStartError(err)}`);
-          } finally {
-            setCreatingSession(false);
-          }
+          navigate(`/${dirSlug()}/session?new=${crypto.randomUUID()}`);
         },
       },
       {
@@ -1084,6 +720,13 @@ export function Session() {
         },
       },
       {
+        id: "prompt.choose",
+        title: "Saved Prompt",
+        description: "Insert a saved prompt into the composer",
+        slash: "prompt",
+        onSelect: () => setShowPromptPicker(true),
+      },
+      {
         id: "mcp.manage",
         title: "MCP Servers",
         description: "Manage MCP server connections",
@@ -1091,16 +734,6 @@ export function Session() {
         onSelect: () => {
           console.log("[Command] MCP dialog");
           setShowMCPDialog(true);
-        },
-      },
-      {
-        id: "prompt.pick",
-        title: "Insert Saved Prompt",
-        description: "Insert a saved prompt into the input",
-        slash: "prompt",
-        onSelect: () => {
-          setPromptPickerFilter("");
-          setShowPromptPicker(true);
         },
       },
       {
@@ -1178,8 +811,11 @@ export function Session() {
         slash: "share",
         onSelect: async () => {
           if (!id) return;
+          const route = sessionRouteKey(LOCAL_SERVER_ID, directory ?? base64Decode(params.dir), params.id);
           try {
             const res = await client.session.share({ sessionID: id });
+            void sync.session.sync(id);
+            if (route !== sessionRouteKey(LOCAL_SERVER_ID, directory ?? base64Decode(params.dir), params.id)) return;
             const url = res.data?.share?.url;
             if (!url) {
               showToast("Failed to share session: no URL returned");
@@ -1191,7 +827,6 @@ export function Session() {
             } catch {
               showToast(`Share link: ${url}`, 8000);
             }
-            refetchSession();
           } catch (err) {
             showToast(`Failed to share session: ${formatStartError(err)}`);
           }
@@ -1227,10 +862,12 @@ export function Session() {
         slash: "unshare",
         onSelect: async () => {
           if (!id) return;
+          const route = sessionRouteKey(LOCAL_SERVER_ID, directory ?? base64Decode(params.dir), params.id);
           try {
             await client.session.unshare({ sessionID: id });
+            void sync.session.sync(id);
+            if (route !== sessionRouteKey(LOCAL_SERVER_ID, directory ?? base64Decode(params.dir), params.id)) return;
             showToast("Session unshared");
-            refetchSession();
           } catch (err) {
             showToast(`Failed to unshare session: ${formatStartError(err)}`);
           }
@@ -1262,13 +899,19 @@ export function Session() {
         slash: "redo",
         onSelect: async () => {
           if (!id) return;
+          if (reverting()) return;
+          const route = sessionRouteKey(LOCAL_SERVER_ID, directory ?? base64Decode(params.dir), params.id);
+          setFollowupPaused(true);
+          setReverting(true);
           try {
             await client.session.unrevert({ sessionID: id });
-            setInput("");
+            if (route === sessionRouteKey(LOCAL_SERVER_ID, directory ?? base64Decode(params.dir), params.id)) setInput("");
             showToast("Messages restored");
-            refetchSession();
+            await sync.session.sync(id);
           } catch (err) {
             showToast(`Failed to redo messages: ${formatStartError(err)}`);
+          } finally {
+            setReverting(false);
           }
         },
       });
@@ -1281,6 +924,7 @@ export function Session() {
   // The backend accepts any messageID, so reverting to an earlier message
   // implicitly removes everything after it.
   async function undoTurns(count: number) {
+    if (reverting()) return;
     const id = sessionId();
     if (!id) {
       showToast("No active session to undo");
@@ -1293,26 +937,37 @@ export function Session() {
       showToast(count === 1 ? "No user message to undo" : `Only ${total} user message${total === 1 ? "" : "s"} to undo`);
       return;
     }
+    const route = sessionRouteKey(LOCAL_SERVER_ID, directory ?? base64Decode(params.dir), params.id);
+    const draftKey = sessionDraftKey(LOCAL_SERVER_ID, params.dir, id);
+    const textPart = target.parts.find((p) => p.type === "text") as
+      | { type: "text"; text?: string }
+      | undefined;
+    setFollowupPaused(true);
+    setReverting(true);
     try {
       // If processing, abort first (clears pendingQuestion too)
       if (processing()) {
         await handleAbort();
+        if (route !== sessionRouteKey(LOCAL_SERVER_ID, directory ?? base64Decode(params.dir), params.id)) return;
       }
       await client.session.revert({
         sessionID: id,
         messageID: target.id,
       });
-      // Restore the reverted message text into the input field
-      const textPart = target.parts.find((p) => p.type === "text") as
-        | { type: "text"; text?: string }
-        | undefined;
-      if (textPart?.text && inputRef) {
-        applyInputAndAutogrow(inputRef, textPart.text);
+      if (textPart?.text) {
+        if (route === sessionRouteKey(LOCAL_SERVER_ID, directory ?? base64Decode(params.dir), params.id)) {
+          setInput(textPart.text);
+          if (inputRef) applyInputAndAutogrow(inputRef, textPart.text);
+        } else {
+          storeDraft(draftKey, { text: textPart.text, files: [], images: [], height: "", drag: 0 });
+        }
       }
       showToast(count === 1 ? "Undone 1 turn" : `Undone ${count} turns`);
-      refetchSession();
+      await sync.session.sync(id);
     } catch (err) {
       showToast(`Failed to undo: ${formatStartError(err)}`);
+    } finally {
+      setReverting(false);
     }
   }
 
@@ -1356,17 +1011,6 @@ export function Session() {
   // Handle input changes to detect slash commands
   function handleInputChange(value: string) {
     setInput(value);
-
-    // Detect `/prompt <search>` — auto-open prompt picker with filter
-    const promptMatch = value.match(/^\/prompt\s+(.*)$/i);
-    if (promptMatch) {
-      setInput("");
-      setShowSlashPopover(false);
-      setSlashQuery("");
-      setPromptPickerFilter(promptMatch[1].trim());
-      setShowPromptPicker(true);
-      return;
-    }
 
     // Detect slash command pattern: /command (no spaces — popover only for partial commands)
     const slashMatch = value.match(/^\/(\S*)$/);
@@ -1436,8 +1080,7 @@ export function Session() {
       showAgentPicker() ||
       showPromptPicker() ||
       showFilePicker() ||
-      showForkPicker() ||
-      showSavePrompt()
+      showForkPicker()
     ) return;
     if (!processing()) return;
 
@@ -1478,53 +1121,30 @@ export function Session() {
     });
   });
 
-  // Refetch is now just re-syncing
-  const refetchSession = async () => {
-    const id = params.id;
-    if (id) await sync.session.sync(id);
-  };
-
-  // Clear stale localStorage key when sessions are loaded and ID is not found
-  createEffect(() => {
-    const id = params.id;
-    if (!id) return;
-    // loadingHistory() stays true when sync.session.sync() fails,
-    // so this effect only fires after a successful sync, not on transient failures.
-    if (loadingHistory()) return;
-    const found = sync.session.get(id);
-    // Non-archived session exists — keep it
-    if (found && !found.time?.archived) return;
-    // For archived sessions: only treat as stale when it matches the stored last-session
-    // (allows direct navigation to archived sessions from the sidebar)
-    if (found?.time?.archived) {
-      try {
-        const dir = directory || base64Decode(params.dir);
-        if (dir && typeof window !== "undefined") {
-          const key = `opencode.lastSession.${dir}`;
-          const stored = window.localStorage.getItem(key);
-          if (stored === id) {
-            window.localStorage.removeItem(key);
-            navigate(`/${dirSlug()}/session`, { replace: true });
-          }
-        }
-      } catch (err) {
-        console.warn("[Session] localStorage error:", err);
-      }
-      return;
-    }
-    // Session not found at all: clear and redirect
+  function clearLastSession(id: string) {
     try {
       const dir = directory || base64Decode(params.dir);
       if (dir && typeof window !== "undefined") {
-        const key = `opencode.lastSession.${dir}`;
+        const key = workspaceStorageKey(LOCAL_SERVER_ID, dir, "lastSession");
         const stored = window.localStorage.getItem(key);
         if (stored === id) window.localStorage.removeItem(key);
       }
     } catch (err) {
       console.warn("[Session] localStorage error:", err);
     }
-    navigate(`/${dirSlug()}/session`, { replace: true });
-  });
+  }
+
+  function isArchivedLastSession(session: { id: string; time?: { archived?: number } }) {
+    try {
+      const dir = directory || base64Decode(params.dir);
+      if (!dir || typeof window === "undefined") return false;
+      const key = workspaceStorageKey(LOCAL_SERVER_ID, dir, "lastSession");
+      return archivedLastSession(window.localStorage.getItem(key), session);
+    } catch (err) {
+      console.warn("[Session] localStorage error:", err);
+      return false;
+    }
+  }
 
   // Persist lastSession only after the session is confirmed to exist in sync
   createEffect(() => {
@@ -1536,7 +1156,7 @@ export function Session() {
     try {
       const dir = directory || base64Decode(params.dir);
       if (dir && typeof window !== "undefined") {
-        window.localStorage.setItem(`opencode.lastSession.${dir}`, id);
+        window.localStorage.setItem(workspaceStorageKey(LOCAL_SERVER_ID, dir, "lastSession"), id);
       }
     } catch (err) {
       console.warn("[Session] Failed to persist last session:", err);
@@ -1544,41 +1164,23 @@ export function Session() {
   });
 
   // Start processing state - SSE events will handle updates and completion
-  function startProcessing() {
+  function startProcessing(id = sessionId()) {
     console.log("[Session] Starting processing, relying on SSE events");
     wasProcessing.value = true;
     setProcessing(true);
+    if (id) events.setSessionStatus(id, { type: "busy" });
   }
 
-  // Subscribe to events for status changes and session updates
+  // Subscribe to events for optimistic-message and status updates.
   // Note: Message updates are handled by sync context, no need to manage here
   onMount(() => {
     const unsub = events.subscribe((event) => {
         const id = sessionId();
         if (!id) return;
 
-        // Handle message part updates - clear optimistic message when user message is echoed
-        if (event.type === "message.part.updated") {
-          const part = event.properties.part as {
-            sessionID: string;
-            type: string;
-            text?: string;
-          };
-          if (part.sessionID !== id) return;
-
-          // Check if this is the backend echo of the user message we just sent
-          const pendingText = pendingUserMessageText();
-          if (
-            pendingText &&
-            part.type === "text" &&
-            part.text?.trim() === pendingText.trim()
-          ) {
-            console.log(
-              "[Session] User message echoed from server, clearing optimistic message",
-            );
-            setPendingUserMessageText(null);
-            setOptimisticMessage(null);
-          }
+        if (event.type === "message.updated") {
+          const info = event.properties.info as { id?: string; sessionID?: string } | undefined;
+          if (info?.sessionID === id && info.id === optimisticMessage()?.id) setOptimisticMessage(null);
         }
 
         // Handle status changes
@@ -1586,13 +1188,9 @@ export function Session() {
         if (statusEvent) {
           if (statusEvent.sessionID === id && statusEvent.status.type === "idle") {
             console.log("[Session] Status idle");
-            // Only clear optimistic message if no pending text or it was already matched
-            if (!pendingUserMessageText()) {
-              setOptimisticMessage(null);
-            }
-            setPendingUserMessageText(null);
+            setOptimisticMessage(null);
 
-            // Reset local processing tracker (notifications now handled globally in Layout)
+            // Reset local processing tracker after the session becomes idle.
             wasProcessing.value = false;
             setProcessing(false);
           } else if (statusEvent.sessionID === id) {
@@ -1600,18 +1198,13 @@ export function Session() {
             setProcessing(true);
           }
         }
-
-        // Handle session updates
-        if (event.type === "session.updated") {
-          refetchSession();
-        }
     });
 
     return unsub;
   });
 
   // Question tracking is now handled via the global events.pendingQuestions store
-  // (seeded via HTTP and updated via SSE in EventProvider) combined with the
+  // (seeded via HTTP and updated via SSE in SyncProvider) combined with the
   // sessionQuestionRequest tree-walk memo defined above. This surfaces questions
   // from child/grandchild sessions automatically without per-session SSE subscriptions.
 
@@ -1644,14 +1237,17 @@ export function Session() {
   async function handleAbort() {
     const id = sessionId();
     if (!id) return;
+    const route = sessionRouteKey(LOCAL_SERVER_ID, directory ?? base64Decode(params.dir), params.id);
+    const q = pendingQuestion();
 
+    setFollowupPaused(true, id);
     try {
       console.log("[Session] Aborting session:", id);
       await client.session.abort({ sessionID: id, directory });
+      if (route !== sessionRouteKey(LOCAL_SERVER_ID, directory ?? base64Decode(params.dir), params.id)) return;
       setProcessing(false);
       // Only dismiss the question if it belongs to this session — aborting is
       // scoped to the current session and does not affect descendant sessions.
-      const q = pendingQuestion();
       if (q && q.sessionID === id) events.dismissQuestion(q.sessionID, q.id);
     } catch (e) {
       console.error("[Session] Failed to abort session:", e);
@@ -1782,15 +1378,15 @@ export function Session() {
     }
   }
 
-  function optimisticUserMessage(text: string, sid: string) {
+  function optimisticUserMessage(text: string, sid: string, messageID: string, partID: string) {
     return {
-      id: crypto.randomUUID(),
+      id: messageID,
       role: "user",
       parts: [
         {
-          id: crypto.randomUUID(),
+          id: partID,
           sessionID: sid,
-          messageID: "",
+          messageID,
           type: "text",
           text,
         },
@@ -1798,110 +1394,12 @@ export function Session() {
     } satisfies DisplayMessage;
   }
 
-  async function sendFollowupNow(id: string, source: "auto" | "manual" = "manual") {
-    const dir = params.dir;
-    const sid = sessionId();
-    const busy = events.status[sid ?? ""]?.type;
-    const autoAttempt = source === "auto";
-    const fail = (message: string) => {
-      setError(message);
-    };
-    const blockedMessage = pendingQuestion()
-      ? "Reply to the pending question above before sending queued followups."
-      : "Resolve the pending permission request above before sending queued followups.";
-    const autoBlockedMessage = pendingQuestion()
-      ? "Auto send waiting: reply to the pending question above before sending queued followups."
-      : "Auto send waiting: resolve the pending permission request above before sending queued followups.";
-    if (!sid || followupSending() || loading() || processing()) return false;
-    if (busy === "busy" || busy === "retry") return false;
-    if (inputBlocked()) {
-      if (autoAttempt) {
-        fail(autoBlockedMessage);
-        return false;
-      }
-      fail(blockedMessage);
-      return false;
-    }
-    const model = sessionModel();
-    if (!model) {
-      if (autoAttempt) {
-        fail("Auto send waiting: select a model to send queued followups.");
-        return false;
-      }
-      fail("Please select a model before sending messages. Click the model button in the header.");
-      return false;
-    }
-    if (!providers.connected.includes(model.providerID)) {
-      if (autoAttempt) {
-        fail(`Auto send waiting: provider "${model.providerID}" is not connected.`);
-        return false;
-      }
-      fail(`Provider "${model.providerID}" is not connected. Please configure it in Settings.`);
-      return false;
-    }
-    const item = followups().find((entry) => entry.id === id);
-    if (!item) return false;
-    setFollowupSending(id);
-    if (followupAutoPaused() === id) setFollowupAutoPaused(undefined);
-    setError(null);
-    setPendingUserMessageText(item.text);
-    setOptimisticMessage(optimisticUserMessage(item.text, sid));
-
-    try {
-      const variant = providers.variant.current(sid, model, providers.selectedAgent);
-      const promptRes = await client.session.promptAsync({
-        sessionID: sid,
-        parts: [{ type: "text", text: item.text }],
-        agent: providers.selectedAgent || "build",
-        model,
-        variant,
-      });
-      if ("error" in promptRes && promptRes.error) {
-        throw new Error(formatStartError(promptRes.error));
-      }
-      const map = readFollowupMap(dir);
-      const next = (map[sid] ?? []).filter((entry) => entry.id !== id);
-      if (next.length === 0) delete map[sid];
-      if (next.length > 0) map[sid] = next;
-      writeFollowupMap(map, dir);
-      if (sessionId() === sid) setFollowups(next);
-      startProcessing();
-      return true;
-    } catch (err) {
-      const autoEnabled = followupAutoSend();
-      setPendingUserMessageText(null);
-      setOptimisticMessage(null);
-      if (autoEnabled) setFollowupAutoPaused(id);
-      const reason = err instanceof Error ? err.message : String(err);
-      if (autoAttempt) {
-        fail(`Auto send paused after queued followup failed: ${reason}`);
-        return false;
-      }
-      if (autoEnabled) {
-        fail(`Failed to send queued followup: ${reason}. Auto send paused to prevent immediate retry loops.`);
-        return false;
-      }
-      fail(`Failed to send queued followup: ${reason}`);
-      return false;
-    } finally {
-      setFollowupSending(undefined);
-    }
-  }
-
-  function editFollowup(id: string) {
-    if (followupSending() === id) return;
-    const item = followups().find((entry) => entry.id === id);
-    if (!item || !inputRef) return;
-    applyInputAndAutogrow(inputRef, item.text);
-    removeFollowup(id);
-  }
-
-  async function sendMessage(e: SubmitEvent) {
-    e.preventDefault();
-    const text = input().trim();
+  async function sendMessage(e?: SubmitEvent, queued?: FollowupItem) {
+    e?.preventDefault();
+    const text = queued?.text ?? input().trim();
 
     // Intercept `/undo N` — revert N user turns at once (explicit submit only)
-    const undoMatch = text.match(/^\/undo\s+(\d+)$/i);
+    const undoMatch = queued ? null : text.match(/^\/undo\s+(\d+)$/i);
     if (undoMatch) {
       const n = parseInt(undoMatch[1], 10);
       if (n > 0) {
@@ -1911,10 +1409,18 @@ export function Session() {
       }
     }
 
-    const files = fileContext();
-    const images = imageAttachments();
+    const files = queued ? [] : fileContext();
+    const images = queued ? [] : imageAttachments();
     if (!text && files.length === 0 && images.length === 0) return;
-    if (loading() || !!followupSending()) return;
+    if (loading()) return;
+    if (loadingHistory() || loadError()) {
+      setError("Wait for this session to finish loading before sending a message.");
+      return;
+    }
+    if (sync.session.get(sessionId() ?? "")?.parentID) {
+      setError("Sub-agent sessions are read-only. Continue the conversation in the parent session.");
+      return;
+    }
     if (inputBlocked()) {
       setError(
         pendingQuestion()
@@ -1924,18 +1430,8 @@ export function Session() {
       return;
     }
 
-    if (processing() && text && files.length === 0 && images.length === 0) {
-      if (!queueFollowup(text)) return;
-      setError(null);
-      setInput("");
-      setDragHeight(0);
-      if (inputRef) inputRef.style.height = "";
-      drafts.delete(draftKey(params.dir, sessionId()));
-      return;
-    }
-
     // Require explicit model selection to avoid OpenCode auto-selecting a broken provider
-    const model = sessionModel();
+    const model = queued?.model ?? sessionModel();
     if (!model) {
       setError(
         "Please select a model before sending messages. Click the model button in the header.",
@@ -1951,6 +1447,46 @@ export function Session() {
       return;
     }
 
+    const currentID = sessionId();
+    const status = currentID ? events.status[currentID]?.type : undefined;
+    if (!queued && currentID && (processing() || status === "busy" || status === "retry")) {
+      if (files.length || images.length) {
+        setError("Attachments cannot be queued while the session is running. They remain in the composer.");
+        return;
+      }
+      const item: FollowupItem = {
+        id: crypto.randomUUID(),
+        messageID: ascendingID("msg"),
+        text,
+        agent: providers.selectedAgent || "build",
+        model,
+        variant: providers.variant.current(currentID, model, providers.selectedAgent),
+        createdAt: Date.now(),
+      };
+      if (!saveFollowups([...followups(), item], currentID)) return;
+      setInput("");
+      setDragHeight(0);
+      if (inputRef) inputRef.style.height = "";
+      drafts.delete(sessionDraftKey(LOCAL_SERVER_ID, params.dir, currentID));
+      setError(null);
+      return;
+    }
+
+    const submitDirectory = directory ?? base64Decode(params.dir);
+    const submitDirSlug = params.dir;
+    const originalID = sessionId();
+    const queuedItems = queued ? followups() : [];
+    const originalDraftID = originalID;
+    const originalDraft = sessionDraftKey(LOCAL_SERVER_ID, submitDirSlug, originalDraftID);
+    const scope = {
+      token: ++lifetime.submit,
+      route: sessionRouteKey(LOCAL_SERVER_ID, submitDirectory, params.id),
+      sessionID: originalID,
+    };
+    const current = () => lifetime.active && scope.token === lifetime.submit &&
+      scope.route === sessionRouteKey(LOCAL_SERVER_ID, directory ?? base64Decode(params.dir), params.id) &&
+      scope.sessionID === sessionId();
+
     setError(null);
     setLoading(true);
     setInput("");
@@ -1960,18 +1496,28 @@ export function Session() {
     setImageAttachments([]); // Clear image attachments after sending
 
     // Clear saved draft for this session since the message was sent
-    drafts.delete(draftKey(params.dir, sessionId()));
-
-    // Track pending user message text to match backend echoes
-    setPendingUserMessageText(text);
+    drafts.delete(originalDraft);
 
     // Optimistic update - show user message immediately while waiting for server
-    const userMessage = optimisticUserMessage(text || "(files attached)", sessionId() || "");
+    const messageID = queued?.messageID ?? ascendingID("msg");
+    const textPartID = ascendingID("prt");
+    const userMessage = optimisticUserMessage(text || "(files attached)", sessionId() || "", messageID, textPartID);
     setOptimisticMessage(userMessage);
 
-    const needsSession = !sessionId();
-    const restoreComposer = () => {
-      setPendingUserMessageText(null);
+    const needsSession = !originalID;
+    const createToken = needsSession ? ++lifetime.create : 0;
+    const saveDraft = (id = originalDraftID) => {
+      storeDraft(sessionDraftKey(LOCAL_SERVER_ID, submitDirSlug, id), {
+        text,
+        files,
+        images,
+        height: "",
+        drag: 0,
+      });
+    };
+    const restoreComposer = (id = originalID) => {
+      saveDraft(id);
+      if (!current()) return;
       setOptimisticMessage(null);
       setInput(text);
       setFileContext(files);
@@ -1980,14 +1526,18 @@ export function Session() {
     };
     let createdID: string | undefined;
     try {
-      let id = sessionId();
+      let id = originalID;
 
       if (!id) {
         console.log("[Session] Creating new session...");
         const res = await createRootSession(client, {
           source: "session.send.createIfMissing",
-          scope: directory,
         });
+        if (!current() || createToken !== lifetime.create) {
+          saveDraft();
+          if (res.isLeader && res.data) await client.session.delete({ sessionID: res.data.id }).catch(() => undefined);
+          return;
+        }
         const data = res.data;
         console.log("[Session] Create response:", data);
         if (!data) {
@@ -1998,6 +1548,8 @@ export function Session() {
 
         id = data.id;
         createdID = id;
+        scope.sessionID = id;
+        scope.route = sessionRouteKey(LOCAL_SERVER_ID, submitDirectory, id);
         setSessionId(id);
         navigate(`/${dirSlug()}/session/${id}`, { replace: true });
         // Store the model for the new session
@@ -2007,9 +1559,9 @@ export function Session() {
       // Build parts array with text and file attachments
       // Always include a text part (even if empty) to ensure SSE reconciliation works
       const parts: (
-        | { type: "text"; text: string }
-        | { type: "file"; mime: string; url: string; filename: string }
-      )[] = [{ type: "text", text: text || "" }];
+        | { id: string; type: "text"; text: string }
+        | { id: string; type: "file"; mime: string; url: string; filename: string }
+      )[] = [{ id: textPartID, type: "text", text: text || "" }];
 
       // Add file parts from file context
       for (const file of files) {
@@ -2025,6 +1577,7 @@ export function Session() {
           .map((segment) => encodeURIComponent(segment))
           .join("/");
         parts.push({
+          id: ascendingID("prt"),
           type: "file",
           mime: "text/plain",
           url: `file://${encoded}`,
@@ -2035,6 +1588,7 @@ export function Session() {
       // Add image/PDF attachments from device uploads
       for (const img of images) {
         parts.push({
+          id: ascendingID("prt"),
           type: "file",
           mime: img.mime,
           url: img.dataUrl,
@@ -2046,428 +1600,109 @@ export function Session() {
       console.log("[Session] Sending message to session:", id);
       const promptPayload: {
         sessionID: string;
+        messageID: string;
         parts: typeof parts;
         agent: string;
         model?: { providerID: string; modelID: string };
         variant?: string;
       } = {
         sessionID: id,
+        messageID,
         parts,
-        agent: providers.selectedAgent || "build",
+        agent: (queued?.agent ?? providers.selectedAgent) || "build",
       };
 
       if (model) {
         promptPayload.model = model;
       }
 
-      promptPayload.variant = providers.variant.current(id, model, providers.selectedAgent);
+      promptPayload.variant = queued?.variant ?? providers.variant.current(id, model, providers.selectedAgent);
 
       const promptRes = await client.session.promptAsync(promptPayload);
       if ("error" in promptRes && promptRes.error) {
         throw new Error(formatStartError(promptRes.error));
       }
+      if (queued) saveFollowups(queuedItems.filter((item) => item.id !== queued.id), id, current());
+      if (!current()) return;
       console.log("[Session] Prompt response:", promptRes);
 
       // Start processing - SSE events will handle updates and completion
-      startProcessing();
+      startProcessing(id);
     } catch (err) {
-      if (createdID) {
-        const cleaned = await client.session
-          .delete({ sessionID: createdID })
-          .catch((error) => ({ error }));
-        if (cleaned && typeof cleaned === "object" && "error" in cleaned && cleaned.error) {
-          console.warn("[Session] Failed to cleanup session after send error:", cleaned.error);
+      if (queued) {
+        saveFollowups(queuedItems.map((item) => item.id === queued.id ? { ...item, failed: true } : item), originalID, current());
+        if (current()) {
+          setOptimisticMessage(null);
+          setError(`Failed to send queued follow-up: ${formatStartError(err)}`);
         }
-        setSessionId(undefined);
-        navigate(`/${dirSlug()}/session`, { replace: true });
+        return;
       }
-      restoreComposer();
+      if (scope.token === lifetime.submit) saveDraft(createdID ?? originalID);
+      if (createdID) void sync.session.sync(createdID);
+      if (!current()) return;
+      restoreComposer(createdID ?? originalID);
       console.error("[Session] Error sending message:", err);
       const msg = needsSession
-        ? "Failed to create session or send message"
+        ? "Failed to send the first message"
         : "Failed to send message";
       setError(
         `${msg}: ${formatStartError(err)}`,
       );
     } finally {
-      setLoading(false);
+      if (current()) setLoading(false);
     }
   }
 
-  async function createSessionAndSendPrompt(text: string) {
-    if (creatingSession()) return;
-    const model = sessionModel();
-    const err = startSessionError({
-      loading: providers.loading,
-      providerCount: providers.providers.length,
-      model,
-      connected: providers.connected,
-    });
-    if (err) {
-      setError(err);
+  function retryFollowup(id: string) {
+    if (dispatchingFollowup()) return;
+    setFollowupPaused(false);
+    saveFollowups(followups().map((item) => item.id === id ? { ...item, failed: false } : item));
+  }
+
+  function deleteFollowup(id: string) {
+    if (dispatchingFollowup()) return;
+    saveFollowups(followups().filter((item) => item.id !== id));
+  }
+
+  function editFollowup(id: string) {
+    if (dispatchingFollowup()) return;
+    const item = followups().find((candidate) => candidate.id === id);
+    if (!item) return;
+    if (input().trim() || fileContext().length || imageAttachments().length) {
+      setError("Clear or send the current composer draft before editing a queued follow-up.");
       return;
     }
-    if (!model) return;
-    setError(null);
-    setCreatingSession(true);
-    try {
-      const created = await createAndSendPrompt({
-        client,
-        text,
-        agent: providers.selectedAgent || "build",
-        model,
-        variant: providers.variant.current(undefined, model, providers.selectedAgent),
-      });
-      const sid = created.id;
-      setSessionId(sid);
-      providers.setSessionModel(sid, model);
-      navigate(`/${dirSlug()}/session/${sid}`, { replace: true });
-    } catch (err) {
-      setError(`Failed to create session or send saved prompt: ${formatStartError(err)}`);
-    } finally {
-      setCreatingSession(false);
-    }
+    setInput(item.text);
+    if (inputRef) applyInputAndAutogrow(inputRef, item.text);
+    deleteFollowup(id);
+    inputRef?.focus();
   }
 
-  // Welcome screen component for when no session is selected
-  function WelcomeScreen() {
-    const savedPrompts = useSavedPrompts();
-    const pendingStartError = createMemo(() => {
-      const model = sessionModel();
-      return startSessionError({
-        loading: providers.loading,
-        providerCount: providers.providers.length,
-        model,
-        connected: providers.connected,
-      });
+  createEffect(() => {
+    const id = sessionId();
+    const item = followups()[0];
+    if (!item) return;
+    const status = id ? events.status[id]?.type : undefined;
+    const eligible = canDispatchFollowup({
+      ready: events.statusReady(),
+      working: status === "busy" || status === "retry",
+      processing: processing(),
+      loading: loading(),
+      blocked: inputBlocked(),
+      historyLoading: loadingHistory(),
+      loadError: !!loadError(),
+      child: !!sync.session.get(id ?? "")?.parentID,
+      composerEmpty: !input().trim() && fileContext().length === 0 && imageAttachments().length === 0,
+      dispatching: dispatchingFollowup(),
+      paused: followupPaused(),
+      reverting: reverting(),
+      providerConnected: providers.connected.includes(item.model.providerID),
+      item,
     });
-    const welcomeError = createMemo(() => {
-      const pending = pendingStartError();
-      const current = error();
-      if (current) return current;
-      return pending;
-    });
-
-    return (
-      <div
-        class="flex flex-col h-full"
-        style={{ background: "var(--background-stronger)" }}
-      >
-        <div class="flex flex-col items-center justify-center flex-1 text-center px-6">
-          {/* OpenCode Logo */}
-          <div class="mb-8">
-            <svg
-              class="w-80 mx-auto opacity-60"
-              style={{ color: "var(--text-strong)" }}
-              viewBox="0 0 640 115"
-              fill="none"
-              xmlns="http://www.w3.org/2000/svg"
-            >
-              <g clip-path="url(#clip0_welcome)">
-                <mask
-                  id="mask0_welcome"
-                  style="mask-type:luminance"
-                  maskUnits="userSpaceOnUse"
-                  x="0"
-                  y="0"
-                  width="640"
-                  height="115"
-                >
-                  <path d="M640 0H0V115H640V0Z" fill="white" />
-                </mask>
-                <g mask="url(#mask0_welcome)">
-                  <path
-                    d="M49.2346 82.1433H16.4141V49.2861H49.2346V82.1433Z"
-                    fill="var(--icon-weak)"
-                  />
-                  <path
-                    d="M49.2308 32.8573H16.4103V82.143H49.2308V32.8573ZM65.641 98.5716H0V16.4287H65.641V98.5716Z"
-                    fill="var(--text-weak)"
-                  />
-                  <path
-                    d="M131.281 82.1433H98.4609V49.2861H131.281V82.1433Z"
-                    fill="var(--icon-weak)"
-                  />
-                  <path
-                    d="M98.4649 82.143H131.285V32.8573H98.4649V82.143ZM147.696 98.5716H98.4649V115H82.0547V16.4287H147.696V98.5716Z"
-                    fill="var(--text-weak)"
-                  />
-                  <path
-                    d="M229.746 65.7139V82.1424H180.516V65.7139H229.746Z"
-                    fill="var(--icon-weak)"
-                  />
-                  <path
-                    d="M229.743 65.7144H180.512V82.143H229.743V98.5716H164.102V16.4287H229.743V65.7144ZM180.512 49.2859H213.332V32.8573H180.512V49.2859Z"
-                    fill="var(--text-weak)"
-                  />
-                  <path
-                    d="M295.383 98.5718H262.562V49.2861H295.383V98.5718Z"
-                    fill="var(--icon-weak)"
-                  />
-                  <path
-                    d="M295.387 32.8573H262.567V98.5716H246.156V16.4287H295.387V32.8573ZM311.797 98.5716H295.387V32.8573H311.797V98.5716Z"
-                    fill="var(--text-weak)"
-                  />
-                  <path
-                    d="M393.848 82.1433H344.617V49.2861H393.848V82.1433Z"
-                    fill="var(--icon-weak)"
-                  />
-                  <path
-                    d="M393.844 32.8573H344.613V82.143H393.844V98.5716H328.203V16.4287H393.844V32.8573Z"
-                    fill="currentColor"
-                  />
-                  <path
-                    d="M459.485 82.1433H426.664V49.2861H459.485V82.1433Z"
-                    fill="var(--icon-weak)"
-                  />
-                  <path
-                    d="M459.489 32.8573H426.668V82.143H459.489V32.8573ZM475.899 98.5716H410.258V16.4287H475.899V98.5716Z"
-                    fill="currentColor"
-                  />
-                  <path
-                    d="M541.539 82.1433H508.719V49.2861H541.539V82.1433Z"
-                    fill="var(--icon-weak)"
-                  />
-                  <path
-                    d="M541.535 32.8571H508.715V82.1428H541.535V32.8571ZM557.946 98.5714H492.305V16.4286H541.535V0H557.946V98.5714Z"
-                    fill="currentColor"
-                  />
-                  <path
-                    d="M639.996 65.7139V82.1424H590.766V65.7139H639.996Z"
-                    fill="var(--icon-weak)"
-                  />
-                  <path
-                    d="M590.77 32.8573V49.2859H623.59V32.8573H590.77ZM640 65.7144H590.77V82.143H640V98.5716H574.359V16.4287H640V65.7144Z"
-                    fill="currentColor"
-                  />
-                </g>
-              </g>
-              <defs>
-                <clipPath id="clip0_welcome">
-                  <rect width="640" height="115" fill="white" />
-                </clipPath>
-              </defs>
-            </svg>
-          </div>
-
-          <Show when={branding.enabled}>
-            <div
-              class="flex items-center justify-center gap-2 mb-8"
-              style={{ color: "var(--text-weak)" }}
-            >
-              <span>Powered by</span>
-              <Show
-                when={branding.url}
-                fallback={
-                  <span class="font-medium" style={{ color: "var(--text-strong)" }}>
-                    {branding.name}
-                  </span>
-                }
-              >
-                <a
-                  href={branding.url}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  class="font-medium transition-opacity hover:opacity-80"
-                  style={{ color: "var(--text-interactive-base)" }}
-                >
-                  {branding.name}
-                </a>
-              </Show>
-            </div>
-          </Show>
-
-          {/* Action buttons */}
-          <div class="flex flex-col gap-3 w-full max-w-xs">
-            <Button
-              onClick={async () => {
-                if (creatingSession()) return;
-                console.log(
-                  "[Welcome] New Session clicked, directory:",
-                  directory,
-                  "dirSlug:",
-                  dirSlug(),
-                );
-                if (!directory) {
-                  console.error("[Welcome] No directory available");
-                  return;
-                }
-                setCreatingSession(true);
-                try {
-                  console.log("[Welcome] Creating session...");
-                  const res = await createRootSession(client, {
-                    source: "session.welcome.createNewSession",
-                    scope: directory,
-                  });
-                  const data = res.data;
-                  console.log("[Welcome] Create response:", data);
-                  if (!data) {
-                    setError("Failed to create session: no session data returned.");
-                    return;
-                  }
-                  const url = `/${dirSlug()}/session/${data.id}`;
-                  console.log("[Welcome] Navigating to:", url);
-                  navigate(url);
-                } catch (e) {
-                  console.error("[Welcome] Failed to create session:", e);
-                  setError(`Failed to create session: ${formatStartError(e)}`);
-                } finally {
-                  setCreatingSession(false);
-                }
-              }}
-              variant="ghost"
-              disabled={creatingSession()}
-              class="w-full"
-              size="sm"
-            >
-              <Plus class="w-4 h-4" />
-              <span>New Session</span>
-            </Button>
-
-            <Button
-              onClick={() => navigate(`/${dirSlug()}/settings`)}
-              variant="ghost"
-              class="w-full"
-              size="sm"
-            >
-              <Settings class="w-4 h-4" />
-              <span>Settings</span>
-            </Button>
-          </div>
-
-          {/* Instructions active indicator */}
-          <Show when={instructionsActive()}>
-            <button
-              type="button"
-              onClick={() => navigate(`/${dirSlug()}/settings#instructions`)}
-              class="mt-4 flex items-center gap-2 px-3 py-2 rounded-md text-sm transition-colors mx-auto"
-              style={{
-                border: "1px solid var(--border-base)",
-                color: "var(--text-base)",
-                background: "transparent",
-              }}
-              onMouseEnter={(e) => {
-                e.currentTarget.style.background = "var(--surface-inset)";
-                e.currentTarget.style.borderColor = "var(--interactive-base)";
-              }}
-              onMouseLeave={(e) => {
-                e.currentTarget.style.background = "transparent";
-                e.currentTarget.style.borderColor = "var(--border-base)";
-              }}
-            >
-              <BookOpen class="w-4 h-4" style={{ color: "var(--icon-success-base)" }} />
-              <span>Project instructions active</span>
-            </button>
-          </Show>
-
-          {/* Saved Prompts */}
-          <Show when={savedPrompts.loading()}>
-            <div class="mt-8 w-full max-w-2xl flex items-center gap-2" style={{ color: "var(--text-weak)" }}>
-              <Spinner class="w-4 h-4" />
-              <span class="text-sm">Loading saved prompts...</span>
-            </div>
-          </Show>
-
-          <Show when={savedPrompts.error()}>
-            <div class="mt-8 w-full max-w-2xl text-sm" style={{ color: "var(--interactive-critical)" }}>
-              {savedPrompts.error()}
-            </div>
-          </Show>
-
-          <Show when={!savedPrompts.error() && savedPrompts.saveError()}>
-            <div class="mt-8 w-full max-w-2xl text-sm" style={{ color: "var(--interactive-critical)" }}>
-              {savedPrompts.saveError()}
-            </div>
-          </Show>
-
-          <Show when={!savedPrompts.loading() && !savedPrompts.error() && savedPrompts.prompts().length > 0}>
-            <div class="mt-8 w-full max-w-2xl">
-              <h3
-                class="text-sm font-medium mb-3 text-left"
-                style={{ color: "var(--text-weak)" }}
-              >
-                Saved Prompts
-              </h3>
-              <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-                <For each={savedPrompts.prompts()}>
-                  {(prompt) => (
-                    <button
-                      type="button"
-                      onClick={() => createSessionAndSendPrompt(prompt.text)}
-                      disabled={creatingSession()}
-                      class="p-3 rounded-lg text-left transition-colors"
-                      style={{
-                        background: "var(--background-base)",
-                        border: "1px solid var(--border-base)",
-                        opacity: creatingSession() ? 0.6 : 1,
-                        cursor: creatingSession() ? "not-allowed" : "pointer",
-                      }}
-                      onMouseEnter={(e) => {
-                        e.currentTarget.style.borderColor = "var(--interactive-base)";
-                        e.currentTarget.style.background = "var(--surface-inset)";
-                      }}
-                      onMouseLeave={(e) => {
-                        e.currentTarget.style.borderColor = "var(--border-base)";
-                        e.currentTarget.style.background = "var(--background-base)";
-                      }}
-                    >
-                      <div class="flex items-center gap-2">
-                        <div
-                          class="text-sm font-medium truncate"
-                          style={{ color: "var(--text-strong)" }}
-                        >
-                          {prompt.title}
-                        </div>
-                        <span
-                          class="text-[10px] px-1.5 py-0.5 rounded shrink-0"
-                          style={{
-                            background: "var(--surface-inset)",
-                            color: "var(--text-weak)",
-                          }}
-                        >
-                          {prompt.scope === "project" ? "Project" : "Global"}
-                        </span>
-                      </div>
-                      <div
-                        class="text-xs mt-1 line-clamp-2"
-                        style={{ color: "var(--text-weak)" }}
-                      >
-                        {prompt.text.length > 100
-                          ? prompt.text.slice(0, 100) + "..."
-                          : prompt.text}
-                      </div>
-                    </button>
-                  )}
-                </For>
-              </div>
-            </div>
-          </Show>
-
-          <Show when={welcomeError()}>
-            <div
-              class="mt-4 px-4 py-2 rounded-lg text-sm max-w-2xl"
-              role="status"
-              aria-live="polite"
-              aria-atomic="true"
-              style={{
-                background: "var(--status-danger-dim)",
-                color: "var(--status-danger-text)",
-              }}
-            >
-              {welcomeError()}
-            </div>
-          </Show>
-
-          <p
-            class="mt-10 text-sm"
-            style={{ color: "var(--text-weak)", opacity: 0.7 }}
-          >
-            Select a session from the sidebar or start a new one
-          </p>
-        </div>
-      </div>
-    );
-  }
+    if (!eligible) return;
+    setDispatchingFollowup(true);
+    queueMicrotask(() => void sendMessage(undefined, item).finally(() => setDispatchingFollowup(false)));
+  });
 
   // Chat view component
   function ChatView() {
@@ -2492,9 +1727,6 @@ export function Session() {
           processing={processing()}
           onOpenMCPDialog={() => setShowMCPDialog(true)}
           onOpenVariantPicker={() => setShowVariantPicker(true)}
-          notifyEnabled={notifyEnabled()}
-          notifyDenied={notifyDenied()}
-          onToggleNotify={toggleNotify}
           instructionsActive={instructionsActive()}
           onOpenInstructions={() => navigate(`/${dirSlug()}/settings#instructions`)}
         />
@@ -2513,17 +1745,17 @@ export function Session() {
 
           {/* Question Prompt - rendered outside timeline for proper focus.
               Uses session tree walk so child/grandchild questions are surfaced here. */}
-          <Show when={pendingQuestion()}>
+          <Show when={pendingQuestion()} keyed>
             {(q) => (
               <div
-                class="px-6 pb-4"
+                class="px-6 pb-4 shrink-0 min-h-0 overflow-y-auto"
                 style={{ background: "var(--background-stronger)" }}
               >
                 <QuestionPrompt
-                  request={q()}
+                  request={q}
                   onReply={handleQuestionReply}
                   onReject={handleQuestionReject}
-                  fromSubAgent={q().sessionID !== sessionId()}
+                  fromSubAgent={q.sessionID !== sessionId()}
                 />
               </div>
             )}
@@ -2554,6 +1786,16 @@ export function Session() {
             </div>
           </Show>
         </div>
+
+        <FollowupDock
+          items={followups()}
+          sending={dispatchingFollowup()}
+          paused={followupPaused()}
+          onResume={() => setFollowupPaused(false)}
+          onRetry={retryFollowup}
+          onEdit={editFollowup}
+          onDelete={deleteFollowup}
+        />
 
         {/* Input */}
         <div
@@ -2761,7 +2003,7 @@ export function Session() {
                   onPaste={handlePaste}
                   onInput={(e) => {
                     handleInputChange(e.currentTarget.value);
-                    clampInputHeight(e.currentTarget);
+                    scheduleInputHeight(e.currentTarget);
                   }}
                   onKeyDown={(e) => {
                     // Handle slash command navigation first
@@ -2785,7 +2027,7 @@ export function Session() {
                       return;
                     }
                     // Enter to submit (without shift), Shift+Enter for newline
-                    if (e.key === "Enter" && !e.shiftKey) {
+                    if (e.key === "Enter" && !e.shiftKey && !e.isComposing) {
                       e.preventDefault();
                       const form = e.currentTarget.closest("form");
                       if (form) form.requestSubmit();
@@ -2806,37 +2048,6 @@ export function Session() {
                 <div class="flex items-center px-2 py-1">
                   {/* Attach buttons */}
                   <div class="flex items-center gap-1 shrink-0">
-                    {/* Save as prompt button */}
-                    <Show when={input().trim()}>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          if (savedPrompts.loading() || savedPrompts.error()) return;
-                          const text = input().trim();
-                          if (!text) return;
-                          setSavePromptTitle(text.slice(0, 30));
-                          setSavePromptBody(text);
-                          setSavePromptScope(savedPrompts.canUseProjectScope() ? "project" : "global");
-                          setShowSavePrompt(true);
-                        }}
-                        disabled={savedPrompts.loading() || !!savedPrompts.error()}
-                        class="p-1.5 rounded transition-colors"
-                        style={{ color: "var(--text-weak)" }}
-                        onMouseEnter={(e) => {
-                          e.currentTarget.style.background =
-                            "var(--surface-inset)";
-                          e.currentTarget.style.color = "var(--text-strong)";
-                        }}
-                        onMouseLeave={(e) => {
-                          e.currentTarget.style.background = "transparent";
-                          e.currentTarget.style.color = "var(--text-weak)";
-                        }}
-                        title={savedPrompts.loading() ? "Saved prompts are still loading" : "Save as prompt"}
-                        aria-label="Save as prompt"
-                      >
-                        <Bookmark class="w-4 h-4" />
-                      </button>
-                    </Show>
                     {/* Upload from device button */}
                     <button
                       type="button"
@@ -2895,22 +2106,6 @@ export function Session() {
               </div>
             </form>
 
-            <Show when={!!sessionId() && followups().length > 0}>
-              <FollowupDock
-                items={followups()}
-                sending={followupSending()}
-                autoSend={followupAutoSend()}
-                processing={processing()}
-                loading={loading()}
-                onToggleAutoSend={toggleFollowupAutoSend}
-                onSend={sendFollowupNow}
-                onEdit={editFollowup}
-                onDelete={removeFollowup}
-                onMoveUp={(id) => moveFollowup(id, -1)}
-                onMoveDown={(id) => moveFollowup(id, 1)}
-                onReorder={reorderFollowup}
-              />
-            </Show>
           </div>
         </div>
 
@@ -3015,18 +2210,22 @@ export function Session() {
           />
         </Show>
 
-        {/* Saved Prompt Picker Dialog */}
         <Show when={showPromptPicker()}>
           <PickerDialog
             title="Insert Saved Prompt"
-            placeholder="Filter prompts..."
-            emptyMessage={savedPrompts.loading() ? "Loading saved prompts..." : savedPrompts.error() || "No saved prompts. Add them in Settings."}
-            initialFilter={promptPickerFilter()}
-            items={promptPickerItems()}
+            placeholder="Filter saved prompts..."
+            emptyMessage={savedPrompts.loading() ? "Loading saved prompts..." : "No saved prompts. Add one in Settings > Prompts."}
+            items={savedPrompts.prompts().map((prompt) => ({
+              id: prompt.id,
+              title: prompt.title,
+              description: prompt.text.length > 100 ? `${prompt.text.slice(0, 100)}...` : prompt.text,
+              group: prompt.scope === "project" ? "Project" : "Global",
+              groupKey: prompt.scope,
+            }))}
             onSelect={(item) => {
-              const found = savedPrompts.prompts().find((p) => p.id === item.id);
-              if (!found) return;
-              if (inputRef) applyInputAndAutogrow(inputRef, found.text);
+              const prompt = savedPrompts.prompts().find((candidate) => candidate.id === item.id);
+              if (!prompt || !inputRef) return;
+              applyInputAndAutogrow(inputRef, prompt.text);
             }}
             onClose={() => setShowPromptPicker(false)}
           />
@@ -3052,64 +2251,42 @@ export function Session() {
             onSelect={(item) => {
               const id = sessionId();
               if (!id) return;
+              const route = sessionRouteKey(LOCAL_SERVER_ID, directory ?? base64Decode(params.dir), params.id);
+              const selected = sync.messages(id).find((message) => message.info.id === item.id);
+              const restoredText = selected ? textFromParts(selected.parts, "\n") : "";
               setError(null);
               client.session
                 .fork({ sessionID: id, messageID: item.id })
-                .then((res) => {
+                .then(async (res) => {
                   if (!res.data) {
-                    setError("Failed to fork session");
+                    if (route === sessionRouteKey(LOCAL_SERVER_ID, directory ?? base64Decode(params.dir), params.id)) {
+                      setError("Failed to fork session");
+                    }
+                    return;
+                  }
+                  if (route !== sessionRouteKey(LOCAL_SERVER_ID, directory ?? base64Decode(params.dir), params.id)) {
+                    await client.session.delete({ sessionID: res.data.id }).catch(() => undefined);
                     return;
                   }
                   setError(null);
                   const forkedId = res.data.id;
-                  // Find the selected message text to restore in the new session's input
-                  const msgs = sync.messages(id);
-                  const selected = msgs.find((m) => m.info.id === item.id);
-                  const restoredText = selected
-                    ? textFromParts(selected.parts, "\n")
-                    : "";
+                  storeDraft(sessionDraftKey(LOCAL_SERVER_ID, params.dir, forkedId), {
+                    text: restoredText,
+                    files: [],
+                    images: [],
+                    height: "",
+                    drag: 0,
+                  });
                   navigate(`/${dirSlug()}/session/${forkedId}`);
-                  // Restore the message text into the new session's input after navigation
-                  if (inputRef) {
-                    requestAnimationFrame(() => {
-                      applyInputAndAutogrow(inputRef!, restoredText);
-                    });
-                  }
                 })
                 .catch((err: unknown) => {
+                  if (route !== sessionRouteKey(LOCAL_SERVER_ID, directory ?? base64Decode(params.dir), params.id)) return;
                   setError(
                     `Failed to fork session: ${formatStartError(err)}`,
                   );
                 });
             }}
             onClose={() => setShowForkPicker(false)}
-          />
-        </Show>
-
-        {/* Save Prompt Dialog */}
-        <Show when={showSavePrompt()}>
-          <SavePromptDialog
-            title={savePromptTitle}
-            setTitle={setSavePromptTitle}
-            scope={savePromptScope}
-            setScope={setSavePromptScope}
-            canUseProjectScope={savedPrompts.canUseProjectScope()}
-            hasActiveProject={savedPrompts.hasActiveProject()}
-            saveDisabled={savedPrompts.loading() || !!savedPrompts.error()}
-            onSave={async () => {
-              if (savedPrompts.loading() || savedPrompts.error()) return;
-              const title = savePromptTitle().trim();
-              const body = savePromptBody();
-              if (!title || !body) return;
-              const ok = await savedPrompts.add(title, body, savePromptScope());
-              if (!ok) {
-                showToast(savedPrompts.saveError() || "Failed to save prompts. Please retry.");
-                return;
-              }
-              setShowSavePrompt(false);
-              showToast("Prompt saved");
-            }}
-            onClose={() => setShowSavePrompt(false)}
           />
         </Show>
 
@@ -3146,274 +2323,75 @@ export function Session() {
 
   // Use Show to reactively switch between welcome and chat views
   return (
-    <Show when={sessionId()} fallback={<WelcomeScreen />}>
-      <div class="flex h-full overflow-hidden">
-        {/* Main chat area */}
-        <div class="flex-1 min-w-0 flex flex-col">
-          <ChatView />
-        </div>
-
-        {/* Review Panel - collapsible with resize handle */}
-        <Show when={layout.review.opened()}>
-          <aside class="flex shrink-0" aria-label="Review panel">
-            <ResizeHandle
-              direction="horizontal"
-              edge="start"
-              size={layout.review.width()}
-              min={200}
-              // Computed from viewport width at render time; clamped to never fall below min
-              max={Math.max(200, typeof window !== "undefined" ? Math.round(window.innerWidth * 0.8) : 800)}
-              onResize={layout.review.resize}
-              onCollapse={layout.review.close}
-              collapseThreshold={100}
-            />
-            <div
-              data-panel="review"
-              tabIndex={-1}
-              class="shrink-0 overflow-hidden focus-visible:outline-2 focus-visible:outline-[var(--interactive-base)] focus-visible:outline-offset-[-2px]"
-              style={{ width: `${layout.review.width()}px` }}
-            >
-              <ReviewPanel sessionId={sessionId()!} />
-            </div>
-          </aside>
-        </Show>
-
-        {/* Info Panel (Session Sidebar) - collapsible with resize handle */}
-        <Show when={layout.info.opened()}>
-          <aside class="flex shrink-0" aria-label="Session info">
-            <ResizeHandle
-              direction="horizontal"
-              edge="start"
-              size={layout.info.width()}
-              min={180}
-              max={400}
-              onResize={layout.info.resize}
-              onCollapse={layout.info.close}
-              collapseThreshold={80}
-            />
-            <div
-              class="shrink-0 overflow-hidden"
-              style={{ width: `${layout.info.width()}px` }}
-            >
-              <SessionSidebar sessionId={sessionId()} />
-            </div>
-          </aside>
-        </Show>
-      </div>
-    </Show>
-  );
-}
-
-function SavePromptDialog(props: {
-  title: () => string
-  setTitle: (v: string) => void
-  scope: () => PromptScope
-  setScope: (v: PromptScope) => void
-  canUseProjectScope: boolean
-  hasActiveProject: boolean
-  saveDisabled: boolean
-  onSave: () => void | Promise<void>
-  onClose: () => void
-}) {
-  const [container, setContainer] = createSignal<HTMLDivElement>();
-  const [saving, setSaving] = createSignal(false);
-  let titleRef: HTMLInputElement | undefined;
-
-  async function handleSave() {
-    if (saving()) return;
-    if (!props.title().trim() || props.saveDisabled) return;
-    setSaving(true);
-    try {
-      await props.onSave();
-    } finally {
-      setSaving(false);
-    }
-  }
-
-  createEffect(() => {
-    const el = container();
-    if (!el) return;
-
-    // Focus title input on open
-    titleRef?.focus();
-
-    function handleKey(e: KeyboardEvent) {
-      if (e.key === "Escape") {
-        e.preventDefault();
-        props.onClose();
-        return;
-      }
-      if (e.key !== "Tab") return;
-
-      const focusable = el!.querySelectorAll<HTMLElement>(
-        'input, textarea, button:not([disabled]), [tabindex]:not([tabindex="-1"])',
-      );
-      if (focusable.length === 0) return;
-
-      const first = focusable[0];
-      const last = focusable[focusable.length - 1];
-
-      if (e.shiftKey && document.activeElement === first) {
-        e.preventDefault();
-        last?.focus();
-      } else if (!e.shiftKey && document.activeElement === last) {
-        e.preventDefault();
-        first?.focus();
-      }
-    }
-
-    document.addEventListener("keydown", handleKey);
-    onCleanup(() => document.removeEventListener("keydown", handleKey));
-  });
-
-  return (
-    <Portal>
-      <div
-        class="fixed inset-0 z-[100] flex items-center justify-center"
-        style={{ background: "rgba(0,0,0,0.5)" }}
-        role="presentation"
-      >
-        <div
-          ref={setContainer}
-          role="dialog"
-          aria-modal="true"
-          aria-labelledby="save-prompt-dialog-title"
-          class="w-full max-w-sm rounded-lg shadow-xl overflow-hidden"
-          style={{
-            background: "var(--background-base)",
-            border: "1px solid var(--border-base)",
-          }}
-        >
-          <div
-            class="px-4 py-3"
-            style={{
-              "border-bottom": "1px solid var(--border-base)",
-            }}
-          >
-            <h2
-              id="save-prompt-dialog-title"
-              class="text-base font-medium"
-              style={{ color: "var(--text-strong)" }}
-            >
-              Save as Prompt
-            </h2>
+      <Show when={loadError()} fallback={
+        <div class="flex h-full overflow-hidden">
+          {/* Main chat area */}
+          <div class="flex-1 min-w-0 flex flex-col">
+            <ChatView />
           </div>
-          <div class="p-4 space-y-3">
-            <div>
-              <label
-                class="block text-sm font-medium mb-1"
-                style={{ color: "var(--text-base)" }}
-              >
-                Title
-              </label>
-              <input
-                ref={titleRef}
-                type="text"
-                value={props.title()}
-                onInput={(e) =>
-                  props.setTitle(e.currentTarget.value)
-                }
-                placeholder="Prompt title"
-                class="w-full px-3 py-2 rounded-md text-sm"
-                style={{
-                  background: "var(--background-base)",
-                  border: "1px solid var(--border-base)",
-                  color: "var(--text-base)",
-                }}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") {
-                    e.preventDefault();
-                    void handleSave();
-                  }
-                }}
+
+          {/* Review Panel - collapsible with resize handle */}
+          <Show when={layout.review.opened()}>
+            <aside class="flex shrink-0" aria-label="Review panel">
+              <ResizeHandle
+                direction="horizontal"
+                edge="start"
+                size={layout.review.width()}
+                min={200}
+                // Computed from viewport width at render time; clamped to never fall below min
+                max={Math.max(200, typeof window !== "undefined" ? Math.round(window.innerWidth * 0.8) : 800)}
+                onResize={layout.review.resize}
+                onCollapse={layout.review.close}
+                collapseThreshold={100}
               />
-            </div>
-            <p class="text-xs" style={{ color: "var(--text-weak)" }}>
-              The current input text will be saved as the prompt body.
-            </p>
-            <div>
-              <label
-                class="block text-xs font-medium mb-1"
-                style={{ color: "var(--text-base)" }}
+              <div
+                data-panel="review"
+                tabIndex={-1}
+                class="shrink-0 overflow-hidden focus-visible:outline-2 focus-visible:outline-[var(--interactive-base)] focus-visible:outline-offset-[-2px]"
+                style={{ width: `${layout.review.width()}px` }}
               >
-                Scope
-              </label>
-              <div class="flex gap-2" role="group" aria-label="Prompt scope">
-                <button
-                  type="button"
-                  onClick={() => props.setScope("global")}
-                  aria-pressed={props.scope() === "global"}
-                  class="flex-1 px-2.5 py-1 rounded-md text-xs font-medium transition-colors"
-                  style={{
-                    background: props.scope() === "global" ? "var(--interactive-base)" : "var(--surface-inset)",
-                    color: props.scope() === "global" ? "white" : "var(--text-base)",
-                    border: props.scope() === "global" ? "1px solid var(--interactive-base)" : "1px solid var(--border-base)",
-                  }}
-                >
-                  Global
-                </button>
-                <button
-                  type="button"
-                  onClick={() => props.setScope("project")}
-                  disabled={!props.canUseProjectScope}
-                  title={!props.canUseProjectScope ? "Open a project first to use project-scoped prompts" : undefined}
-                  aria-pressed={props.scope() === "project"}
-                  class="flex-1 px-2.5 py-1 rounded-md text-xs font-medium transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
-                  style={{
-                    background: props.scope() === "project" ? "var(--interactive-base)" : "var(--surface-inset)",
-                    color: props.scope() === "project" ? "white" : "var(--text-base)",
-                    border: props.scope() === "project" ? "1px solid var(--interactive-base)" : "1px solid var(--border-base)",
-                  }}
-                >
-                  Project
-                </button>
+                <ReviewPanel sessionId={sessionId()!} />
               </div>
-              <Show when={props.scope() === "project"}>
-                <p class="text-xs mt-1" style={{ color: "var(--text-weak)" }}>
-                  {props.hasActiveProject
-                    ? "Project scope saves to this project only."
-                    : "Project scope saves to your most recent project."}
-                </p>
-              </Show>
-              <Show when={!props.canUseProjectScope}>
-                <p class="text-xs mt-1" style={{ color: "var(--text-weak)" }}>
-                  Open a project first to use project-scoped prompts.
-                </p>
-              </Show>
-            </div>
-          </div>
-          <div
-            class="px-4 py-3 flex justify-end gap-2"
-            style={{
-              "border-top": "1px solid var(--border-base)",
-            }}
-          >
-            <button
-              type="button"
-              onClick={props.onClose}
-              class="px-4 py-2 text-sm font-medium rounded-md transition-colors"
-              style={{
-                background: "var(--surface-inset)",
-                color: "var(--text-base)",
-              }}
-            >
-              Cancel
-            </button>
-            <button
-              type="button"
-              disabled={!props.title().trim() || props.saveDisabled || saving()}
-              onClick={() => void handleSave()}
-              class="px-4 py-2 text-sm font-medium rounded-md transition-colors disabled:opacity-50"
-              style={{
-                background: "var(--interactive-base)",
-                color: "white",
-              }}
-            >
-              {saving() ? "Saving..." : "Save"}
-            </button>
+            </aside>
+          </Show>
+
+          {/* Info Panel (Session Sidebar) - collapsible with resize handle */}
+          <Show when={layout.info.opened()}>
+            <aside class="flex shrink-0" aria-label="Session info">
+              <ResizeHandle
+                direction="horizontal"
+                edge="start"
+                size={layout.info.width()}
+                min={180}
+                max={400}
+                onResize={layout.info.resize}
+                onCollapse={layout.info.close}
+                collapseThreshold={80}
+              />
+              <div
+                class="shrink-0 overflow-hidden"
+                style={{ width: `${layout.info.width()}px` }}
+              >
+                <SessionSidebar sessionId={sessionId()} />
+              </div>
+            </aside>
+          </Show>
+        </div>
+      }>
+      {(message) => (
+        <div class="flex h-full items-center justify-center px-6" style={{ background: "var(--background-stronger)" }}>
+          <div class="max-w-md text-center">
+            <p class="text-sm mb-4" role="alert" style={{ color: "var(--status-danger-text)" }}>{message()}</p>
+            <Button variant="ghost" size="sm" onClick={() => {
+              const id = params.id;
+              if (!id) return;
+              setLoadError(null);
+              setLoadingHistory(true);
+              void loadSession(id, sessionDraftKey(LOCAL_SERVER_ID, params.dir, id));
+            }}>Retry</Button>
           </div>
         </div>
-      </div>
-    </Portal>
+      )}
+    </Show>
   );
 }

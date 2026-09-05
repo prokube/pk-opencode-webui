@@ -9,12 +9,8 @@ A feature-rich, prefix-aware Web UI for [OpenCode](https://github.com/anomalyco/
 - **Full reverse proxy support** -- every URL, asset, and API call respects the configured base path
 - **Multi-project workspace** -- switch between projects without restarting; each gets its own session
 - **MCP server management** -- add, remove, connect, and disconnect MCP servers from the UI
-- **Command palette** -- VS Code-style quick navigation with fuzzy search
-- **Keyboard hint mode** -- Vimium-like overlay for mouse-free navigation
-- **AI session rename** -- let the LLM suggest concise titles for your sessions
-- **Sound notifications** -- synthesized audio cues when tasks complete (no external files)
-- **Desktop notifications** -- per-session browser notifications for background tasks
-- **Saved prompts** -- build a reusable prompt library
+- **Keyboard shortcuts** -- core navigation and panel shortcuts with an in-app reference
+- **Manual session rename** -- keep session titles organized from the sidebar
 - **Auto-accept permissions** -- skip confirmation dialogs for file edits on trusted projects
 - **Custom branding** -- white-label with your own name, URL, and icon via environment variables
 - **Kubeflow-native image** -- s6-overlay, PVC-aware home directory, SSH key fixing, rootless operation
@@ -38,16 +34,12 @@ There's an [upstream PR](https://github.com/anomalyco/opencode/pull/7625) attemp
 | Base path / prefix support | Hardcoded to `/` | Full runtime prefix detection |
 | Reverse proxy support | Broken | Works out of the box (nginx, Traefik examples included) |
 | Kubeflow integration | None | Full (NB_PREFIX, s6-overlay, jovyan user, PVC handling) |
-| Multi-project support | Single project | Multiple projects with sidebar and live status badges |
+| Multi-project support | Single project | Multiple projects with sidebar navigation |
 | Project picker | None | Directory browser with fuzzy search, git clone, folder creation |
 | MCP management UI | CLI only | Full graphical add/remove/connect/disconnect with OAuth support |
 | Permission auto-accept | None | Per-directory toggle for trusted projects |
-| AI session rename | None | LLM-powered title suggestions |
-| Sound notifications | None | 5 synthesized sounds, configurable per type |
-| Saved prompts | None | Full create/edit/delete/reorder library |
-| Hint mode (Vimium-style) | None | Keyboard-driven navigation overlay |
-| Command palette | None | Category-filtered fuzzy search (`>` commands, `@` sessions, `#` projects) |
-| Desktop notifications | None | Per-session toggle with cross-tab sync |
+| Session rename | None | Manual sidebar rename |
+| Keyboard shortcuts | Basic | Core navigation, panels, and shortcut reference |
 | Custom branding | None | Name, URL, and icon via environment variables |
 | Extended server API | None | Directory listing, mkdir, file write, MCP config deletion |
 | Docker images | None | Generic (Alpine) and Kubeflow variants |
@@ -57,7 +49,7 @@ There's an [upstream PR](https://github.com/anomalyco/opencode/pull/7625) attemp
 
 ### Multi-Project Workspace
 
-Open multiple projects simultaneously. Each project directory is encoded in the URL, so you can bookmark or share links to specific sessions. The sidebar shows all open projects with live status badges -- you'll see at a glance if a session needs attention (permission request, question waiting, or busy).
+Open multiple projects simultaneously. Each project directory is encoded in the URL, so you can bookmark or share links to specific sessions. The sidebar keeps project and session navigation available without restarting the server.
 
 The **project picker** page offers:
 - Recent projects list with relative timestamps
@@ -75,23 +67,9 @@ Add and manage [Model Context Protocol](https://modelcontextprotocol.io/) server
 - Delete servers with confirmation
 - RFC 7591 automatic client registration support
 
-### Command Palette & Hint Mode
+### Keyboard Workflow
 
-**Command palette** (VS Code-style): fuzzy search across commands, sessions, and projects. Use prefix filters -- `>` for commands, `@` for sessions, `#` for projects. Tab cycles through categories.
-
-**Hint mode** (Vimium-style): activates an overlay showing letter labels on every clickable element. Type the letters to click without touching the mouse. Uses home-row keys for ergonomic access.
-
-### Sound & Desktop Notifications
-
-**Sound notifications** use the Web Audio API to synthesize five distinct sounds (Chime, Ping, Duo, Alert, Gentle) -- no external audio files needed. Each sound type is independently configurable in Settings.
-
-**Desktop notifications** can be toggled per-session. When a background session completes a task, you get a browser notification. Settings sync across tabs.
-
-### Saved Prompts & AI Rename
-
-Build a **prompt library** -- save, edit, reorder, and quickly insert frequently-used prompts. Accessible from Settings or the command palette.
-
-**AI Rename** uses the LLM (via a temporary child session) to suggest concise titles for your chat sessions, replacing the default "Session 1, Session 2..." naming.
+Core shortcuts remain available for session navigation, project switching, sidebar and panel toggles, terminal access, and focus movement. Press `?` outside an input to open the shortcut reference. Sessions can be renamed manually from their sidebar menu.
 
 ### Auto-Accept Permissions
 
@@ -104,10 +82,11 @@ A full settings page with tabs for:
 1. **Providers** -- configure API keys, run OAuth flows (including device code flow)
 2. **Git** -- view SSH keys, configure Git settings
 3. **MCP** -- manage MCP servers (see above)
-4. **Prompts** -- saved prompt library
-5. **Instructions** -- edit project-level instruction files (AGENTS.md, etc.) with inline editor
+4. **Instructions** -- edit project-level instruction files (AGENTS.md, etc.) with inline editor
+5. **Project Config** -- edit project tools, permissions, and configuration
 6. **Appearance** -- Light / Dark / System theme
-7. **Sounds** -- notification sound configuration with preview
+
+The UI connects only to its local OpenCode API through the prefix-aware, same-origin UI proxy. Arbitrary remote OpenCode server targets are not accepted by the browser or UI server.
 
 ## Quick Start
 
@@ -154,14 +133,12 @@ bun install && bun run dev
 | `BRANDING_NAME` | _(empty)_ | Branding text shown as "Powered by {name}" |
 | `BRANDING_URL` | _(empty)_ | URL for the branding link |
 | `BRANDING_ICON` | _(empty)_ | Custom icon URL (HTTP, relative path, or data URI) |
-| `TELEGRAM_BRIDGE_ENABLED` | `false` | Enable optional Telegram bridge service (Kubeflow image) |
-| `TELEGRAM_BOT_TOKEN` | _(required for bridge)_ | Telegram bot token |
-| `TELEGRAM_MODE` | `polling` | Telegram bridge mode (`polling` or `webhook`) |
-| `OPENCODE_API_URL` | `API_URL` or `http://127.0.0.1:4096` | OpenCode API URL for bridge |
-| `OPENCODE_DIRECTORY` | _(empty)_ | Optional directory for bridge session API calls |
-| `TELEGRAM_SESSION_STORE_PATH` | OS temp dir + `/opencode-telegram-sessions.json` | Telegram chat/user to OpenCode session mapping file; set this to a mounted persistent volume path in Kubernetes for restart-safe persistence |
-| `TELEGRAM_SESSION_LINK_BASE` | _(empty)_ | Public UI base URL used in outbound notifications (for direct session links) |
-| `TELEGRAM_NOTIFY_DEBOUNCE_MS` | `20000` | Debounce window to suppress duplicate burst notifications per chat/session/event |
+
+### Local-only security model
+
+This core branch does not support browser-supplied OpenCode backend credentials or backend auth tickets. The OpenCode backend must be reachable only by the UI server, while Kubeflow or another authenticated ingress protects the UI, proxied backend routes, and `/api/ext/*` routes externally. Do not expose the local backend or UI server directly to untrusted networks.
+
+PTY WebSockets use the same prefix-aware UI proxy and external deployment authentication as the rest of the UI. The UI server does not add separate PTY credentials or claim ticket-based PTY authentication.
 
 ## Deployment
 
@@ -209,49 +186,6 @@ See [docker/kubeflow/README.md](docker/kubeflow/README.md) for Kubeflow deployme
 
 See [examples/](examples/) for nginx and Traefik configurations.
 
-### Telegram Bridge (optional)
-
-This repository includes a Telegram bridge service (`docker/telegram-bridge.ts`) that:
-- receives Telegram bot text messages,
-- forwards prompts to OpenCode session APIs,
-- sends assistant responses back to Telegram,
-- sends proactive outbound alerts for question prompts, permission requests, and completed tasks.
-
-The bridge keeps a default OpenCode session per Telegram chat (and sender in shared chats), persisted to `TELEGRAM_SESSION_STORE_PATH` so mappings survive restarts.
-
-Proactive outbound alerts are routed independently from chat-to-session command mappings: `/status` and `/switch` control which session interactive commands target, while alert fanout is controlled by `/notify on` opt-in and per-session bell/alarm state.
-
-In container/Kubernetes deployments, the default OS temp directory is often ephemeral, so set `TELEGRAM_SESSION_STORE_PATH` to a mounted persistent volume location if you need mappings to survive pod/container recreation.
-
-The file-backed session store is single-writer/single-replica only (no cross-process locking). For horizontally scaled or multi-replica deployments, use an external coordinated session store instead of sharing one file.
-
-Supported bot commands:
-- `/new` creates and switches to a fresh session for the current chat mapping.
-- `/status` shows the current mapped session, project/source context, live agent activity, and subsession activity summary.
-- `/notify on|off|status` enables/disables outbound operational notifications per chat (default off).
-- `/help` shows command help.
-- Unknown commands return a short help hint.
-
-Messages from the same chat are handled through a per-chat queue to avoid cross-reply mixups when users send requests quickly.
-
-Outbound alert behavior:
-- Safe by default: outbound alerts are disabled until a chat opts in via `/notify on`.
-- Bell-gated: only sessions with Telegram bell/alarm enabled emit proactive alerts.
-- Debounced: repeated burst events are suppressed for `TELEGRAM_NOTIFY_DEBOUNCE_MS`.
-- Context-rich: alerts include the session id and, when `TELEGRAM_SESSION_LINK_BASE` is set, a direct session URL.
-
-Token and webhook security guidance:
-- Never commit `TELEGRAM_BOT_TOKEN` to git; inject it from your runtime secret manager.
-- For webhook mode, set `TELEGRAM_WEBHOOK_SECRET` and ensure your ingress forwards `x-telegram-bot-api-secret-token` unchanged.
-- Limit webhook exposure to HTTPS only and scope ingress routes to `TELEGRAM_WEBHOOK_PATH`.
-
-Failure troubleshooting:
-- Check bridge logs for `[TelegramBridge] outbound event stream error` when OpenCode event streaming is unavailable.
-- Check bridge logs for `Telegram sendMessage failed` and verify bot token validity/permissions.
-- If links look wrong in alerts, set `TELEGRAM_SESSION_LINK_BASE` to the public UI URL prefix.
-
-The bridge is opt-in and only starts in the Kubeflow image when `TELEGRAM_BRIDGE_ENABLED=true`.
-
 ## Architecture
 
 ```
@@ -269,8 +203,7 @@ The bridge is opt-in and only starts in the Kubeflow image when `TELEGRAM_BRIDGE
 |  |  |  - Review panel (git diffs)                          |  |  |
 |  |  |  - Terminal emulator                                 |  |  |
 |  |  |  - MCP server management                             |  |  |
-|  |  |  - Command palette, hint mode, saved prompts         |  |  |
-|  |  |  - Sound & desktop notifications                     |  |  |
+|  |  |  - Keyboard shortcuts                                |  |  |
 |  |  +------------------------------------------------------+  |  |
 |  |                                                            |  |
 |  +------------------------------------------------------------+  |

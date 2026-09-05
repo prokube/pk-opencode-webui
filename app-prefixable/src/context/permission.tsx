@@ -1,10 +1,9 @@
-import { createContext, useContext, createSignal, createMemo, onCleanup, onMount, type ParentProps } from "solid-js"
-import { createStore, produce } from "solid-js/store"
+import { createContext, useContext, createSignal, createMemo, createEffect, onCleanup, onMount, type ParentProps } from "solid-js"
 import type { PermissionRequest } from "../sdk/client"
 import { useSDK } from "./sdk"
-import { useEvents } from "./events"
 import { useSync } from "./sync"
-import { buildChildMap, sessionDescendantIds } from "../utils/session-tree-request"
+import { LOCAL_SERVER_ID } from "./server"
+import { legacyStorageValue, workspaceStorageKey } from "../utils/storage"
 
 interface PermissionContextValue {
   pending: () => PermissionRequest[]
@@ -27,48 +26,72 @@ function shouldAutoAccept(perm: PermissionRequest): boolean {
 // Cap for responded Set to prevent unbounded memory growth
 const RESPONDED_CAP = 1000
 
+export function resetFailedPermissionResponse(
+  permission: PermissionRequest,
+  responded: Set<string>,
+  autoAttempted: Set<string>,
+  pending: () => boolean,
+  restore: (permission: PermissionRequest) => void,
+) {
+  responded.delete(permission.id)
+  autoAttempted.delete(permission.id)
+  if (!pending()) restore(permission)
+}
+
 export function PermissionProvider(props: ParentProps) {
   const { client, directory } = useSDK()
-  const events = useEvents()
   const sync = useSync()
 
-  // Track pending permission requests
-  const [permissions, setPermissions] = createStore<Record<string, PermissionRequest>>({})
-
   // Track auto-accept state (persisted in localStorage, loaded in onMount)
-  const storageKey = `prokube-permission-autoaccept-${directory || "global"}`
+  const serverId = LOCAL_SERVER_ID
+  const storageKey = workspaceStorageKey(serverId, directory ?? "", "permissionAutoAccept")
   const [autoAccept, setAutoAccept] = createSignal(false)
 
   // Track which permissions we've already responded to (avoid duplicates)
   const responded = new Set<string>()
+  const autoAttempted = new Set<string>()
+  const autoFailed = new Set<string>()
+  const confirmed = new Set<string>()
 
   // Load auto-accept state from localStorage safely
   onMount(() => {
     try {
-      setAutoAccept(localStorage.getItem(storageKey) === "true")
+      const current = localStorage.getItem(storageKey)
+      const legacy = serverId === "local"
+        ? [localStorage.getItem(`prokube-permission-autoaccept-${directory || "global"}`)]
+        : []
+      const result = legacyStorageValue(serverId, current, legacy, (value) => value === "true" || value === "false")
+      if (result.migrated && result.value) localStorage.setItem(storageKey, result.value)
+      setAutoAccept(result.value === "true")
     } catch {
       // localStorage unavailable (SSR, privacy mode, etc.) - default to false
     }
   })
 
-  function pruneResponded() {
-    if (responded.size <= RESPONDED_CAP) return
+  function prune(set: Set<string>) {
+    if (set.size <= RESPONDED_CAP) return
     // Remove oldest entries (first half) when cap exceeded
-    const entries = Array.from(responded)
+    const entries = Array.from(set)
     const toRemove = entries.slice(0, Math.floor(RESPONDED_CAP / 2))
-    for (const id of toRemove) {
-      responded.delete(id)
-    }
+    for (const id of toRemove) set.delete(id)
   }
 
-  function respond(id: string, response: "once" | "always" | "reject", perm?: PermissionRequest) {
-    // Use provided perm or look up from store
-    const permission = perm ?? permissions[id]
+  const unsub = sync.subscribe((event) => {
+    if (event.type !== "permission.replied") return
+    confirmed.add(event.properties.requestID)
+    prune(confirmed)
+  })
+  onCleanup(unsub)
+
+  function respond(id: string, response: "once" | "always" | "reject", perm?: PermissionRequest, auto = false) {
+    const permission = perm ?? sync.pendingPermissions[id]
     if (!permission) return
     if (responded.has(id)) return
+    if (!auto) autoFailed.delete(id)
 
     responded.add(id)
-    pruneResponded()
+    prune(responded)
+    sync.dismissPermission(id)
 
     client.permission
       .respond({
@@ -77,139 +100,69 @@ export function PermissionProvider(props: ParentProps) {
         response,
         directory,
       })
-      .then(() => {
-        // Remove from pending after successful response
-        setPermissions(
-          produce((draft: Record<string, PermissionRequest>) => {
-            delete draft[id]
-          }),
-        )
-      })
       .catch((error: unknown) => {
         console.error("[Permission] Failed to respond:", error)
-        responded.delete(id)
+        if (auto) {
+          autoFailed.add(id)
+          prune(autoFailed)
+        }
+        resetFailedPermissionResponse(
+          permission,
+          responded,
+          autoAttempted,
+          () => confirmed.has(id) || !!sync.pendingPermissions[id],
+          sync.setPermission,
+        )
       })
   }
 
-  function handlePermissionEvent(perm: PermissionRequest) {
-    // If already responded, ignore
-    if (responded.has(perm.id)) return
-
-    // If auto-accept is enabled and this permission can be auto-accepted
-    if (autoAccept() && shouldAutoAccept(perm)) {
-      respond(perm.id, "once", perm)
-      return
-    }
-
-    // Add to pending
-    setPermissions(
-      produce((draft: Record<string, PermissionRequest>) => {
-        draft[perm.id] = perm
-      }),
-    )
-  }
-
-  // Subscribe to permission events
-  const unsub = events.subscribe((event: { type: string; properties: unknown }) => {
-    if (event.type === "permission.asked") {
-      handlePermissionEvent(event.properties as PermissionRequest)
-    }
-
-    if (event.type === "permission.replied") {
-      const props = event.properties as { sessionID: string; requestID: string }
-      // Remove from pending when replied (by us or another client)
-      setPermissions(
-        produce((draft: Record<string, PermissionRequest>) => {
-          delete draft[props.requestID]
-        }),
-      )
-      responded.add(props.requestID)
+  createEffect(() => {
+    if (!autoAccept()) return
+    for (const permission of Object.values(sync.pendingPermissions)) {
+      if (
+        !shouldAutoAccept(permission) ||
+        responded.has(permission.id) ||
+        autoAttempted.has(permission.id) ||
+        autoFailed.has(permission.id)
+      ) continue
+      autoAttempted.add(permission.id)
+      prune(autoAttempted)
+      respond(permission.id, "once", permission, true)
     }
   })
 
-  onCleanup(unsub)
+  const pending = createMemo(() => Object.values(sync.pendingPermissions))
 
-  // Load existing pending permissions on mount
-  client.permission.list({ directory }).then((res: { data?: PermissionRequest[] }) => {
-    const perms = res.data
-    if (!perms) return
-
-    for (const perm of perms) {
-      if (!perm?.id) continue
-      if (responded.has(perm.id)) continue
-
-      // Auto-accept if enabled
-      if (autoAccept() && shouldAutoAccept(perm)) {
-        respond(perm.id, "once", perm)
-        continue
-      }
-
-      setPermissions(
-        produce((draft: Record<string, PermissionRequest>) => {
-          draft[perm.id] = perm
-        }),
-      )
-    }
-  })
-
-  const pending = createMemo(() => Object.values(permissions))
-
-  // Group pending permissions by sessionID for O(1) lookup per session.
+  // Propagate only active permissions through their ancestor chain. This avoids
+  // materializing every descendant set for large session trees.
   const pendingBySession = createMemo(() => {
     const map = new Map<string, PermissionRequest[]>()
+    const parent = new Map(sync.sessions().map((session) => [session.id, session.parentID]))
     for (const perm of pending()) {
-      const list = map.get(perm.sessionID)
-      if (list) list.push(perm)
-      if (!list) map.set(perm.sessionID, [perm])
+      const seen = new Set<string>()
+      for (let id: string | undefined = perm.sessionID; id && !seen.has(id); id = parent.get(id)) {
+        seen.add(id)
+        const list = map.get(id)
+        if (list) list.push(perm)
+        if (!list) map.set(id, [perm])
+      }
     }
     return map
   })
 
-  // Memoize child map once per session-list change so descendant lookups
-  // don't rebuild it on every call (called per-row in sidebar).
-  const children = createMemo(() => buildChildMap(sync.sessions()))
-
-  // Cache descendant ID sets per session to avoid BFS walks on every render.
-  // Recomputed when the session list changes (child map changes).
-  const descendantsCache = createMemo(() => {
-    const map = new Map<string, Set<string>>()
-    const cm = children()
-    for (const s of sync.sessions()) {
-      map.set(s.id, sessionDescendantIds(sync.sessions(), s.id, cm))
-    }
-    return map
-  })
-
-  // Walk the session tree to include permissions from descendant sessions.
-  // Returns all permissions for the given session and its children/grandchildren.
-  // Uses precomputed descendant sets + pendingBySession map for O(descendants) per call.
   function pendingForSession(sessionID: string) {
-    const ids = descendantsCache().get(sessionID) ?? sessionDescendantIds(sync.sessions(), sessionID, children())
-    const bySession = pendingBySession()
-    const result: PermissionRequest[] = []
-    for (const id of ids) {
-      const perms = bySession.get(id)
-      if (perms) result.push(...perms)
-    }
-    return result
+    return pendingBySession().get(sessionID) ?? []
   }
 
   function toggleAutoAccept() {
     const next = !autoAccept()
+    // Re-enabling is an explicit retry; clear failures before the effect runs.
+    if (next) autoFailed.clear()
     setAutoAccept(next)
     try {
       localStorage.setItem(storageKey, String(next))
     } catch {
       // localStorage unavailable - state still works in memory
-    }
-
-    // If enabling, auto-accept all pending edit permissions
-    if (next) {
-      for (const perm of Object.values(permissions) as PermissionRequest[]) {
-        if (shouldAutoAccept(perm)) {
-          respond(perm.id, "once")
-        }
-      }
     }
   }
 

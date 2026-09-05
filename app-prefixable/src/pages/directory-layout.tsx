@@ -1,16 +1,11 @@
-import { type ParentProps, createMemo, createEffect, For } from "solid-js"
+import { type ParentProps, createMemo, createEffect, For, on } from "solid-js"
 import { useParams, Navigate } from "@solidjs/router"
-import { SDKProvider } from "../context/sdk"
-import { EventProvider } from "../context/events"
-import { SyncProvider } from "../context/sync"
-import { ProviderProvider } from "../context/providers"
-import { MCPProvider } from "../context/mcp"
 import { TerminalProvider } from "../context/terminal"
-import { ConfigProvider } from "../context/config"
 import { PermissionProvider } from "../context/permission"
 import { FileProvider } from "../context/file"
 import { LayoutProvider } from "../context/layout"
-import { useRecentProjects } from "../context/recent-projects"
+import { CoreProviders } from "../context/core-providers"
+import { useProjects } from "../context/projects"
 import { base64Decode } from "../utils/path"
 import { Layout } from "./layout"
 
@@ -21,7 +16,7 @@ import { Layout } from "./layout"
  */
 export function DirectoryLayout(props: ParentProps) {
   const params = useParams<{ dir: string }>()
-  const recent = useRecentProjects()
+  const projects = useProjects()
 
   const decoded = createMemo(() => {
     if (!params.dir) return undefined
@@ -50,12 +45,11 @@ export function DirectoryLayout(props: ParentProps) {
   })
 
   // Add to recent projects when directory changes
-  createEffect(() => {
-    const dir = directory()
+  createEffect(on(directory, (dir) => {
     if (dir) {
-      recent.add(dir)
+      projects.touch(dir)
     }
-  })
+  }))
 
   // Use For with a single-element array keyed by directory to force remount
   // This ensures all providers are recreated when switching projects
@@ -67,27 +61,17 @@ export function DirectoryLayout(props: ParentProps) {
   return (
     <For each={directories()} fallback={<Navigate href="/" />}>
       {(dir: string) => (
-        <SDKProvider directory={dir}>
-          <SyncProvider>
-            <EventProvider>
-              <ConfigProvider>
-                <FileProvider>
-                  <PermissionProvider>
-                    <ProviderProvider>
-                      <MCPProvider>
-                        <TerminalProvider>
-                          <LayoutProvider>
-                            <Layout>{props.children}</Layout>
-                          </LayoutProvider>
-                        </TerminalProvider>
-                      </MCPProvider>
-                    </ProviderProvider>
-                  </PermissionProvider>
-                </FileProvider>
-              </ConfigProvider>
-            </EventProvider>
-          </SyncProvider>
-        </SDKProvider>
+        <CoreProviders directory={dir}>
+          <FileProvider>
+            <PermissionProvider>
+              <TerminalProvider>
+                <LayoutProvider>
+                  <Layout>{props.children}</Layout>
+                </LayoutProvider>
+              </TerminalProvider>
+            </PermissionProvider>
+          </FileProvider>
+        </CoreProviders>
       )}
     </For>
   )

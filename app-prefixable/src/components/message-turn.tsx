@@ -647,6 +647,9 @@ export function MessageTurn(props: {
 
   const childState = (childID: string | undefined) => {
     if (!childID) return "waiting"
+    const status = sync.status[childID]?.type
+    if (status === "busy" || status === "retry") return "running"
+    if (sync.statusReady()) return "open"
     const messages = sync.messages(childID)
     for (let i = messages.length - 1; i >= 0; i--) {
       const info = messages[i].info
@@ -908,8 +911,8 @@ export function MessageTurn(props: {
           {/* Assistant messages */}
           <For each={props.turn.assistantMessages}>
             {(message) => {
-              const text = extractTextContent(message.parts).trim()
-              const tools = hasTools(message)
+              const text = createMemo(() => extractTextContent(message.parts).trim())
+              const tools = createMemo(() => hasTools(message))
               const meta = () => message.parts.filter((part) => isAgentPart(part) || isSnapshotPart(part) || isRetryPart(part) || isPatchPart(part) || isCompactionPart(part))
               const subtasks = () => message.parts.filter(isSubtaskPart)
               const messageTime = createMemo(() => {
@@ -954,8 +957,8 @@ export function MessageTurn(props: {
                       )}
                     </Show>
                     {/* Text content */}
-                    <Show when={text}>
-                      <Markdown content={text} class="text-sm" />
+                    <Show when={text()}>
+                      <Markdown content={text()} class="text-sm" />
                     </Show>
                     {/* Agent, snapshot, retry, patch, and compaction parts */}
                     <Show when={meta().length > 0}>
@@ -982,7 +985,7 @@ export function MessageTurn(props: {
                       </div>
                     </Show>
                     {/* Tool calls */}
-                    <Show when={tools}>
+                    <Show when={tools()}>
                       <div class="mt-2">
                         <MessageParts parts={message.parts} />
                       </div>

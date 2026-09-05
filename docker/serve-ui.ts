@@ -9,8 +9,9 @@
  * 5. Provides extended API endpoints (/api/ext/*)
  */
 
-import { handleExtendedEndpoint, isApiPath } from "../shared/extended-api"
-import { handleProxyRequest, normalizeProxiedResponse } from "../shared/proxy"
+import { handleExtendedEndpoint, isApiPath, isMutation, isSameOriginRequest } from "../shared/extended-api"
+import { matchesBasePath, stripBasePath } from "../shared/base-path"
+import { isEventStreamPath, normalizeProxiedResponse, proxyEventResponse, serializeScriptData, stripHopByHopHeaders } from "../shared/proxy"
 
 const BASE_PATH = process.env.NB_PREFIX || process.env.BASE_PATH || "/"
 const PORT = parseInt(process.env.PORT || "8080", 10)
@@ -129,25 +130,6 @@ async function openAIBrowserOAuthMethods() {
   return blockedOpenAIMethods
 }
 
-function shouldDisposeAfterAuthMutation(path: string, req: Request, response: Response) {
-  if (!response.ok) return false
-  if (!AUTH_MUTATION_METHODS.has(req.method)) return false
-  if (/^\/auth\/[^/]+$/.test(path)) return true
-  return /^\/provider\/[^/]+\/oauth\/callback$/.test(path)
-}
-
-const AUTH_MUTATION_METHODS = new Set(["POST", "PUT", "DELETE"])
-
-async function disposeInstanceAfterAuthMutation(path: string, req: Request, response: Response) {
-  if (!shouldDisposeAfterAuthMutation(path, req, response)) return
-  const dispose = new URL("/instance/dispose", API_URL)
-  const res = await fetch(dispose.toString(), { method: "POST" }).catch((e) => {
-    console.error("[Proxy] Failed to dispose instance after auth mutation:", e)
-    return undefined
-  })
-  if (res && !res.ok) console.error("[Proxy] Failed to dispose instance after auth mutation:", res.status, res.statusText)
-}
-
 const server = Bun.serve<{ path: string; search: string }>({
   port: PORT,
   hostname: "0.0.0.0",
@@ -155,12 +137,12 @@ const server = Bun.serve<{ path: string; search: string }>({
 
   async fetch(req, server) {
     const url = new URL(req.url)
-    let path = url.pathname
-
-    // Strip base path prefix if present
-    if (basePathWithoutTrailing && path.startsWith(basePathWithoutTrailing)) {
-      path = path.slice(basePathWithoutTrailing.length) || "/"
+    if (!matchesBasePath(url.pathname, basePathWithoutTrailing)) {
+      return new Response("Not Found", { status: 404 })
     }
+
+    // Strip only a complete base-path segment.
+    let path = stripBasePath(url.pathname, basePathWithoutTrailing)
     if (!path.startsWith("/")) {
       path = "/" + path
     }
@@ -193,6 +175,7 @@ const server = Bun.serve<{ path: string; search: string }>({
     if (isPtyWebSocket(path)) {
       const upgradeHeader = req.headers.get("Upgrade")
       if (upgradeHeader?.toLowerCase() === "websocket") {
+        if (!isSameOriginRequest(req, url)) return new Response("Cross-origin request denied", { status: 403 })
         console.log("[Proxy] WebSocket upgrade for PTY:", path)
         const success = server.upgrade(req, {
           data: { path, search: url.search },
@@ -204,56 +187,44 @@ const server = Bun.serve<{ path: string; search: string }>({
       }
     }
 
-    // Proxy requests to remote servers (avoids CORS)
-    if (path.startsWith("/__proxy/")) {
-      const proxyPath = path.slice("/__proxy".length)
-      return handleProxyRequest(proxyPath, req)
-    }
-    if (path === "/__proxy") {
-      return handleProxyRequest("/", req)
-    }
-
     // Extended API endpoints (handled locally, not proxied)
     const extResponse = await handleExtendedEndpoint(path, req.method, url, req)
     if (extResponse) return withNoStoreHeaders(extResponse)
 
     // Check if this is an API request (after stripping prefix)
     if (isApiPath(path)) {
+      if (isMutation(req.method) && !isSameOriginRequest(req, url)) {
+        return new Response("Cross-origin request denied", { status: 403 })
+      }
       const target = new URL(path + url.search, API_URL)
       const headers = new Headers(req.headers)
+      stripHopByHopHeaders(headers)
 
       // SSE requests need special handling
-      if (path.startsWith("/event")) {
+      if (isEventStreamPath(path)) {
         console.log("[Proxy] SSE request to:", target.toString())
+        const upstream = new AbortController()
+        const abort = () => upstream.abort(req.signal.reason)
+        req.signal.addEventListener("abort", abort, { once: true })
+        if (req.signal.aborted) abort()
         try {
           const response = await fetch(target.toString(), {
             method: req.method,
             headers,
+            signal: upstream.signal,
           })
 
           if (!response.ok) {
+            req.signal.removeEventListener("abort", abort)
             console.error("[Proxy] SSE error:", response.status, response.statusText)
-            return withNoStoreHeaders(
-              new Response(response.body, {
-                status: response.status,
-                statusText: response.statusText,
-                headers: response.headers,
-              }),
-            )
+            return withNoStoreHeaders(normalizeProxiedResponse(response))
           }
 
-          return new Response(response.body, {
-            status: response.status,
-            headers: {
-              "Content-Type": "text/event-stream",
-              "Cache-Control": "no-store",
-              Pragma: "no-cache",
-              Expires: "0",
-              Connection: "keep-alive",
-              "X-Accel-Buffering": "no",
-            },
-          })
+          const proxied = proxyEventResponse(response, req.signal, upstream)
+          req.signal.removeEventListener("abort", abort)
+          return proxied
         } catch (e) {
+          req.signal.removeEventListener("abort", abort)
           console.error("[Proxy] SSE connection error:", e)
           return withNoStoreHeaders(new Response("SSE proxy error", { status: 502 }))
         }
@@ -270,8 +241,8 @@ const server = Bun.serve<{ path: string; search: string }>({
           method: req.method,
           headers,
           body,
+          signal: req.signal,
         })
-        await disposeInstanceAfterAuthMutation(path, req, response)
         return withNoStoreHeaders(normalizeProxiedResponse(response))
       } catch (e) {
         console.error("[Proxy] API error:", e)
@@ -310,7 +281,7 @@ const server = Bun.serve<{ path: string; search: string }>({
 
     const indexHtml = await indexFile.text()
     // Use JSON.stringify for safe encoding to prevent XSS
-    const config = JSON.stringify({
+    const config = serializeScriptData({
       basePath: basePathWithTrailing,
       branding: { name: BRANDING_NAME, url: BRANDING_URL, icon: BRANDING_ICON },
     })

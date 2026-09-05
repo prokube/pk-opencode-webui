@@ -9,430 +9,6 @@
 import * as fs from "node:fs"
 import * as nodePath from "node:path"
 import * as os from "node:os"
-import {
-  TELEGRAM_SOURCE_ID_MAX_LENGTH,
-  TELEGRAM_SOURCE_ID_PATTERN,
-  readDesiredTelegramSettingsFingerprint,
-  readTelegramRuntimeState,
-  readTelegramSettings,
-  updateTelegramSettings,
-} from "./telegram-settings"
-import { createTelegramSessionStore, type TelegramSessionStore } from "./telegram-session-store"
-
-const MAX_TELEGRAM_SESSION_STORES = 8
-const MAX_SESSION_ALARM_SESSION_ID_LENGTH = 256
-const telegramSessionStores = new Map<string, TelegramSessionStore>()
-let telegramSessionStoreFactory = createTelegramSessionStore
-
-function sessionAlarmSessionIdError(sessionId: string) {
-  if (!sessionId) return "sessionId parameter is required"
-  if (sessionId.length > MAX_SESSION_ALARM_SESSION_ID_LENGTH) {
-    return `sessionId must be ${MAX_SESSION_ALARM_SESSION_ID_LENGTH} characters or fewer`
-  }
-  if (/[\x00-\x1F\x7F]/.test(sessionId)) {
-    return "sessionId contains unsupported control characters"
-  }
-}
-
-function sessionAlarmSourceIdError(sourceId: string) {
-  if (!sourceId) return "sourceId parameter is required"
-  if (sourceId === "default") return
-  if (sourceId.toLowerCase() === "default") {
-    return 'sourceId is reserved; use exact "default" or choose another id'
-  }
-  if (sourceId.length > TELEGRAM_SOURCE_ID_MAX_LENGTH) {
-    return `sourceId must be ${TELEGRAM_SOURCE_ID_MAX_LENGTH} characters or fewer`
-  }
-  if (!TELEGRAM_SOURCE_ID_PATTERN.test(sourceId)) {
-    return "sourceId must match [A-Za-z0-9._-]+"
-  }
-}
-
-function sourceScopedId(sourceId: string, sessionId: string): string {
-  if (sourceId === "default") return sessionId
-  return `${sourceId}::${sessionId}`
-}
-
-type SessionAlarmRef = {
-  sourceId: string
-  sessionId: string
-  scopedSessionId: string
-}
-
-function decodeSessionAlarmRef(value: string): SessionAlarmRef | undefined {
-  const trimmed = value.trim()
-  if (!trimmed) return
-  const parts = trimmed.split("::")
-  if (parts.length === 1) {
-    const sessionId = parts[0] || ""
-    return { sourceId: "default", sessionId, scopedSessionId: sessionId }
-  }
-  const sourceId = parts[0]?.trim() || ""
-  const sessionId = parts.slice(1).join("::").trim()
-  if (!sourceId || !sessionId) return
-  return {
-    sourceId,
-    sessionId,
-    scopedSessionId: sourceScopedId(sourceId, sessionId),
-  }
-}
-
-function sessionAlarmRefFromInput(input: {
-  sessionId: string
-  sourceId: string
-  scopedSessionId: string
-}): { ref?: SessionAlarmRef; error?: string } {
-  const scopedSessionId = input.scopedSessionId.trim()
-  if (scopedSessionId) {
-    const decoded = decodeSessionAlarmRef(scopedSessionId)
-    if (!decoded) return { error: "scopedSessionId is invalid" }
-    const sourceIdError = sessionAlarmSourceIdError(decoded.sourceId)
-    if (sourceIdError) return { error: sourceIdError }
-    const sessionIdError = sessionAlarmSessionIdError(decoded.sessionId)
-    if (sessionIdError) return { error: sessionIdError }
-
-    const sourceId = input.sourceId.trim()
-    if (sourceId && sourceId !== decoded.sourceId) {
-      return { error: "sourceId does not match scopedSessionId" }
-    }
-
-    const sessionId = input.sessionId.trim()
-    if (sessionId && sessionId !== decoded.sessionId) {
-      return { error: "sessionId does not match scopedSessionId" }
-    }
-    return { ref: decoded }
-  }
-
-  const sessionId = input.sessionId.trim()
-  const sessionIdError = sessionAlarmSessionIdError(sessionId)
-  if (sessionIdError) return { error: sessionIdError }
-
-  const sourceId = input.sourceId.trim() || "default"
-  const sourceIdError = sessionAlarmSourceIdError(sourceId)
-  if (sourceIdError) return { error: sourceIdError }
-
-  return {
-    ref: {
-      sourceId,
-      sessionId,
-      scopedSessionId: sourceScopedId(sourceId, sessionId),
-    },
-  }
-}
-
-function notifyChatKeyFromSessionKey(value: string) {
-  const match = value.match(/^chat:(-?\d+)(?::user:-?\d+)?$/)
-  if (!match) return
-  const chatId = Number.parseInt(match[1] || "", 10)
-  if (!Number.isFinite(chatId)) return
-  return `chat:${chatId}`
-}
-
-async function enableTelegramNotifyForSession(store: TelegramSessionStore, sessionId: string) {
-  if (!store.sessionKeys || !store.notificationSet) return
-  const keys = await store.sessionKeys(sessionId)
-  if (!keys.length) return
-  const chats = new Set<string>()
-  for (const key of keys) {
-    const chatKey = notifyChatKeyFromSessionKey(key)
-    if (!chatKey) continue
-    chats.add(chatKey)
-  }
-  for (const chatKey of chats) {
-    await store.notificationSet(chatKey, true)
-  }
-}
-
-function evictTelegramSessionStoresIfNeeded() {
-  while (telegramSessionStores.size > MAX_TELEGRAM_SESSION_STORES) {
-    const oldest = telegramSessionStores.keys().next().value
-    if (oldest === undefined) return
-    telegramSessionStores.delete(oldest)
-  }
-}
-
-function telegramSessionStore(sessionStorePath: string) {
-  const cached = telegramSessionStores.get(sessionStorePath)
-  if (cached) {
-    telegramSessionStores.delete(sessionStorePath)
-    telegramSessionStores.set(sessionStorePath, cached)
-    return cached
-  }
-  const next = telegramSessionStoreFactory(sessionStorePath)
-  telegramSessionStores.set(sessionStorePath, next)
-  evictTelegramSessionStoresIfNeeded()
-  return next
-}
-
-export function telegramSessionStoreCacheSizeForTest() {
-  return telegramSessionStores.size
-}
-
-export function setTelegramSessionStoreFactoryForTest(factory: typeof createTelegramSessionStore) {
-  telegramSessionStoreFactory = factory
-  telegramSessionStores.clear()
-}
-
-export function resetTelegramSessionStoreFactoryForTest() {
-  telegramSessionStoreFactory = createTelegramSessionStore
-  telegramSessionStores.clear()
-}
-
-type TelegramBridgeHealthResponse = {
-  status?: "healthy" | "degraded"
-  checkedAt?: string
-  process?: {
-    status?: "up" | "down"
-    pid?: number
-    uptimeSec?: number
-    mode?: "polling" | "webhook"
-  }
-  config?: {
-    status?: "ok"
-    tokenConfigured?: boolean
-    webhookSecretConfigured?: boolean
-    openCodeUrlConfigured?: boolean
-    sessionStorePathConfigured?: boolean
-    directoryConfigured?: boolean
-    mode?: "polling" | "webhook"
-  }
-  dependencies?: {
-    telegramApi?: { status?: "ok" | "error" | "unknown"; message?: string }
-    openCodeApi?: { status?: "ok" | "error" | "unknown"; message?: string }
-    openCodeSources?: Array<{ sourceId?: string; status?: "ok" | "error" | "unknown"; message?: string }>
-  }
-}
-
-type TelegramHealthMessage = {
-  type: "config" | "runtime" | "dependency"
-  text: string
-}
-
-function bridgeHealthStatus(value: unknown): "healthy" | "degraded" {
-  if (value === "healthy") return "healthy"
-  return "degraded"
-}
-
-function bridgeProcess(raw: TelegramBridgeHealthResponse["process"] | undefined) {
-  return {
-    status: raw?.status === "down" ? "down" : "up",
-    pid: typeof raw?.pid === "number" ? raw.pid : undefined,
-    uptimeSec: typeof raw?.uptimeSec === "number" ? raw.uptimeSec : undefined,
-    mode: raw?.mode === "webhook" ? "webhook" : raw?.mode === "polling" ? "polling" : undefined,
-  }
-}
-
-function bridgeConfig(raw: TelegramBridgeHealthResponse["config"] | undefined, settings: Awaited<ReturnType<typeof readTelegramSettings>>["settings"]) {
-  return {
-    status: raw?.status === "ok" ? "ok" : "error",
-    mode: raw?.mode === "webhook" ? "webhook" : raw?.mode === "polling" ? "polling" : settings.mode,
-    tokenConfigured: typeof raw?.tokenConfigured === "boolean" ? raw.tokenConfigured : settings.tokenConfigured,
-    webhookSecretConfigured: typeof raw?.webhookSecretConfigured === "boolean" ? raw.webhookSecretConfigured : settings.webhookSecretConfigured,
-    openCodeUrlConfigured: typeof raw?.openCodeUrlConfigured === "boolean" ? raw.openCodeUrlConfigured : Boolean(settings.openCodeUrl),
-    sessionStorePathConfigured: typeof raw?.sessionStorePathConfigured === "boolean" ? raw.sessionStorePathConfigured : Boolean(settings.sessionStorePath),
-    directoryConfigured: typeof raw?.directoryConfigured === "boolean" ? raw.directoryConfigured : Boolean(settings.directory),
-  }
-}
-
-function bridgeDependency(raw: { status?: "ok" | "error" | "unknown"; message?: string } | undefined, missing: string) {
-  return {
-    status: raw?.status === "ok" || raw?.status === "error" || raw?.status === "unknown" ? raw.status : "unknown",
-    message: typeof raw?.message === "string" && raw.message.trim().length > 0 ? raw.message : missing,
-  }
-}
-
-function bridgeMessages(dependencies: {
-  telegramApi: { status: "ok" | "error" | "unknown"; message: string }
-  openCodeApi: { status: "ok" | "error" | "unknown"; message: string }
-  openCodeSources?: Array<{ sourceId: string; status: "ok" | "error" | "unknown"; message: string }>
-}): TelegramHealthMessage[] {
-  const messages: TelegramHealthMessage[] = []
-  if (dependencies.telegramApi.status === "error") {
-    messages.push({ type: "dependency", text: dependencies.telegramApi.message || "Telegram API check failed" })
-  }
-  if (dependencies.openCodeApi.status === "error") {
-    messages.push({ type: "dependency", text: dependencies.openCodeApi.message || "OpenCode API check failed" })
-  }
-  for (const source of dependencies.openCodeSources || []) {
-    if (source.status !== "error") continue
-    messages.push({ type: "dependency", text: `Source ${source.sourceId}: ${source.message}` })
-  }
-  return messages
-}
-
-type TelegramRestartStatus = {
-  status: "applied" | "pending_restart"
-  pendingRestart: boolean
-  desiredSettingsFingerprint: string
-  appliedSettingsFingerprint: string | null
-  appliedAt: string | null
-  pid: number | null
-  mode: "polling" | "webhook" | null
-  port: number | null
-}
-
-type TelegramSettingsResponse = Awaited<ReturnType<typeof readTelegramSettings>>
-
-function defaultTelegramBridgePort() {
-  return 4097
-}
-
-function telegramBridgePortFromSettings(settings: TelegramSettingsResponse | null) {
-  return typeof settings?.settings?.port === "number" ? settings.settings.port : defaultTelegramBridgePort()
-}
-
-function restartProbePort(status: TelegramRestartStatus | null, settings: TelegramSettingsResponse | null) {
-  if (typeof status?.port === "number") return status.port
-  return telegramBridgePortFromSettings(settings)
-}
-
-function wait(ms: number) {
-  return new Promise((resolve) => setTimeout(resolve, ms))
-}
-
-function restartAuthorized(req: Request) {
-  const token = (process.env.TELEGRAM_BRIDGE_RESTART_TOKEN || "").trim()
-  if (token) {
-    const header = (req.headers.get("authorization") || "").trim()
-    return header === `Bearer ${token}`
-  }
-  const unsafe = (process.env.TELEGRAM_BRIDGE_ALLOW_UNAUTH_RESTART || "").trim().toLowerCase()
-  return unsafe === "1" || unsafe === "true" || unsafe === "yes" || unsafe === "on"
-}
-
-function isDebugRestartResponseEnabled() {
-  const value = (process.env.TELEGRAM_BRIDGE_RESTART_DEBUG || "").trim().toLowerCase()
-  return value === "1" || value === "true" || value === "yes" || value === "on"
-}
-
-function parseRestartArgv(value: string) {
-  try {
-    const parsed = JSON.parse(value)
-    if (!Array.isArray(parsed)) return []
-    return parsed
-      .filter((item): item is string => typeof item === "string")
-      .map((item) => item.trim())
-      .filter((item) => item.length > 0)
-  } catch {
-    return []
-  }
-}
-
-function restartCommand() {
-  const customArgvRaw = (process.env.TELEGRAM_BRIDGE_RESTART_COMMAND_ARGV || "").trim()
-  const customArgv = customArgvRaw ? parseRestartArgv(customArgvRaw) : []
-  if (customArgv.length > 0) {
-    return { cmd: customArgv, reason: "custom argv command" }
-  }
-  const custom = (process.env.TELEGRAM_BRIDGE_RESTART_COMMAND || "").trim()
-  if (custom) {
-    if (process.platform === "win32") {
-      return { cmd: ["cmd.exe", "/d", "/s", "/c", custom], reason: "custom shell command" }
-    }
-    return { cmd: ["sh", "-lc", custom], reason: "custom shell command" }
-  }
-  const servicePath = (process.env.TELEGRAM_BRIDGE_S6_SERVICE_PATH || "/run/service/telegram-bridge").trim() || "/run/service/telegram-bridge"
-  return { cmd: ["s6-svc", "-r", servicePath], reason: "s6 service restart" }
-}
-
-async function runRestartCommand(debug: boolean) {
-  const timeout = Number.parseInt(process.env.TELEGRAM_BRIDGE_RESTART_TIMEOUT_MS || "15000", 10)
-  const timeoutMs = Number.isFinite(timeout) && timeout > 0 ? timeout : 15_000
-  const info = restartCommand()
-  const p = await Promise.resolve()
-    .then(() =>
-      Bun.spawn({
-        cmd: info.cmd,
-        stdout: debug ? "pipe" : "inherit",
-        stderr: debug ? "pipe" : "inherit",
-      }),
-    )
-    .catch((error) => {
-      const message = error instanceof Error ? error.message : String(error)
-      return {
-        ...info,
-        timedOut: false,
-        code: null,
-        stdout: "",
-        stderr: message,
-        spawnFailed: true,
-        ok: false,
-      }
-    })
-  if (!("exited" in p)) {
-    return p
-  }
-  const done = await Promise.race([
-    p.exited.then((code) => ({ code, timedOut: false as const })),
-    wait(timeoutMs).then(() => ({ code: null, timedOut: true as const })),
-  ])
-  if (done.timedOut) {
-    p.kill()
-  }
-  const stdout = debug && p.stdout
-    ? await new Response(p.stdout).text().catch(() => "")
-    : ""
-  const stderr = debug && p.stderr
-    ? await new Response(p.stderr).text().catch(() => "")
-    : ""
-  return {
-    ...info,
-    timedOut: done.timedOut,
-    code: done.code,
-    stdout: stdout.trim(),
-    stderr: stderr.trim(),
-    spawnFailed: false,
-    ok: !done.timedOut && done.code === 0,
-  }
-}
-
-async function readTelegramRestartStatus(): Promise<TelegramRestartStatus> {
-  const desiredSettingsFingerprint = readDesiredTelegramSettingsFingerprint()
-  const runtime = await readTelegramRuntimeState()
-  const pendingRestart = runtime?.settingsFingerprint !== desiredSettingsFingerprint
-  return {
-    status: pendingRestart ? "pending_restart" : "applied",
-    pendingRestart,
-    desiredSettingsFingerprint,
-    appliedSettingsFingerprint: runtime?.settingsFingerprint || null,
-    appliedAt: runtime?.appliedAt || null,
-    pid: runtime?.pid || null,
-    mode: runtime?.mode || null,
-    port: runtime?.port || null,
-  }
-}
-
-async function waitForBridgeApply() {
-  const timeout = Number.parseInt(process.env.TELEGRAM_BRIDGE_APPLY_TIMEOUT_MS || "45000", 10)
-  const timeoutMs = Number.isFinite(timeout) && timeout > 0 ? timeout : 45_000
-  const pollMs = 1500
-  const started = Date.now()
-  const readStatus = () =>
-    readTelegramRestartStatus()
-      .then((status) => ({ status, error: null as string | null }))
-      .catch((error) => {
-        const message = error instanceof Error ? error.message : String(error)
-        console.error("[ExtAPI] telegram restart status poll error", error)
-        return { status: null, error: message }
-      })
-  while (Date.now() - started < timeoutMs) {
-    const read = await readStatus()
-    const status = read.status
-    const settings = await readTelegramSettings().catch(() => null)
-    const port = restartProbePort(status, settings)
-    const health = await queryTelegramBridgeHealth(port)
-    if (status && !status.pendingRestart && health?.process?.status === "up") {
-      return { ok: true as const, status, health }
-    }
-    await wait(pollMs)
-  }
-  const read = await readStatus()
-  const status = read.status
-  const settings = await readTelegramSettings().catch(() => null)
-  const port = restartProbePort(status, settings)
-  const health = await queryTelegramBridgeHealth(port)
-  return { ok: false as const, status, health, error: read.error }
-}
 
 /** Resolve the working directory from a query param, falling back to cwd */
 function resolveDir(url: URL): string {
@@ -511,140 +87,259 @@ function getConfigDir(): string {
   return process.env.OPENCODE_CONFIG_DIR || nodePath.join(homeDir, ".config", "opencode")
 }
 
-function internalError(message: string): Response {
-  return Response.json({ error: message }, { status: 500 })
-}
-
-async function queryTelegramBridgeHealth(port: number): Promise<TelegramBridgeHealthResponse | undefined> {
-  const timeoutMs = 7_000
-  const url = `http://127.0.0.1:${port}/health`
-  const res = await fetch(url, {
-    signal: AbortSignal.timeout(timeoutMs),
-  }).catch(() => undefined)
-  if (!res?.ok) return
-  return res.json().catch(() => undefined)
-}
-
-interface StoredPrompt {
+export interface StoredPrompt {
   id: string
   title: string
   text: string
   createdAt: number
-  scope?: "global" | "project"
+  scope: "global" | "project"
 }
+
+type PromptScope = StoredPrompt["scope"]
 
 function parseCreatedAt(value: unknown): number | null {
   if (typeof value === "number" && Number.isFinite(value)) return value
-  if (typeof value !== "string") return null
-  const trimmed = value.trim()
-  if (!trimmed) return null
-  const numeric = Number(trimmed)
+  if (typeof value !== "string" || !value.trim()) return null
+  const numeric = Number(value)
   if (Number.isFinite(numeric)) return numeric
-  const timestamp = Date.parse(trimmed)
-  if (!Number.isNaN(timestamp)) return timestamp
-  return null
+  const timestamp = Date.parse(value)
+  return Number.isNaN(timestamp) ? null : timestamp
 }
 
-function parsePromptValue(item: unknown, scope: "global" | "project"): StoredPrompt | null {
+function parsePrompt(item: unknown, scope: PromptScope): StoredPrompt | null {
   if (!item || typeof item !== "object") return null
   const row = item as Record<string, unknown>
-  const id = typeof row.id === "string" ? row.id : null
-  if (id === null) return null
+  if (typeof row.id !== "string" || !row.id) return null
   const title = typeof row.title === "string" ? row.title : typeof row.name === "string" ? row.name : null
-  if (title === null) return null
-  const text =
-    typeof row.text === "string"
-      ? row.text
-      : typeof row.prompt === "string"
-        ? row.prompt
-        : typeof row.content === "string"
-          ? row.content
-          : null
-  if (text === null) return null
+  const text = typeof row.text === "string" ? row.text : typeof row.prompt === "string" ? row.prompt : typeof row.content === "string" ? row.content : null
   const createdAt = parseCreatedAt(row.createdAt ?? row.created ?? row.timestamp)
-  if (createdAt === null) return null
-  const itemScope = row.scope === "global" || row.scope === "project" ? row.scope : scope
-  return { id, title, text, createdAt, scope: itemScope }
+  if (title === null || text === null || createdAt === null) return null
+  return { id: row.id, title, text, createdAt, scope }
 }
 
-function parsePromptList(raw: string, scope: "global" | "project"): StoredPrompt[] {
-  const parsed = JSON.parse(raw)
-  const nestedPrompts = parsed && typeof parsed === "object" ? (parsed as { prompts?: unknown }).prompts : undefined
+export function parsePromptList(raw: string, scope: PromptScope, strict = false): StoredPrompt[] {
+  const parsed = JSON.parse(raw) as unknown
+  const row = parsed && typeof parsed === "object" ? parsed as Record<string, unknown> : undefined
+  const prompts = row?.prompts
   const list = Array.isArray(parsed)
     ? parsed
-    : parsed && typeof parsed === "object"
-      ? Array.isArray(nestedPrompts)
-        ? nestedPrompts
-        : nestedPrompts && typeof nestedPrompts === "object" && Array.isArray((nestedPrompts as Record<string, unknown>)[scope])
-          ? ((nestedPrompts as Record<string, unknown>)[scope] as unknown[])
-          : Array.isArray((parsed as Record<string, unknown>)[scope])
-            ? ((parsed as Record<string, unknown>)[scope] as unknown[])
-            : null
-      : []
-  if (list === null) {
-    throw new Error(`invalid saved prompts format for ${scope}: expected array, prompts array, prompts.${scope}, or ${scope} array`)
+    : Array.isArray(prompts)
+      ? prompts
+      : prompts && typeof prompts === "object" && Array.isArray((prompts as Record<string, unknown>)[scope])
+        ? (prompts as Record<string, unknown>)[scope] as unknown[]
+        : Array.isArray(row?.[scope])
+          ? row[scope] as unknown[]
+          : null
+  if (!list) throw new Error(`invalid saved prompts format for ${scope}`)
+  const parsedItems = list.map((item) => parsePrompt(item, scope))
+  if (strict && parsedItems.some((item) => !item)) {
+    throw new PromptMutationError(`invalid ${scope} saved prompt entry`, 409)
   }
-  const prompts: StoredPrompt[] = []
-  for (let i = 0; i < list.length; i++) {
-    const prompt = parsePromptValue(list[i], scope)
-    if (!prompt) {
-      console.warn(`[ExtAPI] skipped invalid saved prompt at ${scope}[${i}]`)
-      continue
-    }
-    prompts.push(prompt)
-  }
-  return prompts
+  return parsedItems.filter((item): item is StoredPrompt => !!item)
 }
 
-async function readPromptFile(path: string, scope: "global" | "project"): Promise<StoredPrompt[]> {
+async function readPromptFile(path: string, scope: PromptScope, strict = false) {
   try {
-    const content = await fs.promises.readFile(path, "utf-8")
-    return parsePromptList(content, scope)
+    return parsePromptList(await fs.promises.readFile(path, "utf-8"), scope, strict)
   } catch (e) {
     const code = typeof e === "object" && e && "code" in e ? (e as { code?: string }).code : undefined
-    if (code !== "ENOENT") throw e
-    return []
-  }
-}
-
-function sanitizePrompt(p: StoredPrompt, scope: "global" | "project"): StoredPrompt {
-  return {
-    id: p.id,
-    title: p.title,
-    text: p.text,
-    createdAt: p.createdAt,
-    scope,
-  }
-}
-
-async function readPromptScope(path: string, scope: "global" | "project") {
-  try {
-    const prompts = await readPromptFile(path, scope)
-    return { prompts: prompts.map((p) => sanitizePrompt(p, scope)) }
-  } catch (e) {
-    console.error(`[ExtAPI] saved-prompts ${scope} read error:`, e)
-    return { prompts: [] as StoredPrompt[], error: `failed to read ${scope} saved prompts` }
+    if (code === "ENOENT") return []
+    throw e
   }
 }
 
 async function writePromptFile(path: string, prompts: StoredPrompt[]) {
-  const parentDir = nodePath.dirname(path)
-  await fs.promises.mkdir(parentDir, { recursive: true })
-  const tmp = `${path}.tmp-${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}`
-  const content = JSON.stringify(prompts, null, 2)
+  await fs.promises.mkdir(nodePath.dirname(path), { recursive: true })
+  const tmp = `${path}.tmp-${process.pid}-${crypto.randomUUID()}`
   try {
-    await fs.promises.writeFile(tmp, content, "utf-8")
-    if (process.platform === "win32") {
-      await fs.promises.rm(path, { force: true }).catch((e) => {
-        const code = typeof e === "object" && e && "code" in e ? (e as { code?: string }).code : undefined
-        if (code !== "ENOENT") throw e
-      })
-    }
+    await fs.promises.writeFile(tmp, JSON.stringify(prompts, null, 2), "utf-8")
     await fs.promises.rename(tmp, path)
   } catch (e) {
-    await fs.promises.unlink(tmp).catch(() => undefined)
+    await fs.promises.rm(tmp, { force: true }).catch(() => undefined)
     throw e
   }
+}
+
+async function projectPromptFile(directory: string, create: boolean) {
+  const parent = nodePath.join(directory, ".opencode")
+  const directoryReal = await fs.promises.realpath(directory)
+  if (create) await fs.promises.mkdir(parent, { recursive: true })
+  const stat = await fs.promises.lstat(parent).catch((e) => {
+    const code = typeof e === "object" && e && "code" in e ? (e as { code?: string }).code : undefined
+    if (code === "ENOENT" && !create) return null
+    throw e
+  })
+  if (!stat) return nodePath.join(directoryReal, ".opencode", "saved-prompts.json")
+  const parentReal = await fs.promises.realpath(parent)
+  if (!stat.isDirectory() || stat.isSymbolicLink() || !isPathWithinRoot(parentReal, directoryReal)) {
+    throw new PromptMutationError("project prompt directory is not safe", 403)
+  }
+  const file = nodePath.join(parentReal, "saved-prompts.json")
+  const fileStat = await fs.promises.lstat(file).catch((e) => {
+    const code = typeof e === "object" && e && "code" in e ? (e as { code?: string }).code : undefined
+    if (code === "ENOENT") return null
+    throw e
+  })
+  if (fileStat?.isSymbolicLink()) throw new PromptMutationError("project prompt file is not safe", 403)
+  return file
+}
+
+let promptMutationQueue = Promise.resolve()
+
+function queuePromptMutation<T>(run: () => Promise<T>) {
+  const result = promptMutationQueue.catch(() => undefined).then(run)
+  promptMutationQueue = result.then(() => undefined, () => undefined)
+  return result
+}
+
+function validPromptId(id: string) {
+  return id.length > 0 && id.length <= 200 && !id.includes("/") && !id.includes("\\")
+}
+
+class PromptMutationError extends Error {
+  constructor(message: string, readonly status: number) {
+    super(message)
+  }
+}
+
+type PromptFiles = { global: string; project: string | null; directory: string | null }
+
+async function promptFiles(url: URL): Promise<PromptFiles | Response> {
+  const directory = url.searchParams.get("directory")
+  const validated = directory ? await validatePath(directory, getAllowedRoot()) : null
+  if (directory && !validated) return Response.json({ error: "directory must be within allowed directory" }, { status: 403 })
+  try {
+    return {
+      global: nodePath.join(getConfigDir(), "saved-prompts.json"),
+      project: validated ? await projectPromptFile(validated, false) : null,
+      directory: validated,
+    }
+  } catch (e) {
+    if (e instanceof PromptMutationError) return Response.json({ error: e.message }, { status: e.status })
+    console.error("[ExtAPI] saved prompts path error:", e)
+    return internalError("failed to resolve saved prompts path")
+  }
+}
+
+type PromptState = { global: StoredPrompt[]; project: StoredPrompt[] }
+
+async function readPrompts(files: PromptFiles, strict = false): Promise<PromptState> {
+  const [global, project] = await Promise.all([
+    readPromptFile(files.global, "global", strict),
+    files.project ? readPromptFile(files.project, "project", strict) : Promise.resolve([]),
+  ])
+  if (strict) {
+    const ids = [...global, ...project].map((prompt) => prompt.id)
+    if (new Set(ids).size !== ids.length) throw new PromptMutationError("saved prompt IDs must be unique", 409)
+  }
+  return { global, project }
+}
+
+async function writePromptScope(files: PromptFiles, scope: PromptScope, prompts: StoredPrompt[]) {
+  if (scope === "global") return writePromptFile(files.global, prompts)
+  if (!files.directory) throw new PromptMutationError("project directory is required", 400)
+  return writePromptFile(await projectPromptFile(files.directory, true), prompts)
+}
+
+async function mutatePrompts(
+  files: PromptFiles,
+  update: (state: PromptState) => PromptScope[],
+) {
+  try {
+    return await queuePromptMutation(async () => {
+      const state = await readPrompts(files, true)
+      const previous = { global: [...state.global], project: [...state.project] }
+      const changed = update(state)
+      if (changed.length === 2) {
+        const destination = changed[1]
+        const source = changed[0]
+        await writePromptScope(files, destination, state[destination])
+        try {
+          await writePromptScope(files, source, state[source])
+        } catch (e) {
+          await writePromptScope(files, destination, previous[destination]).catch(() => undefined)
+          throw e
+        }
+        return Response.json(state)
+      }
+      if (changed.includes("global")) await writePromptScope(files, "global", state.global)
+      if (changed.includes("project")) await writePromptScope(files, "project", state.project)
+      return Response.json(state)
+    })
+  } catch (e) {
+    if (e instanceof PromptMutationError) return Response.json({ error: e.message }, { status: e.status })
+    console.error("[ExtAPI] saved prompts mutation error:", e)
+    return internalError("failed to save prompts")
+  }
+}
+
+function promptBodyError(body: unknown, partial = false) {
+  if (!body || typeof body !== "object" || Array.isArray(body)) return "request body must be an object"
+  const row = body as Record<string, unknown>
+  if (!partial || "title" in row) {
+    if (typeof row.title !== "string" || !row.title.trim() || row.title.length > 200) return "title must be between 1 and 200 characters"
+  }
+  if (!partial || "text" in row) {
+    if (typeof row.text !== "string" || !row.text.trim() || row.text.length > 100_000) return "text must be between 1 and 100000 characters"
+  }
+  if (!partial || "scope" in row) {
+    if (row.scope !== "global" && row.scope !== "project") return "scope must be global or project"
+  }
+  if ("id" in row && (typeof row.id !== "string" || !validPromptId(row.id))) return "id is invalid"
+  if ("createdAt" in row && (typeof row.createdAt !== "number" || !Number.isFinite(row.createdAt))) return "createdAt is invalid"
+  if (partial && !("title" in row) && !("text" in row) && !("scope" in row)) return "title, text, or scope is required"
+}
+
+function promptId(path: string) {
+  const raw = path.slice("/api/ext/saved-prompts/".length)
+  if (!raw || raw.includes("/")) return null
+  try {
+    const id = decodeURIComponent(raw)
+    return validPromptId(id) ? id : null
+  } catch {
+    return null
+  }
+}
+
+function internalError(message: string): Response {
+  return Response.json({ error: message }, { status: 500 })
+}
+
+const MUTATING_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"])
+
+function firstForwarded(value: string | null) {
+  return value?.split(",", 1)[0]?.trim()
+}
+
+export function isSameOriginRequest(req: Request, url = new URL(req.url)) {
+  if (req.headers.get("Sec-Fetch-Site") === "cross-site") return false
+  const origin = req.headers.get("Origin")
+  if (!origin) return true
+  try {
+    const source = new URL(origin)
+    const host = firstForwarded(req.headers.get("X-Forwarded-Host")) ?? url.host
+    const protocol = firstForwarded(req.headers.get("X-Forwarded-Proto")) ?? url.protocol.slice(0, -1)
+    return source.host === host && source.protocol === `${protocol}:`
+  } catch {
+    return false
+  }
+}
+
+export function isMutation(method: string) {
+  return MUTATING_METHODS.has(method.toUpperCase())
+}
+
+function withSecurityHeaders(response: Response) {
+  const headers = new Headers(response.headers)
+  headers.set("Cross-Origin-Resource-Policy", "same-origin")
+  headers.set("Referrer-Policy", "no-referrer")
+  headers.set("X-Content-Type-Options", "nosniff")
+  headers.append("Vary", "Origin")
+  return new Response(response.body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers,
+  })
 }
 
 /**
@@ -697,371 +392,104 @@ export async function handleExtendedEndpoint(
   url: URL,
   req: Request,
 ): Promise<Response | undefined> {
-  if (path === "/api/ext/telegram/settings" && method === "GET") {
-    const data = await readTelegramSettings().catch((error) => {
-      console.error("[ExtAPI] telegram settings read error", error)
-      return null
-    })
-    if (!data) {
-      return Response.json({ error: "failed to read telegram settings" }, { status: 500 })
-    }
-    return Response.json(data)
+  if (!path.startsWith("/api/ext/")) return undefined
+
+  if (isMutation(method) && !isSameOriginRequest(req, url)) {
+    return withSecurityHeaders(Response.json({ error: "cross-origin request denied" }, { status: 403 }))
   }
 
-  if (path === "/api/ext/telegram/settings" && method === "PUT") {
-    const body = await req.json().catch(() => null)
-    const rawSettings = body && typeof body === "object" && !Array.isArray(body) ? (body as Record<string, unknown>).settings : null
-    const result = await updateTelegramSettings(rawSettings).catch((error) => {
-      console.error("[ExtAPI] telegram settings update error", error)
-      return null
-    })
-    if (!result) {
-      return Response.json({ error: "failed to update telegram settings" }, { status: 500 })
-    }
-    if (!result.ok) {
-      return Response.json({ error: "validation_failed", errors: result.errors }, { status: 400 })
-    }
-    return Response.json(result)
-  }
+  const response = await handleExtendedRoute(path, method, url, req)
+  if (!response) return undefined
+  return withSecurityHeaders(response)
+}
 
-  if (path === "/api/ext/telegram/session-alarm" && method === "GET") {
-    const parsed = sessionAlarmRefFromInput({
-      sessionId: url.searchParams.get("sessionId") || "",
-      sourceId: url.searchParams.get("sourceId") || "",
-      scopedSessionId: url.searchParams.get("scopedSessionId") || "",
-    })
-    if (!parsed.ref) {
-      return Response.json({ error: parsed.error || "invalid request" }, { status: 400 })
-    }
-    const ref = parsed.ref
-    const settings = await readTelegramSettings().catch((error) => {
-      console.error("[ExtAPI] telegram settings read error", error)
-      return null
-    })
-    if (!settings) {
-      return Response.json({ error: "failed to read telegram settings" }, { status: 500 })
-    }
-    const store = telegramSessionStore(settings.settings.sessionStorePath)
-    if (!store.sessionAlarmGet) {
-      return Response.json(
-        {
-          error: "not_implemented",
-          message: "telegram session alarm read is not supported by the configured session store",
-        },
-        { status: 501 },
-      )
-    }
-    const enabled = await store.sessionAlarmGet(ref.scopedSessionId).catch((error) => {
-      console.error("[ExtAPI] telegram session alarm read error", error)
-      return undefined
-    })
-    if (enabled === undefined) {
-      return Response.json({ error: "failed to read telegram session alarm" }, { status: 500 })
-    }
-    return Response.json({ sessionId: ref.sessionId, sourceId: ref.sourceId, enabled: enabled === true })
-  }
-
-  if (path === "/api/ext/telegram/session-alarm" && method === "PUT") {
-    const body = await req.json().catch(() => null)
-    const payload = body && typeof body === "object" && !Array.isArray(body) ? (body as Record<string, unknown>) : null
-    const sessionId = typeof payload?.sessionId === "string" ? payload.sessionId : ""
-    const sourceId = typeof payload?.sourceId === "string" ? payload.sourceId : ""
-    const scopedSessionId = typeof payload?.scopedSessionId === "string" ? payload.scopedSessionId : ""
-    const enabled = payload?.enabled
-    const parsed = sessionAlarmRefFromInput({ sessionId, sourceId, scopedSessionId })
-    if (!parsed.ref) {
-      return Response.json({ error: parsed.error || "invalid request" }, { status: 400 })
-    }
-    const ref = parsed.ref
-    if (typeof enabled !== "boolean") {
-      return Response.json({ error: "enabled must be a boolean" }, { status: 400 })
-    }
-    const settings = await readTelegramSettings().catch((error) => {
-      console.error("[ExtAPI] telegram settings read error", error)
-      return null
-    })
-    if (!settings) {
-      return Response.json({ error: "failed to read telegram settings" }, { status: 500 })
-    }
-    const store = telegramSessionStore(settings.settings.sessionStorePath)
-    if (!store.sessionAlarmSet) {
-      return Response.json(
-        {
-          error: "not_implemented",
-          message: "telegram session alarm update is not supported by the configured session store",
-        },
-        { status: 501 },
-      )
-    }
-    const ok = await store.sessionAlarmSet(ref.scopedSessionId, enabled).then(
-      () => true,
-      (error) => {
-        console.error("[ExtAPI] telegram session alarm write error", error)
-        return false
-      },
-    )
-    if (ok === false) {
-      return Response.json({ error: "failed to update telegram session alarm" }, { status: 500 })
-    }
-    if (enabled) {
-      await enableTelegramNotifyForSession(store, ref.scopedSessionId).catch((error) => {
-        console.error("[ExtAPI] telegram notify sync on session alarm enable failed", {
-          sessionId: ref.sessionId,
-          sourceId: ref.sourceId,
-          error,
-        })
-      })
-    }
-    return Response.json({ sessionId: ref.sessionId, sourceId: ref.sourceId, enabled })
-  }
-
-  if (path === "/api/ext/telegram/restart" && method === "GET") {
-    const status = await readTelegramRestartStatus().catch((error) => {
-      console.error("[ExtAPI] telegram restart status read error", error)
-      return null
-    })
-    if (!status) {
-      return Response.json({ error: "failed to read telegram restart status" }, { status: 500 })
-    }
-
-    const settings = await readTelegramSettings().catch(() => null)
-    const port = restartProbePort(status, settings)
-    const health = await queryTelegramBridgeHealth(port)
-    const bridgeReachable = Boolean(health)
-    const bridgeHealthy = health?.status === "healthy"
-    return Response.json({
-      ...status,
-      bridgeReachable,
-      bridgeHealthy,
-      checkedAt: new Date().toISOString(),
-    })
-  }
-
-  if (path === "/api/ext/telegram/restart" && method === "POST") {
-    if (!restartAuthorized(req)) {
-      return Response.json(
-        {
-          error: "forbidden",
-          message: "telegram restart is not authorized",
-          hint: "Set TELEGRAM_BRIDGE_RESTART_TOKEN and use Authorization: Bearer <token>",
-        },
-        { status: 403 },
-      )
-    }
-    const before = await readTelegramRestartStatus().catch((error) => {
-      console.error("[ExtAPI] telegram restart status read error", error)
-      return null
-    })
-    if (!before) {
-      return Response.json({ error: "failed to read telegram restart status" }, { status: 500 })
-    }
-    if (!before.pendingRestart) {
-      return Response.json({
-        ok: true,
-        restarted: false,
-        status: before,
-        message: "Telegram bridge is already using applied settings",
-      })
-    }
-
-    const debug = isDebugRestartResponseEnabled()
-    const run = await runRestartCommand(debug)
-    if (!run.ok) {
-      const reason = run.spawnFailed
-        ? "restart command failed to start"
-        : run.timedOut
-          ? `restart command timed out after ${process.env.TELEGRAM_BRIDGE_RESTART_TIMEOUT_MS || "15000"}ms`
-          : `restart command failed with exit code ${run.code ?? "unknown"}`
-      return Response.json(
-        {
-          error: "restart_failed",
-          message: reason,
-          hint: "Verify telegram-bridge service supervision and restart command configuration",
-          commandReason: run.reason,
-          ...(debug
-            ? {
-                debug: {
-                  code: run.code,
-                  timedOut: run.timedOut,
-                  spawnFailed: run.spawnFailed,
-                },
-              }
-            : {}),
-        },
-        { status: 500 },
-      )
-    }
-
-    const applied = await waitForBridgeApply()
-    if (!applied.ok) {
-      return Response.json(
-        {
-          error: "restart_unhealthy",
-          message: "Telegram bridge restart triggered but service did not become healthy in time",
-          hint: "Check telegram-bridge logs and /api/ext/telegram/health for runtime failures",
-          commandReason: run.reason,
-          status: applied.status,
-          health: applied.health || null,
-          ...(debug
-            ? {
-                debug: {
-                  code: run.code,
-                  timedOut: run.timedOut,
-                },
-              }
-            : {}),
-        },
-        { status: 502 },
-      )
-    }
-
-    return Response.json({
-      ok: true,
-      restarted: true,
-      status: applied.status,
-      health: applied.health,
-      checkedAt: new Date().toISOString(),
-    })
-  }
-
-  if (path === "/api/ext/telegram/health" && method === "GET") {
-    const settings = await readTelegramSettings().catch((error) => {
-      console.error("[ExtAPI] telegram health settings read error", error)
-      return null
-    })
-    if (!settings) {
-      return Response.json({ error: "failed to read telegram settings" }, { status: 500 })
-    }
-
-    const port = typeof settings.settings.port === "number" ? settings.settings.port : 4097
-    const bridge = await queryTelegramBridgeHealth(port)
-
-    if (bridge) {
-      const dependencies = {
-        telegramApi: bridgeDependency(bridge.dependencies?.telegramApi, "Telegram API check unavailable"),
-        openCodeApi: bridgeDependency(bridge.dependencies?.openCodeApi, "OpenCode API check unavailable"),
-        openCodeSources: (bridge.dependencies?.openCodeSources || []).map((source) => ({
-          sourceId: typeof source?.sourceId === "string" && source.sourceId.trim() ? source.sourceId : "default",
-          ...bridgeDependency(source, "OpenCode API check unavailable"),
-        })),
-      }
-      return Response.json({
-        status: bridgeHealthStatus(bridge.status),
-        checkedAt: typeof bridge.checkedAt === "string" ? bridge.checkedAt : new Date().toISOString(),
-        bridgeReachable: true,
-        process: bridgeProcess(bridge.process),
-        config: bridgeConfig(bridge.config, settings.settings),
-        dependencies,
-        messages: bridgeMessages(dependencies),
-      })
-    }
-
-    const configError = !settings.settings.tokenConfigured
-      ? "Telegram bot token is not configured"
-      : "Telegram bridge process is not reachable"
-    const messageType = !settings.settings.tokenConfigured ? "config" : "runtime"
-    return Response.json({
-      status: "down",
-      checkedAt: new Date().toISOString(),
-      bridgeReachable: false,
-      process: { status: "down" },
-      config: {
-        status: !settings.settings.tokenConfigured ? "error" : "ok",
-        mode: settings.settings.mode,
-        tokenConfigured: settings.settings.tokenConfigured,
-        webhookSecretConfigured: settings.settings.webhookSecretConfigured,
-        openCodeUrlConfigured: Boolean(settings.settings.openCodeUrl),
-        sessionStorePathConfigured: Boolean(settings.settings.sessionStorePath),
-        directoryConfigured: Boolean(settings.settings.directory),
-      },
-      dependencies: {
-        telegramApi: { status: "unknown", message: "Bridge is down" },
-        openCodeApi: { status: "unknown", message: "Bridge is down" },
-      },
-      messages: [{ type: messageType, text: configError }],
-    })
-  }
-
-  // GET /api/ext/saved-prompts - Read global + project prompts
+async function handleExtendedRoute(
+  path: string,
+  method: string,
+  url: URL,
+  req: Request,
+): Promise<Response | undefined> {
   if (path === "/api/ext/saved-prompts" && method === "GET") {
-    const directory = url.searchParams.get("directory")
-    const allowedRoot = getAllowedRoot()
-    const validatedDir = directory ? await validatePath(directory, allowedRoot) : null
-    if (directory && !validatedDir) {
-      console.warn("[ExtAPI] saved-prompts read: path outside allowed root:", directory)
-      return Response.json({ error: "directory must be within allowed directory" }, { status: 403 })
+    const files = await promptFiles(url)
+    if (files instanceof Response) return files
+    try {
+      return Response.json(await readPrompts(files))
+    } catch (e) {
+      console.error("[ExtAPI] saved prompts read error:", e)
+      return internalError("failed to read saved prompts")
     }
-
-    const configDir = getConfigDir()
-    const globalPath = nodePath.join(configDir, "saved-prompts.json")
-    const projectPath = validatedDir ? nodePath.join(validatedDir, ".opencode", "saved-prompts.json") : null
-
-    const globalResult = await readPromptScope(globalPath, "global")
-    const projectResult = projectPath ? await readPromptScope(projectPath, "project") : { prompts: [] as StoredPrompt[] }
-
-    if (!globalResult.error && !projectResult.error) {
-      return Response.json({ global: globalResult.prompts, project: projectResult.prompts })
-    }
-
-    return Response.json(
-      {
-        error: "failed to read saved prompts",
-        errors: {
-          ...(globalResult.error ? { global: globalResult.error } : {}),
-          ...(projectResult.error ? { project: projectResult.error } : {}),
-        },
-      },
-      { status: 500 },
-    )
   }
 
-  // PUT /api/ext/saved-prompts - Write global + project prompts
-  if (path === "/api/ext/saved-prompts" && method === "PUT") {
-    const directory = url.searchParams.get("directory")
-    const allowedRoot = getAllowedRoot()
-    const validatedDir = directory ? await validatePath(directory, allowedRoot) : null
-    if (directory && !validatedDir) {
-      console.warn("[ExtAPI] saved-prompts write: path outside allowed root:", directory)
-      return Response.json({ error: "directory must be within allowed directory" }, { status: 403 })
-    }
-
-    const body = (await req.json().catch(() => null)) as unknown
-    const payload = body && typeof body === "object" ? (body as Record<string, unknown>) : null
-    const global = payload && Array.isArray(payload.global) ? payload.global : null
-    const project = payload && Array.isArray(payload.project) ? payload.project : null
-    if (!global || !project) {
-      return Response.json({ error: "global and project arrays are required" }, { status: 400 })
-    }
-
-    const configDir = getConfigDir()
-    const globalPath = nodePath.join(configDir, "saved-prompts.json")
-    const projectPath = validatedDir ? nodePath.join(validatedDir, ".opencode", "saved-prompts.json") : null
-    const parsedGlobal = global.map((item) => parsePromptValue(item, "global"))
-    const badGlobal = parsedGlobal.findIndex((item) => item === null)
-    if (badGlobal !== -1) {
-      return Response.json({ error: `global[${badGlobal}] is invalid` }, { status: 400 })
-    }
-    const parsedProject = project.map((item) => parsePromptValue(item, "project"))
-    const badProject = parsedProject.findIndex((item) => item === null)
-    if (badProject !== -1) {
-      return Response.json({ error: `project[${badProject}] is invalid` }, { status: 400 })
-    }
-    const nextGlobal = parsedGlobal as StoredPrompt[]
-    const nextProject = parsedProject as StoredPrompt[]
-    if (project.length > 0 && !validatedDir) {
+  if (path === "/api/ext/saved-prompts" && method === "POST") {
+    const files = await promptFiles(url)
+    if (files instanceof Response) return files
+    const body = await req.json().catch(() => null)
+    const error = promptBodyError(body)
+    if (error) return Response.json({ error }, { status: 400 })
+    const row = body as { title: string; text: string; scope: PromptScope; id?: string; createdAt?: number }
+    if (row.scope === "project" && !files.project) {
       return Response.json({ error: "directory is required for project prompts" }, { status: 400 })
     }
-
-    try {
-      await writePromptFile(globalPath, nextGlobal.map((p) => sanitizePrompt(p, "global")))
-      if (projectPath) {
-        await writePromptFile(projectPath, nextProject.map((p) => sanitizePrompt(p, "project")))
-      }
-      return Response.json({ success: true })
-    } catch (e) {
-      console.error("[ExtAPI] saved-prompts write error:", e)
-      return internalError("failed to write saved prompts")
+    const prompt: StoredPrompt = {
+      id: row.id ?? crypto.randomUUID(),
+      title: row.title.trim(),
+      text: row.text,
+      createdAt: row.createdAt ?? Date.now(),
+      scope: row.scope,
     }
+    return mutatePrompts(files, (state) => {
+      const existing = [...state.global, ...state.project].find((item) => item.id === prompt.id)
+      if (existing) {
+        if (existing.title === prompt.title && existing.text === prompt.text && existing.createdAt === prompt.createdAt && existing.scope === prompt.scope) return []
+        throw new PromptMutationError("prompt id already exists", 409)
+      }
+      state[row.scope].unshift(prompt)
+      return [row.scope]
+    })
+  }
+
+  if (path.startsWith("/api/ext/saved-prompts/") && (method === "PATCH" || method === "DELETE")) {
+    const id = promptId(path)
+    if (!id) return Response.json({ error: "invalid prompt id" }, { status: 400 })
+    const files = await promptFiles(url)
+    if (files instanceof Response) return files
+
+    if (method === "DELETE") {
+      return mutatePrompts(files, (state) => {
+        const scope = (["project", "global"] as const).find((key) => state[key].some((item) => item.id === id))
+        if (!scope) throw new PromptMutationError("prompt not found", 404)
+        state[scope] = state[scope].filter((item) => item.id !== id)
+        return [scope]
+      })
+    }
+
+    const body = await req.json().catch(() => null)
+    const error = promptBodyError(body, true)
+    if (error) return Response.json({ error }, { status: 400 })
+    const row = body as { title?: string; text?: string; scope?: PromptScope }
+    if (row.scope === "project" && !files.project) {
+      return Response.json({ error: "directory is required for project prompts" }, { status: 400 })
+    }
+    return mutatePrompts(files, (state) => {
+      const source = (["project", "global"] as const).find((key) => state[key].some((item) => item.id === id))
+      if (!source) throw new PromptMutationError("prompt not found", 404)
+      const index = state[source].findIndex((item) => item.id === id)
+      const current = state[source][index]
+      const scope = row.scope ?? source
+      const prompt = {
+        ...current,
+        ...(row.title === undefined ? {} : { title: row.title.trim() }),
+        ...(row.text === undefined ? {} : { text: row.text }),
+        scope,
+      }
+      if (scope === source) {
+        state[source][index] = prompt
+        return [source]
+      }
+      state[source].splice(index, 1)
+      state[scope].unshift(prompt)
+      return [source, scope]
+    })
   }
 
   // POST /api/ext/mkdir - Create directory recursively
@@ -1223,7 +651,7 @@ export async function handleExtendedEndpoint(
         console.log("[ExtAPI] Removed MCP server from config:", serverName)
       } else {
         console.log("[ExtAPI] MCP server not found in config:", serverName)
-        return Response.json({ error: "Server not found in config" }, { status: 404 })
+        return Response.json({ success: true, removed: false })
       }
 
       // Write back (as plain JSON since we stripped comments).
@@ -1235,7 +663,7 @@ export async function handleExtendedEndpoint(
       await fs.promises.writeFile(configPath, output)
       console.log("[ExtAPI] Config saved")
 
-      return Response.json({ success: true })
+      return Response.json({ success: true, removed: true })
     } catch (e) {
       console.error("[ExtAPI] mcp delete error:", e)
       return internalError("failed to update MCP config")

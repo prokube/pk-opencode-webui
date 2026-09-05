@@ -13,7 +13,7 @@ export interface Command {
   global?: boolean
   /** When true, preventDefault is NOT called automatically — the handler receives the event */
   passive?: boolean
-  /** When true, the command is hidden from the shortcut reference and command palette */
+  /** When true, the command is hidden from command discovery surfaces */
   hidden?: boolean
   onSelect: (e?: KeyboardEvent) => void
 }
@@ -29,10 +29,9 @@ interface CommandContextValue {
   shortcutRefOpen: () => boolean
   setShortcutRefOpen: (open: boolean) => void
   paletteOpen: () => boolean
-  setPaletteOpen: (open: boolean) => void
-  /** Initial filter to apply when the palette opens (e.g. "#" for projects) */
-  paletteFilter: () => string
-  setPaletteFilter: (filter: string) => void
+  openPalette: (query?: string) => void
+  closePalette: () => void
+  paletteQuery: () => string
 }
 
 const CommandContext = createContext<CommandContextValue>()
@@ -99,7 +98,17 @@ export function CommandProvider(props: ParentProps) {
   const [commands, setCommands] = createSignal<Command[]>([])
   const [shortcutRefOpen, setShortcutRefOpen] = createSignal(false)
   const [paletteOpen, setPaletteOpen] = createSignal(false)
-  const [paletteFilter, setPaletteFilter] = createSignal("")
+  const [paletteQuery, setPaletteQuery] = createSignal("")
+
+  function openPalette(query = "") {
+    setPaletteQuery(query)
+    setPaletteOpen(true)
+  }
+
+  function closePalette() {
+    setPaletteOpen(false)
+    setPaletteQuery("")
+  }
 
   function register(newCommands: Command[]) {
     setCommands((prev) => {
@@ -173,9 +182,21 @@ export function CommandProvider(props: ParentProps) {
     }
     window.addEventListener("keydown", onQuestionMark)
 
+    function onPalette(e: KeyboardEvent) {
+      if (!(e.metaKey || e.ctrlKey) || e.key.toLowerCase() !== "k") return
+      if (e.shiftKey || e.altKey) return
+      if ((e.target as HTMLElement | null)?.closest(".xterm")) return
+      if (isDialogOpen() && !paletteOpen()) return
+      e.preventDefault()
+      if (paletteOpen()) closePalette()
+      else openPalette()
+    }
+    window.addEventListener("keydown", onPalette)
+
     onCleanup(() => {
       unsub()
       window.removeEventListener("keydown", onQuestionMark)
+      window.removeEventListener("keydown", onPalette)
     })
   })
 
@@ -192,9 +213,9 @@ export function CommandProvider(props: ParentProps) {
     shortcutRefOpen,
     setShortcutRefOpen,
     paletteOpen,
-    setPaletteOpen,
-    paletteFilter,
-    setPaletteFilter,
+    openPalette,
+    closePalette,
+    paletteQuery,
   }
 
   return <CommandContext.Provider value={value}>{props.children}</CommandContext.Provider>
