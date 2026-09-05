@@ -11,9 +11,8 @@ import type {
   PermissionRequest,
 } from "../sdk/client"
 import { useSDK } from "./sdk"
-import { useServer } from "./server"
-import { createSSEParser, nextSSEReconnectDelay } from "../utils/sse"
 import { createEventBuffer } from "../utils/event-buffer"
+import { useServerEvents } from "./server-events"
 
 type LegacySyncEvent =
   | { type: "message.created"; properties: MessageWithParts }
@@ -665,8 +664,8 @@ export function removeSyncSessionData(state: SyncSessionData, sessionID: string)
 }
 
 export function SyncProvider(props: ParentProps) {
-  const { client, directory, url: sdkUrl } = useSDK()
-  const { authHeaders } = useServer()
+  const { client, directory } = useSDK()
+  const serverEvents = useServerEvents()
 
   const [store, setStore] = createStore<SyncStore>({
     ready: false,
@@ -687,7 +686,6 @@ export function SyncProvider(props: ParentProps) {
   const retainedSessions = new Map<string, number>()
   const sessionRequests = createSessionRequestTracker()
   const handlers = new Set<SyncEventHandler>()
-  const [sseUnhealthy, setSseUnhealthy] = createSignal(false)
   const [providerLoading, setProviderLoading] = createSignal(false)
   const overflowSessions = new Set<string>()
   const overflowDeleted = new Set<string>()
@@ -741,12 +739,9 @@ export function SyncProvider(props: ParentProps) {
   let bootstrapRetryDelay = 1000
   let disposed = false
   let providerRequests = 0
+  let recoveryPending = false
+  let recovery: Promise<void> | undefined
   const providerRefresh = createLatestSuccessfulRequest()
-
-  // Connect to SSE endpoint using fetch (supports custom headers unlike EventSource)
-  let abortController: AbortController | null = null
-  let reconnectTimer: ReturnType<typeof setTimeout> | null = null
-  let reconnectDelay = 3000
 
   function applySessions(next: SyncSessionState) {
     batch(() => {
@@ -810,73 +805,6 @@ export function SyncProvider(props: ParentProps) {
 
   function resyncSession(sessionID: string) {
     return syncSession(sessionID, true)
-  }
-
-  async function connect() {
-    if (abortController) return
-
-    const dirParam = directory ? `?directory=${encodeURIComponent(directory)}` : ""
-    const eventUrl = `${sdkUrl}/event${dirParam}`
-    console.log("[Sync] Connecting to SSE:", eventUrl)
-
-    abortController = new AbortController()
-    const signal = abortController.signal
-
-    let connectedAt = 0
-
-    try {
-      const response = await fetch(eventUrl, {
-        headers: { ...authHeaders(), Accept: "text/event-stream" },
-        signal,
-      })
-
-      if (!response.ok || !response.body) {
-        throw new Error(`SSE connection failed: ${response.status}`)
-      }
-
-      console.log("[Sync] Connected")
-      connectedAt = Date.now()
-      setSseUnhealthy(false)
-
-      const reader = response.body.getReader()
-      const decoder = new TextDecoder()
-      const parser = createSSEParser((rawData) => {
-        try {
-          const data = JSON.parse(rawData)
-          const event = (data?.payload ?? data) as SyncEvent
-          if (event?.type) {
-            if (event.type === "server.connected" && bootstrapPromise) reconnectBootstrapPending = true
-            events.push(event)
-          }
-        } catch (err) {
-          console.error("[Sync] Parse error:", err)
-        }
-      })
-
-      while (true) {
-        const { done, value } = await reader.read()
-        if (done) break
-        parser.push(decoder.decode(value, { stream: true }))
-      }
-
-      parser.push(decoder.decode())
-      parser.push("")
-
-      throw new Error("SSE stream ended")
-    } catch (err) {
-      if (signal.aborted) return
-      console.error("[Sync] Connection error, reconnecting...", err)
-      setSseUnhealthy(true)
-      abortController = null
-      reconnectDelay = nextSSEReconnectDelay(connectedAt, Date.now(), reconnectDelay)
-
-      if (!reconnectTimer) {
-        reconnectTimer = setTimeout(() => {
-          reconnectTimer = null
-          connect()
-        }, reconnectDelay)
-      }
-    }
   }
 
   function handleEvent(event: SyncEvent) {
@@ -1053,13 +981,6 @@ export function SyncProvider(props: ParentProps) {
       }
     }
 
-    if (event.type === "server.connected") {
-      if (bootstrapPromise) {
-        reconnectBootstrapPending = true
-        return
-      }
-      void recoverAfterReconnect()
-    }
   }
 
   function subscribe(handler: SyncEventHandler) {
@@ -1269,16 +1190,38 @@ export function SyncProvider(props: ParentProps) {
 
   const refresh = () => bootstrap()
 
+  const unsubscribe = serverEvents.subscribe((envelope) => {
+    if (envelope.directory !== "global" && envelope.directory !== directory) return
+    const event = envelope.payload as SyncEvent
+    events.push(event)
+  })
+
+  function requestRecovery(_reason: "connected" | "overflow") {
+    if (recovery) {
+      recoveryPending = true
+      return
+    }
+    const promise = events.during(recoverAfterReconnect)
+    recovery = promise
+    void promise.finally(() => {
+      if (recovery !== promise) return
+      recovery = undefined
+      if (!recoveryPending || disposed) return
+      recoveryPending = false
+      requestRecovery("overflow")
+    })
+  }
+
+  const unsubscribeRecovery = serverEvents.recover(requestRecovery)
+
   // REST state must not wait for the SSE response or handshake.
   bootstrap()
-  connect()
 
   onCleanup(() => {
     disposed = true
     events.dispose()
-    abortController?.abort()
-    abortController = null
-    if (reconnectTimer) clearTimeout(reconnectTimer)
+    unsubscribe()
+    unsubscribeRecovery()
     if (bootstrapRetryTimer) clearTimeout(bootstrapRetryTimer)
   })
 
@@ -1333,7 +1276,7 @@ export function SyncProvider(props: ParentProps) {
       }))
     },
     setPermission: (permission: PermissionRequest) => setStore("pendingPermissions", permission.id, permission),
-    sseUnhealthy,
+    sseUnhealthy: serverEvents.unhealthy,
     subscribe,
     session: {
       sync: syncSession,

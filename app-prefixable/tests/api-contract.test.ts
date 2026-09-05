@@ -305,5 +305,24 @@ describe("OpenCode API Contract", () => {
         expect(contentType).toContain("text/event-stream");
       }
     });
+
+    test("GET /global/event returns SSE stream", async () => {
+      if (skipIfNoServer()) return;
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 2000);
+      const res = await fetch(`${BASE_URL}/global/event`, {
+        signal: controller.signal,
+        headers: { Accept: "text/event-stream" },
+      }).catch((error) => {
+        if (error.name === "AbortError") return null;
+        throw error;
+      });
+      clearTimeout(timeout);
+
+      if (!res) throw new Error("Global event stream did not respond before timeout");
+      expect(res.ok).toBe(true);
+      expect(res.headers.get("content-type") ?? "").toContain("text/event-stream");
+      controller.abort();
+    });
   });
 });

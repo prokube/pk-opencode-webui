@@ -9,7 +9,7 @@ import {
   on,
   untrack,
 } from "solid-js";
-import { useLocation, useParams, useNavigate } from "@solidjs/router";
+import { useParams, useNavigate } from "@solidjs/router";
 import { Button } from "../components/ui/button";
 import { useSDK } from "../context/sdk";
 import { sessionStatusEvent, useEvents } from "../context/events";
@@ -95,7 +95,6 @@ function storeDraft(key: string, draft: SessionDraft) {
 // Draft keys include server, directory, and session. "__new__" represents a new-session draft.
 export function Session() {
   const params = useParams<{ dir: string; id?: string }>();
-  const location = useLocation();
   const navigate = useNavigate();
   const { client, directory } = useSDK();
   const events = useEvents();
@@ -174,12 +173,6 @@ export function Session() {
   const dirSlug = createMemo(() =>
     directory ? base64Encode(directory) : params.dir,
   );
-  const draftID = createMemo(() => {
-    if (params.id) return params.id;
-    const token = new URLSearchParams(location.search).get("new");
-    return token ? `__new__:${token}` : undefined;
-  });
-
   const [input, setInput] = createSignal("");
   const [dragHeight, setDragHeight] = createSignal(0); // 0 = no manual drag, positive = user-set minimum
   const [optimisticMessage, setOptimisticMessage] =
@@ -192,8 +185,12 @@ export function Session() {
   const [followups, setFollowups] = createSignal<FollowupItem[]>([]);
   const [dispatchingFollowup, setDispatchingFollowup] = createSignal(false);
   const [pausedFollowups, setPausedFollowups] = createSignal<Set<string>>(new Set());
+  const activeDraft = { key: sessionDraftKey(LOCAL_SERVER_ID, params.dir, params.id) };
+  const inputResize = { frame: undefined as number | undefined };
   const lifetime = { active: true, load: 0, create: 0, submit: 0 };
   onCleanup(() => {
+    saveComposerDraft(activeDraft.key);
+    if (inputResize.frame !== undefined) cancelAnimationFrame(inputResize.frame);
     lifetime.active = false;
     lifetime.load += 1;
     lifetime.create += 1;
@@ -343,13 +340,22 @@ export function Session() {
     el.style.height = `${Math.min(maxInputHeight(), desired)}px`;
   }
 
+  function scheduleInputHeight(el: HTMLTextAreaElement) {
+    if (inputResize.frame !== undefined) return;
+    inputResize.frame = requestAnimationFrame(() => {
+      inputResize.frame = undefined;
+      if (!el.isConnected) return;
+      clampInputHeight(el);
+    });
+  }
+
   // Set textarea value, trigger auto-grow, and focus — bypasses input handler
   // to avoid slash-command detection when restored text starts with "/"
   function applyInputAndAutogrow(el: HTMLTextAreaElement, text: string) {
     setInput(text);
     const nativeSet = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")?.set;
     nativeSet?.call(el, text);
-    clampInputHeight(el);
+    scheduleInputHeight(el);
     requestAnimationFrame(() => el.focus());
   }
 
@@ -416,10 +422,11 @@ export function Session() {
   // Track whether the agent was genuinely processing (not initial load)
   const wasProcessing = { value: false };
 
-  function finishProcessing() {
+  function finishProcessing(id = sessionId()) {
     setOptimisticMessage(null);
     wasProcessing.value = false;
     setProcessing(false);
+    if (id) events.setSessionStatus(id, { type: "idle" });
   }
 
   async function loadSession(id: string, route: string) {
@@ -479,28 +486,26 @@ export function Session() {
   // Keep sessionId in sync with URL params and sync session data.
   // Track the composite dir+id key so the effect fires on directory changes too,
   // preventing drafts from leaking across projects when id stays undefined.
-  createEffect(on(() => sessionDraftKey(LOCAL_SERVER_ID, params.dir, draftID()), (key, prevKey) => {
+  function saveComposerDraft(key: string) {
+    const text = untrack(input);
+    const files = untrack(fileContext);
+    const images = untrack(imageAttachments);
+    const meaningful = text.trim().length > 0 || files.length > 0 || images.length > 0;
+    if (!meaningful) {
+      drafts.delete(key);
+      return;
+    }
+    storeDraft(key, { text, files, images, height: inputRef?.style.height ?? "", drag: untrack(dragHeight) });
+  }
+
+  createEffect(on(() => sessionDraftKey(LOCAL_SERVER_ID, params.dir, params.id), (key, prevKey) => {
     const id = params.id;
     const preservesSubmission = !!id && untrack(sessionId) === id && untrack(loading);
     console.log("[Session] URL param changed:", key);
 
     // Save draft from the previous session before switching.
-    // Read signals via untrack() so they aren't tracked dependencies.
-    if (prevKey && prevKey !== key) {
-      const text = untrack(input);
-      const files = untrack(fileContext);
-      const images = untrack(imageAttachments);
-      const meaningful =
-        text.trim().length > 0 ||
-        (files && files.length > 0) ||
-        (images && images.length > 0);
-
-      if (meaningful) {
-        storeDraft(prevKey, { text, files, images, height: inputRef?.style.height ?? "", drag: untrack(dragHeight) });
-      } else {
-        drafts.delete(prevKey);
-      }
-    }
+    if (prevKey && prevKey !== key) saveComposerDraft(prevKey);
+    activeDraft.key = key;
 
     setSessionId(id);
     if (!preservesSubmission) setOptimisticMessage(null);
@@ -1116,12 +1121,6 @@ export function Session() {
     });
   });
 
-  // Refetch is now just re-syncing
-  const refetchSession = async () => {
-    const id = params.id;
-    if (id) await sync.session.sync(id);
-  };
-
   function clearLastSession(id: string) {
     try {
       const dir = directory || base64Decode(params.dir);
@@ -1165,13 +1164,14 @@ export function Session() {
   });
 
   // Start processing state - SSE events will handle updates and completion
-  function startProcessing() {
+  function startProcessing(id = sessionId()) {
     console.log("[Session] Starting processing, relying on SSE events");
     wasProcessing.value = true;
     setProcessing(true);
+    if (id) events.setSessionStatus(id, { type: "busy" });
   }
 
-  // Subscribe to events for status changes and session updates
+  // Subscribe to events for optimistic-message and status updates.
   // Note: Message updates are handled by sync context, no need to manage here
   onMount(() => {
     const unsub = events.subscribe((event) => {
@@ -1197,12 +1197,6 @@ export function Session() {
             wasProcessing.value = true;
             setProcessing(true);
           }
-        }
-
-        // Handle session updates
-        if (event.type === "session.updated") {
-          const info = event.properties.info as { id?: string } | undefined;
-          if (info?.id === id) refetchSession();
         }
     });
 
@@ -1482,7 +1476,7 @@ export function Session() {
     const submitDirSlug = params.dir;
     const originalID = sessionId();
     const queuedItems = queued ? followups() : [];
-    const originalDraftID = originalID ?? draftID();
+    const originalDraftID = originalID;
     const originalDraft = sessionDraftKey(LOCAL_SERVER_ID, submitDirSlug, originalDraftID);
     const scope = {
       token: ++lifetime.submit,
@@ -1633,7 +1627,7 @@ export function Session() {
       console.log("[Session] Prompt response:", promptRes);
 
       // Start processing - SSE events will handle updates and completion
-      startProcessing();
+      startProcessing(id);
     } catch (err) {
       if (queued) {
         saveFollowups(queuedItems.map((item) => item.id === queued.id ? { ...item, failed: true } : item), originalID, current());
@@ -1687,6 +1681,7 @@ export function Session() {
   createEffect(() => {
     const id = sessionId();
     const item = followups()[0];
+    if (!item) return;
     const status = id ? events.status[id]?.type : undefined;
     const eligible = canDispatchFollowup({
       ready: events.statusReady(),
@@ -1701,7 +1696,7 @@ export function Session() {
       dispatching: dispatchingFollowup(),
       paused: followupPaused(),
       reverting: reverting(),
-      providerConnected: !!item && providers.connected.includes(item.model.providerID),
+      providerConnected: providers.connected.includes(item.model.providerID),
       item,
     });
     if (!eligible) return;
@@ -2008,7 +2003,7 @@ export function Session() {
                   onPaste={handlePaste}
                   onInput={(e) => {
                     handleInputChange(e.currentTarget.value);
-                    clampInputHeight(e.currentTarget);
+                    scheduleInputHeight(e.currentTarget);
                   }}
                   onKeyDown={(e) => {
                     // Handle slash command navigation first
@@ -2032,7 +2027,7 @@ export function Session() {
                       return;
                     }
                     // Enter to submit (without shift), Shift+Enter for newline
-                    if (e.key === "Enter" && !e.shiftKey) {
+                    if (e.key === "Enter" && !e.shiftKey && !e.isComposing) {
                       e.preventDefault();
                       const form = e.currentTarget.closest("form");
                       if (form) form.requestSubmit();

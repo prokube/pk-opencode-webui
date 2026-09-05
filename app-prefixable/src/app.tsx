@@ -15,6 +15,7 @@ import { ProjectPicker } from "./pages/project-picker"
 import { base64Decode } from "./utils/path"
 import { legacyStorageValue, workspaceStorageKey } from "./utils/storage"
 import { BrowserNotificationsProvider } from "./context/browser-notifications"
+import { ServerEventsProvider } from "./context/server-events"
 
 function validSessionId(value: string) {
   return !!value && !value.includes("..") && !/[/\\]/.test(value)
@@ -116,19 +117,21 @@ function AppRoutes() {
 function AppProviders() {
   return (
     <BasePathProvider>
-      <BrowserNotificationsProvider>
-        <ThemeProvider>
-          <BrandingProvider>
-            <ProjectsProvider>
-              <ProjectActivityProvider>
-                <CommandProvider>
-                  <AppRoutes />
-                </CommandProvider>
-              </ProjectActivityProvider>
-            </ProjectsProvider>
-          </BrandingProvider>
-        </ThemeProvider>
-      </BrowserNotificationsProvider>
+      <ServerEventsProvider>
+        <BrowserNotificationsProvider>
+          <ThemeProvider>
+            <BrandingProvider>
+              <ProjectsProvider>
+                <ProjectActivityProvider>
+                  <CommandProvider>
+                    <AppRoutes />
+                  </CommandProvider>
+                </ProjectActivityProvider>
+              </ProjectsProvider>
+            </BrandingProvider>
+          </ThemeProvider>
+        </BrowserNotificationsProvider>
+      </ServerEventsProvider>
     </BasePathProvider>
   )
 }

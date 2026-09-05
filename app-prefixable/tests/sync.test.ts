@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test"
 import { applyPartDelta, coalesceSyncEvent, createLatestSuccessfulRequest, createSessionRequestTracker, mergeMessageUpdate, mergePartUpdate, mergeSessionMessages, reduceSyncLiveEvent, removeMessageByID, removePartByID, removeSyncSession, removeSyncSessionData, syncEventSize, updateProviderConnected, upsertSyncSession } from "../src/context/sync"
 import type { MessageWithParts, SyncLiveState } from "../src/context/sync"
 import type { Message, Part, PermissionRequest, QuestionRequest, Session } from "../src/sdk/client"
-import { createEventBuffer } from "../src/utils/event-buffer"
+import { createEventBuffer, createScheduledEventBuffer } from "../src/utils/event-buffer"
 import { nextSSEReconnectDelay } from "../src/utils/sse"
 
 const user = (id: string, sessionID = "ses_1"): Message => ({
@@ -524,6 +524,84 @@ describe("sync event helpers", () => {
 })
 
 describe("sync event buffer", () => {
+  test("schedules and coalesces live deltas before delivery", () => {
+    const seen: string[] = []
+    const delta = (value: string) => ({
+      type: "message.part.delta" as const,
+      properties: { sessionID: "ses_1", messageID: "msg_1", partID: "part_1", field: "text", delta: value },
+    })
+    const events = createScheduledEventBuffer((event: ReturnType<typeof delta>) => {
+      seen.push(event.properties.delta)
+    }, { coalesce: coalesceSyncEvent })
+
+    events.push(delta("hel"))
+    events.push(delta("lo"))
+    expect(seen).toEqual([])
+    events.flush()
+
+    expect(seen).toEqual(["hello"])
+    events.dispose()
+  })
+
+  test("yields between bounded live event batches", () => {
+    const seen: number[] = []
+    const events = createScheduledEventBuffer<number>((event) => seen.push(event), { batchSize: 2 })
+    events.push(1)
+    events.push(2)
+    events.push(3)
+
+    events.flush()
+    expect(seen).toEqual([1, 2])
+    events.flush()
+
+    expect(seen).toEqual([1, 2, 3])
+    events.dispose()
+  })
+
+  test("bounds the scheduled queue and reports one overflow per backlog", () => {
+    const seen: number[] = []
+    const dropped: number[] = []
+    const events = createScheduledEventBuffer<number>((event) => seen.push(event), {
+      batchSize: 2,
+      limit: 2,
+      overflow: (event) => dropped.push(event),
+    })
+    events.push(1)
+    events.push(2)
+    events.push(3)
+    events.push(4)
+
+    expect(dropped).toEqual([3])
+    events.flush()
+    events.push(5)
+    events.push(6)
+    events.push(7)
+    expect(dropped).toEqual([3, 7])
+    events.dispose()
+  })
+
+  test("starts a fresh queue after reset-on-overflow", () => {
+    const seen: number[] = []
+    const dropped: number[] = []
+    const events = createScheduledEventBuffer<number>((event) => seen.push(event), {
+      batchSize: 2,
+      limit: 2,
+      byteLimit: 2,
+      size: () => 1,
+      resetOnOverflow: true,
+      overflow: (event) => dropped.push(event),
+    })
+    events.push(1)
+    events.push(2)
+    events.push(3)
+    events.push(4)
+    events.flush()
+
+    expect(dropped).toEqual([3])
+    expect(seen).toEqual([3, 4])
+    events.dispose()
+  })
+
   test("releases buffered events in arrival order after completion", async () => {
     const seen: number[] = []
     const events = createEventBuffer<number>((event) => seen.push(event))
@@ -535,6 +613,21 @@ describe("sync event buffer", () => {
     })
 
     expect(seen).toEqual([1, 2])
+  })
+
+  test("keeps events buffered until nested tasks complete", async () => {
+    const seen: number[] = []
+    const events = createEventBuffer<number>((event) => seen.push(event))
+    const gate = Promise.withResolvers<void>()
+    const outer = events.during(async () => {})
+    const inner = events.during(() => gate.promise)
+    await outer
+    events.push(1)
+
+    expect(seen).toEqual([])
+    gate.resolve()
+    await inner
+    expect(seen).toEqual([1])
   })
 
   test("marks overflow without silently dropping queued events", async () => {
