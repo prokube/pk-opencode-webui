@@ -13,12 +13,24 @@
  *   REQUIRE_SERVER - Set to "true" to fail if server unavailable (default: false)
  */
 
-import { describe, test, expect, beforeAll } from "bun:test";
+import { afterAll, describe, test, expect, beforeAll } from "bun:test";
 
 const BASE_URL = process.env.OPENCODE_URL || "http://127.0.0.1:4096";
 const REQUIRE_SERVER = process.env.REQUIRE_SERVER === "true";
 
 let serverIsAvailable = false;
+const createdSessions = new Set<string>();
+
+async function createTestSession() {
+  const response = await fetch(`${BASE_URL}/session`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({}),
+  });
+  const data = await response.json() as { id?: string };
+  if (response.ok && data.id) createdSessions.add(data.id);
+  return { response, data };
+}
 
 // Helper to check if server is available
 async function checkServer(): Promise<boolean> {
@@ -51,6 +63,15 @@ describe("OpenCode API Contract", () => {
     }
   });
 
+  afterAll(async () => {
+    const responses = await Promise.all([...createdSessions].map((id) =>
+      fetch(`${BASE_URL}/session/${id}`, { method: "DELETE" }).catch(() => undefined)
+    ));
+    if (responses.some((response) => !response?.ok && response?.status !== 404)) {
+      throw new Error("Failed to clean up API contract test sessions");
+    }
+  });
+
   // Core Session Endpoints
   describe("Session API", () => {
     test("GET /session/status returns expected schema", async () => {
@@ -72,26 +93,16 @@ describe("OpenCode API Contract", () => {
 
     test("POST /session creates session", async () => {
       if (skipIfNoServer()) return;
-      const res = await fetch(`${BASE_URL}/session`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({}),
-      });
-      expect(res.ok).toBe(true);
-      const data = await res.json();
+      const { response, data } = await createTestSession();
+      expect(response.ok).toBe(true);
       expect(data).toHaveProperty("id");
     });
 
     test("GET /session/{id}/message returns messages array", async () => {
       if (skipIfNoServer()) return;
       // First create a session to get an ID
-      const sessionRes = await fetch(`${BASE_URL}/session`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({}),
-      });
-      expect(sessionRes.ok).toBe(true);
-      const session = await sessionRes.json();
+      const { response, data: session } = await createTestSession();
+      expect(response.ok).toBe(true);
 
       const res = await fetch(`${BASE_URL}/session/${session.id}/message`);
       expect(res.ok).toBe(true);
@@ -102,13 +113,8 @@ describe("OpenCode API Contract", () => {
     test("POST /session/{id}/message endpoint exists", async () => {
       if (skipIfNoServer()) return;
       // First create a session
-      const sessionRes = await fetch(`${BASE_URL}/session`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({}),
-      });
-      expect(sessionRes.ok).toBe(true);
-      const session = await sessionRes.json();
+      const { response, data: session } = await createTestSession();
+      expect(response.ok).toBe(true);
 
       // Test that the endpoint accepts POST (we don't send a real prompt)
       const res = await fetch(`${BASE_URL}/session/${session.id}/message`, {
