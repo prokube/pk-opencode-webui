@@ -182,13 +182,32 @@ export function createEventBuffer<T>(consume: (event: T) => void, options: Event
 
   function release() {
     if (!queue) return
-    for (let index = 0; index < queue.length; index += 1) consume(queue[index])
+    const dropped = overflowed
+    const pending = queue
+    let failed = false
+    let failure: unknown
+    for (let index = 0; index < pending.length; index += 1) {
+      try {
+        consume(pending[index])
+      } catch (error) {
+        if (failed) continue
+        failed = true
+        failure = error
+      }
+    }
     queue = undefined
     sizes = undefined
     bytes = 0
-    const dropped = overflowed
     overflowed = false
-    options.released?.(dropped)
+    try {
+      options.released?.(dropped)
+    } catch (error) {
+      if (!failed) {
+        failed = true
+        failure = error
+      }
+    }
+    if (failed) throw failure
   }
 
   async function during<R>(task: () => Promise<R>) {
@@ -198,12 +217,29 @@ export function createEventBuffer<T>(consume: (event: T) => void, options: Event
       sizes = []
     }
     holds += 1
+    let failed = false
+    let failure: unknown
+    let result: R | undefined
     try {
-      return await task()
+      result = await task()
+    } catch (error) {
+      failed = true
+      failure = error
     } finally {
       holds = Math.max(0, holds - 1)
-      if (!disposed && holds === 0) release()
+      if (!disposed && holds === 0) {
+        try {
+          release()
+        } catch (error) {
+          if (!failed) {
+            failed = true
+            failure = error
+          }
+        }
+      }
     }
+    if (failed) throw failure
+    return result as R
   }
 
   function dispose() {

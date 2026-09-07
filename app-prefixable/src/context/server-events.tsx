@@ -48,6 +48,11 @@ export function parseServerEvent(raw: string) {
   return { directory, payload }
 }
 
+export function serverEventIsCurrent(event: ServerEvent, source: AbortSignal | undefined, current: AbortSignal | undefined) {
+  if (event.payload.type !== "server.connected") return true
+  return source !== undefined && source === current
+}
+
 export function ServerEventsProvider(props: ParentProps) {
   const server = useServer()
   const handlers = new Set<ServerEventHandler>()
@@ -55,6 +60,7 @@ export function ServerEventsProvider(props: ParentProps) {
   const [connected, setConnected] = createSignal(false)
   const [unhealthy, setUnhealthy] = createSignal(false)
   const encoder = new TextEncoder()
+  const handshakes = new WeakMap<ServerEvent, AbortSignal>()
   const recover = (reason: "connected" | "overflow") => {
     for (const handler of recoveries) {
       try {
@@ -65,6 +71,7 @@ export function ServerEventsProvider(props: ParentProps) {
     }
   }
   const pending = createScheduledEventBuffer<ServerEvent>((event) => {
+    if (!serverEventIsCurrent(event, handshakes.get(event), controller?.signal)) return
     if (event.payload.type === "server.connected") {
       setConnected(true)
       recover("connected")
@@ -109,7 +116,9 @@ export function ServerEventsProvider(props: ParentProps) {
       const parser = createSSEParser((raw) => {
         try {
           const event = parseServerEvent(raw)
-          if (event) pending.push(event)
+          if (!event) return
+          if (event.payload.type === "server.connected") handshakes.set(event, signal)
+          pending.push(event)
         } catch (error) {
           console.error("[Events] Parse error:", error)
         }

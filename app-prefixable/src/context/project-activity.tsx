@@ -108,7 +108,11 @@ export function ProjectActivityProvider(props: ParentProps) {
   const alerted = new Set<string>()
   const errors = new Set<string>()
   const timers = new Map<string, ReturnType<typeof setTimeout>>()
-  const eventBuffer = createEventBuffer<ServerEvent>(apply)
+  const eventBuffer = createEventBuffer<ServerEvent>(apply, {
+    released: (overflowed) => {
+      if (overflowed) restartReconciliation()
+    },
+  })
   let generation = 0
   let activeTimer: ReturnType<typeof setTimeout> | undefined
   let retryTimer: ReturnType<typeof setTimeout> | undefined

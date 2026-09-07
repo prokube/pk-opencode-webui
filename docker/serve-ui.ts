@@ -10,7 +10,7 @@
  */
 
 import { handleExtendedEndpoint, isApiPath, isMutation, isSameOriginRequest } from "../shared/extended-api"
-import { matchesBasePath, stripBasePath } from "../shared/base-path"
+import { normalizeRequestPath, prefixStrippedAllowed } from "../shared/base-path"
 import { isEventStreamPath, normalizeProxiedResponse, proxyEventResponse, serializeScriptData, stripHopByHopHeaders } from "../shared/proxy"
 
 const BASE_PATH = process.env.NB_PREFIX || process.env.BASE_PATH || "/"
@@ -21,6 +21,7 @@ const DIST_DIR = process.env.DIST_DIR || "/opt/opencode-ui/dist"
 const BRANDING_NAME = process.env.BRANDING_NAME || ""
 const BRANDING_URL = process.env.BRANDING_URL || ""
 const BRANDING_ICON = process.env.BRANDING_ICON || ""
+const BASE_PATH_STRIPPED = prefixStrippedAllowed(process.env.BASE_PATH_STRIPPED, process.env.NB_PREFIX)
 
 console.log(`OpenCode UI Server starting...`)
 console.log(`  BASE_PATH: ${BASE_PATH}`)
@@ -28,6 +29,7 @@ console.log(`  API_URL: ${API_URL}`)
 console.log(`  WS_API_URL: ${WS_API_URL}`)
 console.log(`  PORT: ${PORT}`)
 console.log(`  DIST_DIR: ${DIST_DIR}`)
+console.log(`  BASE_PATH_STRIPPED: ${BASE_PATH_STRIPPED}`)
 if (BRANDING_NAME) console.log(`  BRANDING: ${BRANDING_NAME}`)
 
 // Normalize and validate base path (must be a valid path-only prefix)
@@ -137,15 +139,10 @@ const server = Bun.serve<{ path: string; search: string }>({
 
   async fetch(req, server) {
     const url = new URL(req.url)
-    if (!matchesBasePath(url.pathname, basePathWithoutTrailing)) {
-      return new Response("Not Found", { status: 404 })
-    }
-
-    // Strip only a complete base-path segment.
-    let path = stripBasePath(url.pathname, basePathWithoutTrailing)
-    if (!path.startsWith("/")) {
-      path = "/" + path
-    }
+    // Prefix-stripping proxies must opt in so direct deployments remain prefix-isolated.
+    const normalizedPath = normalizeRequestPath(url.pathname, basePathWithoutTrailing, BASE_PATH_STRIPPED)
+    if (normalizedPath === null) return new Response("Not Found", { status: 404 })
+    const path = normalizedPath
 
     // Kubeflow idle culling: /api/kernels must never update activity timestamp
     if (path === "/api/kernels") {

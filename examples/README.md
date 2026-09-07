@@ -41,6 +41,8 @@ To use a different prefix (e.g., `/myapp/`):
 1. Update `BASE_PATH` environment variable in docker-compose.yml
 2. Update the proxy configuration to match
 
+Set `BASE_PATH_STRIPPED=true` when the reverse proxy removes that prefix before forwarding. Leave it unset when the UI server receives the original prefixed path.
+
 ### nginx
 
 ```nginx
@@ -54,7 +56,7 @@ location /myapp/ {
 
 ```yaml
 labels:
-  - "traefik.http.routers.opencode.rule=PathPrefix(`/myapp`)"
+  - "traefik.http.routers.opencode.rule=Path(`/myapp`) || PathPrefix(`/myapp/`)"
   - "traefik.http.middlewares.opencode-strip.stripprefix.prefixes=/myapp"
 ```
 
@@ -81,5 +83,5 @@ proxy_cache off;
 ### Assets return 404
 
 Verify that:
-1. `BASE_PATH` matches your proxy prefix exactly (including trailing slash)
-2. The proxy is correctly stripping the prefix before forwarding
+1. `BASE_PATH` matches your proxy prefix (a trailing slash is optional)
+2. `BASE_PATH_STRIPPED=true` is set if the proxy strips the prefix before forwarding

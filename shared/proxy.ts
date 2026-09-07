@@ -54,9 +54,7 @@ export function proxyEventResponse(response: Response, signal: AbortSignal, upst
   if (!response.body) return normalizeProxiedResponse(response)
   const reader = response.body.getReader()
   let closed = false
-  const abort = () => upstream.abort(signal.reason)
-  signal.addEventListener("abort", abort, { once: true })
-  if (signal.aborted) abort()
+  let cancellation: Promise<void> | undefined
 
   function release() {
     try {
@@ -67,11 +65,25 @@ export function proxyEventResponse(response: Response, signal: AbortSignal, upst
   }
 
   function cleanup(reason?: unknown) {
-    if (closed) return
+    if (closed) return false
     closed = true
     signal.removeEventListener("abort", abort)
     upstream.abort(reason)
+    return true
   }
+
+  function cancel(reason?: unknown) {
+    if (cancellation) return cancellation
+    if (!cleanup(reason)) return Promise.resolve()
+    cancellation = reader.cancel(reason)
+      .catch(() => undefined)
+      .then(release)
+    return cancellation
+  }
+
+  const abort = () => void cancel(signal.reason)
+  signal.addEventListener("abort", abort, { once: true })
+  if (signal.aborted) abort()
 
   const body = new ReadableStream<Uint8Array>({
     async pull(controller) {
@@ -91,9 +103,7 @@ export function proxyEventResponse(response: Response, signal: AbortSignal, upst
       }
     },
     async cancel(reason) {
-      cleanup(reason)
-      await reader.cancel(reason).catch(() => undefined)
-      release()
+      await cancel(reason)
     },
   })
 

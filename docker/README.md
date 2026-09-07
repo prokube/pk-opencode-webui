@@ -60,6 +60,7 @@ services:
 | `PORT`          | `8080`                  | Port the UI server listens on        |
 | `API_URL`       | `http://127.0.0.1:4096` | OpenCode API server URL              |
 | `BASE_PATH`     | `/`                     | URL prefix for reverse proxy support |
+| `BASE_PATH_STRIPPED` | `true` with `NB_PREFIX`, otherwise `false` | Set to `true` when the reverse proxy strips `BASE_PATH` before forwarding |
 | `BRANDING_NAME` | (empty)                 | Optional branding name shown in UI   |
 | `BRANDING_URL`  | (empty)                 | Optional URL for branding link       |
 

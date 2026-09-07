@@ -21,6 +21,21 @@ export function followupStorageKey(serverID: string, directory: string, sessionI
   return workspaceStorageKey(serverID, directory, `followups.${sessionID}`)
 }
 
+export function followupPauseStorageKey(serverID: string, directory: string, sessionID: string) {
+  return workspaceStorageKey(serverID, directory, `followups.${sessionID}.paused`)
+}
+
+export function parseFollowupPaused(value: string | null) {
+  return value === "true"
+}
+
+export function retryFollowups(items: FollowupItem[], id: string) {
+  return {
+    items: items.map((item) => item.id === id ? { ...item, failed: false } : item),
+    paused: false as const,
+  }
+}
+
 export function parseFollowups(value: string | null, defaults?: { agent: string; model: ModelRef; variant?: string }) {
   if (!value) return []
   try {

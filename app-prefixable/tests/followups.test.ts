@@ -1,9 +1,16 @@
 import { describe, expect, test } from "bun:test"
-import { canDispatchFollowup, parseFollowups, parseLegacyFollowupMap } from "../src/utils/followups"
+import { canDispatchFollowup, followupPauseStorageKey, parseFollowupPaused, parseFollowups, parseLegacyFollowupMap, retryFollowups } from "../src/utils/followups"
 
 const model = { providerID: "provider", modelID: "model" }
 
 describe("follow-ups", () => {
+  test("persists paused state separately for each session", () => {
+    expect(followupPauseStorageKey("local", "/work", "one")).not.toBe(followupPauseStorageKey("local", "/work", "two"))
+    expect(parseFollowupPaused("true")).toBe(true)
+    expect(parseFollowupPaused("false")).toBe(false)
+    expect(parseFollowupPaused(null)).toBe(false)
+  })
+
   test("migrates legacy text entries with stable send metadata", () => {
     const items = parseFollowups(JSON.stringify([{ id: "one", text: "continue" }]), { agent: "build", model })
     expect(items).toHaveLength(1)
@@ -33,5 +40,13 @@ describe("follow-ups", () => {
     expect(canDispatchFollowup({ ...ready, working: true })).toBe(false)
     expect(canDispatchFollowup({ ...ready, item: { ...item, failed: true } })).toBe(false)
     expect(canDispatchFollowup({ ...ready, providerConnected: false })).toBe(false)
+  })
+
+  test("retry clears failure and explicitly resumes a paused queue", () => {
+    const item = { ...parseFollowups(JSON.stringify([{ id: "one", text: "continue", failed: true }]), { agent: "build", model })[0], failed: true }
+    const retry = retryFollowups([item], item.id)
+
+    expect(retry.paused).toBe(false)
+    expect(retry.items[0].failed).toBe(false)
   })
 })

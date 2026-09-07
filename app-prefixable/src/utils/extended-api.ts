@@ -62,6 +62,39 @@ export async function writeFile(serverUrl: string, path: string, content: string
   return true
 }
 
+export type CompareWriteResult = "written" | "conflict" | "error"
+
+export async function readProjectConfigSource(serverUrl: string, directory: string): Promise<string | null> {
+  const query = new URLSearchParams({ directory })
+  const res = await fetch(`${serverUrl}/api/ext/project-config?${query}`).catch(() => null)
+  if (!res?.ok) {
+    console.error("[extended-api] readProjectConfigSource failed:", res?.status)
+    return null
+  }
+  const body: unknown = await res.json().catch(() => null)
+  if (!body || typeof body !== "object" || typeof (body as { content?: unknown }).content !== "string") return null
+  return (body as { content: string }).content
+}
+
+export async function compareWriteProjectConfig(
+  serverUrl: string,
+  directory: string,
+  expected: string,
+  content: string,
+): Promise<CompareWriteResult> {
+  const res = await fetch(`${serverUrl}/api/ext/project-config`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ directory, expected, content }),
+  }).catch(() => null)
+  if (res?.status === 409) return "conflict"
+  if (!res?.ok) {
+    console.error("[extended-api] compareWriteProjectConfig failed:", res?.status)
+    return "error"
+  }
+  return "written"
+}
+
 export type PromptScope = "global" | "project"
 
 export interface SavedPrompt {

@@ -128,6 +128,7 @@ bun install && bun run dev
 | Variable | Default | Description |
 |---|---|---|
 | `BASE_PATH` | `/` | URL prefix for the app |
+| `BASE_PATH_STRIPPED` | `true` with `NB_PREFIX`, otherwise `false` | Set to `true` when the reverse proxy strips `BASE_PATH` before forwarding |
 | `PORT` | `3000` (dev) / `8080` (Docker) | Server port |
 | `API_URL` | `http://127.0.0.1:4096` | OpenCode API URL |
 | `BRANDING_NAME` | _(empty)_ | Branding text shown as "Powered by {name}" |
@@ -155,7 +156,7 @@ docker run -p 8080:8080 \
   opencode-web
 # Access at http://localhost:8080
 
-# Run with prefix (requires reverse proxy in front)
+# Run with a prefix preserved by the reverse proxy
 docker run -p 8080:8080 \
   --add-host=host.docker.internal:host-gateway \
   -e API_URL=http://host.docker.internal:4096 \
@@ -163,6 +164,8 @@ docker run -p 8080:8080 \
   opencode-web
 # Access via your reverse proxy at /apps/opencode/
 ```
+
+Add `-e BASE_PATH_STRIPPED=true` when the reverse proxy removes `/apps/opencode` before forwarding the request to the UI server.
 
 See [docker/README.md](docker/README.md) for Docker Compose examples.
 

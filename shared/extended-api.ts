@@ -185,10 +185,17 @@ async function projectPromptFile(directory: string, create: boolean) {
 }
 
 let promptMutationQueue = Promise.resolve()
+let fileMutationQueue = Promise.resolve()
 
 function queuePromptMutation<T>(run: () => Promise<T>) {
   const result = promptMutationQueue.catch(() => undefined).then(run)
   promptMutationQueue = result.then(() => undefined, () => undefined)
+  return result
+}
+
+function queueFileMutation<T>(run: () => Promise<T>) {
+  const result = fileMutationQueue.catch(() => undefined).then(run)
+  fileMutationQueue = result.then(() => undefined, () => undefined)
   return result
 }
 
@@ -668,6 +675,85 @@ async function handleExtendedRoute(
       console.error("[ExtAPI] mcp delete error:", e)
       return internalError("failed to update MCP config")
     }
+  }
+
+  // GET /api/ext/project-config - Read exact source for a subsequent compare-and-write
+  if (path === "/api/ext/project-config" && method === "GET") {
+    const directory = url.searchParams.get("directory")
+    if (!directory) return Response.json({ error: "directory is required" }, { status: 400 })
+    const validatedDir = await validatePath(directory, getAllowedRoot())
+    if (!validatedDir || !(await fs.promises.stat(validatedDir).catch(() => null))?.isDirectory()) {
+      return Response.json({ error: "directory must be within allowed directory" }, { status: 403 })
+    }
+    const validatedPath = await validatePath(nodePath.join(validatedDir, "config.json"), getAllowedRoot())
+    if (!validatedPath) return Response.json({ error: "config path is not safe" }, { status: 403 })
+    try {
+      const stat = await fs.promises.lstat(validatedPath).catch((e) => {
+        const code = typeof e === "object" && e && "code" in e ? (e as { code?: string }).code : undefined
+        if (code === "ENOENT") return undefined
+        throw e
+      })
+      if (stat?.isSymbolicLink()) return Response.json({ error: "file path must not be a symbolic link" }, { status: 403 })
+      const content = stat ? await fs.promises.readFile(validatedPath, "utf-8") : ""
+      return Response.json({ content })
+    } catch (e) {
+      console.error("[ExtAPI] compare file read error:", e)
+      return internalError("failed to read file")
+    }
+  }
+
+  // PUT /api/ext/project-config - Atomically replace unchanged project config
+  if (path === "/api/ext/project-config" && method === "PUT") {
+    const body = await req.json().catch(() => null)
+    if (!body || typeof body.directory !== "string" || typeof body.expected !== "string" || typeof body.content !== "string") {
+      return Response.json({ error: "directory, expected, and content are required" }, { status: 400 })
+    }
+
+    const allowedRoot = getAllowedRoot()
+    const validatedDir = await validatePath(body.directory, allowedRoot)
+    if (!validatedDir || !(await fs.promises.stat(validatedDir).catch(() => null))?.isDirectory()) {
+      console.warn("[ExtAPI] project config write: directory outside allowed root:", body.directory)
+      return Response.json({ error: "directory must be within allowed directory" }, { status: 403 })
+    }
+    const validatedPath = await validatePath(nodePath.join(validatedDir, "config.json"), allowedRoot)
+    if (!validatedPath) return Response.json({ error: "config path is not safe" }, { status: 403 })
+
+    return queueFileMutation(async () => {
+      const current = await fs.promises.readFile(validatedPath, "utf-8").catch((e) => {
+        const code = typeof e === "object" && e && "code" in e ? (e as { code?: string }).code : undefined
+        if (code === "ENOENT") return ""
+        throw e
+      })
+      if (current !== body.expected) {
+        return Response.json({ error: "file changed" }, { status: 409 })
+      }
+
+      const stat = await fs.promises.lstat(validatedPath).catch((e) => {
+        const code = typeof e === "object" && e && "code" in e ? (e as { code?: string }).code : undefined
+        if (code === "ENOENT") return undefined
+        throw e
+      })
+      if (stat?.isSymbolicLink()) return Response.json({ error: "file path must not be a symbolic link" }, { status: 403 })
+
+      const parent = nodePath.dirname(validatedPath)
+      await fs.promises.mkdir(parent, { recursive: true })
+      const tmp = nodePath.join(parent, `.${nodePath.basename(validatedPath)}.tmp-${process.pid}-${crypto.randomUUID()}`)
+      try {
+        await fs.promises.writeFile(tmp, body.content, {
+          encoding: "utf-8",
+          flag: "wx",
+          mode: stat?.mode,
+        })
+        await fs.promises.rename(tmp, validatedPath)
+      } catch (e) {
+        await fs.promises.rm(tmp, { force: true }).catch(() => undefined)
+        throw e
+      }
+      return Response.json({ success: true })
+    }).catch((e) => {
+      console.error("[ExtAPI] compare file write error:", e)
+      return internalError("failed to update file")
+    })
   }
 
   // PUT /api/ext/file - Write file content

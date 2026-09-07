@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test"
+import { describe, expect, spyOn, test } from "bun:test"
 import { isEventStreamPath, normalizeProxiedResponse, proxyEventResponse, serializeScriptData, stripHopByHopHeaders } from "../../shared/proxy"
 
 describe("normalizeProxiedResponse", () => {
@@ -18,12 +18,47 @@ describe("normalizeProxiedResponse", () => {
     expect(response.headers.get("Content-Type")).toBe("text/event-stream")
   })
 
-  test("aborts upstream when the downstream request was already aborted", () => {
+  test("cancels and releases the source when the downstream request was already aborted", async () => {
     const request = new AbortController()
     const upstream = new AbortController()
+    const remove = spyOn(request.signal, "removeEventListener")
+    let cancelled: unknown
     request.abort("offline")
-    proxyEventResponse(new Response(new ReadableStream<Uint8Array>({ pull() {} })), request.signal, upstream)
+    const source = new ReadableStream<Uint8Array>({
+      pull() {},
+      cancel(reason) {
+        cancelled = reason
+      },
+    })
+    const response = proxyEventResponse(new Response(source), request.signal, upstream)
     expect(upstream.signal.aborted).toBe(true)
+    expect(cancelled).toBe("offline")
+    expect(remove).toHaveBeenCalledWith("abort", expect.any(Function))
+    await response.body?.cancel()
+    expect(source.locked).toBe(false)
+  })
+
+  test("cancels and releases the source once when the downstream request aborts", async () => {
+    const request = new AbortController()
+    const upstream = new AbortController()
+    const remove = spyOn(request.signal, "removeEventListener")
+    const reasons: unknown[] = []
+    const source = new ReadableStream<Uint8Array>({
+      pull() {},
+      cancel(reason) {
+        reasons.push(reason)
+      },
+    })
+    const response = proxyEventResponse(new Response(source), request.signal, upstream)
+    const reader = response.body?.getReader()
+    const pending = reader?.read()
+    request.abort("offline")
+    expect(upstream.signal.aborted).toBe(true)
+    expect(reasons).toEqual(["offline"])
+    expect(remove).toHaveBeenCalledWith("abort", expect.any(Function))
+    await expect(pending).resolves.toEqual({ done: true, value: undefined })
+    await reader?.cancel("duplicate")
+    expect(source.locked).toBe(false)
   })
 
   test("removes decode-sensitive headers and keeps body/status", async () => {

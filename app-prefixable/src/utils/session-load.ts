@@ -35,12 +35,12 @@ export function sessionNeighbor(ids: string[], id: string) {
   return ids[index + 1] ?? ids[index - 1];
 }
 
-export function sessionDraftKey(serverId: string, dir: string, id?: string) {
-  return `${serverId}:${dir}:${id ?? "__new__"}`;
+export function sessionDraftKey(serverId: string, dir: string, id?: string, token?: string) {
+  return `${serverId}:${dir}:${id ?? (token ? `__new__:${token}` : "__new__")}`;
 }
 
-export function sessionRouteKey(serverId: string, directory: string, id?: string) {
-  return `${serverId}\0${directory}\0${id ?? "__new__"}`;
+export function sessionRouteKey(serverId: string, directory: string, id?: string, token?: string) {
+  return `${serverId}\0${directory}\0${id ?? (token ? `__new__:${token}` : "__new__")}`;
 }
 
 export function archivedLastSession(stored: string | null, session: { id: string; time?: { archived?: number } }) {

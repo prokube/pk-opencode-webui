@@ -12,11 +12,12 @@ import { Check, Copy, Plug, GitBranch, Server, ExternalLink, Key, Search, X, Tra
 import { useTheme } from "../context/theme"
 import { useOptionalPermission } from "../context/permission"
 import { SETTINGS_BASE_TABS } from "./settings-tabs"
-import { writeFile } from "../utils/extended-api"
+import { compareWriteProjectConfig, readProjectConfigSource, writeFile } from "../utils/extended-api"
 import { OPENAI_BROWSER_OAUTH_UNSUPPORTED_MESSAGE, browserOAuthUnsupported, extractProviderAuthCode, providerOAuthMethodUnsupported } from "../utils/provider-auth"
 import type { Config, PermissionActionConfig } from "../sdk/client"
 import { SavedPromptsSettings } from "../components/saved-prompts-settings"
 import { BrowserNotificationsSettings } from "../components/browser-notifications-settings"
+import { parseProjectConfig, removeProjectDefault, removeProjectPermissionPattern, type ProjectConfigRewrite } from "../utils/project-config"
 
 // Connected via environment or built-in defaults, not removable by auth.remove.
 const NON_REMOVABLE_PROVIDER_IDS = new Set(["amazon-bedrock", "opencode"])
@@ -2223,7 +2224,7 @@ function getPermissionPatterns(rule: unknown): Array<{ pattern: string; action: 
 function ProjectConfigTab() {
   const config = useConfig()
   const providers = useProviders()
-  const { directory } = useSDK()
+  const { client, directory, url } = useSDK()
   const [saveError, setSaveError] = createSignal<string | null>(null)
   const [saving, setSaving] = createSignal(false)
   const [saved, setSaved] = createSignal(false)
@@ -2329,6 +2330,69 @@ function ProjectConfigTab() {
     }
   }
 
+  async function rewriteProjectConfig(rewrite: (value: Config) => ProjectConfigRewrite, missing: string) {
+    if (!directory) return false
+    setSaving(true)
+    setSaveError(null)
+    const original = await readProjectConfigSource(url, directory)
+    if (original === null) {
+      setSaving(false)
+      setSaveError("Failed to read the API-managed project config. Changes were not saved.")
+      return false
+    }
+    const current = parseProjectConfig(original)
+    if (!current) {
+      setSaving(false)
+      setSaveError("The API-managed project config is not valid JSON. Changes were not saved.")
+      return false
+    }
+
+    const result = rewrite(current)
+    if (!result.changed) {
+      setSaving(false)
+      setSaveError(missing)
+      return false
+    }
+
+    const written = await compareWriteProjectConfig(url, directory, original, JSON.stringify(result.config, null, 2))
+    if (written === "conflict") {
+      setSaving(false)
+      setSaveError("The project config changed while it was being edited. Reload Settings and try again.")
+      return false
+    }
+    if (written === "error") {
+      setSaving(false)
+      setSaveError("Failed to write the API-managed project config. Changes were not saved.")
+      return false
+    }
+
+    const verification = await readProjectConfigSource(url, directory)
+    const verified = verification === null ? null : parseProjectConfig(verification)
+    if (!verified || rewrite(verified).changed) {
+      setSaving(false)
+      setSaveError("The project config could not be verified after writing. Reload Settings before trying again.")
+      return false
+    }
+
+    const disposed = await client.instance.dispose({ directory }).catch(() => null)
+    if (disposed?.data !== true) {
+      setSaving(false)
+      setSaveError("The project config was saved, but OpenCode could not reload it. Reload the page before continuing.")
+      return false
+    }
+    await config.refresh()
+    setSaving(false)
+    showSaved()
+    return true
+  }
+
+  async function removePermissionPattern(tool: string, pattern: string) {
+    await rewriteProjectConfig(
+      (value) => removeProjectPermissionPattern(value, tool, pattern),
+      "This permission rule is not stored in the API-managed project config.",
+    )
+  }
+
   // ── Model defaults handlers ──
 
   const availableModels = createMemo(() => {
@@ -2343,7 +2407,13 @@ function ProjectConfigTab() {
   })
 
   async function setDefaultModel(value: string) {
-    if (!value) return
+    if (!value) {
+      await rewriteProjectConfig(
+        (current) => removeProjectDefault(current, "model"),
+        "The project model is already inherited.",
+      )
+      return
+    }
     setSaving(true)
     const result = await config.updateProject({ model: value })
     setSaving(false)
@@ -2351,7 +2421,13 @@ function ProjectConfigTab() {
   }
 
   async function setDefaultAgent(value: string) {
-    if (!value) return
+    if (!value) {
+      await rewriteProjectConfig(
+        (current) => removeProjectDefault(current, "default_agent"),
+        "The project default agent is already inherited.",
+      )
+      return
+    }
     setSaving(true)
     const result = await config.updateProject({ default_agent: value })
     setSaving(false)
@@ -2551,6 +2627,16 @@ function ProjectConfigTab() {
                                       >
                                         {p.action}
                                       </span>
+                                      <button
+                                        onClick={() => removePermissionPattern(tool.key, p.pattern)}
+                                        disabled={saving()}
+                                        class="p-0.5 rounded transition-colors opacity-50 hover:opacity-100 disabled:opacity-30"
+                                        style={{ color: "var(--icon-critical-base)" }}
+                                        title="Remove rule"
+                                        aria-label={`Remove ${p.pattern} rule`}
+                                      >
+                                        <X class="w-3 h-3" />
+                                      </button>
                                     </div>
                                   </div>
                                 )}
@@ -2660,7 +2746,7 @@ function ProjectConfigTab() {
                     color: "var(--text-base)",
                   }}
                 >
-                  <option value="" disabled>Select a project default</option>
+                  <option value="">Use inherited default</option>
                   <For each={availableModels()}>
                     {(m) => (
                       <option value={m.id}>
@@ -2689,7 +2775,7 @@ function ProjectConfigTab() {
                     color: "var(--text-base)",
                   }}
                 >
-                  <option value="" disabled>Select a project default</option>
+                  <option value="">Use inherited default</option>
                   <For each={providers.agents}>
                     {(agent) => (
                       <option value={agent.name}>{agent.name}</option>

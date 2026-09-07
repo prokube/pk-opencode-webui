@@ -276,7 +276,7 @@ describe("sync event helpers", () => {
     tracker.end(second)
   })
 
-  test("collapsed tombstones survive snapshots without resurrection", () => {
+  test("collapsed tombstones remain bounded and reset after an authoritative snapshot", () => {
     const tracker = createSessionRequestTracker(1)
     tracker.removeMessage("ses_1", "msg_1")
     expect(tracker.removeMessage("ses_1", "msg_2")).toBe(true)
@@ -285,12 +285,12 @@ describe("sync event helpers", () => {
 
     const request = tracker.begin("ses_1")
     const stale = [message(user("msg_1"), []), message(user("msg_2"), []), message(user("msg_3"), [])]
-    expect(tracker.snapshot(request, [], stale)).toEqual([])
+    expect(tracker.snapshot(request, [], stale)).toEqual(stale)
     tracker.appliedSnapshot("ses_1")
     tracker.end(request)
 
     const next = tracker.begin("ses_1")
-    expect(tracker.filter(next, stale)).toEqual([])
+    expect(tracker.filter(next, stale)).toEqual(stale)
     expect(tracker.needsSnapshot("ses_1")).toBe(false)
   })
 
@@ -394,6 +394,32 @@ describe("sync event helpers", () => {
     expect(tracker.valid(request)).toBe(false)
   })
 
+  test("session deletion invalidates a replacement sync waiting for an inflight request", async () => {
+    const tracker = createSessionRequestTracker()
+    const request = tracker.begin("ses_1")
+    const revision = tracker.revision("ses_1")
+    const gate = Promise.withResolvers<void>()
+    const replacement = gate.promise.then(() => tracker.revision("ses_1") === revision)
+
+    tracker.removeSession("ses_1")
+    tracker.end(request)
+    gate.resolve()
+
+    expect(await replacement).toBe(false)
+  })
+
+  test("failed saturation recovery keeps the session eligible for retry", async () => {
+    const tracker = createSessionRequestTracker(1)
+    tracker.removeMessage("ses_1", "msg_1")
+    expect(tracker.removeMessage("ses_1", "msg_2")).toBe(true)
+
+    const request = tracker.begin("ses_1")
+    await Promise.resolve(false)
+    tracker.end(request)
+
+    expect(tracker.needsSnapshot("ses_1")).toBe(true)
+  })
+
   test("preserves removals that arrive during an unknown authoritative snapshot", () => {
     const tracker = createSessionRequestTracker(1)
     tracker.requireSnapshot("ses_1")
@@ -427,6 +453,24 @@ describe("sync event helpers", () => {
 
     expect(snapshot[0].parts[0]).toEqual(text("part_1", "msg_1", "live"))
     expect(snapshot[1].parts[0]).toEqual(text("part_2", "msg_2", "live"))
+  })
+
+  test("allows full updates to recreate known removals while tombstones are unknown", () => {
+    const tracker = createSessionRequestTracker(2)
+    tracker.removeMessage("ses_1", "msg_1")
+    tracker.removePart("ses_1", "msg_2", "part_2")
+    tracker.requireSnapshot("ses_1")
+    const request = tracker.begin("ses_1")
+
+    tracker.updateMessage("ses_1", "msg_1")
+    tracker.updatePart("ses_1", "msg_2", "part_2")
+    const live = [
+      message(user("msg_1"), [text("part_1", "msg_1", "live")]),
+      message(user("msg_2"), [text("part_2", "msg_2", "live")]),
+    ]
+
+    expect(tracker.snapshot(request, live, live)).toEqual(live)
+    tracker.end(request)
   })
 
   test("immediate SSE close backs off reconnects", () => {
@@ -739,6 +783,78 @@ describe("sync event buffer", () => {
     expect(seen).toEqual(["live"])
     events.push("after")
     expect(seen).toEqual(["live", "after"])
+  })
+
+  test("drains the buffer after a consumer throws and preserves reentrant ordering", async () => {
+    const seen: number[] = []
+    const events = createEventBuffer<number>((event) => {
+      seen.push(event)
+      if (event === 1) {
+        events.push(3)
+        throw new Error("consume failed")
+      }
+    })
+
+    await expect(events.during(async () => {
+      events.push(1)
+      events.push(2)
+    })).rejects.toThrow("consume failed")
+
+    expect(seen).toEqual([1, 2, 3])
+    events.push(4)
+    expect(seen).toEqual([1, 2, 3, 4])
+  })
+
+  test("preserves the first consumer error when release also fails", async () => {
+    const seen: number[] = []
+    const events = createEventBuffer<number>((event) => {
+      seen.push(event)
+      if (event === 1) throw new Error("first consume failed")
+      if (event === 2) throw new Error("second consume failed")
+    }, {
+      released: () => {
+        throw new Error("released failed")
+      },
+    })
+
+    await expect(events.during(async () => {
+      events.push(1)
+      events.push(2)
+      events.push(3)
+    })).rejects.toThrow("first consume failed")
+    expect(seen).toEqual([1, 2, 3])
+    expect(() => events.push(4)).not.toThrow()
+    expect(seen).toEqual([1, 2, 3, 4])
+  })
+
+  test("does not let release errors mask a coordinated task failure", async () => {
+    const events = createEventBuffer<number>(() => {
+      throw new Error("consume failed")
+    }, {
+      released: () => {
+        throw new Error("released failed")
+      },
+    })
+
+    await expect(events.during(async () => {
+      events.push(1)
+      throw new Error("task failed")
+    })).rejects.toThrow("task failed")
+    expect(() => events.push(2)).toThrow("consume failed")
+  })
+
+  test("restores the buffer when the released callback throws", async () => {
+    const seen: number[] = []
+    const events = createEventBuffer<number>((event) => seen.push(event), {
+      released: () => {
+        throw new Error("released failed")
+      },
+    })
+
+    await expect(events.during(async () => events.push(1))).rejects.toThrow("released failed")
+    expect(seen).toEqual([1])
+    events.push(2)
+    expect(seen).toEqual([1, 2])
   })
 
   test("drops buffered events after disposal", async () => {

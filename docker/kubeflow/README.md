@@ -113,6 +113,7 @@ spec:
 | ------------------ | ----------------------- | --------------------------------- |
 | `NB_PREFIX`        | `/`                     | URL path prefix (set by Kubeflow) |
 | `BASE_PATH`        | `/`                     | Alternative to NB_PREFIX          |
+| `BASE_PATH_STRIPPED` | `true` with `NB_PREFIX` | Accept requests after Kubeflow strips `NB_PREFIX`; set to `false` only when the proxy preserves it |
 | `API_URL`          | `http://127.0.0.1:4096` | Internal API server URL           |
 | `KF_EXAMPLES_REPO` | (empty)                 | Git repo to clone on startup      |
 | `BRANDING_NAME`    | (empty)                 | Optional branding name shown in UI|

@@ -241,9 +241,11 @@ export function createSessionRequestTracker(limit = 1000) {
     return next
   }
 
-  function collapse(sessionID: string, state: SessionTombstones) {
+  function collapse(state: SessionTombstones) {
     const count = state.messages.size + [...state.parts.values()].reduce((total, parts) => total + parts.size, 0)
     if (count <= limit || state.saturated) return false
+    state.messages.clear()
+    state.parts.clear()
     state.unknown = true
     state.saturated = true
     return true
@@ -273,20 +275,26 @@ export function createSessionRequestTracker(limit = 1000) {
     return versions.get(request.sessionID) === request.version
   }
 
+  function revision(sessionID: string) {
+    return versions.get(sessionID) ?? 0
+  }
+
   function removeMessage(sessionID: string, messageID: string) {
     const state = removals(sessionID)
-    state.messages.add(messageID)
-    state.parts.delete(messageID)
+    if (!state.saturated) {
+      state.messages.add(messageID)
+      state.parts.delete(messageID)
+    }
     for (const request of requests.get(sessionID) ?? []) {
       request.removedMessages.add(messageID)
       request.removedParts.delete(messageID)
     }
-    return collapse(sessionID, state)
+    return collapse(state)
   }
 
   function removePart(sessionID: string, messageID: string, partID: string) {
     const state = removals(sessionID)
-    if (!state.messages.has(messageID)) {
+    if (!state.saturated && !state.messages.has(messageID)) {
       const parts = state.parts.get(messageID) ?? new Set()
       parts.add(partID)
       state.parts.set(messageID, parts)
@@ -297,15 +305,13 @@ export function createSessionRequestTracker(limit = 1000) {
       parts.add(partID)
       request.removedParts.set(messageID, parts)
     }
-    return collapse(sessionID, state)
+    return collapse(state)
   }
 
   function updateMessage(sessionID: string, messageID: string) {
     const state = tombstones.get(sessionID)
-    if (!state?.unknown) {
-      state?.messages.delete(messageID)
-      if (state && state.messages.size === 0 && state.parts.size === 0) tombstones.delete(sessionID)
-    }
+    state?.messages.delete(messageID)
+    if (state && !state.unknown && state.messages.size === 0 && state.parts.size === 0) tombstones.delete(sessionID)
     for (const request of requests.get(sessionID) ?? []) {
       request.removedMessages.delete(messageID)
       request.updatedMessages.add(messageID)
@@ -322,11 +328,9 @@ export function createSessionRequestTracker(limit = 1000) {
 
   function updatePart(sessionID: string, messageID: string, partID: string) {
     const state = tombstones.get(sessionID)
-    if (!state?.unknown) {
-      state?.parts.get(messageID)?.delete(partID)
-      if (state?.parts.get(messageID)?.size === 0) state.parts.delete(messageID)
-      if (state && state.messages.size === 0 && state.parts.size === 0) tombstones.delete(sessionID)
-    }
+    state?.parts.get(messageID)?.delete(partID)
+    if (state?.parts.get(messageID)?.size === 0) state.parts.delete(messageID)
+    if (state && !state.unknown && state.messages.size === 0 && state.parts.size === 0) tombstones.delete(sessionID)
     for (const request of requests.get(sessionID) ?? []) {
       request.removedParts.get(messageID)?.delete(partID)
       if (request.removedParts.get(messageID)?.size === 0) request.removedParts.delete(messageID)
@@ -389,8 +393,7 @@ export function createSessionRequestTracker(limit = 1000) {
   }
 
   function appliedSnapshot(sessionID: string) {
-    const state = tombstones.get(sessionID)
-    if (state) state.unknown = false
+    tombstones.delete(sessionID)
   }
 
   function needsSnapshot(sessionID: string) {
@@ -440,6 +443,7 @@ export function createSessionRequestTracker(limit = 1000) {
     removePart,
     removeSession,
     requireSnapshot,
+    revision,
     restore,
     snapshot,
     touchPart,
@@ -689,6 +693,9 @@ export function SyncProvider(props: ParentProps) {
   const [providerLoading, setProviderLoading] = createSignal(false)
   const overflowSessions = new Set<string>()
   const overflowDeleted = new Set<string>()
+  const overflowRecoveries = new Map<string, Promise<void>>()
+  const overflowRetryTimers = new Map<string, ReturnType<typeof setTimeout>>()
+  const overflowRetryDelays = new Map<string, number>()
   let overflowGlobal = false
   const events = createEventBuffer<SyncEvent>(handleEvent, {
     coalesce: coalesceSyncEvent,
@@ -722,7 +729,7 @@ export function SyncProvider(props: ParentProps) {
       for (const sessionID of deleted) removeSession(sessionID)
       overflowDeleted.clear()
       for (const sessionID of sessions) {
-        if (!deleted.has(sessionID)) void resyncSession(sessionID)
+        if (!deleted.has(sessionID)) recoverOverflowSession(sessionID)
       }
       if (!overflowGlobal) return
       overflowGlobal = false
@@ -760,6 +767,10 @@ export function SyncProvider(props: ParentProps) {
   }
 
   function removeSession(sessionID: string) {
+    const timer = overflowRetryTimers.get(sessionID)
+    if (timer) clearTimeout(timer)
+    overflowRetryTimers.delete(sessionID)
+    overflowRetryDelays.delete(sessionID)
     sessionCacheAccess.delete(sessionID)
     sessionRequests.removeSession(sessionID)
     const next = removeSyncSessionData(store, sessionID)
@@ -803,8 +814,37 @@ export function SyncProvider(props: ParentProps) {
     }
   }
 
-  function resyncSession(sessionID: string) {
+  async function resyncSession(sessionID: string) {
+    const current = inflight.get(sessionID)
+    const revision = current ? sessionRequests.revision(sessionID) : undefined
+    if (current) await current
+    if (disposed) return false
+    if (revision !== undefined && sessionRequests.revision(sessionID) !== revision) return false
     return syncSession(sessionID, true)
+  }
+
+  function recoverOverflowSession(sessionID: string) {
+    if (disposed || !sessionRequests.needsSnapshot(sessionID)) return
+    if (overflowRecoveries.has(sessionID) || overflowRetryTimers.has(sessionID)) return
+
+    const promise = (async () => {
+      const success = await resyncSession(sessionID)
+      if (!success || sessionRequests.needsSnapshot(sessionID)) return
+      overflowRetryDelays.delete(sessionID)
+    })()
+    overflowRecoveries.set(sessionID, promise)
+    void promise.finally(() => {
+      if (overflowRecoveries.get(sessionID) !== promise) return
+      overflowRecoveries.delete(sessionID)
+      if (disposed || !sessionRequests.needsSnapshot(sessionID)) return
+      const delay = overflowRetryDelays.get(sessionID) ?? 1_000
+      overflowRetryDelays.set(sessionID, Math.min(delay * 2, 30_000))
+      const timer = setTimeout(() => {
+        overflowRetryTimers.delete(sessionID)
+        recoverOverflowSession(sessionID)
+      }, delay)
+      overflowRetryTimers.set(sessionID, timer)
+    })
   }
 
   function handleEvent(event: SyncEvent) {
@@ -862,7 +902,7 @@ export function SyncProvider(props: ParentProps) {
       setStore("part", produce((parts) => {
         delete parts[removed.messageID!]
       }))
-      if (resync) void resyncSession(removed.sessionID)
+      if (resync) recoverOverflowSession(removed.sessionID)
     }
 
     if (event.type === "message.part.removed") {
@@ -877,7 +917,7 @@ export function SyncProvider(props: ParentProps) {
           ? { ...message, parts: removePartByID(message.parts, removed.partID!) }
           : message) ?? [],
       )
-      if (resync) void resyncSession(removed.sessionID)
+      if (resync) recoverOverflowSession(removed.sessionID)
     }
 
     // Message part events - the main real-time update mechanism
@@ -1223,6 +1263,7 @@ export function SyncProvider(props: ParentProps) {
     unsubscribe()
     unsubscribeRecovery()
     if (bootstrapRetryTimer) clearTimeout(bootstrapRetryTimer)
+    overflowRetryTimers.forEach(clearTimeout)
   })
 
   const value: SyncContextValue = {

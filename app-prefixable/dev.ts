@@ -1,6 +1,6 @@
 import { watch } from "fs"
 import { handleExtendedEndpoint, isApiPath, isMutation, isSameOriginRequest } from "../shared/extended-api"
-import { matchesBasePath, stripBasePath } from "../shared/base-path"
+import { normalizeRequestPath, prefixStrippedAllowed } from "../shared/base-path"
 import { isEventStreamPath, normalizeProxiedResponse, proxyEventResponse, serializeScriptData, stripHopByHopHeaders } from "../shared/proxy"
 
 const BASE_PATH = process.env.BASE_PATH || "/"
@@ -9,11 +9,13 @@ const API_URL = process.env.API_URL || "http://127.0.0.1:4096"
 const BRANDING_NAME = process.env.BRANDING_NAME || ""
 const BRANDING_URL = process.env.BRANDING_URL || ""
 const BRANDING_ICON = process.env.BRANDING_ICON || ""
+const BASE_PATH_STRIPPED = prefixStrippedAllowed(process.env.BASE_PATH_STRIPPED)
 
 console.log(`Starting dev server...`)
 console.log(`  BASE_PATH: ${BASE_PATH}`)
 console.log(`  API_URL: ${API_URL}`)
 console.log(`  PORT: ${PORT}`)
+console.log(`  BASE_PATH_STRIPPED: ${BASE_PATH_STRIPPED}`)
 if (BRANDING_NAME) console.log(`  BRANDING: ${BRANDING_NAME}`)
 
 // Initial build
@@ -67,15 +69,10 @@ const server = Bun.serve<{ target: string }>({
     const url = new URL(req.url)
     const path = url.pathname
 
-    if (!matchesBasePath(path, basePathWithoutTrailing)) {
-      return new Response("Not Found", { status: 404 })
-    }
-
-    // Strip only a complete base-path segment (for both API and frontend routes).
-    let strippedPath = stripBasePath(path, basePathWithoutTrailing)
-    if (!strippedPath.startsWith("/")) {
-      strippedPath = "/" + strippedPath
-    }
+    // Prefix-stripping proxies must opt in so direct deployments remain prefix-isolated.
+    const normalizedPath = normalizeRequestPath(path, basePathWithoutTrailing, BASE_PATH_STRIPPED)
+    if (normalizedPath === null) return new Response("Not Found", { status: 404 })
+    const strippedPath = normalizedPath
 
     // WebSocket upgrade for /pty routes - proxy to backend
     if (strippedPath.startsWith("/pty/") && req.headers.get("upgrade") === "websocket") {

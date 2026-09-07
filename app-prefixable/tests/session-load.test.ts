@@ -48,6 +48,12 @@ describe("session load helpers", () => {
       sessionDraftKey("server-b", "dir", "ses_1"),
     );
     expect(sessionDraftKey("server-a", "dir")).toBe("server-a:dir:__new__");
+    expect(sessionDraftKey("server-a", "dir", undefined, "one")).not.toBe(
+      sessionDraftKey("server-a", "dir", undefined, "two"),
+    );
+    expect(sessionRouteKey("server-a", "dir", undefined, "one")).not.toBe(
+      sessionRouteKey("server-a", "dir", undefined, "two"),
+    );
   });
 
   test("does not run a stale submit continuation after same-directory navigation", async () => {

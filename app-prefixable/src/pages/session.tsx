@@ -9,7 +9,7 @@ import {
   on,
   untrack,
 } from "solid-js";
-import { useParams, useNavigate } from "@solidjs/router";
+import { useParams, useNavigate, useSearchParams } from "@solidjs/router";
 import { Button } from "../components/ui/button";
 import { useSDK } from "../context/sdk";
 import { sessionStatusEvent, useEvents } from "../context/events";
@@ -45,7 +45,7 @@ import {
 import { sessionQuestionRequest } from "../utils/session-tree-request";
 import { ascendingID } from "../utils/id";
 import { createRootSession } from "../utils/root-session";
-import { formatStartError } from "../utils/session-start";
+import { acceptPendingPrompt, clearPendingPrompt, finishPendingPrompt, formatStartError, type PendingPrompt } from "../utils/session-start";
 import { LOCAL_SERVER_ID } from "../context/server";
 import { workspaceStorageKey } from "../utils/storage";
 import {
@@ -54,8 +54,10 @@ import {
   sessionDraftKey,
   sessionRouteKey,
 } from "../utils/session-load";
-import { canDispatchFollowup, followupStorageKey, parseFollowups, parseLegacyFollowupMap, type FollowupItem } from "../utils/followups";
+import { canDispatchFollowup, followupPauseStorageKey, followupStorageKey, parseFollowupPaused, parseFollowups, parseLegacyFollowupMap, retryFollowups, type FollowupItem } from "../utils/followups";
 import { useSavedPrompts } from "../context/saved-prompts";
+import { selectsSlashCommand } from "../utils/session-input";
+import { advanceDraftVersion, draftVersionIsCurrent, trimDraftVersions } from "../utils/session-draft";
 
 const ACCEPTED_TYPES = [
   "image/png",
@@ -84,17 +86,30 @@ interface SessionDraft {
   drag: number;
 }
 const drafts = new Map<string, SessionDraft>();
+const draftVersions = new Map<string, number>();
 const DRAFT_LIMIT = 40;
 
+function reviseDraft(key: string) {
+  const version = advanceDraftVersion(draftVersions, key);
+  for (const removed of trimDraftVersions(draftVersions, DRAFT_LIMIT)) drafts.delete(removed);
+  return version;
+}
+
 function storeDraft(key: string, draft: SessionDraft) {
+  reviseDraft(key);
   drafts.delete(key);
   drafts.set(key, draft);
-  while (drafts.size > DRAFT_LIMIT) drafts.delete(drafts.keys().next().value!);
+  while (drafts.size > DRAFT_LIMIT) {
+    const removed = drafts.keys().next().value!;
+    drafts.delete(removed);
+    draftVersions.delete(removed);
+  }
 }
 
 // Draft keys include server, directory, and session. "__new__" represents a new-session draft.
 export function Session() {
   const params = useParams<{ dir: string; id?: string }>();
+  const [search] = useSearchParams<{ new?: string }>();
   const navigate = useNavigate();
   const { client, directory } = useSDK();
   const events = useEvents();
@@ -185,9 +200,11 @@ export function Session() {
   const [followups, setFollowups] = createSignal<FollowupItem[]>([]);
   const [dispatchingFollowup, setDispatchingFollowup] = createSignal(false);
   const [pausedFollowups, setPausedFollowups] = createSignal<Set<string>>(new Set());
-  const activeDraft = { key: sessionDraftKey(LOCAL_SERVER_ID, params.dir, params.id) };
+  const newToken = () => search.new;
+  const activeDraft = { key: sessionDraftKey(LOCAL_SERVER_ID, params.dir, params.id, newToken()) };
   const inputResize = { frame: undefined as number | undefined };
   const lifetime = { active: true, load: 0, create: 0, submit: 0 };
+  const pendingPrompts = new Map<string, PendingPrompt>();
   onCleanup(() => {
     saveComposerDraft(activeDraft.key);
     if (inputResize.frame !== undefined) cancelAnimationFrame(inputResize.frame);
@@ -216,6 +233,13 @@ export function Session() {
 
   function setFollowupPaused(paused: boolean, id = sessionId()) {
     if (!id) return;
+    try {
+      const key = followupPauseStorageKey(LOCAL_SERVER_ID, directory ?? base64Decode(params.dir), id);
+      if (paused) localStorage.setItem(key, "true");
+      if (!paused) localStorage.removeItem(key);
+    } catch (err) {
+      console.warn("[Session] Failed to persist follow-up pause state:", err);
+    }
     setPausedFollowups((current) => {
       const next = new Set(current);
       if (paused) next.add(id);
@@ -244,6 +268,7 @@ export function Session() {
       const legacy = parseLegacyFollowupMap(legacyRaw, id, defaults);
       const items = current ? parseFollowups(current, defaults) : legacy.items;
       setFollowups(items);
+      setFollowupPaused(items.length > 0 && parseFollowupPaused(localStorage.getItem(followupPauseStorageKey(LOCAL_SERVER_ID, directory ?? base64Decode(params.dir), id))), id);
       localStorage.setItem(key, JSON.stringify(items));
       if (legacyRaw && legacy.items.length) {
         if (legacy.remaining) localStorage.setItem(legacyKey, legacy.remaining);
@@ -251,6 +276,7 @@ export function Session() {
       }
     } catch {
       setFollowups([]);
+      setFollowupPaused(false, id);
     }
   }));
 
@@ -351,7 +377,8 @@ export function Session() {
 
   // Set textarea value, trigger auto-grow, and focus — bypasses input handler
   // to avoid slash-command detection when restored text starts with "/"
-  function applyInputAndAutogrow(el: HTMLTextAreaElement, text: string) {
+  function applyInputAndAutogrow(el: HTMLTextAreaElement, text: string, user = true) {
+    if (user) reviseDraft(activeDraft.key);
     setInput(text);
     const nativeSet = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")?.set;
     nativeSet?.call(el, text);
@@ -432,7 +459,7 @@ export function Session() {
   async function loadSession(id: string, route: string) {
     const token = ++lifetime.load;
     const current = () => lifetime.active && token === lifetime.load &&
-      route === sessionDraftKey(LOCAL_SERVER_ID, params.dir, params.id);
+      route === sessionDraftKey(LOCAL_SERVER_ID, params.dir, params.id, newToken());
     try {
       const loaded = await requestSession(
         (params, options) => client.session.get(params, options),
@@ -498,7 +525,7 @@ export function Session() {
     storeDraft(key, { text, files, images, height: inputRef?.style.height ?? "", drag: untrack(dragHeight) });
   }
 
-  createEffect(on(() => sessionDraftKey(LOCAL_SERVER_ID, params.dir, params.id), (key, prevKey) => {
+  createEffect(on(() => sessionDraftKey(LOCAL_SERVER_ID, params.dir, params.id, newToken()), (key, prevKey) => {
     const id = params.id;
     const preservesSubmission = !!id && untrack(sessionId) === id && untrack(loading);
     console.log("[Session] URL param changed:", key);
@@ -1010,6 +1037,7 @@ export function Session() {
 
   // Handle input changes to detect slash commands
   function handleInputChange(value: string) {
+    reviseDraft(activeDraft.key);
     setInput(value);
 
     // Detect slash command pattern: /command (no spaces — popover only for partial commands)
@@ -1037,7 +1065,7 @@ export function Session() {
     } else if (e.key === "ArrowUp") {
       e.preventDefault();
       setSlashIndex((i) => (i - 1 + cmds.length) % cmds.length);
-    } else if (e.key === "Enter" || e.key === "Tab") {
+    } else if (selectsSlashCommand(e.key, e.isComposing)) {
       e.preventDefault();
       const cmd = cmds[slashIndex()];
       if (cmd) {
@@ -1180,13 +1208,19 @@ export function Session() {
 
         if (event.type === "message.updated") {
           const info = event.properties.info as { id?: string; sessionID?: string } | undefined;
-          if (info?.sessionID === id && info.id === optimisticMessage()?.id) setOptimisticMessage(null);
+          if (info?.sessionID === id && info.id) {
+            const pending = pendingPrompts.get(id);
+            if (pending) acceptPendingPrompt(pending, info.id);
+            if (info.id === optimisticMessage()?.id) setOptimisticMessage(null);
+          }
         }
 
         // Handle status changes
         const statusEvent = sessionStatusEvent(event);
         if (statusEvent) {
           if (statusEvent.sessionID === id && statusEvent.status.type === "idle") {
+            const pending = pendingPrompts.get(id);
+            if (pending) finishPendingPrompt(pending);
             console.log("[Session] Status idle");
             setOptimisticMessage(null);
 
@@ -1244,6 +1278,9 @@ export function Session() {
     try {
       console.log("[Session] Aborting session:", id);
       await client.session.abort({ sessionID: id, directory });
+      const pending = pendingPrompts.get(id);
+      if (pending) pending.finished = true;
+      events.setSessionStatus(id, { type: "idle" });
       if (route !== sessionRouteKey(LOCAL_SERVER_ID, directory ?? base64Decode(params.dir), params.id)) return;
       setProcessing(false);
       // Only dismiss the question if it belongs to this session — aborting is
@@ -1263,10 +1300,12 @@ export function Session() {
     const key = `file:${path}`;
     const existing = fileContext().find((f) => f.key === key);
     if (existing) return;
+    reviseDraft(activeDraft.key);
     setFileContext((prev) => [...prev, { path, key }]);
   }
 
   function removeFileFromContext(key: string) {
+    reviseDraft(activeDraft.key);
     setFileContext((prev) => prev.filter((f) => f.key !== key));
   }
 
@@ -1293,12 +1332,14 @@ export function Session() {
         mime: file.type,
         dataUrl,
       };
+      reviseDraft(activeDraft.key);
       setImageAttachments((prev) => [...prev, attachment]);
     };
     reader.readAsDataURL(file);
   }
 
   function removeUpload(id: string) {
+    reviseDraft(activeDraft.key);
     setImageAttachments((prev) => prev.filter((a) => a.id !== id));
   }
 
@@ -1477,14 +1518,16 @@ export function Session() {
     const originalID = sessionId();
     const queuedItems = queued ? followups() : [];
     const originalDraftID = originalID;
-    const originalDraft = sessionDraftKey(LOCAL_SERVER_ID, submitDirSlug, originalDraftID);
+    const originalDraft = sessionDraftKey(LOCAL_SERVER_ID, submitDirSlug, originalDraftID, newToken());
     const scope = {
       token: ++lifetime.submit,
-      route: sessionRouteKey(LOCAL_SERVER_ID, submitDirectory, params.id),
+      route: sessionRouteKey(LOCAL_SERVER_ID, submitDirectory, params.id, newToken()),
       sessionID: originalID,
+      draft: originalDraft,
+      draftVersion: 0,
     };
     const current = () => lifetime.active && scope.token === lifetime.submit &&
-      scope.route === sessionRouteKey(LOCAL_SERVER_ID, directory ?? base64Decode(params.dir), params.id) &&
+      scope.route === sessionRouteKey(LOCAL_SERVER_ID, directory ?? base64Decode(params.dir), params.id, newToken()) &&
       scope.sessionID === sessionId();
 
     setError(null);
@@ -1497,6 +1540,7 @@ export function Session() {
 
     // Clear saved draft for this session since the message was sent
     drafts.delete(originalDraft);
+    scope.draftVersion = reviseDraft(originalDraft);
 
     // Optimistic update - show user message immediately while waiting for server
     const messageID = queued?.messageID ?? ascendingID("msg");
@@ -1506,25 +1550,27 @@ export function Session() {
 
     const needsSession = !originalID;
     const createToken = needsSession ? ++lifetime.create : 0;
-    const saveDraft = (id = originalDraftID) => {
-      storeDraft(sessionDraftKey(LOCAL_SERVER_ID, submitDirSlug, id), {
+    const saveDraft = () => {
+      if (!draftVersionIsCurrent(draftVersions, scope.draft, scope.draftVersion)) return false;
+      storeDraft(scope.draft, {
         text,
         files,
         images,
         height: "",
         drag: 0,
       });
+      return true;
     };
-    const restoreComposer = (id = originalID) => {
-      saveDraft(id);
-      if (!current()) return;
+    const restoreComposer = () => {
+      if (!saveDraft() || !current()) return;
       setOptimisticMessage(null);
       setInput(text);
       setFileContext(files);
       setImageAttachments(images);
-      if (inputRef) applyInputAndAutogrow(inputRef, text);
+      if (inputRef) applyInputAndAutogrow(inputRef, text, false);
     };
     let createdID: string | undefined;
+    let pending: PendingPrompt | undefined;
     try {
       let id = originalID;
 
@@ -1550,6 +1596,9 @@ export function Session() {
         createdID = id;
         scope.sessionID = id;
         scope.route = sessionRouteKey(LOCAL_SERVER_ID, submitDirectory, id);
+        scope.draft = sessionDraftKey(LOCAL_SERVER_ID, submitDirSlug, id);
+        drafts.delete(scope.draft);
+        scope.draftVersion = reviseDraft(scope.draft);
         setSessionId(id);
         navigate(`/${dirSlug()}/session/${id}`, { replace: true });
         // Store the model for the new session
@@ -1618,6 +1667,8 @@ export function Session() {
 
       promptPayload.variant = queued?.variant ?? providers.variant.current(id, model, providers.selectedAgent);
 
+      pending = { messageID, accepted: false, finished: false };
+      pendingPrompts.set(id, pending);
       const promptRes = await client.session.promptAsync(promptPayload);
       if ("error" in promptRes && promptRes.error) {
         throw new Error(formatStartError(promptRes.error));
@@ -1627,7 +1678,8 @@ export function Session() {
       console.log("[Session] Prompt response:", promptRes);
 
       // Start processing - SSE events will handle updates and completion
-      startProcessing(id);
+      if (pending.finished) finishProcessing(id);
+      if (!pending.finished) startProcessing(id);
     } catch (err) {
       if (queued) {
         saveFollowups(queuedItems.map((item) => item.id === queued.id ? { ...item, failed: true } : item), originalID, current());
@@ -1637,10 +1689,10 @@ export function Session() {
         }
         return;
       }
-      if (scope.token === lifetime.submit) saveDraft(createdID ?? originalID);
+      restoreComposer();
       if (createdID) void sync.session.sync(createdID);
       if (!current()) return;
-      restoreComposer(createdID ?? originalID);
+      setOptimisticMessage(null);
       console.error("[Session] Error sending message:", err);
       const msg = needsSession
         ? "Failed to send the first message"
@@ -1649,14 +1701,16 @@ export function Session() {
         `${msg}: ${formatStartError(err)}`,
       );
     } finally {
+      if (scope.sessionID && pending) clearPendingPrompt(pendingPrompts, scope.sessionID, pending);
       if (current()) setLoading(false);
     }
   }
 
   function retryFollowup(id: string) {
     if (dispatchingFollowup()) return;
-    setFollowupPaused(false);
-    saveFollowups(followups().map((item) => item.id === id ? { ...item, failed: false } : item));
+    const retry = retryFollowups(followups(), id);
+    setFollowupPaused(retry.paused);
+    saveFollowups(retry.items);
   }
 
   function deleteFollowup(id: string) {
