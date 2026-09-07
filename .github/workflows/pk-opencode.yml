@@ -27,13 +27,8 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Validate release tag
-        if: env.IS_RELEASE == 'true'
-        run: |
-          if [[ ! "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-rc[0-9]+)?$ ]]; then
-            echo "Release tag must match vX.Y.Z or vX.Y.Z-rcN"
-            exit 1
-          fi
+      - name: Test image tag validation
+        run: bash .github/scripts/validate-image-tag.test.sh
 
       - name: Generate dynamic version
         id: version
@@ -49,16 +44,18 @@ jobs:
           echo "VERSION=${VERSION}" >> "$GITHUB_OUTPUT"
           echo "Generated version: ${VERSION}"
 
-      - name: Determine Docker tag
+      - name: Validate and set Docker tag
+        env:
+          VERSION: ${{ steps.version.outputs.VERSION }}
         run: |
-          if [ -n "${{ steps.version.outputs.VERSION }}" ]; then
-            DOCKER_TAG="${{ steps.version.outputs.VERSION }}"
-          else
-            DOCKER_TAG="latest"
+          TAG_KIND="development"
+          if [[ "$IS_RELEASE" == "true" ]]; then
+            TAG_KIND="release"
           fi
 
-          echo "DOCKER_TAG=$DOCKER_TAG" >> "$GITHUB_ENV"
-          echo "VERSION_TAG=$IMAGE_PUSH_PATH/$IMAGE_NAME:$DOCKER_TAG" >> "$GITHUB_ENV"
+          bash .github/scripts/validate-image-tag.sh "$VERSION" "$TAG_KIND"
+          echo "DOCKER_TAG=$VERSION" >> "$GITHUB_ENV"
+          echo "VERSION_TAG=$IMAGE_PUSH_PATH/$IMAGE_NAME:$VERSION" >> "$GITHUB_ENV"
 
       - name: Authenticate to Google Cloud
         uses: google-github-actions/auth@v2
@@ -112,6 +109,9 @@ jobs:
 
       - name: Build and push image
         if: env.PUBLISH_IMAGE == 'true'
+        env:
+          COMMIT_SHA: ${{ github.sha }}
+          REPOSITORY_URL: ${{ github.event.repository.html_url }}
         run: |
           # Build the Kubeflow image
           docker build \
@@ -123,16 +123,16 @@ jobs:
             --build-arg KF_EXAMPLES_REPO=https://github.com/prokube-ai/kubeflow-examples.git \
             --label "org.opencontainers.image.title=OpenCode Prefixable UI" \
             --label "org.opencontainers.image.description=Prefix-aware OpenCode Web UI for Kubeflow" \
-            --label "org.opencontainers.image.source=${{ github.event.repository.html_url }}" \
-            --label "org.opencontainers.image.revision=${{ github.sha }}" \
+            --label "org.opencontainers.image.source=$REPOSITORY_URL" \
+            --label "org.opencontainers.image.revision=$COMMIT_SHA" \
             .
 
           # Push to GCP Artifact Registry
           docker push "$VERSION_TAG"
 
           if [[ "$IS_RELEASE" != "true" ]]; then
-            COMMIT_TAG="${{ env.IMAGE_PUSH_PATH }}/${{ env.IMAGE_NAME }}:commit-${{ github.sha }}"
-            LATEST_TAG="${{ env.IMAGE_PUSH_PATH }}/${{ env.IMAGE_NAME }}:latest"
+            COMMIT_TAG="$IMAGE_PUSH_PATH/$IMAGE_NAME:commit-$COMMIT_SHA"
+            LATEST_TAG="$IMAGE_PUSH_PATH/$IMAGE_NAME:latest"
             docker tag "$VERSION_TAG" "$COMMIT_TAG"
             docker tag "$VERSION_TAG" "$LATEST_TAG"
             docker push "$COMMIT_TAG"
@@ -163,7 +163,7 @@ jobs:
           cat <<EOF > summary.md
           ## Docker Image $RESULT
 
-          **Version:** \`${{ env.DOCKER_TAG }}\`
+          **Version:** \`$DOCKER_TAG\`
 
           ### Image Tags
           | Tag | URL |
