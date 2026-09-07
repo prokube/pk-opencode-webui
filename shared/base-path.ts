@@ -19,5 +19,5 @@ export function normalizeRequestPath(path: string, base: string, prefixStripped 
 
 export function prefixStrippedAllowed(value: string | undefined, notebookPrefix?: string) {
   if (value !== undefined) return value === "true"
-  return notebookPrefix !== undefined
+  return !!notebookPrefix
 }

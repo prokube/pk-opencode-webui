@@ -61,6 +61,7 @@ describe("normalizeRequestPath", () => {
 describe("prefixStrippedAllowed", () => {
   test("defaults Kubeflow notebook prefixes to stripped mode", () => {
     expect(prefixStrippedAllowed(undefined, "/notebook/team/workspace/")).toBe(true)
+    expect(prefixStrippedAllowed(undefined, "")).toBe(false)
     expect(prefixStrippedAllowed(undefined)).toBe(false)
   })
 
