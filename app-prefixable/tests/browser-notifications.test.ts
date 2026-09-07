@@ -25,6 +25,7 @@ describe("browser notification settings", () => {
   test("does not broaden legacy per-session opt-ins", () => {
     const legacy = parseLegacyNotificationMap('{"/workspace::ses_one":true,"ses_two":false}')
     expect(legacy).toEqual({ "/workspace::ses_one": true })
+    expect(parseLegacyNotificationMap('[true]')).toEqual({})
     expect(initialBrowserNotificationSettings(null, legacy)).toEqual({ agent: false, permissions: false, errors: false })
     expect(initialBrowserNotificationSettings(null, {}, false)).toEqual({ agent: false, permissions: false, errors: false })
     expect(initialBrowserNotificationSettings(null, {}, true, true)).toEqual({ agent: false, permissions: false, errors: false })

@@ -28,7 +28,7 @@ export function parseLegacyNotificationMap(raw: string | null) {
   if (!raw) return {}
   try {
     const parsed = JSON.parse(raw) as Record<string, unknown>
-    if (!parsed || typeof parsed !== "object") return {}
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {}
     return Object.fromEntries(Object.entries(parsed).filter(([, enabled]) => enabled === true).map(([key]) => [key, true])) as Record<string, boolean>
   } catch {
     return {}
