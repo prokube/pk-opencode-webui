@@ -61,6 +61,7 @@ export function ServerEventsProvider(props: ParentProps) {
   const [unhealthy, setUnhealthy] = createSignal(false)
   const encoder = new TextEncoder()
   const handshakes = new WeakMap<ServerEvent, AbortSignal>()
+  const sizes = new WeakMap<ServerEvent, number>()
   const recover = (reason: "connected" | "overflow") => {
     for (const handler of recoveries) {
       try {
@@ -84,10 +85,14 @@ export function ServerEventsProvider(props: ParentProps) {
       }
     }
   }, {
-    coalesce: coalesceServerEvent,
+    coalesce: (previous, event) => {
+      const merged = coalesceServerEvent(previous, event)
+      if (merged) sizes.set(merged, (sizes.get(previous) ?? 0) + (sizes.get(event) ?? 0))
+      return merged
+    },
     limit: 5_000,
     byteLimit: 2 * 1024 * 1024,
-    size: (event) => encoder.encode(JSON.stringify(event)).byteLength,
+    size: (event) => sizes.get(event) ?? 0,
     resetOnOverflow: true,
     overflow: () => recover("overflow"),
     run: batch,
@@ -117,6 +122,7 @@ export function ServerEventsProvider(props: ParentProps) {
         try {
           const event = parseServerEvent(raw)
           if (!event) return
+          sizes.set(event, encoder.encode(raw).byteLength)
           if (event.payload.type === "server.connected") handshakes.set(event, signal)
           pending.push(event)
         } catch (error) {
