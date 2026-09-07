@@ -118,9 +118,13 @@ function messageGrowth(message: DisplayMessage) {
 }
 
 export function MessageTimeline(props: {
+  sessionID?: string
   messages: DisplayMessage[]
   processing: boolean
   loadingHistory: boolean
+  historyMore?: boolean
+  historyLoading?: boolean
+  onLoadEarlier?: () => Promise<void>
   onScroll?: (nearBottom: boolean) => void
 }) {
   let containerRef: HTMLDivElement | undefined
@@ -198,7 +202,7 @@ export function MessageTimeline(props: {
   })
 
   // Check if there are more turns to load
-  const hasMore = createMemo(() => renderCount() < turnRefs().length)
+  const hasMore = createMemo(() => renderCount() < turnRefs().length || !!props.historyMore)
 
   // Get the last turn (for showing streaming content)
   const lastTurn = createMemo(() => {
@@ -208,17 +212,23 @@ export function MessageTimeline(props: {
   })
 
   // Load more earlier turns with scroll anchoring
-  function loadMore() {
+  async function loadMore() {
+    if (props.historyLoading) return
+    const sessionID = props.sessionID
     if (!containerRef) {
+      if (renderCount() >= turnRefs().length) await props.onLoadEarlier?.()
+      if (props.sessionID !== sessionID) return
       setRenderCount((prev) => Math.min(prev + TURNS_PER_BATCH, turnRefs().length))
       return
     }
     // Save scroll position relative to bottom before loading
     const scrollBottom = containerRef.scrollHeight - containerRef.scrollTop
+    if (renderCount() >= turnRefs().length) await props.onLoadEarlier?.()
+    if (props.sessionID !== sessionID) return
     setRenderCount((prev) => Math.min(prev + TURNS_PER_BATCH, turnRefs().length))
     // Restore scroll position after DOM update
     requestAnimationFrame(() => {
-      if (containerRef) {
+      if (containerRef && props.sessionID === sessionID) {
         containerRef.scrollTop = containerRef.scrollHeight - scrollBottom
       }
     })
@@ -327,7 +337,8 @@ export function MessageTimeline(props: {
         <Show when={hasMore()}>
           <div class="flex justify-center mb-4">
             <button
-              onClick={loadMore}
+              onClick={() => void loadMore()}
+              disabled={props.historyLoading}
               class="flex items-center gap-2 px-4 py-2 text-sm rounded-lg transition-colors"
               style={{
                 background: "var(--surface-inset)",
@@ -344,7 +355,11 @@ export function MessageTimeline(props: {
               }}
             >
               <ChevronUp class="w-4 h-4" />
-              <span>Load {Math.min(TURNS_PER_BATCH, turnRefs().length - renderCount())} earlier turns</span>
+              <span>{props.historyLoading
+                ? "Loading earlier messages..."
+                : renderCount() < turnRefs().length
+                  ? `Load ${Math.min(TURNS_PER_BATCH, turnRefs().length - renderCount())} earlier turns`
+                  : "Load earlier messages"}</span>
             </button>
           </div>
         </Show>

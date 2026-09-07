@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { applyPartDelta, coalesceSyncEvent, createLatestSuccessfulRequest, createSessionRequestTracker, mergeMessageUpdate, mergePartUpdate, mergeSessionMessages, reduceSyncLiveEvent, removeMessageByID, removePartByID, removeSyncSession, removeSyncSessionData, syncEventSize, updateProviderConnected, upsertSyncSession } from "../src/context/sync"
+import { applyPartDelta, coalesceSyncEvent, createLatestSuccessfulRequest, createSessionRequestTracker, hasMoreSessionMessages, mergeMessageUpdate, mergePartUpdate, mergeSessionMessages, nextSessionMessageLimit, reduceSyncLiveEvent, removeMessageByID, removePartByID, removeSyncSession, removeSyncSessionData, SESSION_MESSAGE_PAGE_SIZE, shouldPreserveSessionHistory, syncEventSize, updateProviderConnected, upsertSyncSession } from "../src/context/sync"
 import type { MessageWithParts, SyncLiveState } from "../src/context/sync"
 import type { Message, Part, PermissionRequest, QuestionRequest, Session } from "../src/sdk/client"
 import { createEventBuffer, createScheduledEventBuffer } from "../src/utils/event-buffer"
@@ -12,6 +12,21 @@ const user = (id: string, sessionID = "ses_1"): Message => ({
   time: { created: 1 },
   agent: "build",
   model: { providerID: "prov", modelID: "model" },
+})
+
+const assistant = (id: string, parentID: string): Message => ({
+  id,
+  sessionID: "ses_1",
+  role: "assistant",
+  time: { created: 1 },
+  parentID,
+  modelID: "model",
+  providerID: "prov",
+  mode: "build",
+  agent: "build",
+  path: { cwd: "/workspace", root: "/workspace" },
+  cost: 0,
+  tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
 })
 
 const text = (id: string, messageID: string, value = ""): Part => ({
@@ -65,6 +80,25 @@ const session = (id: string, archived?: number): Session => ({
 })
 
 describe("sync event helpers", () => {
+  test("loads bounded message history in upstream-sized pages", () => {
+    expect(SESSION_MESSAGE_PAGE_SIZE).toBe(200)
+    expect(nextSessionMessageLimit()).toBe(400)
+    expect(nextSessionMessageLimit(400)).toBe(600)
+    expect(hasMoreSessionMessages(200, 200)).toBe(false)
+    expect(hasMoreSessionMessages(201, 200)).toBe(true)
+  })
+
+  test("preserves paged history only across a known continuous boundary", () => {
+    const previous = [message(user("msg_001"), []), message(user("msg_200"), [])]
+    const overlapping = [message(user("msg_200"), []), message(user("msg_201"), [])]
+    const disconnected = [message(user("msg_400"), []), message(user("msg_401"), [])]
+
+    expect(shouldPreserveSessionHistory(previous, overlapping, true, false)).toBe(true)
+    expect(shouldPreserveSessionHistory(previous, disconnected, true, false)).toBe(false)
+    expect(shouldPreserveSessionHistory(previous, overlapping, true, true)).toBe(false)
+    expect(shouldPreserveSessionHistory(previous, overlapping, false, false)).toBe(false)
+  })
+
   test("upserts active sessions in id order", () => {
     const updated = { ...session("ses_2"), title: "updated" }
     const state = upsertSyncSession({ session: [session("ses_2")], archivedSession: [] }, updated)
@@ -259,6 +293,36 @@ describe("sync event helpers", () => {
     const next = tracker.begin("ses_1")
     expect(tracker.filter(next, [message(user("msg_removed"), [])])).toHaveLength(0)
     tracker.end(next)
+  })
+
+  test("paged snapshots retain older cached messages without restoring removals", () => {
+    const tracker = createSessionRequestTracker()
+    const old = message(user("msg_001"), [])
+    const recent = message(user("msg_200"), [])
+    const first = tracker.begin("ses_1")
+
+    expect(tracker.snapshot(first, [old, recent], [recent], recent).map((item) => item.info.id))
+      .toEqual(["msg_001", "msg_200"])
+    tracker.end(first)
+
+    tracker.removeMessage("ses_1", old.info.id)
+    const second = tracker.begin("ses_1")
+    expect(tracker.snapshot(second, [old, recent], [recent], recent).map((item) => item.info.id))
+      .toEqual(["msg_200"])
+    tracker.end(second)
+  })
+
+  test("paged snapshots preserve cached responses between a fetched parent and the page boundary", () => {
+    const tracker = createSessionRequestTracker()
+    const parent = message(user("msg_001"), [])
+    const omitted = message(assistant("msg_002", parent.info.id), [])
+    const boundary = message(assistant("msg_003", parent.info.id), [])
+    const request = tracker.begin("ses_1")
+
+    const snapshot = tracker.snapshot(request, [parent, omitted, boundary], [parent, boundary], boundary)
+
+    expect(snapshot.map((item) => item.info.id)).toEqual(["msg_001", "msg_002", "msg_003"])
+    tracker.end(request)
   })
 
   test("event-only part removals persist until a newer part update", () => {

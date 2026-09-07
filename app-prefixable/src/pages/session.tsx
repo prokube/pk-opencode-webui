@@ -1788,6 +1788,7 @@ export function Session() {
         {/* Messages - using rich message timeline with lazy rendering */}
         <div class="flex-1 flex flex-col overflow-hidden">
           <MessageTimeline
+            sessionID={sessionId()}
             messages={messages()}
             processing={
               processing() &&
@@ -1795,6 +1796,12 @@ export function Session() {
               pendingPermissions().length === 0
             }
             loadingHistory={loadingHistory()}
+            historyMore={sessionId() ? sync.session.history.more(sessionId()!) : false}
+            historyLoading={sessionId() ? sync.session.history.loading(sessionId()!) : false}
+            onLoadEarlier={() => {
+              const id = sessionId();
+              return id ? sync.session.history.loadMore(id) : Promise.resolve();
+            }}
           />
 
           {/* Question Prompt - rendered outside timeline for proper focus.

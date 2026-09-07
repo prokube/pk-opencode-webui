@@ -72,6 +72,11 @@ interface SyncContextValue {
     upsert: (session: Session) => void
     remove: (sessionID: string) => void
     retain: (sessionID: string) => () => void
+    history: {
+      more: (sessionID: string) => boolean
+      loading: (sessionID: string) => boolean
+      loadMore: (sessionID: string) => Promise<void>
+    }
   }
   provider: {
     invalidate: () => void
@@ -86,6 +91,26 @@ const SyncContext = createContext<SyncContextValue>()
 
 const cmp = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0)
 const encoder = new TextEncoder()
+export const SESSION_MESSAGE_PAGE_SIZE = 200
+
+export function nextSessionMessageLimit(limit = SESSION_MESSAGE_PAGE_SIZE) {
+  return limit + SESSION_MESSAGE_PAGE_SIZE
+}
+
+export function hasMoreSessionMessages(count: number, limit: number) {
+  return count > limit
+}
+
+export function shouldPreserveSessionHistory(
+  existing: MessageWithParts[],
+  page: MessageWithParts[],
+  more: boolean,
+  needsSnapshot: boolean,
+) {
+  if (!more || needsSnapshot) return false
+  const ids = new Set(page.map((message) => message.info.id))
+  return existing.some((message) => ids.has(message.info.id))
+}
 
 export function compareMessages(a: MessageWithParts, b: MessageWithParts) {
   const created = a.info.time.created - b.info.time.created
@@ -355,7 +380,12 @@ export function createSessionRequestTracker(limit = 1000) {
       }))
   }
 
-  function snapshot(request: SessionRequest, existing: MessageWithParts[] | undefined, messages: MessageWithParts[]) {
+  function snapshot(
+    request: SessionRequest,
+    existing: MessageWithParts[] | undefined,
+    messages: MessageWithParts[],
+    preserveOlderThan?: MessageWithParts,
+  ) {
     const current = existing ?? []
     const currentByID = new Map(current.map((message) => [message.info.id, message]))
     const state = tombstones.get(request.sessionID)
@@ -384,6 +414,11 @@ export function createSessionRequestTracker(limit = 1000) {
     const nextIDs = new Set(next.map((message) => message.info.id))
     for (const message of current) {
       if (state?.messages.has(message.info.id) || request.removedMessages.has(message.info.id)) continue
+      if (preserveOlderThan && compareMessages(message, preserveOlderThan) < 0 && !nextIDs.has(message.info.id)) {
+        next.push(message)
+        nextIDs.add(message.info.id)
+        continue
+      }
       if (!request.updatedMessages.has(message.info.id) && !request.updatedParts.has(message.info.id)) continue
       if (nextIDs.has(message.info.id)) continue
       next.push(message)
@@ -686,6 +721,7 @@ export function SyncProvider(props: ParentProps) {
   })
 
   const inflight = new Map<string, Promise<boolean>>()
+  const [history, setHistory] = createStore<Record<string, { limit: number; more: boolean; loading: boolean }>>({})
   const sessionCacheAccess = new Map<string, number>()
   const retainedSessions = new Map<string, number>()
   const sessionRequests = createSessionRequestTracker()
@@ -772,6 +808,9 @@ export function SyncProvider(props: ParentProps) {
     overflowRetryTimers.delete(sessionID)
     overflowRetryDelays.delete(sessionID)
     sessionCacheAccess.delete(sessionID)
+    setHistory(produce((state) => {
+      delete state[sessionID]
+    }))
     sessionRequests.removeSession(sessionID)
     const next = removeSyncSessionData(store, sessionID)
     batch(() => {
@@ -802,6 +841,9 @@ export function SyncProvider(props: ParentProps) {
       if (!candidate) return
       if (!sessionRequests.evict(candidate)) return
       sessionCacheAccess.delete(candidate)
+      setHistory(produce((state) => {
+        delete state[candidate]
+      }))
       const messageIDs = new Set((store.message[candidate] ?? []).map((message) => message.info.id))
       setStore("message", produce((messages) => {
         delete messages[candidate]
@@ -1170,7 +1212,7 @@ export function SyncProvider(props: ParentProps) {
     }
   }
 
-  async function syncSession(sessionID: string, replace = false) {
+  async function syncSession(sessionID: string, replace = false, messageLimit = SESSION_MESSAGE_PAGE_SIZE) {
     if (disposed) return false
     const current = inflight.get(sessionID)
     if (current && !replace && !sessionRequests.needsSnapshot(sessionID)) return current
@@ -1180,8 +1222,23 @@ export function SyncProvider(props: ParentProps) {
       try {
         const [sessionRes, messagesRes] = await Promise.all([
           client.session.get({ sessionID }),
-          client.session.messages({ sessionID }),
+          client.session.messages({ sessionID, limit: messageLimit + 1 }),
         ])
+        const response = (messagesRes.data ?? []) as MessageWithParts[]
+        const more = hasMoreSessionMessages(response.length, messageLimit)
+        const page = response.slice(-messageLimit)
+        const ids = new Set(page.map((message) => message.info.id))
+        const parentIDs = [...new Set(page.flatMap((message) =>
+          message.info.role === "assistant" && !ids.has(message.info.parentID) ? [message.info.parentID] : []))]
+        const parents = await Promise.all(parentIDs.map((messageID) => {
+          const cached = response.find((message) => message.info.id === messageID)
+          if (cached) return cached
+          return client.session.message({ sessionID, messageID }, { throwOnError: false }).then((result) => {
+            if (result.data) return result.data
+            if (result.response.status === 404) return undefined
+            throw new Error(`Failed to load parent message ${messageID}`)
+          })
+        }))
         if (!sessionRequests.valid(request)) return true
 
         batch(() => {
@@ -1192,11 +1249,23 @@ export function SyncProvider(props: ParentProps) {
 
           // Merge messages - preserve newer SSE updates
           if (messagesRes.data) {
-            const synced = sessionRequests.filter(request, messagesRes.data as MessageWithParts[])
+            const existing = store.message[sessionID] ?? []
+            const preserveHistory = shouldPreserveSessionHistory(
+              existing,
+              page,
+              more,
+              sessionRequests.needsSnapshot(sessionID),
+            )
+            const synced = sessionRequests.filter(request, [...parents.filter((message): message is MessageWithParts => !!message), ...page])
               .filter((m): m is MessageWithParts => !!m?.info?.id)
               .sort(compareMessages)
 
-            const snapshot = sessionRequests.snapshot(request, store.message[sessionID], synced)
+            const snapshot = sessionRequests.snapshot(
+              request,
+              existing,
+              synced,
+              preserveHistory ? page[0] : undefined,
+            )
             const oldMessageIDs = new Set((store.message[sessionID] ?? []).map((message) => message.info.id))
             const messageIDs = new Set(snapshot.map((message) => message.info.id))
             setStore("message", sessionID, reconcile(snapshot))
@@ -1209,6 +1278,13 @@ export function SyncProvider(props: ParentProps) {
               for (const message of snapshot) parts[message.info.id] = sortParts(message.parts)
             }))
             sessionRequests.appliedSnapshot(sessionID)
+            const currentHistory = history[sessionID]
+            const preserveLoadedWindow = preserveHistory && !!currentHistory && messageLimit < currentHistory.limit
+            setHistory(sessionID, {
+              limit: preserveLoadedWindow ? currentHistory.limit : messageLimit,
+              more: preserveLoadedWindow ? currentHistory.more : more,
+              loading: currentHistory?.loading ?? false,
+            })
             touchSessionCache(sessionID)
             evictSessionCaches(sessionID)
           }
@@ -1226,6 +1302,26 @@ export function SyncProvider(props: ParentProps) {
       if (inflight.get(sessionID) === promise) inflight.delete(sessionID)
     })
     return promise
+  }
+
+  async function loadMoreMessages(sessionID: string) {
+    const current = history[sessionID] ?? {
+      limit: SESSION_MESSAGE_PAGE_SIZE,
+      more: true,
+      loading: false,
+    }
+    if (current.loading || !current.more) return
+    setHistory(sessionID, {
+      ...current,
+      limit: nextSessionMessageLimit(current.limit),
+      loading: true,
+    })
+    const success = await syncSession(sessionID, true, nextSessionMessageLimit(current.limit))
+    if (!success) {
+      setHistory(sessionID, { ...current, loading: false })
+      return
+    }
+    setHistory(sessionID, "loading", false)
   }
 
   const refresh = () => bootstrap()
@@ -1337,6 +1433,11 @@ export function SyncProvider(props: ParentProps) {
           if (next > 0) retainedSessions.set(sessionID, next)
           if (next <= 0) retainedSessions.delete(sessionID)
         }
+      },
+      history: {
+        more: (sessionID: string) => history[sessionID]?.more ?? false,
+        loading: (sessionID: string) => history[sessionID]?.loading ?? false,
+        loadMore: loadMoreMessages,
       },
     },
     provider: {
