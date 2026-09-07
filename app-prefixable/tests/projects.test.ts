@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { loadProjects, mergeProjects, parseProjects, projectsStorageKey, type Project } from "../src/context/projects"
+import { loadProjects, mergeProjects, parseProjects, PROJECT_LIMIT, projectsStorageKey, type Project } from "../src/context/projects"
 
 function storage(initial: Record<string, string> = {}) {
   const values = new Map(Object.entries(initial))
@@ -34,6 +34,18 @@ describe("project persistence", () => {
       { worktree: "/one", name: "One", lastOpened: 3 },
       { worktree: "/two", name: "Two", lastOpened: 2 },
     ])
+  })
+
+  test("keeps only the most recently opened projects while preserving list order", () => {
+    const projects = Array.from({ length: PROJECT_LIMIT + 5 }, (_, index) => ({
+      worktree: `/project-${index}`,
+      lastOpened: index,
+    }))
+
+    const parsed = parseProjects(JSON.stringify(projects))
+    expect(parsed).toHaveLength(PROJECT_LIMIT)
+    expect(parsed[0].worktree).toBe("/project-5")
+    expect(parsed.at(-1)?.worktree).toBe(`/project-${PROJECT_LIMIT + 4}`)
   })
 
   test("migrates both local legacy formats once", () => {

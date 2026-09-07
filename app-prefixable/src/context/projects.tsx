@@ -25,6 +25,7 @@ interface ProjectsContextValue {
 
 const LEGACY_PROJECTS_KEY = "opencode.projects"
 const LEGACY_RECENT_KEY = "opencode-recent-projects"
+export const PROJECT_LIMIT = 100
 const ProjectsContext = createContext<ProjectsContextValue>()
 
 export function projectsStorageKey(serverId: string) {
@@ -66,21 +67,26 @@ export function parseProjects(value: string | null): Project[] {
 }
 
 export function mergeProjects(...lists: Project[][]): Project[] {
-  const result: Project[] = []
+  const result = new Map<string, Project>()
   for (const item of lists.flat()) {
-    const index = result.findIndex((existing) => existing.worktree === item.worktree)
-    if (index === -1) {
-      result.push(item)
+    const existing = result.get(item.worktree)
+    if (!existing) {
+      result.set(item.worktree, item)
       continue
     }
-    const existing = result[index]
-    result[index] = {
+    result.set(item.worktree, {
       worktree: existing.worktree,
       ...(existing.name || item.name ? { name: existing.name || item.name } : {}),
       lastOpened: Math.max(existing.lastOpened, item.lastOpened),
-    }
+    })
   }
-  return result
+  const projects = [...result.values()]
+  if (projects.length <= PROJECT_LIMIT) return projects
+  const recent = new Set([...projects]
+    .sort((a, b) => b.lastOpened - a.lastOpened)
+    .slice(0, PROJECT_LIMIT)
+    .map((item) => item.worktree))
+  return projects.filter((item) => recent.has(item.worktree))
 }
 
 function parseLegacy(value: string | null, now: number): Project[] {
@@ -154,10 +160,11 @@ export function ProjectsProvider(props: ParentProps) {
   const recent = createMemo(() => [...projects()].sort((a, b) => b.lastOpened - a.lastOpened))
 
   function save(list: Project[]) {
-    setProjects(list)
+    const limited = mergeProjects(list)
+    setProjects(limited)
     if (!storage) return
     try {
-      storage.setItem(key, JSON.stringify(list))
+      storage.setItem(key, JSON.stringify(limited))
     } catch {
       // Keep in-memory project management available when storage is unavailable.
     }
