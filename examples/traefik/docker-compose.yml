@@ -15,12 +15,13 @@ services:
       dockerfile: docker/Dockerfile
     environment:
       - BASE_PATH=/apps/opencode/
+      - BASE_PATH_STRIPPED=true
       - API_URL=http://host.docker.internal:4096
     extra_hosts:
       - "host.docker.internal:host-gateway"
     labels:
       - "traefik.enable=true"
-      - "traefik.http.routers.opencode.rule=PathPrefix(`/apps/opencode`)"
+      - "traefik.http.routers.opencode.rule=Path(`/apps/opencode`) || PathPrefix(`/apps/opencode/`)"
       - "traefik.http.routers.opencode.entrypoints=web"
       - "traefik.http.middlewares.opencode-strip.stripprefix.prefixes=/apps/opencode"
       - "traefik.http.routers.opencode.middlewares=opencode-strip"

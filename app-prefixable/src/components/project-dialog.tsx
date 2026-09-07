@@ -1,7 +1,7 @@
 import { createSignal, For, Show, onMount, createEffect, createMemo } from "solid-js"
 import { createOpencodeClient, type Event } from "../sdk/client"
-import { useBasePath } from "../context/base-path"
 import { useServer } from "../context/server"
+import { useSDK } from "../context/sdk"
 import { Spinner } from "./ui/spinner"
 import { Button } from "./ui/button"
 import { Folder, X, GitBranch, AlertCircle } from "lucide-solid"
@@ -60,7 +60,7 @@ function displayPath(path: string, home: string) {
 }
 
 export function ProjectDialog(props: ProjectDialogProps) {
-  const { serverUrl } = useBasePath()
+  const { url } = useSDK()
   const { authHeaders } = useServer()
   const events = useEvents()
 
@@ -87,8 +87,8 @@ export function ProjectDialog(props: ProjectDialogProps) {
   let inputRef: HTMLInputElement | undefined
   let cloneUnsubscribe: (() => void) | null = null
 
-  const client = createOpencodeClient({ baseUrl: serverUrl, headers: authHeaders(), throwOnError: false })
-  const global = createOpencodeClient({ baseUrl: serverUrl, headers: authHeaders(), throwOnError: false })
+  const client = createOpencodeClient({ baseUrl: url, headers: authHeaders(), throwOnError: false })
+  const global = createOpencodeClient({ baseUrl: url, headers: authHeaders(), throwOnError: false })
 
   // Load home directory on mount
   onMount(async () => {
@@ -147,7 +147,7 @@ export function ProjectDialog(props: ProjectDialogProps) {
     if (cached) return cached
 
     try {
-      const dirs = await listDirs(serverUrl, key, { limit: 500, depth: 1 })
+      const dirs = await listDirs(url, key, { limit: 500, depth: 1 })
       // Convert to absolute paths
       const absolute = dirs.map(d => `${key}/${d.replace(/\/$/, "")}`.replace(/\/+/g, "/"))
       dirCache.set(key, absolute)
@@ -330,7 +330,7 @@ export function ProjectDialog(props: ProjectDialogProps) {
 
     setCreating(true)
     try {
-      const success = await mkdir(serverUrl, fullPath)
+      const success = await mkdir(url, fullPath)
       if (success) {
         // Clear cache and select the new folder
         dirCache.clear()

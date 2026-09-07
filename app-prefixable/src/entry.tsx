@@ -3,8 +3,6 @@ import { render } from "solid-js/web"
 import { App } from "./app"
 import { preventLegacyServiceWorkerCaching } from "./utils/legacy-service-worker"
 
-console.log("[OpenCode] Starting app...")
-
 const root = document.getElementById("root")
 
 if (!root) {
@@ -22,16 +20,13 @@ async function start() {
     return null
   })
   if (cleanup && (cleanup.registrations > 0 || cleanup.caches > 0)) {
-    console.log(
+    console.warn(
       "[OpenCode] Cleared legacy service worker state:",
       `${cleanup.unregistered}/${cleanup.registrations} registrations, ${cleanup.caches} caches`,
     )
   }
 
-  console.log("[OpenCode] Rendering...")
   render(() => <App />, mount)
-  console.log("[OpenCode] Rendered successfully")
-  console.log("[OpenCode] Root innerHTML:", mount.innerHTML.slice(0, 200))
 }
 
 start().catch((e) => {

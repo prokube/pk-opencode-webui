@@ -1,6 +1,30 @@
 import { describe, expect, test } from "bun:test";
-import { createSessionWithPrompt, formatStartError, startSessionError } from "../src/utils/session-start";
+import { acceptPendingPrompt, clearPendingPrompt, createSessionWithPrompt, finishPendingPrompt, formatStartError, startSessionError, type PendingPrompt } from "../src/utils/session-start";
 import type { OpencodeClient } from "../src/sdk/client";
+
+describe("pending prompt lifecycle", () => {
+  test("only finishes after observing the exact submitted user message", () => {
+    const pending: PendingPrompt = { messageID: "msg-submitted", accepted: false, finished: false };
+
+    expect(acceptPendingPrompt(pending, "msg-stale")).toBe(false);
+    expect(finishPendingPrompt(pending)).toBe(false);
+    expect(pending.finished).toBe(false);
+    expect(acceptPendingPrompt(pending, "msg-submitted")).toBe(true);
+    expect(finishPendingPrompt(pending)).toBe(true);
+    expect(pending.finished).toBe(true);
+  });
+
+  test("clears only the same pending prompt instance", () => {
+    const previous: PendingPrompt = { messageID: "msg-old", accepted: false, finished: false };
+    const current: PendingPrompt = { messageID: "msg-new", accepted: false, finished: false };
+    const prompts = new Map([["ses_1", current]]);
+
+    expect(clearPendingPrompt(prompts, "ses_1", previous)).toBe(false);
+    expect(prompts.get("ses_1")).toBe(current);
+    expect(clearPendingPrompt(prompts, "ses_1", current)).toBe(true);
+    expect(prompts.has("ses_1")).toBe(false);
+  });
+});
 
 describe("formatStartError", () => {
   const cases: { name: string; input: unknown; expected: string }[] = [

@@ -23,6 +23,21 @@ interface ConfigContextValue {
 
 const ConfigContext = createContext<ConfigContextValue>()
 
+export function mergeConfigState<T>(current: T, patch: T): T {
+  if (!current || !patch || typeof current !== "object" || typeof patch !== "object") return patch
+  if (Array.isArray(current) || Array.isArray(patch)) return patch
+  const result = { ...current } as Record<string, unknown>
+  for (const [key, value] of Object.entries(patch as Record<string, unknown>)) {
+    if (key === "__proto__" || key === "constructor" || key === "prototype") continue
+    const previous = result[key]
+    result[key] = previous && value && typeof previous === "object" && typeof value === "object" &&
+      !Array.isArray(previous) && !Array.isArray(value)
+      ? mergeConfigState(previous, value)
+      : value
+  }
+  return result as T
+}
+
 export function ConfigProvider(props: ParentProps) {
   const sdk = useSDK()
   const events = useEvents()
@@ -79,8 +94,9 @@ export function ConfigProvider(props: ParentProps) {
       const data = res.data as Config | undefined
       if (data) {
         lastUpdateAt = Date.now()
-        setProject(reconcile(data))
-        return data
+        const next = mergeConfigState(project as Config, data)
+        setProject(reconcile(next))
+        return next
       }
       return null
     } catch (e) {
@@ -93,19 +109,13 @@ export function ConfigProvider(props: ParentProps) {
   async function updateGlobal(patch: Config): Promise<Config | null> {
     setError(null)
     try {
-      // Preserve disabled_providers in the patch if it exists in the current
-      // global config but not in the patch itself. This prevents the backend
-      // from dropping it during a shallow merge (e.g. when saving MCP or
-      // provider settings from the UI).
-      const safePatch = global.disabled_providers && !patch.disabled_providers
-        ? { ...patch, disabled_providers: global.disabled_providers }
-        : patch
-      const res = await sdk.client.global.config.update({ config: safePatch })
+      const res = await sdk.client.global.config.update({ config: patch })
       const data = res.data as Config | undefined
       if (data) {
         lastUpdateAt = Date.now()
-        setGlobal(reconcile(data))
-        return data
+        const next = mergeConfigState(global as Config, data)
+        setGlobal(reconcile(next))
+        return next
       }
       return null
     } catch (e) {

@@ -559,11 +559,22 @@ export function ToolPartDisplay(props: { part: ToolPart }) {
     return <TaskToolDisplay part={props.part} />;
   }
 
+  const sync = useSync();
+
   // Use the module-level store for expanded state to persist across re-renders
   const expanded = () => expandedStore.get(props.part.id);
 
   const state = () => props.part.state;
   const status = () => getStatus(state());
+  const interruptedQuestion = () => {
+    if (props.part.tool !== "question" || status() !== "running" || !sync.statusReady()) return false;
+    const pending = sync.pendingQuestions[props.part.sessionID] ?? [];
+    const waiting = pending.some((request) => !request.tool || request.tool.callID === props.part.callID);
+    if (waiting) return false;
+    const session = sync.status[props.part.sessionID]?.type;
+    return session !== "busy" && session !== "retry";
+  };
+  const visualStatus = () => interruptedQuestion() ? "error" : status();
   const metadata = () => getMetadata(state());
   const isFileChange = () =>
     props.part.tool === "edit" || props.part.tool === "write";
@@ -624,7 +635,7 @@ export function ToolPartDisplay(props: { part: ToolPart }) {
         {/* Tool icon */}
         <svg
           class="w-4 h-4 shrink-0"
-          style={{ color: getStatusColor(status()) }}
+          style={{ color: getStatusColor(visualStatus()) }}
           fill="none"
           stroke="currentColor"
           viewBox="0 0 24 24"
@@ -661,9 +672,11 @@ export function ToolPartDisplay(props: { part: ToolPart }) {
         {/* Status indicator */}
         <span
           class="text-xs shrink-0"
-          style={{ color: getStatusColor(status()) }}
+          style={{ color: getStatusColor(visualStatus()) }}
+          title={interruptedQuestion() ? "The backend restarted while waiting for this answer" : undefined}
         >
-          {status() === "running" && "running..."}
+          {interruptedQuestion() && "interrupted"}
+          {!interruptedQuestion() && status() === "running" && "running..."}
           {status() === "pending" && "pending"}
           {status() === "error" && "error"}
         </span>

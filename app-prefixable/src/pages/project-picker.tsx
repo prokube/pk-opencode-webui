@@ -5,10 +5,10 @@ import { formatRelativeTime } from "../utils/time"
 import { Folder, GitBranch } from "lucide-solid"
 import { ProjectDialog } from "../components/project-dialog"
 import { useBranding } from "../context/branding"
-import { useBasePath } from "../context/base-path"
-import { useRecentProjects } from "../context/recent-projects"
+import { useProjects } from "../context/projects"
 import { createOpencodeClient } from "../sdk/client"
 import { useServer } from "../context/server"
+import { useSDK } from "../context/sdk"
 import { Button } from "../components/ui/button"
 
 // OpenCode Wordmark
@@ -71,21 +71,21 @@ function shortenPath(path: string, home: string): string {
 export function ProjectPicker() {
   const navigate = useNavigate()
   const branding = useBranding()
-  const { serverUrl } = useBasePath()
+  const { url } = useSDK()
   const { authHeaders } = useServer()
-  const recent = useRecentProjects()
+  const projects = useProjects()
   const [dialogOpen, setDialogOpen] = createSignal(false)
   const [dialogView, setDialogView] = createSignal<"browse" | "clone">("browse")
   const [homeDir, setHomeDir] = createSignal("")
 
   // Get home directory for path shortening
   onMount(async () => {
-    const client = createOpencodeClient({ baseUrl: serverUrl, headers: authHeaders(), throwOnError: false })
+    const client = createOpencodeClient({ baseUrl: url, headers: authHeaders(), throwOnError: false })
     const res = await client.path.get()
     if (res.data?.home) setHomeDir(res.data.home)
   })
 
-  const recentProjects = createMemo(() => recent.projects().slice(0, 5))
+  const recentProjects = createMemo(() => projects.recent().slice(0, 5))
   const hasRecent = createMemo(() => recentProjects().length > 0)
 
   function openDialog(view: "browse" | "clone") {
@@ -94,13 +94,13 @@ export function ProjectPicker() {
   }
 
   function handleProjectSelect(worktree: string) {
-    recent.add(worktree)
+    projects.touch(worktree)
     navigate(`/${base64Encode(worktree)}/session`)
   }
 
-  function openRecentProject(path: string) {
-    recent.add(path) // Updates lastOpened timestamp
-    navigate(`/${base64Encode(path)}/session`)
+  function openRecentProject(worktree: string) {
+    projects.touch(worktree)
+    navigate(`/${base64Encode(worktree)}/session`)
   }
 
   return (
@@ -157,9 +157,9 @@ export function ProjectPicker() {
                 variant="ghost"
                 size="large"
                 class="text-left justify-between px-3 font-mono text-sm"
-                onClick={() => openRecentProject(project.path)}
+                onClick={() => openRecentProject(project.worktree)}
               >
-                <span class="truncate">{shortenPath(project.path, homeDir())}</span>
+                <span class="truncate">{shortenPath(project.worktree, homeDir())}</span>
                 <span class="text-sm font-sans" style={{ color: "var(--text-weak)" }}>
                   {formatRelativeTime(project.lastOpened)}
                 </span>

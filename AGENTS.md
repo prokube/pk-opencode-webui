@@ -38,7 +38,8 @@ This document describes workflows for autonomous agents working on **prokube.ai 
 │   └── s6/             # s6-overlay config
 │
 ├── shared/             # Shared code between servers
-│   └── prokube-endpoints.ts
+│   ├── extended-api.ts
+│   └── proxy.ts
 │
 ├── .github/            # CI/CD workflows
 ├── AGENTS.md           # This file

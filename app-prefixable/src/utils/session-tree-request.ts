@@ -1,4 +1,4 @@
-import type { PermissionRequest, QuestionRequest, Session } from "../sdk/client"
+import type { PermissionRequest, QuestionRequest, Session, SessionStatus } from "../sdk/client"
 
 /**
  * Build a parent->children lookup map from a session list.
@@ -40,6 +40,22 @@ export function sessionDescendantIds(
   return result
 }
 
+export function sessionIsWorking(status: SessionStatus | undefined) {
+  return status?.type === "busy" || status?.type === "retry"
+}
+
+export function sessionTreeIsWorking(
+  sessions: Session[],
+  statuses: Record<string, SessionStatus>,
+  sessionID?: string,
+  children?: Map<string, string[]>,
+) {
+  for (const id of sessionDescendantIds(sessions, sessionID, children)) {
+    if (sessionIsWorking(statuses[id])) return true
+  }
+  return false
+}
+
 /**
  * Single-pass BFS tree-walk through session hierarchy.
  * Starting from `sessionID`, checks the current session first, then walks
@@ -49,14 +65,14 @@ export function sessionDescendantIds(
  */
 function sessionTreeRequest<T>(
   sessions: Session[],
-  requests: Record<string, T | undefined>,
+  requests: Record<string, T[] | undefined>,
   sessionID?: string,
   children?: Map<string, string[]>,
 ) {
   if (!sessionID) return
 
   // Check the current session first (highest priority)
-  if (requests[sessionID] !== undefined) return requests[sessionID]
+  if (requests[sessionID]?.length) return requests[sessionID][0]
 
   const map = children ?? buildChildMap(sessions)
 
@@ -69,7 +85,7 @@ function sessionTreeRequest<T>(
     for (const child of list) {
       if (seen.has(child)) continue
       seen.add(child)
-      if (requests[child] !== undefined) return requests[child]
+      if (requests[child]?.length) return requests[child][0]
       queue.push(child)
     }
   }
@@ -80,7 +96,7 @@ function sessionTreeRequest<T>(
  */
 export function sessionQuestionRequest(
   sessions: Session[],
-  requests: Record<string, QuestionRequest | undefined>,
+  requests: Record<string, QuestionRequest[] | undefined>,
   sessionID?: string,
   children?: Map<string, string[]>,
 ) {
@@ -111,7 +127,7 @@ export function sessionPermissionRequests(
  */
 export function sessionHasQuestion(
   sessions: Session[],
-  requests: Record<string, QuestionRequest | undefined>,
+  requests: Record<string, QuestionRequest[] | undefined>,
   sessionID?: string,
   children?: Map<string, string[]>,
 ): boolean {

@@ -15,6 +15,7 @@ services:
       dockerfile: docker/Dockerfile
     environment:
       - BASE_PATH=/apps/opencode/
+      - BASE_PATH_STRIPPED=true
       - API_URL=http://host.docker.internal:4096
     extra_hosts:
       - "host.docker.internal:host-gateway"
