@@ -26,6 +26,10 @@ interface TerminalContextValue {
 
 const TerminalContext = createContext<TerminalContextValue>()
 
+export function ptyRemoveSucceeded(result: { data?: boolean; response: { status: number } }) {
+  return result.data === true || result.response.status === 404
+}
+
 export function TerminalProvider(props: ParentProps) {
   const { client, url } = useSDK()
   const events = useEvents()
@@ -107,12 +111,18 @@ export function TerminalProvider(props: ParentProps) {
   }
 
   async function close(id: string): Promise<void> {
+    setError(null)
     try {
-      await client.pty.remove({ ptyID: id })
+      const result = await client.pty.remove({ ptyID: id }, { throwOnError: false })
+      if (ptyRemoveSucceeded(result)) {
+        drop(id)
+        return
+      }
+      setError(`Failed to close terminal: Server returned HTTP ${result.response.status}`)
     } catch (e) {
-      console.error("Failed to close PTY:", e)
-    } finally {
-      drop(id)
+      console.error("[Terminal] Failed to close PTY:", e)
+      const message = e instanceof Error ? e.message : typeof e === "string" ? e : "Unknown error"
+      setError(`Failed to close terminal: ${message}`)
     }
   }
 
