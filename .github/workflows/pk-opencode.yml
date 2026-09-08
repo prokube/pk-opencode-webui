@@ -27,8 +27,10 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Test image tag validation
-        run: bash .github/scripts/validate-image-tag.test.sh
+      - name: Test publishing contracts
+        run: |
+          bash .github/scripts/validate-image-tag.test.sh
+          bash .github/scripts/probe-registry-manifest.test.sh
 
       - name: Generate dynamic version
         id: version
@@ -72,25 +74,22 @@ jobs:
           ACCESS_TOKEN=$(gcloud auth print-access-token)
           REGISTRY_URL="https://europe-west3-docker.pkg.dev/v2/prokube/releases/$IMAGE_NAME/manifests/$DOCKER_TAG"
 
-          if ! HTTP_STATUS=$(curl --silent --show-error --head --output /dev/null \
-            --write-out "%{http_code}" \
-            --header "Authorization: Bearer $ACCESS_TOKEN" \
-            --header "Accept: application/vnd.docker.distribution.manifest.v2+json" \
-            "$REGISTRY_URL"); then
+          if ! PROBE_RESULT=$(bash .github/scripts/probe-registry-manifest.sh \
+            "$REGISTRY_URL" "$ACCESS_TOKEN"); then
             echo "Failed to query release image $VERSION_TAG"
             exit 1
           fi
 
-          case "$HTTP_STATUS" in
-            200)
+          case "$PROBE_RESULT" in
+            present)
               echo "Release image $VERSION_TAG already exists; skipping build and push."
               echo "PUBLISH_IMAGE=false" >> "$GITHUB_ENV"
               ;;
-            404)
+            missing)
               echo "Release image $VERSION_TAG does not exist; it will be published."
               ;;
             *)
-              echo "Registry returned HTTP $HTTP_STATUS while checking $VERSION_TAG"
+              echo "Registry probe returned an invalid result for $VERSION_TAG"
               exit 1
               ;;
           esac
@@ -230,6 +229,8 @@ jobs:
         run: |
           RELEASE_URL="https://api.github.com/repos/$GITHUB_REPOSITORY/releases/tags/$RELEASE_TAG"
           if ! HTTP_STATUS=$(curl --silent --show-error --output /dev/null \
+            --connect-timeout 10 \
+            --max-time 30 \
             --write-out "%{http_code}" \
             --header "Authorization: Bearer $GH_TOKEN" \
             --header "Accept: application/vnd.github+json" \
