@@ -205,6 +205,10 @@ Kubeflow-specific features:
 
 See [docker/kubeflow/README.md](docker/kubeflow/README.md) for Kubeflow deployment details.
 
+### Published Image Tags
+
+Release tags must match `vX.Y.Z` or `vX.Y.Z-rcN`. Tag-triggered builds publish only that unchanged tag to `prokube/releases`; reruns skip an image that already exists. Manual builds publish `<nearest-git-tag>-<short-commit>`, `commit-<full-commit>`, and `latest` to `prokube/development`. All generated Docker tags must be valid and no longer than 128 characters.
+
 ### Reverse Proxy Examples
 
 See [examples/](examples/) for nginx and Traefik configurations.

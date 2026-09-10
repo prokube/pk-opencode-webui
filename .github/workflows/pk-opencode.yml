@@ -8,7 +8,10 @@ on:
 
 env:
   IMAGE_NAME: pk-opencode
-  IMAGE_PUSH_PATH: "${{ secrets.GCP_ARTIFACT_REGISTRY_PATH }}"
+  IMAGE_PUSH_PATH: "${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && 'europe-west3-docker.pkg.dev/prokube/releases' || 'europe-west3-docker.pkg.dev/prokube/development' }}"
+  IS_RELEASE: "${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') }}"
+  PUBLISH_IMAGE: "true"
+  RELEASE_TAG: "${{ github.ref_name }}"
 
 jobs:
   build-prefixable-image:
@@ -24,36 +27,75 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Test publishing contracts
+        run: |
+          bash .github/scripts/validate-image-tag.test.sh
+          bash .github/scripts/probe-registry-manifest.test.sh
+
       - name: Generate dynamic version
         id: version
         run: |
-          CURRENT_TAG=$(git tag --points-at HEAD | head -n 1)
-
-          if [ -n "$CURRENT_TAG" ]; then
-            VERSION="${CURRENT_TAG}"
+          if [[ "$IS_RELEASE" == "true" ]]; then
+            VERSION="$RELEASE_TAG"
           else
             LATEST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "v0.0.0")
             SHORT_COMMIT=$(git rev-parse --short HEAD)
             VERSION="${LATEST_TAG}-${SHORT_COMMIT}"
           fi
 
-          echo "VERSION=${VERSION}" >> $GITHUB_OUTPUT
+          echo "VERSION=${VERSION}" >> "$GITHUB_OUTPUT"
           echo "Generated version: ${VERSION}"
 
-      - name: Determine Docker tag
+      - name: Validate and set Docker tag
+        env:
+          VERSION: ${{ steps.version.outputs.VERSION }}
         run: |
-          if [ -n "${{ steps.version.outputs.VERSION }}" ]; then
-            echo "DOCKER_TAG=${{ steps.version.outputs.VERSION }}" >> $GITHUB_ENV
-          else
-            echo "DOCKER_TAG=latest" >> $GITHUB_ENV
+          TAG_KIND="development"
+          if [[ "$IS_RELEASE" == "true" ]]; then
+            TAG_KIND="release"
           fi
+
+          bash .github/scripts/validate-image-tag.sh "$VERSION" "$TAG_KIND"
+          echo "DOCKER_TAG=$VERSION" >> "$GITHUB_ENV"
+          echo "VERSION_TAG=$IMAGE_PUSH_PATH/$IMAGE_NAME:$VERSION" >> "$GITHUB_ENV"
 
       - name: Authenticate to Google Cloud
         uses: google-github-actions/auth@v2
         with:
           credentials_json: "${{ secrets.GCP_SA_KEY }}"
 
+      - name: Set up Google Cloud SDK
+        if: env.IS_RELEASE == 'true'
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Check release image
+        if: env.IS_RELEASE == 'true'
+        run: |
+          ACCESS_TOKEN=$(gcloud auth print-access-token)
+          REGISTRY_URL="https://europe-west3-docker.pkg.dev/v2/prokube/releases/$IMAGE_NAME/manifests/$DOCKER_TAG"
+
+          if ! PROBE_RESULT=$(bash .github/scripts/probe-registry-manifest.sh \
+            "$REGISTRY_URL" "$ACCESS_TOKEN"); then
+            echo "Failed to query release image $VERSION_TAG"
+            exit 1
+          fi
+
+          case "$PROBE_RESULT" in
+            present)
+              echo "Release image $VERSION_TAG already exists; skipping build and push."
+              echo "PUBLISH_IMAGE=false" >> "$GITHUB_ENV"
+              ;;
+            missing)
+              echo "Release image $VERSION_TAG does not exist; it will be published."
+              ;;
+            *)
+              echo "Registry probe returned an invalid result for $VERSION_TAG"
+              exit 1
+              ;;
+          esac
+
       - name: Docker Login to Google Artifact Registry
+        if: env.PUBLISH_IMAGE == 'true'
         uses: docker/login-action@v3
         with:
           registry: europe-west3-docker.pkg.dev
@@ -61,18 +103,18 @@ jobs:
           password: ${{ secrets.GCP_SA_KEY }}
 
       - name: Set up Docker Buildx
+        if: env.PUBLISH_IMAGE == 'true'
         uses: docker/setup-buildx-action@v3
 
       - name: Build and push image
+        if: env.PUBLISH_IMAGE == 'true'
+        env:
+          COMMIT_SHA: ${{ github.sha }}
+          REPOSITORY_URL: ${{ github.event.repository.html_url }}
         run: |
-          # GCP Artifact Registry tags
-          LATEST_TAG="${{ env.IMAGE_PUSH_PATH }}/${{ env.IMAGE_NAME }}:latest"
-          VERSION_TAG="${{ env.IMAGE_PUSH_PATH }}/${{ env.IMAGE_NAME }}:${{ env.DOCKER_TAG }}"
-          COMMIT_TAG="${{ env.IMAGE_PUSH_PATH }}/${{ env.IMAGE_NAME }}:commit-${{ github.sha }}"
-
           # Build the Kubeflow image
           docker build \
-            -t $LATEST_TAG \
+            -t "$VERSION_TAG" \
             -f docker/kubeflow/Dockerfile \
             --platform linux/amd64 \
             --build-arg OPENCODE_VERSION=1.15.7 \
@@ -80,50 +122,63 @@ jobs:
             --build-arg KF_EXAMPLES_REPO=https://github.com/prokube-ai/kubeflow-examples.git \
             --label "org.opencontainers.image.title=OpenCode Prefixable UI" \
             --label "org.opencontainers.image.description=Prefix-aware OpenCode Web UI for Kubeflow" \
-            --label "org.opencontainers.image.source=${{ github.event.repository.html_url }}" \
-            --label "org.opencontainers.image.revision=${{ github.sha }}" \
+            --label "org.opencontainers.image.source=$REPOSITORY_URL" \
+            --label "org.opencontainers.image.revision=$COMMIT_SHA" \
             .
 
-          # Tag for different versions
-          docker tag $LATEST_TAG $VERSION_TAG
-          docker tag $LATEST_TAG $COMMIT_TAG
-
           # Push to GCP Artifact Registry
-          docker push $LATEST_TAG
-          docker push $VERSION_TAG
-          docker push $COMMIT_TAG
+          docker push "$VERSION_TAG"
 
-          # Save tags for summary
-          echo "LATEST_TAG=$LATEST_TAG" >> $GITHUB_ENV
-          echo "VERSION_TAG=$VERSION_TAG" >> $GITHUB_ENV
-          echo "COMMIT_TAG=$COMMIT_TAG" >> $GITHUB_ENV
+          if [[ "$IS_RELEASE" != "true" ]]; then
+            COMMIT_TAG="$IMAGE_PUSH_PATH/$IMAGE_NAME:commit-$COMMIT_SHA"
+            LATEST_TAG="$IMAGE_PUSH_PATH/$IMAGE_NAME:latest"
+            docker tag "$VERSION_TAG" "$COMMIT_TAG"
+            docker tag "$VERSION_TAG" "$LATEST_TAG"
+            docker push "$COMMIT_TAG"
+            docker push "$LATEST_TAG"
+            echo "COMMIT_TAG=$COMMIT_TAG" >> "$GITHUB_ENV"
+            echo "LATEST_TAG=$LATEST_TAG" >> "$GITHUB_ENV"
+          fi
 
       - name: Generate summary
         run: |
-          cat <<EOF > summary.md
-          ## Docker Image Published
+          if [[ "$PUBLISH_IMAGE" == "true" ]]; then
+            RESULT="Published"
+          else
+            RESULT="Already Published"
+          fi
 
-          **Version:** \`${{ env.DOCKER_TAG }}\`
+          TAG_ROWS="| version | \`$VERSION_TAG\` |"
+          IMAGE_URLS="$VERSION_TAG"
+          if [[ -n "$COMMIT_TAG" ]]; then
+            TAG_ROWS="$TAG_ROWS
+          | commit | \`$COMMIT_TAG\` |
+          | latest | \`$LATEST_TAG\` |"
+            IMAGE_URLS="$IMAGE_URLS
+          $COMMIT_TAG
+          $LATEST_TAG"
+          fi
+
+          cat <<EOF > summary.md
+          ## Docker Image $RESULT
+
+          **Version:** \`$DOCKER_TAG\`
 
           ### Image Tags
           | Tag | URL |
           |-----|-----|
-          | latest | \`${{ env.LATEST_TAG }}\` |
-          | version | \`${{ env.VERSION_TAG }}\` |
-          | commit | \`${{ env.COMMIT_TAG }}\` |
+          $TAG_ROWS
 
           <details>
           <summary>Full image URLs for copy/paste</summary>
 
           \`\`\`
-          ${{ env.LATEST_TAG }}
-          ${{ env.VERSION_TAG }}
-          ${{ env.COMMIT_TAG }}
+          $IMAGE_URLS
           \`\`\`
           </details>
           EOF
 
-          cat summary.md >> $GITHUB_STEP_SUMMARY
+          cat summary.md >> "$GITHUB_STEP_SUMMARY"
 
       - name: Comment on PR
         if: github.event_name == 'pull_request'
@@ -162,7 +217,7 @@ jobs:
 
   create-release:
     needs: build-prefixable-image
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -171,6 +226,31 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Create GitHub Release
-        run: gh release create "${{ github.ref_name }}" --generate-notes --title "${{ github.ref_name }}"
+        run: |
+          RELEASE_URL="https://api.github.com/repos/$GITHUB_REPOSITORY/releases/tags/$RELEASE_TAG"
+          if ! HTTP_STATUS=$(curl --silent --show-error --output /dev/null \
+            --connect-timeout 10 \
+            --max-time 30 \
+            --write-out "%{http_code}" \
+            --header "Authorization: Bearer $GH_TOKEN" \
+            --header "Accept: application/vnd.github+json" \
+            --header "X-GitHub-Api-Version: 2022-11-28" \
+            "$RELEASE_URL"); then
+            echo "Failed to query GitHub release $RELEASE_TAG"
+            exit 1
+          fi
+
+          case "$HTTP_STATUS" in
+            200)
+              echo "GitHub release $RELEASE_TAG already exists; skipping creation."
+              ;;
+            404)
+              gh release create "$RELEASE_TAG" --generate-notes --title "$RELEASE_TAG"
+              ;;
+            *)
+              echo "GitHub returned HTTP $HTTP_STATUS while checking release $RELEASE_TAG"
+              exit 1
+              ;;
+          esac
         env:
           GH_TOKEN: ${{ github.token }}
