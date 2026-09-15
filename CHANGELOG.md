@@ -6,6 +6,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.9.4] - 2026-09-15
+
+### Added
+- Restore project activity indicators, queued follow-ups, saved prompts, browser notifications, command palette actions, and batch session deletion (#461)
+
+### Changed
+- Consolidate project updates onto one global event stream with bounded buffering, snapshot recovery, and paged long-session history (#461)
+- Update the Kubeflow image to OpenCode 1.18.23 and refresh compatible frontend dependencies (#461)
+
+### Removed
+- Remove the unsupported Telegram bridge, arbitrary external-server management, and superseded legacy UI implementations (#461)
+
+### Fixed
+- Harden prefix-aware proxy routing, configuration updates, session synchronization, terminal cleanup, notifications, and persisted state validation (#461)
+
 ## [0.9.3] - 2026-08-13
 
 ### Fixed
