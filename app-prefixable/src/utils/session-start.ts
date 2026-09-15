@@ -13,6 +13,30 @@ interface StartSessionCheck {
   connected: string[];
 }
 
+export interface PendingPrompt {
+  messageID: string;
+  accepted: boolean;
+  finished: boolean;
+}
+
+export function acceptPendingPrompt(pending: PendingPrompt, messageID: string) {
+  if (pending.messageID !== messageID) return false;
+  pending.accepted = true;
+  return true;
+}
+
+export function finishPendingPrompt(pending: PendingPrompt) {
+  if (!pending.accepted) return false;
+  pending.finished = true;
+  return true;
+}
+
+export function clearPendingPrompt(pending: Map<string, PendingPrompt>, sessionID: string, prompt: PendingPrompt) {
+  if (pending.get(sessionID) !== prompt) return false;
+  pending.delete(sessionID);
+  return true;
+}
+
 export function formatStartError(err: unknown): string {
   if (err instanceof Error && err.message.trim()) return err.message;
   if (typeof err === "string" && err.trim()) return err;

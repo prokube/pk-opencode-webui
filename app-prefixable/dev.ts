@@ -1,6 +1,7 @@
 import { watch } from "fs"
-import { handleExtendedEndpoint, isApiPath } from "../shared/extended-api"
-import { handleProxyRequest, normalizeProxiedResponse } from "../shared/proxy"
+import { handleExtendedEndpoint, isApiPath, isMutation, isSameOriginRequest } from "../shared/extended-api"
+import { normalizeRequestPath, prefixStrippedAllowed } from "../shared/base-path"
+import { isEventStreamPath, normalizeProxiedResponse, proxyEventResponse, serializeScriptData, stripHopByHopHeaders } from "../shared/proxy"
 
 const BASE_PATH = process.env.BASE_PATH || "/"
 const PORT = parseInt(process.env.PORT || "3000", 10)
@@ -8,11 +9,13 @@ const API_URL = process.env.API_URL || "http://127.0.0.1:4096"
 const BRANDING_NAME = process.env.BRANDING_NAME || ""
 const BRANDING_URL = process.env.BRANDING_URL || ""
 const BRANDING_ICON = process.env.BRANDING_ICON || ""
+const BASE_PATH_STRIPPED = prefixStrippedAllowed(process.env.BASE_PATH_STRIPPED)
 
 console.log(`Starting dev server...`)
 console.log(`  BASE_PATH: ${BASE_PATH}`)
 console.log(`  API_URL: ${API_URL}`)
 console.log(`  PORT: ${PORT}`)
+console.log(`  BASE_PATH_STRIPPED: ${BASE_PATH_STRIPPED}`)
 if (BRANDING_NAME) console.log(`  BRANDING: ${BRANDING_NAME}`)
 
 // Initial build
@@ -48,31 +51,6 @@ function withNoStoreHeaders(response: Response) {
   })
 }
 
-function stripHopByHopHeaders(headers: Headers) {
-  const connection = headers.get("connection")
-  if (connection) {
-    for (const name of connection.split(",")) {
-      const trimmed = name.trim()
-      if (trimmed) headers.delete(trimmed)
-    }
-  }
-
-  for (const name of [
-    "connection",
-    "content-length",
-    "host",
-    "keep-alive",
-    "proxy-authenticate",
-    "proxy-authorization",
-    "te",
-    "trailer",
-    "transfer-encoding",
-    "upgrade",
-  ]) {
-    headers.delete(name)
-  }
-}
-
 function normalizeDevProxiedResponse(response: Response) {
   const normalized = normalizeProxiedResponse(response)
   const headers = new Headers(normalized.headers)
@@ -89,19 +67,16 @@ const server = Bun.serve<{ target: string }>({
   idleTimeout: 0, // Disable timeout for SSE connections
   async fetch(req, server) {
     const url = new URL(req.url)
-    let path = url.pathname
+    const path = url.pathname
 
-    // Strip base path prefix if present (for both API and frontend routes)
-    let strippedPath = path
-    if (basePathWithoutTrailing && path.startsWith(basePathWithoutTrailing)) {
-      strippedPath = path.slice(basePathWithoutTrailing.length) || "/"
-    }
-    if (!strippedPath.startsWith("/")) {
-      strippedPath = "/" + strippedPath
-    }
+    // Prefix-stripping proxies must opt in so direct deployments remain prefix-isolated.
+    const normalizedPath = normalizeRequestPath(path, basePathWithoutTrailing, BASE_PATH_STRIPPED)
+    if (normalizedPath === null) return new Response("Not Found", { status: 404 })
+    const strippedPath = normalizedPath
 
     // WebSocket upgrade for /pty routes - proxy to backend
     if (strippedPath.startsWith("/pty/") && req.headers.get("upgrade") === "websocket") {
+      if (!isSameOriginRequest(req, url)) return new Response("Cross-origin request denied", { status: 403 })
       const target = API_URL.replace(/^http/, "ws") + strippedPath + url.search
       console.log("[Proxy] WebSocket upgrade:", target)
 
@@ -113,59 +88,44 @@ const server = Bun.serve<{ target: string }>({
       return new Response("WebSocket upgrade failed", { status: 500 })
     }
 
-    // Proxy requests to remote servers (avoids CORS)
-    if (strippedPath.startsWith("/__proxy/")) {
-      const proxyPath = strippedPath.slice("/__proxy".length)
-      return handleProxyRequest(proxyPath, req)
-    }
-    if (strippedPath === "/__proxy") {
-      return handleProxyRequest("/", req)
-    }
-
     // Extended API endpoints (handled locally, not proxied)
     const extResponse = await handleExtendedEndpoint(strippedPath, req.method, url, req)
     if (extResponse) return withNoStoreHeaders(extResponse)
 
     // API requests go directly to the backend
     if (isApiPath(strippedPath)) {
+      if (isMutation(req.method) && !isSameOriginRequest(req, url)) {
+        return new Response("Cross-origin request denied", { status: 403 })
+      }
       const target = new URL(strippedPath + url.search, API_URL)
       const headers = new Headers(req.headers)
       stripHopByHopHeaders(headers)
 
       // SSE requests - just pass through the response body directly
-      if (strippedPath.startsWith("/event")) {
+      if (isEventStreamPath(strippedPath)) {
         console.log("[Proxy] SSE request to:", target.toString())
+        const upstream = new AbortController()
+        const abort = () => upstream.abort(req.signal.reason)
+        req.signal.addEventListener("abort", abort, { once: true })
+        if (req.signal.aborted) abort()
         try {
           const response = await fetch(target.toString(), {
             method: req.method,
             headers,
-            signal: req.signal,
+            signal: upstream.signal,
           })
 
           if (!response.ok) {
+            req.signal.removeEventListener("abort", abort)
             console.error("[Proxy] SSE error:", response.status, response.statusText)
-            return withNoStoreHeaders(
-              new Response(response.body, {
-                status: response.status,
-                statusText: response.statusText,
-                headers: response.headers,
-              }),
-            )
+            return withNoStoreHeaders(normalizeProxiedResponse(response))
           }
 
-          // Pass through the body directly - Bun handles streaming
-          return new Response(response.body, {
-            status: response.status,
-            headers: {
-              "Content-Type": "text/event-stream",
-              "Cache-Control": "no-store",
-              Pragma: "no-cache",
-              Expires: "0",
-              Connection: "keep-alive",
-              "X-Accel-Buffering": "no",
-            },
-          })
+          const proxied = proxyEventResponse(response, req.signal, upstream)
+          req.signal.removeEventListener("abort", abort)
+          return proxied
         } catch (e) {
+          req.signal.removeEventListener("abort", abort)
           console.error("[Proxy] SSE connection error:", e)
           return withNoStoreHeaders(new Response("SSE proxy error", { status: 502 }))
         }
@@ -213,7 +173,7 @@ const server = Bun.serve<{ target: string }>({
     // SPA fallback - serve index.html with injected config
     const indexHtml = await Bun.file("./dist/index.html").text()
     // Use JSON.stringify for safe encoding to prevent XSS
-    const config = JSON.stringify({
+    const config = serializeScriptData({
       basePath: basePathWithTrailing,
       branding: { name: BRANDING_NAME, url: BRANDING_URL, icon: BRANDING_ICON },
     })

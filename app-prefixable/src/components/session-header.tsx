@@ -6,7 +6,7 @@ import { useMCP } from "../context/mcp"
 import { usePermission } from "../context/permission"
 import { useTerminal } from "../context/terminal"
 import { useSDK } from "../context/sdk"
-import { PanelBottom, FileCode, ListTodo, Plug, ArrowLeft, Users, Bell, BellRing, BookOpen, ChevronDown } from "lucide-solid"
+import { PanelBottom, FileCode, ListTodo, Plug, ArrowLeft, Users, BookOpen, ChevronDown } from "lucide-solid"
 import { base64Encode } from "../utils/path"
 import type { Session } from "../sdk/client"
 
@@ -18,9 +18,6 @@ interface SessionHeaderProps {
   processing: boolean
   onOpenMCPDialog: () => void
   onOpenVariantPicker: () => void
-  notifyEnabled: boolean
-  notifyDenied: boolean
-  onToggleNotify: () => void
   instructionsActive: boolean
   onOpenInstructions: () => void
 }
@@ -197,7 +194,6 @@ export function SessionHeader(props: SessionHeaderProps) {
       <div class="flex items-center gap-1">
         {/* MCP toggle */}
         <button
-          data-hint-target
           onClick={props.onOpenMCPDialog}
           class="p-1.5 rounded-md transition-colors relative"
           style={{
@@ -224,7 +220,6 @@ export function SessionHeader(props: SessionHeaderProps) {
 
         {/* Review panel toggle */}
         <button
-          data-hint-target
           onClick={layout.review.toggle}
           class="p-1.5 rounded-md transition-colors"
           style={{
@@ -245,7 +240,6 @@ export function SessionHeader(props: SessionHeaderProps) {
 
         {/* Info panel toggle */}
         <button
-          data-hint-target
           onClick={layout.info.toggle}
           class="p-1.5 rounded-md transition-colors"
           style={{
@@ -266,7 +260,6 @@ export function SessionHeader(props: SessionHeaderProps) {
 
         {/* Terminal toggle */}
         <button
-          data-hint-target
           onClick={() => terminal.toggle(directory)}
           class="p-1.5 rounded-md transition-colors"
           style={{
@@ -285,41 +278,6 @@ export function SessionHeader(props: SessionHeaderProps) {
           <PanelBottom class="w-4 h-4" />
         </button>
 
-        {/* Notification toggle */}
-        <div class="relative">
-          <button
-            onClick={props.onToggleNotify}
-            class="p-1.5 rounded-md transition-colors"
-            style={{
-              color: props.notifyEnabled ? "var(--text-interactive-base)" : "var(--icon-weak)",
-              background: props.notifyEnabled ? "var(--surface-inset)" : "transparent",
-            }}
-            onMouseEnter={(e) => {
-              if (!props.notifyEnabled) (e.currentTarget as HTMLElement).style.background = "var(--surface-inset)"
-            }}
-            onMouseLeave={(e) => {
-              if (!props.notifyEnabled) (e.currentTarget as HTMLElement).style.background = "transparent"
-            }}
-            title={props.notifyEnabled ? "Disable alarms for this session" : "Enable alarms for this session"}
-            aria-label="Toggle alarms for this session"
-          >
-            <Show when={props.notifyEnabled} fallback={<Bell class="w-4 h-4" />}>
-              <BellRing class="w-4 h-4" />
-            </Show>
-          </button>
-          <Show when={props.notifyDenied}>
-            <div
-              class="absolute right-0 top-full mt-1 whitespace-nowrap text-xs px-2 py-1 rounded shadow-lg z-30"
-              style={{
-                background: "var(--background-base)",
-                border: "1px solid var(--border-base)",
-                color: "var(--text-weak)",
-              }}
-            >
-              Notifications blocked — enable in browser settings
-            </div>
-          </Show>
-        </div>
       </div>
     </header>
   )

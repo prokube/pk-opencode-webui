@@ -1,4 +1,4 @@
-import { createContext, useContext, createSignal, onMount, type ParentProps, createMemo } from "solid-js"
+import { createContext, useContext, createSignal, onMount, onCleanup, type ParentProps, createMemo } from "solid-js"
 import { createStore, reconcile } from "solid-js/store"
 import { useSDK } from "./sdk"
 import { useEvents } from "./events"
@@ -50,7 +50,7 @@ interface MCPContextValue {
   disconnect: (name: string) => Promise<void>
   add: (name: string, config: McpConfig) => Promise<void>
   remove: (name: string) => Promise<void>
-  startAuth: (name: string) => Promise<{ authorizationUrl: string } | null>
+  startAuth: (name: string, open: (url: string) => void) => Promise<boolean>
   stats: () => { enabled: number; failed: boolean; total: number }
   /** Per-project MCP overrides (read from project config) */
   projectOverrides: () => Record<string, McpProjectOverride>
@@ -72,7 +72,8 @@ export function MCPProvider(props: ParentProps) {
   const [loading, setLoading] = createSignal(true)
   const [projectOverrides, setProjectOverrides] = createSignal<Record<string, McpProjectOverride>>({})
   const [overrideLoadingSet, setOverrideLoadingSet] = createSignal<Set<string>>(new Set())
-  let refreshSeq = 0
+  let statusSeq = 0
+  let overrideSeq = 0
 
   function isPlainObject(v: unknown): v is Record<string, unknown> {
     return typeof v === "object" && v !== null && !Array.isArray(v)
@@ -106,7 +107,7 @@ export function MCPProvider(props: ParentProps) {
       console.error("[MCP] Failed to fetch status:", e)
       return null
     })
-    if (seq !== refreshSeq) return
+    if (seq !== statusSeq) return
     if (res?.data) {
       setServers(reconcile(res.data as Record<string, MCPStatus>))
     }
@@ -122,7 +123,7 @@ export function MCPProvider(props: ParentProps) {
       console.error("[MCP] Failed to fetch project config for overrides:", e)
       return null
     })
-    if (seq !== refreshSeq) return
+    if (seq !== overrideSeq) return
     // Only update when we got a valid response; keep previous state on failure
     if (res?.data) {
       setProjectOverrides(parseOverrides(res.data as Record<string, unknown>))
@@ -131,30 +132,30 @@ export function MCPProvider(props: ParentProps) {
 
   /** Refresh MCP server status only (lightweight, called on mcp.* events) */
   async function refreshStatus() {
-    const seq = ++refreshSeq
+    const seq = ++statusSeq
     setLoading(true)
     try {
       await fetchStatus(seq)
     } finally {
-      if (seq === refreshSeq) setLoading(false)
+      if (seq === statusSeq) setLoading(false)
     }
   }
 
   /** Full refresh: status + overrides in parallel (used on mount and server reconnect) */
   async function refresh() {
-    const seq = ++refreshSeq
+    const status = ++statusSeq
+    const override = ++overrideSeq
     setLoading(true)
     try {
-      await Promise.all([fetchStatus(seq), fetchOverrides(seq)])
+      await Promise.all([fetchStatus(status), fetchOverrides(override)])
     } finally {
-      if (seq === refreshSeq) setLoading(false)
+      if (status === statusSeq && override === overrideSeq) setLoading(false)
     }
   }
 
   async function connect(name: string) {
     try {
       await client.mcp.connect({ name })
-      await client.global.config.update({ config: { mcp: { [name]: { enabled: true } } } }).catch((e) => console.warn("[MCP] Failed to persist config for", name, e))
     } catch (e) {
       console.error("[MCP] Failed to connect:", name, e)
     }
@@ -164,7 +165,6 @@ export function MCPProvider(props: ParentProps) {
   async function disconnect(name: string) {
     try {
       await client.mcp.disconnect({ name })
-      await client.global.config.update({ config: { mcp: { [name]: { enabled: false } } } }).catch((e) => console.warn("[MCP] Failed to persist config for", name, e))
     } catch (e) {
       console.error("[MCP] Failed to disconnect:", name, e)
     }
@@ -174,42 +174,18 @@ export function MCPProvider(props: ParentProps) {
   async function add(name: string, mcpConfig: McpConfig) {
     try {
       console.log("[MCP] Adding server:", name, mcpConfig)
-
-      // First, persist the MCP config to the global config file
-      // This is necessary because mcp.status() reads from the config file
-      const currentConfig = await client.global.config.get()
-      const existingMcp = (currentConfig.data?.mcp as Record<string, McpConfig> | undefined) || {}
-      await client.global.config.update({
-        config: {
-          mcp: {
-            ...existingMcp,
-            [name]: mcpConfig,
-          },
-        },
-      })
-      console.log("[MCP] Config persisted to global config")
-
-      // Now call mcp.add to connect the server
       const response = await client.mcp.add({ name, config: mcpConfig })
       console.log("[MCP] Add server response:", response)
-      await refresh()
-
-      // Check if the server actually connected successfully
-      const s = await client.mcp.status()
-      const status = s.data?.[name]
-      console.log("[MCP] Server status after add:", status)
-
+      const status = response.data?.[name]
       if (status?.status === "failed") {
         throw new Error(`Failed to connect: ${status.error}`)
       }
-      if (status?.status === "needs_auth") {
-        throw new Error("Server requires OAuth authentication. Please configure OAuth settings.")
-      }
-      if (status?.status === "needs_client_registration") {
-        throw new Error(status.error || "Server requires OAuth client registration")
-      }
+      await client.global.config.update({ config: { mcp: { [name]: mcpConfig } } })
+      await client.global.dispose()
+      await refresh()
     } catch (e) {
       console.error("[MCP] Failed to add server:", name, e)
+      await client.mcp.disconnect({ name }).catch(() => undefined)
       throw e
     }
   }
@@ -222,6 +198,11 @@ export function MCPProvider(props: ParentProps) {
       await client.mcp.disconnect({ name }).catch(() => {
         // Ignore disconnect errors - server might not be connected
       })
+
+      // Invalidate OpenCode's global config cache before editing the file
+      // through the extended endpoint. Disposing instances alone does not
+      // invalidate that cache, so the deleted server would otherwise return.
+      await client.global.config.update({ config: { mcp: { [name]: { enabled: false } } } })
 
       // Remove from global config using extended API endpoint
       // (We can't use the SDK because the backend does a deep merge and doesn't support deletion)
@@ -236,15 +217,18 @@ export function MCPProvider(props: ParentProps) {
 
       console.log("[MCP] Server removed from global config")
 
-      // Trigger a backend restart by updating config (this causes server.instance.disposed)
-      // The backend will reload the config file which now has the server removed
-      await client.global.config.update({ config: {} })
+      const remaining = Object.fromEntries(Object.entries(servers).filter(([key]) => key !== name))
+      setServers(reconcile(remaining))
+
+      // Reload the backend after the extended endpoint updates the config file.
+      // An empty config patch is rejected by OpenCode as a bad request.
+      await client.global.dispose()
       console.log("[MCP] Triggered backend restart")
 
-      // Wait for backend to restart and refresh
-      // The server.connected event should also trigger a refresh, but we do it here too for reliability
-      await new Promise((resolve) => setTimeout(resolve, 1500))
+      // The server.connected event also refreshes, but await one here so the
+      // delete operation only completes after the visible state is current.
       await refresh()
+      if (servers[name]) throw new Error(`"${name}" is still configured by another config source`)
       console.log("[MCP] Refreshed after restart")
     } catch (e) {
       console.error("[MCP] Failed to remove server:", name, e)
@@ -327,13 +311,17 @@ export function MCPProvider(props: ParentProps) {
     }
   }
 
-  async function startAuth(name: string): Promise<{ authorizationUrl: string } | null> {
+  async function startAuth(name: string, open: (url: string) => void) {
+    authOpeners.set(name, open)
     try {
-      const res = await client.mcp.auth.start({ name })
-      return res.data as { authorizationUrl: string } | null
+      const res = await client.mcp.auth.authenticate({ name })
+      await refreshStatus()
+      return res.data?.status === "connected"
     } catch (e) {
       console.error("[MCP] Failed to start auth:", name, e)
-      return null
+      return false
+    } finally {
+      authOpeners.delete(name)
     }
   }
 
@@ -345,22 +333,39 @@ export function MCPProvider(props: ParentProps) {
     return { enabled, failed, total }
   })
 
+  let disposed = false
+  let reconnectTimer: number | undefined
+  let unsub = () => {}
+  const authOpeners = new Map<string, (url: string) => void>()
+
   onMount(() => {
     refresh()
 
     // Listen for MCP-related events and server restarts
-    const unsub = events.subscribe((event) => {
+    unsub = events.subscribe((event) => {
+      if (disposed) return
       // Only refresh status (not overrides) on mcp events to reduce churn
       if (event.type.startsWith("mcp.")) {
         refreshStatus()
       }
+      if (event.type === "mcp.browser.open.failed") {
+        authOpeners.get(event.properties.mcpName)?.(event.properties.url)
+      }
       // Full refresh (status + overrides) on server reconnect since config may have changed
       if (event.type === "server.connected") {
-        setTimeout(() => refresh(), 500)
+        if (reconnectTimer !== undefined) clearTimeout(reconnectTimer)
+        reconnectTimer = window.setTimeout(() => {
+          reconnectTimer = undefined
+          if (!disposed) refresh()
+        }, 500)
       }
     })
+  })
 
-    return unsub
+  onCleanup(() => {
+    disposed = true
+    unsub()
+    if (reconnectTimer !== undefined) clearTimeout(reconnectTimer)
   })
 
   return (

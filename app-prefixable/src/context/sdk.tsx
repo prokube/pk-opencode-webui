@@ -1,6 +1,5 @@
 import { createContext, useContext, type ParentProps } from "solid-js"
 import { createOpencodeClient } from "../sdk/client"
-import { useBasePath } from "./base-path"
 import { useServer } from "./server"
 
 type SDKClient = ReturnType<typeof createOpencodeClient>
@@ -16,25 +15,24 @@ interface SDKContextValue {
 const SDKContext = createContext<SDKContextValue>()
 
 export function SDKProvider(props: ParentProps & { directory?: string }) {
-  const { serverUrl } = useBasePath()
-  const { authHeaders } = useServer()
+  const { serverUrl, authHeaders } = useServer()
+  const url = serverUrl()
 
   const client = createOpencodeClient({
-    baseUrl: serverUrl,
+    baseUrl: url,
     directory: props.directory,
     headers: authHeaders(),
     throwOnError: true,
   })
 
-  // Global client without directory - for PTY operations, SSH keys, etc.
   const global = createOpencodeClient({
-    baseUrl: serverUrl,
+    baseUrl: url,
     headers: authHeaders(),
     throwOnError: true,
   })
 
   return (
-    <SDKContext.Provider value={{ client, global, url: serverUrl, directory: props.directory }}>
+    <SDKContext.Provider value={{ client, global, url, directory: props.directory }}>
       {props.children}
     </SDKContext.Provider>
   )

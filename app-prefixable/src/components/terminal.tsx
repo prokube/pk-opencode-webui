@@ -102,6 +102,8 @@ export function Terminal(props: TerminalProps) {
   let fitAddon: FitAddon | undefined
   let ws: WebSocket | undefined
   let reconnectTimer: ReturnType<typeof setTimeout> | undefined
+  let stableTimer: ReturnType<typeof setTimeout> | undefined
+  let reconnectAttempts = 0
   let disposed = false
 
   const [status, setStatus] = createSignal<"connecting" | "connected" | "error" | "disconnected">("connecting")
@@ -141,6 +143,10 @@ export function Terminal(props: TerminalProps) {
     ws.addEventListener("open", () => {
       console.log("[Terminal] WebSocket connected")
       setStatus("connected")
+      if (stableTimer) clearTimeout(stableTimer)
+      stableTimer = setTimeout(() => {
+        reconnectAttempts = 0
+      }, 10_000)
 
       // Send initial size after connection
       if (term) {
@@ -173,6 +179,7 @@ export function Terminal(props: TerminalProps) {
     ws.addEventListener("close", (event) => {
       console.log("[Terminal] WebSocket closed:", event.code, event.reason)
       setStatus("disconnected")
+      if (stableTimer) clearTimeout(stableTimer)
 
       if (event.code === 1000) {
         writeStatus("Connection closed normally", "info")
@@ -184,9 +191,31 @@ export function Terminal(props: TerminalProps) {
 
       // Reconnect on abnormal close (but not if we're disposing)
       if (!disposed && event.code !== 1000) {
-        console.log("[Terminal] Scheduling reconnect...")
-        writeStatus("Reconnecting in 2 seconds...", "info")
-        reconnectTimer = setTimeout(() => connect(), 2000)
+        void client.pty.list({ directory }).then((res) => {
+          if (disposed) return
+          if (!res.data?.some((pty) => pty.id === props.ptyId)) {
+            writeStatus("Terminal process has exited", "info")
+            props.onClose?.()
+            return
+          }
+          if (reconnectAttempts >= 5) {
+            writeStatus("Reconnect limit reached", "error")
+            return
+          }
+          const delay = Math.min(1000 * 2 ** reconnectAttempts, 10_000)
+          reconnectAttempts += 1
+          writeStatus(`Reconnecting in ${delay / 1000} seconds...`, "info")
+          reconnectTimer = setTimeout(() => connect(), delay)
+        }).catch(() => {
+          if (disposed || reconnectAttempts >= 5) {
+            writeStatus("Unable to reconnect terminal", "error")
+            return
+          }
+          const delay = Math.min(1000 * 2 ** reconnectAttempts, 10_000)
+          reconnectAttempts += 1
+          writeStatus(`Terminal state unavailable; retrying in ${delay / 1000} seconds...`, "info")
+          reconnectTimer = setTimeout(() => connect(), delay)
+        })
       }
     })
   }
@@ -288,6 +317,7 @@ export function Terminal(props: TerminalProps) {
       console.log("[Terminal] Cleaning up")
       disposed = true
       if (reconnectTimer) clearTimeout(reconnectTimer)
+      if (stableTimer) clearTimeout(stableTimer)
       window.removeEventListener("resize", handleResize)
       resizeObserver.disconnect()
       ws?.close()

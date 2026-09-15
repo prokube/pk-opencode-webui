@@ -1,21 +1,19 @@
 import { createContext, useContext, type ParentProps } from "solid-js"
-import { getBasePath, prefixPath, getServerUrl } from "../utils/path"
+import { getBasePath, prefixPath } from "../utils/path"
 
 interface BasePathContextValue {
   basePath: string
   prefix: (path: string) => string
-  serverUrl: string
 }
 
 const BasePathContext = createContext<BasePathContextValue>()
 
-export function BasePathProvider(props: ParentProps & { serverUrl?: string }) {
+export function BasePathProvider(props: ParentProps) {
   const basePath = getBasePath()
 
   const value: BasePathContextValue = {
     basePath,
     prefix: (path: string) => prefixPath(path, basePath),
-    serverUrl: props.serverUrl || getServerUrl(),
   }
 
   return <BasePathContext.Provider value={value}>{props.children}</BasePathContext.Provider>
