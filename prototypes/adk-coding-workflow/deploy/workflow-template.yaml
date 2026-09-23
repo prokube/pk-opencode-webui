@@ -1,0 +1,994 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: adk-coding-workflow
+imagePullSecrets:
+  - name: regcred-prokube
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: adk-coding-workflow.service-account-token
+  annotations:
+    kubernetes.io/service-account.name: adk-coding-workflow
+type: kubernetes.io/service-account-token
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: adk-coding-workflow-executor
+rules:
+  - apiGroups: ["argoproj.io"]
+    resources: ["workflowtaskresults"]
+    verbs: ["create", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: adk-coding-workflow-executor
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: adk-coding-workflow-executor
+subjects:
+  - kind: ServiceAccount
+    name: adk-coding-workflow
+---
+apiVersion: argoproj.io/v1alpha1
+kind: WorkflowTemplate
+metadata:
+  name: adk-coding-workflow-plan
+  labels:
+    app.kubernetes.io/name: adk-coding-workflow
+    app.kubernetes.io/component: prototype
+spec:
+  entrypoint: plan
+  serviceAccountName: adk-coding-workflow
+  activeDeadlineSeconds: 300
+  podMetadata:
+    annotations:
+      sidecar.istio.io/inject: "false"
+  podGC:
+    strategy: OnWorkflowCompletion
+    deleteDelayDuration: 5m
+  ttlStrategy:
+    secondsAfterCompletion: 86400
+  podSpecPatch: '{"runtimeClassName":"gvisor"}'
+  arguments:
+    parameters:
+      - name: ticket-repository
+      - name: target-repository
+      - name: issue
+      - name: base
+        value: main
+  templates:
+    - name: plan
+      inputs:
+        parameters:
+          - name: ticket-repository
+          - name: target-repository
+          - name: issue
+          - name: base
+      container:
+        image: europe-west3-docker.pkg.dev/prokube-internal/prokube-customer/adk-coding-workflow:prototype-cg-20260807-2330
+        imagePullPolicy: IfNotPresent
+        command: ["bun", "/app/src/cli.ts"]
+        args:
+          - --ticket-repository
+          - "{{inputs.parameters.ticket-repository}}"
+          - --target-repository
+          - "{{inputs.parameters.target-repository}}"
+          - --issue
+          - "{{inputs.parameters.issue}}"
+          - --base
+          - "{{inputs.parameters.base}}"
+          - --mode
+          - plan
+        env:
+          - name: GH_TOKEN
+            valueFrom:
+              secretKeyRef:
+                name: adk-coding-workflow-github
+                key: token
+                optional: true
+        resources:
+          requests:
+            cpu: 100m
+            memory: 256Mi
+          limits:
+            cpu: "1"
+            memory: 1Gi
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop: ["ALL"]
+          readOnlyRootFilesystem: true
+          runAsNonRoot: true
+          runAsUser: 1000
+          runAsGroup: 1000
+          seccompProfile:
+            type: RuntimeDefault
+---
+apiVersion: argoproj.io/v1alpha1
+kind: WorkflowTemplate
+metadata:
+  name: adk-coding-workflow-execute
+  labels:
+    app.kubernetes.io/name: adk-coding-workflow
+    app.kubernetes.io/component: prototype
+spec:
+  entrypoint: execute
+  onExit: exit-handler
+  serviceAccountName: adk-coding-workflow
+  executor:
+    serviceAccountName: adk-coding-workflow
+  activeDeadlineSeconds: 86400
+  podMetadata:
+    annotations:
+      sidecar.istio.io/inject: "false"
+  podGC:
+    strategy: OnPodCompletion
+    deleteDelayDuration: 10s
+  volumeClaimGC:
+    strategy: OnWorkflowDeletion
+  volumeClaimTemplates:
+    - metadata:
+        name: workspace
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 5Gi
+  ttlStrategy:
+    secondsAfterCompletion: 86400
+  podSpecPatch: '{"runtimeClassName":"gvisor","securityContext":{"fsGroup":1000,"fsGroupChangePolicy":"OnRootMismatch"}}'
+  arguments:
+    parameters:
+      - name: discovery-request
+        value: '{"projects":[{"provider":"github","project":"prokube/pkui","suggestedBaseBranch":"main"}],"includeLabels":["ready"],"excludeLabels":["in-progress","needs-discussion","needs-supervisor"]}'
+      - name: bot-login
+        value: ""
+      - name: issue
+      - name: ticket-repository
+      - name: target-repository
+      - name: base
+        value: main
+      - name: publish
+        value: "false"
+  templates:
+    - name: supervise
+      inputs:
+        parameters:
+          - name: discovery-request
+          - name: bot-login
+      outputs:
+        parameters:
+          - name: candidate-list
+            valueFrom:
+              parameter: "{{steps.discover.outputs.parameters.candidate-list}}"
+      steps:
+        - - name: discover
+            template: discover
+            arguments:
+              parameters:
+                - name: discovery-request
+                  value: "{{inputs.parameters.discovery-request}}"
+        - - name: select-ticket
+            template: select-ticket
+            arguments:
+              parameters:
+                - name: candidate-list
+                  value: "{{steps.discover.outputs.parameters.candidate-list}}"
+        - - name: revalidate-selection
+            template: revalidate-selection
+            arguments:
+              parameters:
+                - name: candidate-list
+                  value: "{{steps.discover.outputs.parameters.candidate-list}}"
+                - name: discovery-request
+                  value: "{{inputs.parameters.discovery-request}}"
+                - name: selected-ticket
+                  value: "{{steps.select-ticket.outputs.parameters.selected-ticket}}"
+                - name: base-branch
+                  value: "{{steps.select-ticket.outputs.parameters.base-branch}}"
+        - - name: claim-selected-ticket
+            template: claim-selected-ticket
+            arguments:
+              parameters:
+                - name: selected-ticket
+                  value: "{{steps.select-ticket.outputs.parameters.selected-ticket}}"
+                - name: discovery-request
+                  value: "{{inputs.parameters.discovery-request}}"
+                - name: bot-login
+                  value: "{{inputs.parameters.bot-login}}"
+        - - name: execute-selected-ticket
+            template: execute
+            arguments:
+              parameters:
+                - name: issue
+                  value: "{{steps.revalidate-selection.outputs.parameters.issue}}"
+                - name: ticket-repository
+                  value: "{{steps.revalidate-selection.outputs.parameters.ticket-repository}}"
+                - name: target-repository
+                  value: "{{steps.revalidate-selection.outputs.parameters.target-repository}}"
+                - name: base
+                  value: "{{steps.revalidate-selection.outputs.parameters.base}}"
+                - name: publish
+                  value: "true"
+    - name: auto-supervise
+      inputs:
+        parameters:
+          - name: discovery-request
+          - name: bot-login
+      outputs:
+        parameters:
+          - name: candidate-list
+            valueFrom:
+              parameter: "{{steps.discover.outputs.parameters.candidate-list}}"
+      steps:
+        - - name: discover
+            template: discover
+            arguments:
+              parameters:
+                - name: discovery-request
+                  value: "{{inputs.parameters.discovery-request}}"
+        - - name: select-first-ticket
+            template: select-first-ticket
+            arguments:
+              parameters:
+                - name: candidate-list
+                  value: "{{steps.discover.outputs.parameters.candidate-list}}"
+        - - name: revalidate-selection
+            template: revalidate-selection
+            arguments:
+              parameters:
+                - name: candidate-list
+                  value: "{{steps.discover.outputs.parameters.candidate-list}}"
+                - name: discovery-request
+                  value: "{{inputs.parameters.discovery-request}}"
+                - name: selected-ticket
+                  value: "{{steps.select-first-ticket.outputs.parameters.selected-ticket}}"
+                - name: base-branch
+                  value: "{{steps.select-first-ticket.outputs.parameters.base-branch}}"
+        - - name: claim-selected-ticket
+            template: claim-selected-ticket
+            arguments:
+              parameters:
+                - name: selected-ticket
+                  value: "{{steps.select-first-ticket.outputs.parameters.selected-ticket}}"
+                - name: discovery-request
+                  value: "{{inputs.parameters.discovery-request}}"
+                - name: bot-login
+                  value: "{{inputs.parameters.bot-login}}"
+        - - name: execute-selected-ticket
+            template: execute
+            arguments:
+              parameters:
+                - name: issue
+                  value: "{{steps.revalidate-selection.outputs.parameters.issue}}"
+                - name: ticket-repository
+                  value: "{{steps.revalidate-selection.outputs.parameters.ticket-repository}}"
+                - name: target-repository
+                  value: "{{steps.revalidate-selection.outputs.parameters.target-repository}}"
+                - name: base
+                  value: "{{steps.revalidate-selection.outputs.parameters.base}}"
+                - name: publish
+                  value: "true"
+    - name: discover
+      inputs:
+        parameters:
+          - name: discovery-request
+      outputs:
+        parameters:
+          - name: candidate-list
+            globalName: candidate-list
+            valueFrom:
+              path: /tmp/outputs/candidate-list.json
+      automountServiceAccountToken: false
+      volumes:
+        - name: discovery-output
+          emptyDir:
+            sizeLimit: 1Mi
+      container:
+        image: europe-west3-docker.pkg.dev/prokube-internal/prokube-customer/adk-coding-workflow:prototype-cg-20260807-2330
+        imagePullPolicy: IfNotPresent
+        command: ["bun", "/app/src/discovery-cli.ts"]
+        args:
+          - --mode
+          - discover
+          - --request
+          - "{{inputs.parameters.discovery-request}}"
+          - --output-dir
+          - /tmp/outputs
+        env:
+          - name: GH_TOKEN
+            valueFrom:
+              secretKeyRef:
+                name: adk-coding-workflow-github
+                key: token
+        volumeMounts:
+          - name: discovery-output
+            mountPath: /tmp
+        resources:
+          requests:
+            cpu: 25m
+            memory: 64Mi
+          limits:
+            cpu: "1"
+            memory: 256Mi
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop: ["ALL"]
+          readOnlyRootFilesystem: true
+          runAsNonRoot: true
+          runAsUser: 1000
+          runAsGroup: 1000
+          seccompProfile:
+            type: RuntimeDefault
+    - name: select-ticket
+      inputs:
+        parameters:
+          - name: candidate-list
+      suspend: {}
+      outputs:
+        parameters:
+          - name: selected-ticket
+            valueFrom:
+              supplied: {}
+          - name: base-branch
+            valueFrom:
+              supplied: {}
+    - name: select-first-ticket
+      inputs:
+        parameters:
+          - name: candidate-list
+      outputs:
+        parameters:
+          - name: selected-ticket
+            valueFrom:
+              path: /tmp/outputs/selected-ticket.json
+          - name: base-branch
+            valueFrom:
+              path: /tmp/outputs/base-branch
+      automountServiceAccountToken: false
+      volumes:
+        - name: selection-output
+          emptyDir:
+            sizeLimit: 1Mi
+      container:
+        image: europe-west3-docker.pkg.dev/prokube-internal/prokube-customer/adk-coding-workflow:prototype-cg-20260807-2330
+        imagePullPolicy: IfNotPresent
+        command: ["bun", "/app/src/discovery-cli.ts"]
+        args:
+          - --mode
+          - select-first
+          - --candidates
+          - "{{inputs.parameters.candidate-list}}"
+          - --output-dir
+          - /tmp/outputs
+        volumeMounts:
+          - name: selection-output
+            mountPath: /tmp
+        resources:
+          requests:
+            cpu: 25m
+            memory: 64Mi
+          limits:
+            cpu: "1"
+            memory: 256Mi
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop: ["ALL"]
+          readOnlyRootFilesystem: true
+          runAsNonRoot: true
+          runAsUser: 1000
+          runAsGroup: 1000
+          seccompProfile:
+            type: RuntimeDefault
+    - name: revalidate-selection
+      inputs:
+        parameters:
+          - name: candidate-list
+          - name: discovery-request
+          - name: selected-ticket
+          - name: base-branch
+      outputs:
+        parameters:
+          - name: ticket-repository
+            valueFrom:
+              path: /tmp/outputs/ticket-repository
+          - name: target-repository
+            valueFrom:
+              path: /tmp/outputs/target-repository
+          - name: issue
+            valueFrom:
+              path: /tmp/outputs/issue
+          - name: base
+            valueFrom:
+              path: /tmp/outputs/base
+      automountServiceAccountToken: false
+      volumes:
+        - name: selection-output
+          emptyDir:
+            sizeLimit: 1Mi
+      container:
+        image: europe-west3-docker.pkg.dev/prokube-internal/prokube-customer/adk-coding-workflow:prototype-cg-20260807-2330
+        imagePullPolicy: IfNotPresent
+        command: ["bun", "/app/src/discovery-cli.ts"]
+        args:
+          - --mode
+          - revalidate
+          - --candidates
+          - "{{inputs.parameters.candidate-list}}"
+          - --request
+          - "{{inputs.parameters.discovery-request}}"
+          - --selected-ticket
+          - "{{inputs.parameters.selected-ticket}}"
+          - --base-branch
+          - "{{inputs.parameters.base-branch}}"
+          - --output-dir
+          - /tmp/outputs
+        env:
+          - name: GH_TOKEN
+            valueFrom:
+              secretKeyRef:
+                name: adk-coding-workflow-github
+                key: token
+        volumeMounts:
+          - name: selection-output
+            mountPath: /tmp
+        resources:
+          requests:
+            cpu: 25m
+            memory: 64Mi
+          limits:
+            cpu: "1"
+            memory: 256Mi
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop: ["ALL"]
+          readOnlyRootFilesystem: true
+          runAsNonRoot: true
+          runAsUser: 1000
+          runAsGroup: 1000
+          seccompProfile:
+            type: RuntimeDefault
+    - name: claim-selected-ticket
+      synchronization:
+        mutex:
+          name: adk-coding-workflow-ticket-claim
+      retryStrategy:
+        limit: "2"
+        retryPolicy: Always
+        backoff:
+          duration: 5s
+          factor: 2
+          maxDuration: 30s
+      inputs:
+        parameters:
+          - name: selected-ticket
+          - name: discovery-request
+          - name: bot-login
+      automountServiceAccountToken: false
+      container:
+        image: europe-west3-docker.pkg.dev/prokube-internal/prokube-customer/adk-coding-workflow:prototype-cg-20260807-2330
+        imagePullPolicy: IfNotPresent
+        command: ["bun", "/app/src/discovery-cli.ts"]
+        args:
+          - --mode
+          - claim
+          - --selected-ticket
+          - "{{inputs.parameters.selected-ticket}}"
+          - --request
+          - "{{inputs.parameters.discovery-request}}"
+        env:
+          - name: GH_TOKEN
+            valueFrom:
+              secretKeyRef:
+                name: adk-coding-workflow-github
+                key: token
+          - name: PK_WORKFLOW_RUN_ID
+            value: "{{workflow.name}}"
+          - name: PK_WORKFLOW_BOT_LOGIN
+            value: "{{inputs.parameters.bot-login}}"
+          - name: PK_WORKFLOW_CLAIM_FILE
+            value: /workspace/.workflow-claim.json
+        volumeMounts:
+          - name: workspace
+            mountPath: /workspace
+        resources:
+          requests:
+            cpu: 25m
+            memory: 64Mi
+          limits:
+            cpu: "1"
+            memory: 256Mi
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop: ["ALL"]
+          readOnlyRootFilesystem: true
+          runAsNonRoot: true
+          runAsUser: 1000
+          runAsGroup: 1000
+          seccompProfile:
+            type: RuntimeDefault
+    - name: execute
+      inputs:
+        parameters:
+          - name: issue
+          - name: ticket-repository
+          - name: target-repository
+          - name: base
+          - name: publish
+      steps:
+        - - name: implement
+            template: implement
+            arguments:
+              parameters:
+                - name: issue
+                  value: "{{inputs.parameters.issue}}"
+                - name: ticket-repository
+                  value: "{{inputs.parameters.ticket-repository}}"
+                - name: target-repository
+                  value: "{{inputs.parameters.target-repository}}"
+                - name: base
+                  value: "{{inputs.parameters.base}}"
+        - - name: validate
+            template: validate
+            arguments:
+              parameters:
+                - name: target-repository
+                  value: "{{inputs.parameters.target-repository}}"
+        - - name: attest
+            template: attest
+            when: "{{inputs.parameters.publish}} == true"
+            arguments:
+              parameters:
+                - name: issue
+                  value: "{{inputs.parameters.issue}}"
+                - name: ticket-repository
+                  value: "{{inputs.parameters.ticket-repository}}"
+                - name: target-repository
+                  value: "{{inputs.parameters.target-repository}}"
+                - name: base
+                  value: "{{inputs.parameters.base}}"
+                - name: validated-patch-sha
+                  value: "{{steps.validate.outputs.parameters.patch-sha256}}"
+        - - name: publish
+            template: publish
+            when: "{{inputs.parameters.publish}} == true"
+            arguments:
+              parameters:
+                - name: issue
+                  value: "{{inputs.parameters.issue}}"
+                - name: ticket-repository
+                  value: "{{inputs.parameters.ticket-repository}}"
+                - name: target-repository
+                  value: "{{inputs.parameters.target-repository}}"
+                - name: base
+                  value: "{{inputs.parameters.base}}"
+    - name: implement
+      inputs:
+        parameters:
+          - name: issue
+          - name: ticket-repository
+          - name: target-repository
+          - name: base
+      automountServiceAccountToken: false
+      volumes:
+        - name: opencode-home
+          emptyDir:
+            sizeLimit: 1Gi
+        - name: opencode-tmp
+          emptyDir:
+            sizeLimit: 1Gi
+        - name: runner-tmp
+          emptyDir:
+            sizeLimit: 4Gi
+        - name: opencode-auth
+          secret:
+            secretName: adk-coding-workflow-opencode-auth
+      container:
+        image: europe-west3-docker.pkg.dev/prokube-internal/prokube-customer/adk-coding-workflow:prototype-cg-20260807-2330
+        imagePullPolicy: IfNotPresent
+        command: ["bun", "/app/src/cli.ts"]
+        args:
+          - --ticket-repository
+          - "{{inputs.parameters.ticket-repository}}"
+          - --target-repository
+          - "{{inputs.parameters.target-repository}}"
+          - --issue
+          - "{{inputs.parameters.issue}}"
+          - --base
+          - "{{inputs.parameters.base}}"
+          - --mode
+          - execute
+          - --opencode-url
+          - http://127.0.0.1:4096
+        env:
+          - name: HOME
+            value: /tmp
+          - name: GH_TOKEN
+            valueFrom:
+              secretKeyRef:
+                name: adk-coding-workflow-github
+                key: token
+          - name: OPENCODE_PROVIDER_ID
+            value: openai
+          - name: OPENCODE_MODEL_ID
+            value: gpt-5.6-sol
+          - name: PK_WORKFLOW_RUN_ID
+            value: "{{workflow.name}}"
+          - name: PK_WORKFLOW_OUTPUT_DIR
+            value: /workspace/.workflow-output
+        volumeMounts:
+          - name: workspace
+            mountPath: /workspace
+          - name: runner-tmp
+            mountPath: /tmp
+        resources:
+          requests:
+            cpu: 25m
+            memory: 256Mi
+          limits:
+            cpu: "4"
+            memory: 4Gi
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop: ["ALL"]
+          readOnlyRootFilesystem: true
+          runAsNonRoot: true
+          runAsUser: 1000
+          runAsGroup: 1000
+          seccompProfile:
+            type: RuntimeDefault
+      sidecars:
+        - name: opencode
+          image: europe-west3-docker.pkg.dev/prokube-internal/prokube-customer/adk-coding-workflow:prototype-cg-20260807-2330
+          imagePullPolicy: IfNotPresent
+          command: ["bash", "-c"]
+          args:
+            - >-
+              mkdir -p /opencode-home/.local/share/opencode &&
+              cp /opencode-auth/auth.json /opencode-home/.local/share/opencode/auth.json &&
+              chmod 600 /opencode-home/.local/share/opencode/auth.json &&
+              exec opencode serve --pure --hostname 127.0.0.1 --port 4096
+          env:
+            - name: HOME
+              value: /opencode-home
+            - name: OPENCODE_CONFIG_CONTENT
+              value: >-
+                {"model":"openai/gpt-5.6-sol","small_model":"openai/gpt-5.6-sol","share":"disabled","autoupdate":false,"snapshot":false,"enabled_providers":["openai"],"tools":{"bash":false,"webfetch":false}}
+          ports:
+            - name: http
+              containerPort: 4096
+          readinessProbe:
+            exec:
+              command: ["curl", "-fsS", "http://127.0.0.1:4096/global/health"]
+            periodSeconds: 2
+            failureThreshold: 30
+          volumeMounts:
+            - name: workspace
+              mountPath: /workspace
+            - name: opencode-home
+              mountPath: /opencode-home
+            - name: opencode-tmp
+              mountPath: /tmp
+            - name: opencode-auth
+              mountPath: /opencode-auth
+              readOnly: true
+          resources:
+            requests:
+              cpu: 25m
+              memory: 256Mi
+            limits:
+              cpu: "2"
+              memory: 2Gi
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            runAsUser: 1000
+            runAsGroup: 1000
+            seccompProfile:
+              type: RuntimeDefault
+    - name: validate
+      inputs:
+        parameters:
+          - name: target-repository
+      automountServiceAccountToken: false
+      outputs:
+        parameters:
+          - name: patch-sha256
+            valueFrom:
+              path: /var/run/argo/outputs/patch.sha256
+      volumes:
+        - name: validation-work
+          emptyDir:
+            sizeLimit: 4Gi
+        - name: validation-tmp
+          emptyDir:
+            sizeLimit: 1Gi
+      container:
+        image: europe-west3-docker.pkg.dev/prokube-internal/prokube-customer/adk-coding-workflow:prototype-cg-20260807-2330
+        imagePullPolicy: IfNotPresent
+        command: ["bash", "-c"]
+        args:
+          - |
+            git clone --no-hardlinks /workspace/.data/workspaces/{{workflow.name}}/source /validation/worktree &&
+            git -C /validation/worktree apply --binary /workspace/.workflow-output/changes.patch &&
+            mkdir -p /validation/home &&
+            export HOME=/validation/home &&
+            cd /validation/worktree &&
+            bun /app/src/validate.ts \
+              --repository "{{inputs.parameters.target-repository}}" \
+              --worktree /validation/worktree &&
+              mkdir -p /var/run/argo/outputs &&
+              sha256sum /workspace/.workflow-output/changes.patch | cut -d ' ' -f 1 > /var/run/argo/outputs/patch.sha256
+        env:
+          - name: HOME
+            value: /tmp
+        volumeMounts:
+          - name: workspace
+            mountPath: /workspace
+            readOnly: true
+          - name: validation-work
+            mountPath: /validation
+          - name: validation-tmp
+            mountPath: /tmp
+        resources:
+          requests:
+            cpu: 100m
+            memory: 256Mi
+          limits:
+            cpu: "4"
+            memory: 4Gi
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop: ["ALL"]
+          readOnlyRootFilesystem: true
+          runAsNonRoot: true
+          runAsUser: 1000
+          runAsGroup: 1000
+          seccompProfile:
+            type: RuntimeDefault
+    - name: attest
+      inputs:
+        parameters:
+          - name: issue
+          - name: ticket-repository
+          - name: target-repository
+          - name: base
+          - name: validated-patch-sha
+      automountServiceAccountToken: false
+      volumes:
+        - name: attest-tmp
+          emptyDir:
+            sizeLimit: 1Gi
+      container:
+        image: europe-west3-docker.pkg.dev/prokube-internal/prokube-customer/adk-coding-workflow:prototype-cg-20260807-2330
+        imagePullPolicy: IfNotPresent
+        command: ["bun", "/app/src/cli.ts"]
+        args:
+          - --ticket-repository
+          - "{{inputs.parameters.ticket-repository}}"
+          - --target-repository
+          - "{{inputs.parameters.target-repository}}"
+          - --issue
+          - "{{inputs.parameters.issue}}"
+          - --base
+          - "{{inputs.parameters.base}}"
+          - --mode
+          - attest
+          - --workspace-root
+          - /workspace/.data/workspaces
+          - --validated-patch-sha
+          - "{{inputs.parameters.validated-patch-sha}}"
+        env:
+          - name: HOME
+            value: /tmp
+          - name: PK_WORKFLOW_RUN_ID
+            value: "{{workflow.name}}"
+        volumeMounts:
+          - name: workspace
+            mountPath: /workspace
+          - name: attest-tmp
+            mountPath: /tmp
+        resources:
+          requests:
+            cpu: 100m
+            memory: 256Mi
+          limits:
+            cpu: "1"
+            memory: 1Gi
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop: ["ALL"]
+          readOnlyRootFilesystem: true
+          runAsNonRoot: true
+          runAsUser: 1000
+          runAsGroup: 1000
+          seccompProfile:
+            type: RuntimeDefault
+    - name: publish
+      retryStrategy:
+        limit: "2"
+        retryPolicy: Always
+        backoff:
+          duration: 5s
+          factor: 2
+          maxDuration: 30s
+      inputs:
+        parameters:
+          - name: issue
+          - name: ticket-repository
+          - name: target-repository
+          - name: base
+      automountServiceAccountToken: false
+      volumes:
+        - name: publish-tmp
+          emptyDir:
+            sizeLimit: 1Gi
+      container:
+        image: europe-west3-docker.pkg.dev/prokube-internal/prokube-customer/adk-coding-workflow:prototype-cg-20260807-2330
+        imagePullPolicy: IfNotPresent
+        command: ["bun", "/app/src/cli.ts"]
+        args:
+          - --ticket-repository
+          - "{{inputs.parameters.ticket-repository}}"
+          - --target-repository
+          - "{{inputs.parameters.target-repository}}"
+          - --issue
+          - "{{inputs.parameters.issue}}"
+          - --base
+          - "{{inputs.parameters.base}}"
+          - --mode
+          - finalize
+          - --workspace-root
+          - /workspace/.data/workspaces
+        env:
+          - name: HOME
+            value: /tmp
+          - name: GH_TOKEN
+            valueFrom:
+              secretKeyRef:
+                name: adk-coding-workflow-github
+                key: token
+          - name: PK_WORKFLOW_RUN_ID
+            value: "{{workflow.name}}"
+          - name: PK_WORKFLOW_OUTPUT_DIR
+            value: /workspace/.workflow-output
+        volumeMounts:
+          - name: workspace
+            mountPath: /workspace
+          - name: publish-tmp
+            mountPath: /tmp
+        resources:
+          requests:
+            cpu: 100m
+            memory: 256Mi
+          limits:
+            cpu: "1"
+            memory: 1Gi
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop: ["ALL"]
+          readOnlyRootFilesystem: true
+          runAsNonRoot: true
+          runAsUser: 1000
+          runAsGroup: 1000
+          seccompProfile:
+            type: RuntimeDefault
+    - name: exit-handler
+      outputs:
+        parameters:
+          - name: workflow-result
+            valueFrom:
+              parameter: "{{steps.report.outputs.parameters.workflow-result}}"
+      steps:
+        - - name: reconcile-claim
+            template: reconcile-claim
+            continueOn:
+              failed: true
+              error: true
+        - - name: report
+            template: report
+    - name: reconcile-claim
+      retryStrategy:
+        limit: "2"
+        retryPolicy: Always
+        backoff:
+          duration: 5s
+          factor: 2
+          maxDuration: 30s
+      automountServiceAccountToken: false
+      container:
+        image: europe-west3-docker.pkg.dev/prokube-internal/prokube-customer/adk-coding-workflow:prototype-cg-20260807-2330
+        imagePullPolicy: IfNotPresent
+        command: ["bun", "/app/src/cleanup.ts"]
+        env:
+          - name: GH_TOKEN
+            valueFrom:
+              secretKeyRef:
+                name: adk-coding-workflow-github
+                key: token
+          - name: PK_WORKFLOW_RUN_ID
+            value: "{{workflow.name}}"
+          - name: PK_WORKFLOW_STATUS
+            value: "{{workflow.status}}"
+          - name: PK_WORKFLOW_CLAIM_FILE
+            value: /workspace/.workflow-claim.json
+          - name: PK_WORKFLOW_RESULT_FILE
+            value: /workspace/.workflow-output/result.json
+        volumeMounts:
+          - name: workspace
+            mountPath: /workspace
+            readOnly: true
+        resources:
+          requests:
+            cpu: 25m
+            memory: 64Mi
+          limits:
+            cpu: "1"
+            memory: 256Mi
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop: ["ALL"]
+          readOnlyRootFilesystem: true
+          runAsNonRoot: true
+          runAsUser: 1000
+          runAsGroup: 1000
+          seccompProfile:
+            type: RuntimeDefault
+    - name: report
+      automountServiceAccountToken: false
+      outputs:
+        parameters:
+          - name: workflow-result
+            valueFrom:
+              path: /tmp/workflow-result.json
+      volumes:
+        - name: report-tmp
+          emptyDir:
+            sizeLimit: 10Mi
+      container:
+        image: europe-west3-docker.pkg.dev/prokube-internal/prokube-customer/adk-coding-workflow:prototype-cg-20260807-2330
+        imagePullPolicy: IfNotPresent
+        command: ["bun", "/app/src/report.ts"]
+        env:
+          - name: PK_WORKFLOW_STATUS
+            value: "{{workflow.status}}"
+        volumeMounts:
+          - name: workspace
+            mountPath: /workspace
+            readOnly: true
+          - name: report-tmp
+            mountPath: /tmp
+        resources:
+          requests:
+            cpu: 10m
+            memory: 32Mi
+          limits:
+            cpu: 100m
+            memory: 128Mi
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop: ["ALL"]
+          readOnlyRootFilesystem: true
+          runAsNonRoot: true
+          runAsUser: 1000
+          runAsGroup: 1000
+          seccompProfile:
+            type: RuntimeDefault

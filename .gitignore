@@ -7,6 +7,10 @@ dist/
 
 # Bun
 bun.lock
+!prototypes/adk-coding-workflow/bun.lock
+
+# Prototype runtime state
+prototypes/adk-coding-workflow/.data/
 
 # Turbo
 .turbo/

@@ -1,0 +1,23 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Workflow
+metadata:
+  generateName: adk-coding-workflow-auto-
+  labels:
+    app.kubernetes.io/name: adk-coding-workflow
+    app.kubernetes.io/component: auto-run
+spec:
+  workflowTemplateRef:
+    name: adk-coding-workflow-execute
+  entrypoint: auto-supervise
+  arguments:
+    parameters:
+      # Argo validates required template-level arguments before selecting an entrypoint.
+      # These values are not consumed by the auto-supervise template.
+      - name: issue
+        value: "0"
+      - name: ticket-repository
+        value: prokube/pkui
+      - name: target-repository
+        value: prokube/pkui
+      - name: discovery-request
+        value: '{"projects":[{"provider":"github","project":"prokube/pkui","suggestedBaseBranch":"main"}],"includeLabels":["ready"],"excludeLabels":["in-progress","needs-discussion","needs-supervisor"]}'

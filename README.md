@@ -195,6 +195,12 @@ See [examples/](examples/) for nginx and Traefik configurations.
 
 ## Architecture
 
+The draft design for unattended issue implementation, pull-request remediation,
+Argo Workflows, and kagent integration is documented in
+[Autonomous Coding Workflows](docs/AUTONOMOUS_CODING_WORKFLOWS.md).
+An initial safe-by-default implementation is available under
+[`prototypes/adk-coding-workflow/`](prototypes/adk-coding-workflow/README.md).
+
 ```
 +------------------------------------------------------------------+
 |  This Project                                                    |

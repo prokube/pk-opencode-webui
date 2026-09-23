@@ -1,0 +1,20 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Workflow
+metadata:
+  generateName: adk-coding-workflow-publish-
+  labels:
+    app.kubernetes.io/name: adk-coding-workflow
+    app.kubernetes.io/component: publish-run
+spec:
+  workflowTemplateRef:
+    name: adk-coding-workflow-execute
+  arguments:
+    parameters:
+      - name: ticket-repository
+        value: prokube/pkui
+      - name: target-repository
+        value: prokube/pkui
+      - name: issue
+        value: "3522"
+      - name: publish
+        value: "true"
