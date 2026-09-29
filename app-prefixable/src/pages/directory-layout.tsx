@@ -8,6 +8,8 @@ import { CoreProviders } from "../context/core-providers"
 import { useProjects } from "../context/projects"
 import { base64Decode } from "../utils/path"
 import { Layout } from "./layout"
+import { useServer } from "../context/server"
+import { serverHref } from "../utils/servers"
 
 /**
  * Wraps routes that need a directory context.
@@ -15,6 +17,7 @@ import { Layout } from "./layout"
  * Uses a keyed For to force full remount when directory changes.
  */
 export function DirectoryLayout(props: ParentProps) {
+  const server = useServer()
   const params = useParams<{ dir: string }>()
   const projects = useProjects()
 
@@ -59,7 +62,7 @@ export function DirectoryLayout(props: ParentProps) {
   })
 
   return (
-    <For each={directories()} fallback={<Navigate href="/" />}>
+    <For each={directories()} fallback={<Navigate href={serverHref(server.id, "/")} />}>
       {(dir: string) => (
         <CoreProviders directory={dir}>
           <FileProvider>

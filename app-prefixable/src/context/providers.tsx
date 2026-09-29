@@ -3,7 +3,7 @@ import { createStore, produce } from "solid-js/store"
 import { useSDK } from "./sdk"
 import { useConfig } from "./config"
 import { cycleModelVariant, getConfiguredAgentVariant, resolveModelVariant } from "./model-variant"
-import { LOCAL_SERVER_ID } from "./server"
+import { useServer } from "./server"
 import { useSync, type ProviderData } from "./sync"
 import { legacyStorageValue, serverStorageKey, workspaceStorageKey } from "../utils/storage"
 
@@ -133,7 +133,7 @@ export function ProviderProvider(props: ParentProps) {
   const { client, global, directory } = useSDK()
   const sync = useSync()
   const cfg = useConfig()
-  const serverId = LOCAL_SERVER_ID
+  const serverId = useServer().id
   const workspace = directory ?? ""
   const storageKey = workspaceStorageKey(serverId, workspace, "modelsByAgent")
   const variantKey = workspaceStorageKey(serverId, workspace, "variantsBySession")

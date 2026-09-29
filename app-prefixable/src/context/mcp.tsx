@@ -1,6 +1,7 @@
 import { createContext, useContext, createSignal, onMount, onCleanup, type ParentProps, createMemo } from "solid-js"
 import { createStore, reconcile } from "solid-js/store"
 import { useSDK } from "./sdk"
+import { useServer } from "./server"
 import { useEvents } from "./events"
 
 // MCP Status types matching the backend
@@ -65,6 +66,7 @@ interface MCPContextValue {
 const MCPContext = createContext<MCPContextValue>()
 
 export function MCPProvider(props: ParentProps) {
+  const local = useServer().local
   const sdk = useSDK()
   const { client, url } = sdk
   const events = useEvents()
@@ -191,6 +193,7 @@ export function MCPProvider(props: ParentProps) {
   }
 
   async function remove(name: string) {
+    if (!local) throw new Error("Removing MCP configuration requires the local UI filesystem API. Remote servers can be disconnected instead.")
     try {
       console.log("[MCP] Removing server:", name)
 

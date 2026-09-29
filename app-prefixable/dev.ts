@@ -2,6 +2,8 @@ import { watch } from "fs"
 import { handleExtendedEndpoint, isApiPath, isMutation, isSameOriginRequest } from "../shared/extended-api"
 import { normalizeRequestPath, prefixStrippedAllowed } from "../shared/base-path"
 import { isEventStreamPath, normalizeProxiedResponse, proxyEventResponse, serializeScriptData, stripHopByHopHeaders } from "../shared/proxy"
+import { createRemoteProxy, type RemoteSocket } from "../shared/remote-server"
+import { socketRelay } from "../shared/socket-relay"
 
 const BASE_PATH = process.env.BASE_PATH || "/"
 const PORT = parseInt(process.env.PORT || "3000", 10)
@@ -36,9 +38,6 @@ const validatedBasePath = validateBasePath(BASE_PATH)
 const basePathWithoutTrailing = validatedBasePath.endsWith("/") ? validatedBasePath.slice(0, -1) : validatedBasePath
 const basePathWithTrailing = validatedBasePath.endsWith("/") ? validatedBasePath : validatedBasePath + "/"
 
-// Track WebSocket connections: client ws -> backend ws
-const wsConnections = new Map<object, WebSocket>()
-
 function withNoStoreHeaders(response: Response) {
   const headers = new Headers(response.headers)
   headers.set("Cache-Control", "no-store")
@@ -62,7 +61,8 @@ function normalizeDevProxiedResponse(response: Response) {
   })
 }
 
-const server = Bun.serve<{ target: string }>({
+const remoteProxy = createRemoteProxy()
+const server = Bun.serve<{ target: string; remote?: RemoteSocket }>({
   port: PORT,
   idleTimeout: 0, // Disable timeout for SSE connections
   async fetch(req, server) {
@@ -73,6 +73,9 @@ const server = Bun.serve<{ target: string }>({
     const normalizedPath = normalizeRequestPath(path, basePathWithoutTrailing, BASE_PATH_STRIPPED)
     if (normalizedPath === null) return new Response("Not Found", { status: 404 })
     const strippedPath = normalizedPath
+    const remote = await remoteProxy(req, strippedPath, (socket) => server.upgrade(req, { data: { target: socket.target, remote: socket } }))
+    if (remote === true) return undefined
+    if (remote) return remote
 
     // WebSocket upgrade for /pty routes - proxy to backend
     if (strippedPath.startsWith("/pty/") && req.headers.get("upgrade") === "websocket") {
@@ -192,55 +195,7 @@ const server = Bun.serve<{ target: string }>({
       headers: { "Content-Type": "text/html" },
     })
   },
-  websocket: {
-    open(ws) {
-      const target = ws.data.target
-      console.log("[Proxy] WebSocket client connected, connecting to backend:", target)
-
-      // Connect to backend WebSocket
-      const backend = new WebSocket(target)
-
-      backend.addEventListener("open", () => {
-        console.log("[Proxy] Backend WebSocket connected")
-      })
-
-      backend.addEventListener("message", (event) => {
-        // Forward backend messages to client
-        if (ws.readyState === 1) {
-          ws.send(event.data)
-        }
-      })
-
-      backend.addEventListener("close", (event) => {
-        console.log("[Proxy] Backend WebSocket closed:", event.code)
-        wsConnections.delete(ws)
-        if (ws.readyState === 1) {
-          ws.close(event.code, event.reason)
-        }
-      })
-
-      backend.addEventListener("error", (e) => {
-        console.error("[Proxy] Backend WebSocket error:", e)
-      })
-
-      wsConnections.set(ws, backend)
-    },
-    message(ws, message) {
-      // Forward client messages to backend
-      const backend = wsConnections.get(ws)
-      if (backend?.readyState === WebSocket.OPEN) {
-        backend.send(message)
-      }
-    },
-    close(ws, code, reason) {
-      console.log("[Proxy] Client WebSocket closed:", code)
-      const backend = wsConnections.get(ws)
-      if (backend) {
-        backend.close(code, reason)
-        wsConnections.delete(ws)
-      }
-    },
-  },
+  websocket: socketRelay<{ target: string; remote?: RemoteSocket }>(data => data.remote ?? { target: data.target, headers: {} }),
 })
 
 console.log(`\nDev server running at http://localhost:${PORT}${basePathWithTrailing}`)

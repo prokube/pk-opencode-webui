@@ -1,5 +1,5 @@
 import { type ParentProps, createSignal, For, onCleanup, onMount, Show } from "solid-js"
-import { useNavigate } from "@solidjs/router"
+import { useServerNavigate as useNavigate } from "../context/server-navigation"
 import { createOpencodeClient } from "../sdk/client"
 import { base64Encode } from "../utils/path"
 import { useServer } from "../context/server"
@@ -136,7 +136,7 @@ function HomeContent(props: ParentProps) {
   }
 
   return (
-    <div class="flex h-screen" style={{ background: "var(--background-stronger)" }}>
+    <div class="flex h-full min-h-0" style={{ background: "var(--background-stronger)" }}>
       <CommandPalette />
       {/* Project Dialog */}
               <ProjectDialog

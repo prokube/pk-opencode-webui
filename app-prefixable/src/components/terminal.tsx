@@ -3,6 +3,8 @@ import { Terminal as XTerm } from "@xterm/xterm"
 import { FitAddon } from "@xterm/addon-fit"
 import "@xterm/xterm/css/xterm.css"
 import { useSDK } from "../context/sdk"
+import { useServer } from "../context/server"
+import { terminalFrame, terminalSocketUrl } from "../utils/terminal-connection"
 import { useTheme } from "../context/theme"
 import { Sun, Moon, Monitor } from "lucide-solid"
 import type { ITheme } from "@xterm/xterm"
@@ -94,6 +96,7 @@ export interface TerminalProps {
 }
 
 export function Terminal(props: TerminalProps) {
+  const server = useServer()
   const { client, url, directory } = useSDK()
   const appTheme = useTheme()
   let container!: HTMLDivElement
@@ -105,6 +108,7 @@ export function Terminal(props: TerminalProps) {
   let stableTimer: ReturnType<typeof setTimeout> | undefined
   let reconnectAttempts = 0
   let disposed = false
+  let cursor: number | undefined
 
   const [status, setStatus] = createSignal<"connecting" | "connected" | "error" | "disconnected">("connecting")
   const [error, setError] = createSignal<string | null>(null)
@@ -127,18 +131,19 @@ export function Terminal(props: TerminalProps) {
     term.write(`${colors[type]}${message}\x1b[0m\r\n`)
   }
 
-  function connect() {
+  async function connect() {
     if (disposed || !term) return
 
     // Build WebSocket URL
-    const wsUrl =
-      url.replace(/^http/, "ws") + `/pty/${props.ptyId}/connect?directory=${encodeURIComponent(directory || "")}`
-    console.log("[Terminal] Connecting to:", wsUrl)
+    const wsUrl = await terminalSocketUrl({ url, id: props.ptyId, directory: directory || "", cursor, remote: !server.local, headers: server.authHeaders() }).catch(() => undefined)
+    if (disposed) return
+    if (!wsUrl) { setStatus("error"); setError("Could not authorize the terminal connection"); writeStatus("Could not authorize the terminal connection", "error"); return }
 
     setStatus("connecting")
     setError(null)
 
     ws = new WebSocket(wsUrl)
+    ws.binaryType = "arraybuffer"
 
     ws.addEventListener("open", () => {
       console.log("[Terminal] WebSocket connected")
@@ -166,7 +171,13 @@ export function Terminal(props: TerminalProps) {
     })
 
     ws.addEventListener("message", (event) => {
-      term?.write(event.data)
+      if (disposed) return
+      const frame = terminalFrame(event.data)
+      if (frame.cursor !== undefined) cursor = frame.cursor
+      if (frame.output !== undefined) {
+        term?.write(frame.output)
+        if (cursor !== undefined) cursor += frame.output.length
+      }
     })
 
     ws.addEventListener("error", (e) => {

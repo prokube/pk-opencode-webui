@@ -53,8 +53,7 @@ export function serverEventIsCurrent(event: ServerEvent, source: AbortSignal | u
   return source !== undefined && source === current
 }
 
-export function ServerEventsProvider(props: ParentProps) {
-  const server = useServer()
+export function createServerEvents(server: { serverUrl: () => string; authHeaders: () => Record<string, string> }): ServerEventsContextValue {
   const handlers = new Set<ServerEventHandler>()
   const recoveries = new Set<ServerRecoveryHandler>()
   const [connected, setConnected] = createSignal(false)
@@ -162,8 +161,7 @@ export function ServerEventsProvider(props: ParentProps) {
     if (reconnect) clearTimeout(reconnect)
   })
 
-  return (
-    <ServerEventsContext.Provider value={{
+  return {
       connected,
       unhealthy,
       recover: (handler) => {
@@ -178,10 +176,11 @@ export function ServerEventsProvider(props: ParentProps) {
           handlers.delete(handler)
         }
       },
-    }}>
-      {props.children}
-    </ServerEventsContext.Provider>
-  )
+  }
+}
+
+export function ServerEventsProvider(props: ParentProps) {
+  return <ServerEventsContext.Provider value={useServer().events}>{props.children}</ServerEventsContext.Provider>
 }
 
 export function useServerEvents() {

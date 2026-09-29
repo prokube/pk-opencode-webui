@@ -1,5 +1,6 @@
 import { Show, createMemo } from "solid-js"
-import { useNavigate, useParams } from "@solidjs/router"
+import { useParams } from "@solidjs/router"
+import { useServerNavigate as useNavigate } from "../context/server-navigation"
 import { Spinner } from "./ui/spinner"
 import { useLayout } from "../context/layout"
 import { useMCP } from "../context/mcp"

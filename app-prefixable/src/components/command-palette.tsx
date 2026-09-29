@@ -1,6 +1,6 @@
 import { createEffect, createMemo, createSignal, For, on, onCleanup, Show } from "solid-js"
 import { Portal } from "solid-js/web"
-import { useNavigate } from "@solidjs/router"
+import { useServerNavigate as useNavigate } from "../context/server-navigation"
 import { FolderOpen, Loader2, MessageCircle, Search, Zap } from "lucide-solid"
 import { formatKeybind, useCommand } from "../context/command"
 import { useProjects } from "../context/projects"

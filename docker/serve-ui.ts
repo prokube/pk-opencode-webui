@@ -12,6 +12,8 @@
 import { handleExtendedEndpoint, isApiPath, isMutation, isSameOriginRequest } from "../shared/extended-api"
 import { normalizeRequestPath, prefixStrippedAllowed } from "../shared/base-path"
 import { isEventStreamPath, normalizeProxiedResponse, proxyEventResponse, serializeScriptData, stripHopByHopHeaders } from "../shared/proxy"
+import { createRemoteProxy, type RemoteSocket } from "../shared/remote-server"
+import { socketRelay } from "../shared/socket-relay"
 
 const BASE_PATH = process.env.NB_PREFIX || process.env.BASE_PATH || "/"
 const PORT = parseInt(process.env.PORT || "8080", 10)
@@ -78,9 +80,6 @@ function isPtyWebSocket(path: string): boolean {
 let lastActivity = Date.now()
 let blockedOpenAIMethods: Promise<Set<number>> | undefined
 
-// Store for backend WebSocket connections (keyed by client WebSocket)
-const backendConnections = new WeakMap<object, WebSocket>()
-
 function withNoStoreHeaders(response: Response) {
   const headers = new Headers(response.headers)
   headers.set("Cache-Control", "no-store")
@@ -132,7 +131,8 @@ async function openAIBrowserOAuthMethods() {
   return blockedOpenAIMethods
 }
 
-const server = Bun.serve<{ path: string; search: string }>({
+const remoteProxy = createRemoteProxy()
+const server = Bun.serve<{ path: string; search: string; remote?: RemoteSocket }>({
   port: PORT,
   hostname: "0.0.0.0",
   idleTimeout: 0, // Disable timeout for SSE connections
@@ -143,7 +143,6 @@ const server = Bun.serve<{ path: string; search: string }>({
     const normalizedPath = normalizeRequestPath(url.pathname, basePathWithoutTrailing, BASE_PATH_STRIPPED)
     if (normalizedPath === null) return new Response("Not Found", { status: 404 })
     const path = normalizedPath
-
     // Kubeflow idle culling: /api/kernels must never update activity timestamp
     if (path === "/api/kernels") {
       if (req.method !== "GET") {
@@ -167,6 +166,9 @@ const server = Bun.serve<{ path: string; search: string }>({
 
     // Update activity timestamp for all non-polling requests
     lastActivity = Date.now()
+    const remote = await remoteProxy(req, path, (socket) => server.upgrade(req, { data: { path: "", search: "", remote: socket } }))
+    if (remote === true) return undefined
+    if (remote) return remote
 
     // Handle WebSocket upgrade for PTY connections
     if (isPtyWebSocket(path)) {
@@ -303,60 +305,7 @@ const server = Bun.serve<{ path: string; search: string }>({
   },
 
   // WebSocket handler for PTY proxy
-  websocket: {
-    open(ws) {
-      const { path, search } = ws.data
-      const targetUrl = `${WS_API_URL}${path}${search}`
-      console.log("[Proxy] Opening backend WebSocket to:", targetUrl)
-
-      const backend = new WebSocket(targetUrl)
-
-      backend.addEventListener("open", () => {
-        console.log("[Proxy] Backend WebSocket connected")
-      })
-
-      backend.addEventListener("message", (event) => {
-        // Forward backend messages to client
-        if (ws.readyState === WebSocket.OPEN) {
-          ws.send(event.data)
-        }
-      })
-
-      backend.addEventListener("close", (event) => {
-        console.log("[Proxy] Backend WebSocket closed:", event.code, event.reason)
-        if (ws.readyState === WebSocket.OPEN) {
-          ws.close(event.code, event.reason)
-        }
-      })
-
-      backend.addEventListener("error", (error) => {
-        console.error("[Proxy] Backend WebSocket error:", error)
-        if (ws.readyState === WebSocket.OPEN) {
-          ws.close(1011, "Backend connection error")
-        }
-      })
-
-      backendConnections.set(ws, backend)
-    },
-
-    message(ws, message) {
-      // Forward client messages to backend
-      lastActivity = Date.now()
-      const backend = backendConnections.get(ws)
-      if (backend?.readyState === WebSocket.OPEN) {
-        backend.send(message)
-      }
-    },
-
-    close(ws, code, reason) {
-      console.log("[Proxy] Client WebSocket closed:", code, reason)
-      const backend = backendConnections.get(ws)
-      if (backend?.readyState === WebSocket.OPEN) {
-        backend.close(code, reason)
-      }
-      backendConnections.delete(ws)
-    },
-  },
+  websocket: socketRelay<{ path: string; search: string; remote?: RemoteSocket }>(data => data.remote ?? { target: `${WS_API_URL}${data.path}${data.search}`, headers: {} }, () => { lastActivity = Date.now() }),
 })
 
 console.log(`\nOpenCode UI Server running at http://0.0.0.0:${PORT}${basePathWithTrailing}`)

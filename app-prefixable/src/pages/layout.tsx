@@ -9,7 +9,8 @@ import {
   onCleanup,
   createEffect,
 } from "solid-js";
-import { A, useLocation, useNavigate } from "@solidjs/router";
+import { useLocation } from "@solidjs/router";
+import { ServerLink as A, useServerNavigate as useNavigate } from "../context/server-navigation";
 import { useSDK } from "../context/sdk";
 import { useEvents } from "../context/events";
 import { useProviders } from "../context/providers";
@@ -69,7 +70,7 @@ import { ConstrainDragXAxis } from "../utils/solid-dnd";
 import { useProjects } from "../context/projects";
 import { sessionHasQuestion, buildChildMap, sessionDescendantIds, sessionTreeIsWorking } from "../utils/session-tree-request";
 import { useProjectActivity } from "../context/project-activity";
-import { LOCAL_SERVER_ID } from "../context/server";
+import { useServer } from "../context/server";
 import { legacyStorageValue, serverStorageKey, workspaceStorageKey } from "../utils/storage";
 import { sessionNeighbor } from "../utils/session-load";
 import { isSessionNotFound, mapWithConcurrency, selectSessionRange, selectedRootSessions, toggleSessionSelection } from "../utils/session-selection";
@@ -153,7 +154,7 @@ export function Layout(props: ParentProps) {
   const projectActivity = useProjectActivity();
   const location = useLocation();
   const navigate = useNavigate();
-  const serverId = LOCAL_SERVER_ID;
+  const serverId = useServer().id;
   const sidebarExpandedKey = serverStorageKey(serverId, "sidebarExpanded");
   const showArchivedKey = serverStorageKey(serverId, "showArchived");
   const pinnedSessionsKey = directory ? workspaceStorageKey(serverId, directory, "pinnedSessions") : undefined;
@@ -1621,7 +1622,7 @@ export function Layout(props: ParentProps) {
   function clearLastSession(ids: Set<string>) {
     if (!directory) return;
     try {
-      const key = workspaceStorageKey(LOCAL_SERVER_ID, directory, "lastSession");
+      const key = workspaceStorageKey(serverId, directory, "lastSession");
       const stored = window.localStorage.getItem(key);
       if (stored && ids.has(stored)) window.localStorage.removeItem(key);
     } catch (err) {
@@ -1653,7 +1654,7 @@ export function Layout(props: ParentProps) {
 
   return (
     <div
-      class="flex h-screen"
+      class="flex h-full min-h-0"
       style={{ background: "var(--background-stronger)" }}
     >
       {/* Project Dialog */}
