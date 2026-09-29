@@ -16,6 +16,7 @@ const servers = ["Local", "Alpha", "Beta"].map((name, index) => {
     fetch(req, server) {
       const url = new URL(req.url)
       if (url.pathname === "/test/writes") return Response.json(writes)
+      if (url.pathname === "/test/streams") return Response.json(streams.size)
       if (url.pathname === "/test/reset") {
         sessions.splice(0, sessions.length, initial())
         writes.length = 0

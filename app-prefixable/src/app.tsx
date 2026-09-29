@@ -1,5 +1,15 @@
 import { Router, Route, useLocation, useNavigate, useParams } from "@solidjs/router"
-import { createEffect, createMemo, createSignal, ErrorBoundary, For, on, Show, type ParentProps } from "solid-js"
+import {
+  createEffect,
+  createMemo,
+  createSignal,
+  ErrorBoundary,
+  For,
+  on,
+  onCleanup,
+  Show,
+  type ParentProps,
+} from "solid-js"
 import { BasePathProvider, useBasePath } from "./context/base-path"
 import { LOCAL_SERVER_ID, ServerProvider, ServerScope, useConnections, useServer } from "./context/server"
 import { useServerNavigate } from "./context/server-navigation"
@@ -156,6 +166,7 @@ function ConnectionLayout(props: ParentProps) {
     const item = connection()
     return !!item && item.auth !== "none" && !registry.credentials()[item.id]
   }
+  onCleanup(registry.followActive(() => (needsCredential() ? undefined : connection()?.id)))
   const health = createMemo(() => {
     const item = connection()
     return item && !needsCredential() ? registry.events(item) : undefined

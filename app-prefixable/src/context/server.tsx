@@ -76,6 +76,8 @@ function createConnections() {
     ),
   )
   const [busy, setBusy] = createSignal<Record<string, boolean>>({})
+  const idle = () => undefined
+  const [active, setActive] = createSignal<() => string | undefined>(idle)
   const streams = new Map<
     string,
     { value: ReturnType<typeof createServerEvents>; dispose: () => void; signature: string }
@@ -138,7 +140,22 @@ function createConnections() {
   }
   createEffect(() => {
     const open = new Set(tabs().map((tab) => tab.server))
-    for (const item of list()) if (open.has(item.id) && (item.auth === "none" || credentials()[item.id])) events(item)
+    const current = active()()
+    if (current) open.add(current)
+    const wanted = list().filter((item) => open.has(item.id) && (item.auth === "none" || credentials()[item.id]))
+    const ids = new Set(wanted.map((item) => item.id))
+    for (const [id, source] of streams) {
+      if (ids.has(id)) continue
+      source.dispose()
+      streams.delete(id)
+    }
+    for (const item of wanted) events(item)
+    const keys = new Set(tabs().map(tabKey))
+    setBusy((previous) =>
+      Object.keys(previous).some((key) => !keys.has(key))
+        ? Object.fromEntries(Object.entries(previous).filter(([key]) => keys.has(key)))
+        : previous,
+    )
   })
   return {
     list,
@@ -147,6 +164,12 @@ function createConnections() {
     credentials,
     transport,
     events,
+    followActive(read: () => string | undefined) {
+      setActive(() => read)
+      return () => {
+        if (active() === read) setActive(() => idle)
+      }
+    },
     save(input: Omit<ServerConnection, "id">, secret: string) {
       const url = normalizeServerUrl(input.url)
       const item = { ...input, url, id: base64Encode(url) }

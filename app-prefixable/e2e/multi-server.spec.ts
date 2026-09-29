@@ -46,6 +46,7 @@ test("sessions with identical IDs stay attached to their server across tabs and 
   request,
 }, testInfo) => {
   const errors: string[] = []
+  const streams = async (port: number) => (await request.get(`http://127.0.0.1:${port}/test/streams`)).json()
   page.on("pageerror", (error) => errors.push(error.message))
   await page.goto("./")
   await page.getByRole("button", { name: "Select server" }).click()
@@ -54,6 +55,8 @@ test("sessions with identical IDs stay attached to their server across tabs and 
   await page.getByLabel("Name", { exact: true }).fill("Alpha")
   await page.getByRole("button", { name: "Connect", exact: true }).click()
   await expect(page.getByRole("button", { name: "Select server" })).toHaveText("Alpha")
+  await expect.poll(() => streams(18041)).toBe(0)
+  await expect.poll(() => streams(18042)).toBe(1)
   const alpha = new URL(page.url()).searchParams.get("server")!
   await page.goto(`./L3dvcmtzcGFjZQ/session/ses_shared?server=${alpha}`)
   await expect(page.getByRole("navigation", { name: "Open sessions" })).toContainText("Alpha session")
@@ -65,6 +68,8 @@ test("sessions with identical IDs stay attached to their server across tabs and 
   await page.getByLabel("Password", { exact: true }).fill("beta-secret")
   await page.getByRole("button", { name: "Connect", exact: true }).click()
   await expect(page.getByRole("button", { name: "Select server" })).toHaveText("Beta")
+  await expect.poll(() => streams(18042)).toBe(1)
+  await expect.poll(() => streams(18043)).toBe(1)
   const beta = new URL(page.url()).searchParams.get("server")!
   await page.goto(`./L3dvcmtzcGFjZQ/session/ses_shared?server=${beta}`)
   const tabs = page.getByRole("navigation", { name: "Open sessions" })
@@ -130,6 +135,14 @@ test("sessions with identical IDs stay attached to their server across tabs and 
   await expect.poll(async () => (await request.get("http://127.0.0.1:18043/test/writes")).json()).toContain("prompt")
   expect(await (await request.get("http://127.0.0.1:18042/test/writes")).json()).not.toContain("create")
   await page.screenshot({ path: testInfo.outputPath("multi-server.png"), fullPage: true })
+  await tabs.getByRole("button", { name: "Close Alpha session", exact: true }).click()
+  await expect.poll(() => streams(18042)).toBe(1)
+  await tabs.getByRole("button", { name: "Close New session", exact: true }).click()
+  await expect.poll(() => streams(18042)).toBe(0)
+  await expect.poll(() => streams(18043)).toBe(1)
+  await tabs.getByRole("button", { name: "Close Beta new session", exact: true }).click()
+  await tabs.getByRole("button", { name: "Close Beta renamed", exact: true }).click()
+  await expect.poll(() => streams(18043)).toBe(1)
   expect(await page.evaluate(() => localStorage.getItem("opencode.connections.v1"))).not.toContain("beta-secret")
   expect(errors).toEqual([])
 })
