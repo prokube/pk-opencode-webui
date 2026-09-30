@@ -22,14 +22,14 @@ function urlHasLoopbackTarget(value: string): boolean {
   return false
 }
 
-export function browserOAuthUnsupported(input: { authUrl: string; method: "auto" | "code"; browserHostname: string }) {
+export function browserOAuthUnsupported(input: { authUrl: string; method: "auto" | "code"; browserHostname: string; remote?: boolean }) {
   if (input.method !== "auto") return false
-  if (isLocalBrowserHost(input.browserHostname)) return false
+  if (!input.remote && isLocalBrowserHost(input.browserHostname)) return false
   return urlHasLoopbackTarget(input.authUrl)
 }
 
-export function providerOAuthMethodUnsupported(input: { providerID: string; label: string; browserHostname: string; basePath?: string }) {
-  if (isLocalBrowserHost(input.browserHostname) && !isNotebookBasePath(input.basePath ?? "")) return false
+export function providerOAuthMethodUnsupported(input: { providerID: string; label: string; browserHostname: string; basePath?: string; remote?: boolean }) {
+  if (!input.remote && isLocalBrowserHost(input.browserHostname) && !isNotebookBasePath(input.basePath ?? "")) return false
   if (input.providerID !== "openai") return false
   return /\b(browser|local)\b/i.test(input.label)
 }

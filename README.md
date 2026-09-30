@@ -8,6 +8,7 @@ A feature-rich, prefix-aware Web UI for [OpenCode](https://github.com/anomalyco/
 
 - **Full reverse proxy support** -- every URL, asset, and API call respects the configured base path
 - **Multi-project workspace** -- switch between projects without restarting; each gets its own session
+- **Multiple OpenCode servers** -- manage connections and keep session/draft tabs attached to their server
 - **MCP server management** -- add, remove, connect, and disconnect MCP servers from the UI
 - **Keyboard shortcuts** -- core navigation and panel shortcuts with an in-app reference
 - **Manual session rename** -- keep session titles organized from the sidebar
@@ -86,7 +87,41 @@ A full settings page with tabs for:
 5. **Project Config** -- edit project tools, permissions, and configuration
 6. **Appearance** -- Light / Dark / System theme
 
-The UI connects only to its local OpenCode API through the prefix-aware, same-origin UI proxy. Arbitrary remote OpenCode server targets are not accepted by the browser or UI server.
+The **Settings → Servers** page manages local and external OpenCode connections.
+Session tabs show their server name; switching a
+tab restores its own server, project, draft and settings scope.
+
+### External OpenCode servers
+
+1. Open **Settings → Servers** and choose **Add server**.
+2. Enter the OpenCode API base URL and an optional display name.
+3. Choose no authentication, username/password (default username: `opencode`),
+   or a Bearer token. **Connect** checks `/global/health` before saving.
+4. Open a discovered project or choose **New session**. Existing sessions and
+   new-session drafts remain attached to their original server when switching tabs.
+
+The workspace has no persistent server dropdown or connection-status header.
+The tab strip offers a **+** action for new sessions. Missing connections or
+credentials link to a backend-independent server settings page, so connection
+management remains accessible even when the selected backend cannot be used.
+
+For a personal prokube.ai sandbox, use its full published connect URL, for example
+`https://cluster.example/svc/personal-sandbox/connect/workspace/sbx-id`, and a
+key with that sandbox's `connect` permission. Provider credentials such as the
+ChatGPT device-code login are managed by the selected OpenCode server separately.
+
+Connection metadata and open tabs persist in browser localStorage. Passwords and
+Bearer tokens are kept separately in sessionStorage for the current browser tab
+session. After they expire or that browser session ends, edit the connection to
+authenticate again. Removing a connection forgets its credential and tabs; it
+does not delete sessions on the external server.
+
+Native OpenCode APIs (sessions, providers, files, MCP connect/disconnect/add and
+PTY terminals) use the selected server. Our filesystem-backed extensions
+(`/api/ext/*`: saved prompts, direct file/config writes, directory creation and
+MCP config removal) are local-only. Remote directory browsing uses OpenCode's
+file API, and the UI marks local-only settings unavailable. Remote requests can
+never fall back to the UI host's filesystem.
 
 ## Quick Start
 
@@ -135,11 +170,48 @@ bun install && bun run dev
 | `BRANDING_URL` | _(empty)_ | URL for the branding link |
 | `BRANDING_ICON` | _(empty)_ | Custom icon URL (HTTP, relative path, or data URI) |
 
-### Local-only security model
+### Connection and deployment model
 
-This core branch does not support browser-supplied OpenCode backend credentials or backend auth tickets. The OpenCode backend must be reachable only by the UI server, while Kubeflow or another authenticated ingress protects the UI, proxied backend routes, and `/api/ext/*` routes externally. Do not expose the local backend or UI server directly to untrusted networks.
+Kubeflow or another authenticated ingress protects the UI and all its proxy and
+`/api/ext/*` routes. Keep the built-in OpenCode backend private to the UI server.
+External servers must be reachable from the UI server's network. The same-origin
+relay preserves API URL prefixes, so browsers do not need remote CORS access.
+Only explicitly configured remote credentials are forwarded; platform cookies,
+JWTs and user-identity headers are stripped. Redirects are rejected instead of
+forwarding credentials to a second destination.
 
-PTY WebSockets use the same prefix-aware UI proxy and external deployment authentication as the rest of the UI. The UI server does not add separate PTY credentials or claim ticket-based PTY authentication.
+External PTY WebSockets obtain a single-use, server/PTY-bound relay ticket via
+an authenticated same-origin POST. Tickets expire after 30 seconds and contain
+no credentials. The relay adds the remote Authorization header to the upstream
+WebSocket handshake. As with local terminal access, server connection management
+is intended for the authenticated owner of this UI deployment.
+
+The connection list and server-bound session/draft tabs follow the upstream
+[v1.18.33 server](https://github.com/anomalyco/opencode/blob/v1.18.33/packages/app/src/context/server.tsx)
+and [tab](https://github.com/anomalyco/opencode/blob/v1.18.33/packages/app/src/context/tabs.tsx)
+concepts. This implementation adapts them to our existing prefix-aware router,
+same-origin relay and local extended API. It supports HTTP(S) connections; SSH
+and desktop-sidecar transports belong to the upstream desktop application.
+
+### Testing
+
+In `app-prefixable/`:
+
+```sh
+bun install --frozen-lockfile
+bun run typecheck
+bun run lint
+bun run test
+node node_modules/playwright/cli.js install chromium
+bun run test:browser
+```
+
+Browser tests run the production UI server against isolated local mock OpenCode
+servers at root and notebook-prefixed URLs. They cover Basic authentication,
+same-ID sessions on two servers, draft isolation, mutation routing, background
+SSE, terminal WebSockets, reload, missing credentials and connection removal.
+An installed Chrome binary can be selected with
+`PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH` instead of downloading Chromium.
 
 ## Deployment
 

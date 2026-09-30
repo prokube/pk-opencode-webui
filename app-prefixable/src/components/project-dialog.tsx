@@ -62,6 +62,7 @@ function displayPath(path: string, home: string) {
 export function ProjectDialog(props: ProjectDialogProps) {
   const { url } = useSDK()
   const { authHeaders } = useServer()
+  const server = useServer()
   const events = useEvents()
 
   const [homeDirectory, setHomeDirectory] = createSignal<string | null>(null)
@@ -145,6 +146,13 @@ export function ProjectDialog(props: ProjectDialogProps) {
     const key = trimTrailing(directory)
     const cached = dirCache.get(key)
     if (cached) return cached
+
+    if (!server.local) {
+      const result = await client.file.list({ path: directory, directory }).catch(() => null)
+      const paths = result?.data?.filter(item => item.type === "directory").map(item => item.absolute) ?? []
+      dirCache.set(key, paths)
+      return paths
+    }
 
     try {
       const dirs = await listDirs(url, key, { limit: 500, depth: 1 })
@@ -311,7 +319,7 @@ export function ProjectDialog(props: ProjectDialogProps) {
   async function createFolder() {
     const home = homeDirectory()
     const name = newFolderName().trim()
-    if (!name || !home || creating()) return
+    if (!name || !home || creating() || !server.local) return
 
     // Determine base directory from current filter
     let baseDir = home
@@ -485,6 +493,12 @@ export function ProjectDialog(props: ProjectDialogProps) {
                 <p class="mt-1 text-xs" style={{ color: "var(--text-weak)" }}>
                   Use Tab to auto-complete. Click to select, double-click or Enter to open.
                 </p>
+                <Show when={!server.local}>
+                  <div class="mt-2 flex items-center justify-between gap-2 text-xs" style={{ color: "var(--text-weak)" }}>
+                    <span>Or enter an absolute directory on {server.name}.</span>
+                    <Button type="button" variant="ghost" disabled={!filter().trim().startsWith("/")} onClick={() => selectProject(filter().trim())}>Open path</Button>
+                  </div>
+                </Show>
               </div>
 
               {/* Results list - fixed height to prevent jumping */}
@@ -576,7 +590,7 @@ export function ProjectDialog(props: ProjectDialogProps) {
                     }}
                     onKeyDown={(e) => e.key === "Enter" && createFolder()}
                   />
-                  <Button onClick={createFolder} variant="primary" disabled={!newFolderName().trim() || creating()}>
+                  <Button onClick={createFolder} variant="primary" disabled={!server.local || !newFolderName().trim() || creating()} title={!server.local ? "Create remote folders in the terminal" : undefined}>
                     <Show when={creating()} fallback="Create">
                       <Spinner class="w-4 h-4" />
                     </Show>

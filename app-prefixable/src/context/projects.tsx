@@ -1,5 +1,6 @@
-import { createContext, createMemo, createSignal, onCleanup, type ParentProps, untrack, useContext } from "solid-js"
-import { LOCAL_SERVER_ID } from "./server"
+import { createContext, createMemo, createSignal, onCleanup, onMount, type ParentProps, untrack, useContext } from "solid-js"
+import { createOpencodeClient } from "../sdk/client"
+import { useServer } from "./server"
 import { serverStorageKey } from "../utils/storage"
 
 export interface Project {
@@ -153,11 +154,25 @@ export function loadProjects(storage: ProjectStorage, serverId: string, now = Da
 }
 
 export function ProjectsProvider(props: ParentProps) {
-  const serverId = LOCAL_SERVER_ID
+  const server = useServer()
+  const serverId = server.id
   const key = projectsStorageKey(serverId)
   const storage = typeof localStorage === "undefined" ? undefined : localStorage
   const [projects, setProjects] = createSignal<Project[]>(storage ? loadProjects(storage, serverId) : [])
   const recent = createMemo(() => [...projects()].sort((a, b) => b.lastOpened - a.lastOpened))
+  const discovery = new AbortController()
+  onCleanup(() => discovery.abort())
+  onMount(() => {
+    if (server.local) return
+    const client = createOpencodeClient({ baseUrl: server.serverUrl(), headers: server.authHeaders() })
+    void client.project.list({}, { signal: discovery.signal }).then(result => {
+      if (discovery.signal.aborted || !Array.isArray(result.data)) return
+      const known = new Set(projects().map(project => project.worktree))
+      const discovered = result.data.filter(project => typeof project.worktree === "string" && !known.has(project.worktree))
+        .map(project => ({ worktree: project.worktree, lastOpened: 0 }))
+      if (discovered.length) save([...projects(), ...discovered])
+    }).catch(() => undefined)
+  })
 
   function save(list: Project[]) {
     const limited = mergeProjects(list)

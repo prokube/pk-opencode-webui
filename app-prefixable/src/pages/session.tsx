@@ -9,7 +9,8 @@ import {
   on,
   untrack,
 } from "solid-js";
-import { useParams, useNavigate, useSearchParams } from "@solidjs/router";
+import { useParams, useSearchParams } from "@solidjs/router";
+import { useServerNavigate as useNavigate } from "../context/server-navigation";
 import { Button } from "../components/ui/button";
 import { useSDK } from "../context/sdk";
 import { sessionStatusEvent, useEvents } from "../context/events";
@@ -46,7 +47,7 @@ import { sessionQuestionRequest } from "../utils/session-tree-request";
 import { ascendingID } from "../utils/id";
 import { createRootSession } from "../utils/root-session";
 import { acceptPendingPrompt, clearPendingPrompt, finishPendingPrompt, formatStartError, type PendingPrompt } from "../utils/session-start";
-import { LOCAL_SERVER_ID } from "../context/server";
+import { LOCAL_SERVER_ID, useConnections, useServer } from "../context/server";
 import { workspaceStorageKey } from "../utils/storage";
 import {
   archivedLastSession,
@@ -108,6 +109,8 @@ function storeDraft(key: string, draft: SessionDraft) {
 
 // Draft keys include server, directory, and session. "__new__" represents a new-session draft.
 export function Session() {
+  const serverId = useServer().id;
+  const connections = useConnections();
   const params = useParams<{ dir: string; id?: string }>();
   const [search] = useSearchParams<{ new?: string }>();
   const navigate = useNavigate();
@@ -200,8 +203,8 @@ export function Session() {
   const [followups, setFollowups] = createSignal<FollowupItem[]>([]);
   const [dispatchingFollowup, setDispatchingFollowup] = createSignal(false);
   const [pausedFollowups, setPausedFollowups] = createSignal<Set<string>>(new Set());
-  const newToken = () => search.new;
-  const activeDraft = { key: sessionDraftKey(LOCAL_SERVER_ID, params.dir, params.id, newToken()) };
+  const newToken = () => params.id ? undefined : search.new || params.dir;
+  const activeDraft = { key: sessionDraftKey(serverId, params.dir, params.id, newToken()) };
   const inputResize = { frame: undefined as number | undefined };
   const lifetime = { active: true, load: 0, create: 0, submit: 0 };
   const pendingPrompts = new Map<string, PendingPrompt>();
@@ -217,7 +220,7 @@ export function Session() {
   function saveFollowups(items: FollowupItem[], id = sessionId(), updateView = id === sessionId()) {
     if (!id) return false;
     try {
-      localStorage.setItem(followupStorageKey(LOCAL_SERVER_ID, directory ?? base64Decode(params.dir), id), JSON.stringify(items));
+      localStorage.setItem(followupStorageKey(serverId, directory ?? base64Decode(params.dir), id), JSON.stringify(items));
       if (updateView) setFollowups(items);
       if (!items.length) setFollowupPaused(false, id);
       return true;
@@ -234,7 +237,7 @@ export function Session() {
   function setFollowupPaused(paused: boolean, id = sessionId()) {
     if (!id) return;
     try {
-      const key = followupPauseStorageKey(LOCAL_SERVER_ID, directory ?? base64Decode(params.dir), id);
+      const key = followupPauseStorageKey(serverId, directory ?? base64Decode(params.dir), id);
       if (paused) localStorage.setItem(key, "true");
       if (!paused) localStorage.removeItem(key);
     } catch (err) {
@@ -256,7 +259,7 @@ export function Session() {
       return;
     }
     try {
-      const key = followupStorageKey(LOCAL_SERVER_ID, directory ?? base64Decode(params.dir), id);
+      const key = followupStorageKey(serverId, directory ?? base64Decode(params.dir), id);
       const defaults = {
         agent: providers.selectedAgent || "build",
         model,
@@ -264,11 +267,11 @@ export function Session() {
       };
       const current = localStorage.getItem(key);
       const legacyKey = `opencode.followup.${params.dir}`;
-      const legacyRaw = current ? null : localStorage.getItem(legacyKey);
+      const legacyRaw = current || serverId !== LOCAL_SERVER_ID ? null : localStorage.getItem(legacyKey);
       const legacy = parseLegacyFollowupMap(legacyRaw, id, defaults);
       const items = current ? parseFollowups(current, defaults) : legacy.items;
       setFollowups(items);
-      setFollowupPaused(items.length > 0 && parseFollowupPaused(localStorage.getItem(followupPauseStorageKey(LOCAL_SERVER_ID, directory ?? base64Decode(params.dir), id))), id);
+      setFollowupPaused(items.length > 0 && parseFollowupPaused(localStorage.getItem(followupPauseStorageKey(serverId, directory ?? base64Decode(params.dir), id))), id);
       localStorage.setItem(key, JSON.stringify(items));
       if (legacyRaw && legacy.items.length) {
         if (legacy.remaining) localStorage.setItem(legacyKey, legacy.remaining);
@@ -459,7 +462,7 @@ export function Session() {
   async function loadSession(id: string, route: string) {
     const token = ++lifetime.load;
     const current = () => lifetime.active && token === lifetime.load &&
-      route === sessionDraftKey(LOCAL_SERVER_ID, params.dir, params.id, newToken());
+      route === sessionDraftKey(serverId, params.dir, params.id, newToken());
     try {
       const loaded = await requestSession(
         (params, options) => client.session.get(params, options),
@@ -525,7 +528,7 @@ export function Session() {
     storeDraft(key, { text, files, images, height: inputRef?.style.height ?? "", drag: untrack(dragHeight) });
   }
 
-  createEffect(on(() => sessionDraftKey(LOCAL_SERVER_ID, params.dir, params.id, newToken()), (key, prevKey) => {
+  createEffect(on(() => sessionDraftKey(serverId, params.dir, params.id, newToken()), (key, prevKey) => {
     const id = params.id;
     const preservesSubmission = !!id && untrack(sessionId) === id && untrack(loading);
     console.log("[Session] URL param changed:", key);
@@ -688,6 +691,11 @@ export function Session() {
     if (!id) return null;
     return sync.session.get(id) ?? null;
   });
+  createEffect(() => {
+    const item = session();
+    if (!params.id && directory) connections.remember({ server: serverId, sessionId: "", draftID: newToken(), directory, title: "New session" });
+    if (item && directory) connections.remember({ server: serverId, sessionId: item.id, directory, title: item.title || "New session" });
+  });
 
   // Slash commands — computed so state-dependent commands update reactively
   const baseSlashCommands = createMemo<Command[]>(() => {
@@ -838,11 +846,11 @@ export function Session() {
         slash: "share",
         onSelect: async () => {
           if (!id) return;
-          const route = sessionRouteKey(LOCAL_SERVER_ID, directory ?? base64Decode(params.dir), params.id);
+          const route = sessionRouteKey(serverId, directory ?? base64Decode(params.dir), params.id);
           try {
             const res = await client.session.share({ sessionID: id });
             void sync.session.sync(id);
-            if (route !== sessionRouteKey(LOCAL_SERVER_ID, directory ?? base64Decode(params.dir), params.id)) return;
+            if (route !== sessionRouteKey(serverId, directory ?? base64Decode(params.dir), params.id)) return;
             const url = res.data?.share?.url;
             if (!url) {
               showToast("Failed to share session: no URL returned");
@@ -889,11 +897,11 @@ export function Session() {
         slash: "unshare",
         onSelect: async () => {
           if (!id) return;
-          const route = sessionRouteKey(LOCAL_SERVER_ID, directory ?? base64Decode(params.dir), params.id);
+          const route = sessionRouteKey(serverId, directory ?? base64Decode(params.dir), params.id);
           try {
             await client.session.unshare({ sessionID: id });
             void sync.session.sync(id);
-            if (route !== sessionRouteKey(LOCAL_SERVER_ID, directory ?? base64Decode(params.dir), params.id)) return;
+            if (route !== sessionRouteKey(serverId, directory ?? base64Decode(params.dir), params.id)) return;
             showToast("Session unshared");
           } catch (err) {
             showToast(`Failed to unshare session: ${formatStartError(err)}`);
@@ -927,12 +935,12 @@ export function Session() {
         onSelect: async () => {
           if (!id) return;
           if (reverting()) return;
-          const route = sessionRouteKey(LOCAL_SERVER_ID, directory ?? base64Decode(params.dir), params.id);
+          const route = sessionRouteKey(serverId, directory ?? base64Decode(params.dir), params.id);
           setFollowupPaused(true);
           setReverting(true);
           try {
             await client.session.unrevert({ sessionID: id });
-            if (route === sessionRouteKey(LOCAL_SERVER_ID, directory ?? base64Decode(params.dir), params.id)) setInput("");
+            if (route === sessionRouteKey(serverId, directory ?? base64Decode(params.dir), params.id)) setInput("");
             showToast("Messages restored");
             await sync.session.sync(id);
           } catch (err) {
@@ -964,8 +972,8 @@ export function Session() {
       showToast(count === 1 ? "No user message to undo" : `Only ${total} user message${total === 1 ? "" : "s"} to undo`);
       return;
     }
-    const route = sessionRouteKey(LOCAL_SERVER_ID, directory ?? base64Decode(params.dir), params.id);
-    const draftKey = sessionDraftKey(LOCAL_SERVER_ID, params.dir, id);
+    const route = sessionRouteKey(serverId, directory ?? base64Decode(params.dir), params.id);
+    const draftKey = sessionDraftKey(serverId, params.dir, id);
     const textPart = target.parts.find((p) => p.type === "text") as
       | { type: "text"; text?: string }
       | undefined;
@@ -975,14 +983,14 @@ export function Session() {
       // If processing, abort first (clears pendingQuestion too)
       if (processing()) {
         await handleAbort();
-        if (route !== sessionRouteKey(LOCAL_SERVER_ID, directory ?? base64Decode(params.dir), params.id)) return;
+        if (route !== sessionRouteKey(serverId, directory ?? base64Decode(params.dir), params.id)) return;
       }
       await client.session.revert({
         sessionID: id,
         messageID: target.id,
       });
       if (textPart?.text) {
-        if (route === sessionRouteKey(LOCAL_SERVER_ID, directory ?? base64Decode(params.dir), params.id)) {
+        if (route === sessionRouteKey(serverId, directory ?? base64Decode(params.dir), params.id)) {
           setInput(textPart.text);
           if (inputRef) applyInputAndAutogrow(inputRef, textPart.text);
         } else {
@@ -1153,7 +1161,7 @@ export function Session() {
     try {
       const dir = directory || base64Decode(params.dir);
       if (dir && typeof window !== "undefined") {
-        const key = workspaceStorageKey(LOCAL_SERVER_ID, dir, "lastSession");
+        const key = workspaceStorageKey(serverId, dir, "lastSession");
         const stored = window.localStorage.getItem(key);
         if (stored === id) window.localStorage.removeItem(key);
       }
@@ -1166,7 +1174,7 @@ export function Session() {
     try {
       const dir = directory || base64Decode(params.dir);
       if (!dir || typeof window === "undefined") return false;
-      const key = workspaceStorageKey(LOCAL_SERVER_ID, dir, "lastSession");
+      const key = workspaceStorageKey(serverId, dir, "lastSession");
       return archivedLastSession(window.localStorage.getItem(key), session);
     } catch (err) {
       console.warn("[Session] localStorage error:", err);
@@ -1184,7 +1192,7 @@ export function Session() {
     try {
       const dir = directory || base64Decode(params.dir);
       if (dir && typeof window !== "undefined") {
-        window.localStorage.setItem(workspaceStorageKey(LOCAL_SERVER_ID, dir, "lastSession"), id);
+        window.localStorage.setItem(workspaceStorageKey(serverId, dir, "lastSession"), id);
       }
     } catch (err) {
       console.warn("[Session] Failed to persist last session:", err);
@@ -1271,7 +1279,7 @@ export function Session() {
   async function handleAbort() {
     const id = sessionId();
     if (!id) return;
-    const route = sessionRouteKey(LOCAL_SERVER_ID, directory ?? base64Decode(params.dir), params.id);
+    const route = sessionRouteKey(serverId, directory ?? base64Decode(params.dir), params.id);
     const q = pendingQuestion();
 
     setFollowupPaused(true, id);
@@ -1281,7 +1289,7 @@ export function Session() {
       const pending = pendingPrompts.get(id);
       if (pending) pending.finished = true;
       events.setSessionStatus(id, { type: "idle" });
-      if (route !== sessionRouteKey(LOCAL_SERVER_ID, directory ?? base64Decode(params.dir), params.id)) return;
+      if (route !== sessionRouteKey(serverId, directory ?? base64Decode(params.dir), params.id)) return;
       setProcessing(false);
       // Only dismiss the question if it belongs to this session — aborting is
       // scoped to the current session and does not affect descendant sessions.
@@ -1508,7 +1516,7 @@ export function Session() {
       setInput("");
       setDragHeight(0);
       if (inputRef) inputRef.style.height = "";
-      drafts.delete(sessionDraftKey(LOCAL_SERVER_ID, params.dir, currentID));
+      drafts.delete(sessionDraftKey(serverId, params.dir, currentID));
       setError(null);
       return;
     }
@@ -1516,18 +1524,19 @@ export function Session() {
     const submitDirectory = directory ?? base64Decode(params.dir);
     const submitDirSlug = params.dir;
     const originalID = sessionId();
+    const originalDraftToken = newToken();
     const queuedItems = queued ? followups() : [];
     const originalDraftID = originalID;
-    const originalDraft = sessionDraftKey(LOCAL_SERVER_ID, submitDirSlug, originalDraftID, newToken());
+    const originalDraft = sessionDraftKey(serverId, submitDirSlug, originalDraftID, newToken());
     const scope = {
       token: ++lifetime.submit,
-      route: sessionRouteKey(LOCAL_SERVER_ID, submitDirectory, params.id, newToken()),
+      route: sessionRouteKey(serverId, submitDirectory, params.id, newToken()),
       sessionID: originalID,
       draft: originalDraft,
       draftVersion: 0,
     };
     const current = () => lifetime.active && scope.token === lifetime.submit &&
-      scope.route === sessionRouteKey(LOCAL_SERVER_ID, directory ?? base64Decode(params.dir), params.id, newToken()) &&
+      scope.route === sessionRouteKey(serverId, directory ?? base64Decode(params.dir), params.id, newToken()) &&
       scope.sessionID === sessionId();
 
     setError(null);
@@ -1594,9 +1603,10 @@ export function Session() {
 
         id = data.id;
         createdID = id;
+        if (originalDraftToken) connections.promote(serverId, originalDraftToken, { server: serverId, sessionId: id, directory: submitDirectory, title: data.title || "New session" });
         scope.sessionID = id;
-        scope.route = sessionRouteKey(LOCAL_SERVER_ID, submitDirectory, id);
-        scope.draft = sessionDraftKey(LOCAL_SERVER_ID, submitDirSlug, id);
+        scope.route = sessionRouteKey(serverId, submitDirectory, id);
+        scope.draft = sessionDraftKey(serverId, submitDirSlug, id);
         drafts.delete(scope.draft);
         scope.draftVersion = reviseDraft(scope.draft);
         setSessionId(id);
@@ -2312,7 +2322,7 @@ export function Session() {
             onSelect={(item) => {
               const id = sessionId();
               if (!id) return;
-              const route = sessionRouteKey(LOCAL_SERVER_ID, directory ?? base64Decode(params.dir), params.id);
+              const route = sessionRouteKey(serverId, directory ?? base64Decode(params.dir), params.id);
               const selected = sync.messages(id).find((message) => message.info.id === item.id);
               const restoredText = selected ? textFromParts(selected.parts, "\n") : "";
               setError(null);
@@ -2320,18 +2330,18 @@ export function Session() {
                 .fork({ sessionID: id, messageID: item.id })
                 .then(async (res) => {
                   if (!res.data) {
-                    if (route === sessionRouteKey(LOCAL_SERVER_ID, directory ?? base64Decode(params.dir), params.id)) {
+                    if (route === sessionRouteKey(serverId, directory ?? base64Decode(params.dir), params.id)) {
                       setError("Failed to fork session");
                     }
                     return;
                   }
-                  if (route !== sessionRouteKey(LOCAL_SERVER_ID, directory ?? base64Decode(params.dir), params.id)) {
+                  if (route !== sessionRouteKey(serverId, directory ?? base64Decode(params.dir), params.id)) {
                     await client.session.delete({ sessionID: res.data.id }).catch(() => undefined);
                     return;
                   }
                   setError(null);
                   const forkedId = res.data.id;
-                  storeDraft(sessionDraftKey(LOCAL_SERVER_ID, params.dir, forkedId), {
+                  storeDraft(sessionDraftKey(serverId, params.dir, forkedId), {
                     text: restoredText,
                     files: [],
                     images: [],
@@ -2341,7 +2351,7 @@ export function Session() {
                   navigate(`/${dirSlug()}/session/${forkedId}`);
                 })
                 .catch((err: unknown) => {
-                  if (route !== sessionRouteKey(LOCAL_SERVER_ID, directory ?? base64Decode(params.dir), params.id)) return;
+                  if (route !== sessionRouteKey(serverId, directory ?? base64Decode(params.dir), params.id)) return;
                   setError(
                     `Failed to fork session: ${formatStartError(err)}`,
                   );
@@ -2448,7 +2458,7 @@ export function Session() {
               if (!id) return;
               setLoadError(null);
               setLoadingHistory(true);
-              void loadSession(id, sessionDraftKey(LOCAL_SERVER_ID, params.dir, id));
+              void loadSession(id, sessionDraftKey(serverId, params.dir, id));
             }}>Retry</Button>
           </div>
         </div>

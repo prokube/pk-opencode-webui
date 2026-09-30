@@ -1,6 +1,7 @@
 import { createMemo, createSignal, createEffect, Show, onCleanup } from "solid-js"
 import { Portal } from "solid-js/web"
-import { A, useParams } from "@solidjs/router"
+import { useParams } from "@solidjs/router"
+import { ServerLink as A } from "../context/server-navigation"
 import { useSync } from "../context/sync"
 import { useProviders } from "../context/providers"
 import { getContextTokens } from "../utils/tokens"

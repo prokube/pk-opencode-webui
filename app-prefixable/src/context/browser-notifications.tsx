@@ -1,6 +1,8 @@
 import { createContext, createSignal, onCleanup, onMount, useContext, type ParentProps } from "solid-js"
 import { useBasePath } from "./base-path"
 import { base64Encode } from "../utils/path"
+import { useServer } from "./server"
+import { serverHref } from "../utils/servers"
 import {
   DEFAULT_BROWSER_NOTIFICATION_SETTINGS,
   initialBrowserNotificationSettings,
@@ -29,6 +31,7 @@ interface BrowserNotificationsContextValue {
 const BrowserNotificationsContext = createContext<BrowserNotificationsContextValue>()
 
 export function BrowserNotificationsProvider(props: ParentProps) {
+  const server = useServer()
   const { prefix } = useBasePath()
   const supported = () => typeof window !== "undefined" && "Notification" in window
   const [permission, setPermission] = createSignal<NotificationPermission | "unsupported">("unsupported")
@@ -118,26 +121,27 @@ export function BrowserNotificationsProvider(props: ParentProps) {
       }
     },
     notify: (category, title, body, directory, sessionID, tag, preferenceSessionID) => {
+      const scopedTag = tag ? JSON.stringify([server.id, tag]) : undefined
       const target = preferenceSessionID ?? sessionID
-      const legacyEnabled = category !== "errors" && legacyBrowser() && !!target && (legacy()[`${directory}::${target}`] === true || legacy()[target] === true)
+      const legacyEnabled = server.local && category !== "errors" && legacyBrowser() && !!target && (legacy()[`${directory}::${target}`] === true || legacy()[target] === true)
       if ((!settings()[category] && !legacyEnabled) || !supported()) return false
       if (!shouldShowBrowserNotification(Notification.permission, document.visibilityState, document.hasFocus())) return false
       const deliver = () => {
-        if (tag && !claim(tag)) return
+        if (scopedTag && !claim(scopedTag)) return
         try {
-          const notification = new Notification(title, { body, icon: prefix("/favicon.svg"), tag })
+          const notification = new Notification(title, { body, icon: prefix("/favicon.svg"), tag: scopedTag })
           notification.onclick = () => {
             window.focus()
             const route = `/${base64Encode(directory)}/session${sessionID ? `/${sessionID}` : ""}`
-            window.location.assign(prefix(route))
+            window.location.assign(prefix(serverHref(server.id, route)))
             notification.close()
           }
         } catch {
           // Browser permission may have changed between the permission check and delivery.
         }
       }
-      if (!tag || !navigator.locks) deliver()
-      if (tag && navigator.locks) void navigator.locks.request(`opencode-notification:${tag}`, { ifAvailable: true }, (lock) => {
+      if (!scopedTag || !navigator.locks) deliver()
+      if (scopedTag && navigator.locks) void navigator.locks.request(`opencode-notification:${scopedTag}`, { ifAvailable: true }, (lock) => {
         if (lock) deliver()
       }).catch(deliver)
       return true

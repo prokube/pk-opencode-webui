@@ -2,7 +2,7 @@ import { createContext, useContext, createSignal, createMemo, createEffect, onCl
 import type { PermissionRequest } from "../sdk/client"
 import { useSDK } from "./sdk"
 import { useSync } from "./sync"
-import { LOCAL_SERVER_ID } from "./server"
+import { useServer } from "./server"
 import { legacyStorageValue, workspaceStorageKey } from "../utils/storage"
 
 interface PermissionContextValue {
@@ -43,7 +43,7 @@ export function PermissionProvider(props: ParentProps) {
   const sync = useSync()
 
   // Track auto-accept state (persisted in localStorage, loaded in onMount)
-  const serverId = LOCAL_SERVER_ID
+  const serverId = useServer().id
   const storageKey = workspaceStorageKey(serverId, directory ?? "", "permissionAutoAccept")
   const [autoAccept, setAutoAccept] = createSignal(false)
 

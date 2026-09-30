@@ -1,5 +1,5 @@
 import { createSignal, Show, For, createMemo, onMount } from "solid-js"
-import { useNavigate } from "@solidjs/router"
+import { useServerNavigate as useNavigate } from "../context/server-navigation"
 import { base64Encode } from "../utils/path"
 import { formatRelativeTime } from "../utils/time"
 import { Folder, GitBranch } from "lucide-solid"

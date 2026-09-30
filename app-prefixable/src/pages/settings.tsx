@@ -3,6 +3,11 @@ import { Spinner } from "../components/ui/spinner"
 import { useProviders } from "../context/providers"
 import { useMCP } from "../context/mcp"
 import { useSDK } from "../context/sdk"
+import { useServer } from "../context/server"
+import { terminalFrame, terminalSocketUrl } from "../utils/terminal-connection"
+import { useNavigate } from "@solidjs/router"
+import { serverHref } from "../utils/servers"
+import { ServerManager } from "../components/server-manager"
 import { useBasePath } from "../context/base-path"
 import { useConfig } from "../context/config"
 import { MCPAddDialog } from "../components/mcp-add-dialog"
@@ -23,6 +28,8 @@ import { parseProjectConfig, removeProjectDefault, removeProjectPermissionPatter
 const NON_REMOVABLE_PROVIDER_IDS = new Set(["amazon-bedrock", "opencode"])
 
 export function Settings() {
+  const server = useServer()
+  const navigate = useNavigate()
   const providers = useProviders()
   const mcp = useMCP()
   const { client, global, url, directory } = useSDK()
@@ -39,9 +46,9 @@ export function Settings() {
   // Initialize tab from URL hash, default to "providers"
   const getInitialTab = () => {
     const hash = window.location.hash.slice(1)
-    const baseTabs: string[] = [...SETTINGS_BASE_TABS]
+    const baseTabs: string[] = [...SETTINGS_BASE_TABS, "servers"]
     const validTabs = directory ? [...baseTabs, "config"] : baseTabs
-    return validTabs.includes(hash) ? hash : "providers"
+    return validTabs.includes(hash) && (server.local || !["prompts", "instructions", "config"].includes(hash)) ? hash : "providers"
   }
   const [activeTab, setActiveTab] = createSignal(getInitialTab())
   const [showMCPAddDialog, setShowMCPAddDialog] = createSignal(false)
@@ -148,6 +155,7 @@ export function Settings() {
   })
 
   async function runPtyCommand(command: string, timeout = 5000): Promise<string> {
+    const pending = { id: undefined as string | undefined }
     console.log("[runPtyCommand] Starting with command:", command)
     try {
       // Create PTY that directly runs the command via sh -c
@@ -175,12 +183,14 @@ export function Settings() {
       }
 
       const ptyId = ptyRes.data.id
-      const wsUrl = url.replace(/^http/, "ws") + `/pty/${ptyId}/connect`
-      console.log("[runPtyCommand] Connecting to:", wsUrl)
+      pending.id = ptyId
+      const wsUrl = await terminalSocketUrl({ url, id: ptyId, remote: !server.local, headers: server.authHeaders() })
 
       const output = await new Promise<string>((resolve) => {
         let data = ""
         const ws = new WebSocket(wsUrl)
+        ws.binaryType = "arraybuffer"
+        const decoder = new TextDecoder()
 
         const timeoutId = setTimeout(() => {
           console.log("[runPtyCommand] Timeout reached. Data collected:", data)
@@ -193,7 +203,9 @@ export function Settings() {
         })
 
         ws.addEventListener("message", async (event) => {
-          const text = event.data instanceof Blob ? await event.data.text() : String(event.data)
+          const frame = terminalFrame(event.data)
+          if (frame.output === undefined) return
+          const text = typeof frame.output === "string" ? frame.output : decoder.decode(frame.output, { stream: true })
           console.log("[runPtyCommand] Received message:", text)
           data += text
 
@@ -220,11 +232,12 @@ export function Settings() {
       })
 
       console.log("[runPtyCommand] Final output:", output)
-      await global.pty.remove({ ptyID: ptyId }).catch(() => {})
       return output
     } catch (e) {
       console.error("[runPtyCommand] Error:", e)
       return ""
+    } finally {
+      if (pending.id) await global.pty.remove({ ptyID: pending.id }).catch(() => undefined)
     }
   }
 
@@ -501,6 +514,7 @@ Add your project-specific instructions here.
         authUrl: result.url,
         method: result.method,
         browserHostname: window.location.hostname,
+        remote: !server.local,
       })) {
         setError(`${providerName} browser authentication redirects to a loopback address (localhost/127.0.0.1/::1) and is only supported when this UI runs on your local machine. Use API key authentication or a headless/code method instead.`)
         return
@@ -556,7 +570,7 @@ Add your project-specific instructions here.
   }
 
   function oauthMethodUnsupported(providerID: string, label: string) {
-    return providerOAuthMethodUnsupported({ providerID, label, browserHostname: window.location.hostname, basePath })
+    return providerOAuthMethodUnsupported({ providerID, label, browserHostname: window.location.hostname, basePath, remote: !server.local })
   }
 
   async function handleOAuthComplete() {
@@ -631,6 +645,7 @@ Add your project-specific instructions here.
 
   const tabs = createMemo(() => {
     const base: Array<{ id: string; label: string; icon: () => JSX.Element; scope: ScopeBadge }> = [
+      { id: "servers", label: "Servers", icon: () => <Server class="w-4 h-4" />, scope: null },
       { id: "providers", label: "Providers", icon: () => <Plug class="w-4 h-4" />, scope: "Global + Project" },
       { id: "git", label: "Git", icon: () => <GitBranch class="w-4 h-4" />, scope: "Global" },
       { id: "mcp", label: "MCP Servers", icon: () => <Server class="w-4 h-4" />, scope: "Global + Project" },
@@ -677,7 +692,9 @@ Add your project-specific instructions here.
             {(tab) => (
               <button
                 onClick={() => onTabChange(tab.id)}
-                class="w-full flex items-center gap-2 px-3 py-2 rounded-md text-sm transition-colors text-left"
+                disabled={!server.local && ["prompts", "instructions", "config"].includes(tab.id)}
+                title={!server.local && ["prompts", "instructions", "config"].includes(tab.id) ? "Requires the local UI filesystem API" : undefined}
+                class="w-full flex items-center gap-2 px-3 py-2 rounded-md text-sm transition-colors text-left disabled:opacity-40"
                 style={{
                   color: activeTab() === tab.id ? "var(--text-interactive-base)" : "var(--text-base)",
                   background: activeTab() === tab.id ? "var(--surface-inset)" : "transparent",
@@ -729,6 +746,9 @@ Add your project-specific instructions here.
           </Show>
 
           {/* Providers Tab */}
+          <Show when={activeTab() === "servers"}>
+            <ServerManager current={server.id} onSelect={id => navigate(serverHref(id, "/"))} />
+          </Show>
           <Show when={activeTab() === "providers"}>
             <div class="space-y-6">
               <header>
