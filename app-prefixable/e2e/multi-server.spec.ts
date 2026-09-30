@@ -1,4 +1,11 @@
-import { test, expect } from "@playwright/test"
+import { test, expect, type Page } from "@playwright/test"
+
+async function openServers(page: Page) {
+  await expect(page.getByRole("button", { name: "Select server" })).toHaveCount(0)
+  await page.getByRole("button", { name: "Settings", exact: true }).click()
+  await page.getByRole("button", { name: "Servers", exact: true }).click()
+  await expect(page.getByRole("heading", { name: "Servers", exact: true })).toBeVisible()
+}
 
 test.beforeEach(async ({ request }) => {
   for (const port of [18041, 18042, 18043]) await request.post(`http://127.0.0.1:${port}/test/reset`)
@@ -17,7 +24,8 @@ test("missing and rejected credentials never fall back to the local server", asy
   await page.goto(`./L3dvcmtzcGFjZQ/session/ses_shared?server=${beta}`)
   await expect(page.getByRole("status")).toContainText("Authentication required")
   await expect(page.getByRole("heading", { name: "Local session" })).toHaveCount(0)
-  await page.getByRole("button", { name: "Edit server connection" }).click()
+  await page.getByRole("button", { name: "Server settings", exact: true }).click()
+  await expect(page).toHaveURL((url) => url.pathname.endsWith("/settings/servers"))
   await page.getByRole("button", { name: "Edit Beta", exact: true }).click()
   await page.getByLabel("Password", { exact: true }).fill("wrong-password")
   await page.getByRole("button", { name: "Connect", exact: true }).click()
@@ -27,7 +35,7 @@ test("missing and rejected credentials never fall back to the local server", asy
   )
   await page.getByLabel("Password", { exact: true }).fill("beta-secret")
   await page.getByRole("button", { name: "Connect", exact: true }).click()
-  await expect(page.getByRole("dialog")).toHaveCount(0)
+  await expect(page).toHaveURL((url) => url.searchParams.get("server") === beta && !url.pathname.includes("/settings"))
   await page.goto(`./settings?server=${beta}#servers`)
   await expect(page.getByRole("heading", { name: "Servers", exact: true })).toBeVisible()
   await expect(page.getByRole("button", { name: /^Instructions/ })).toBeDisabled()
@@ -36,9 +44,10 @@ test("missing and rejected credentials never fall back to the local server", asy
   expect(await page.evaluate(() => sessionStorage.getItem("opencode.connectionCredentials.v1"))).not.toContain(
     "beta-secret",
   )
-  await page.getByRole("button", { name: "Manage servers" }).click()
+  await page.getByRole("button", { name: "Server settings", exact: true }).click()
   await page.getByRole("button", { name: /Local server.*Built-in connection/ }).click()
-  await expect(page.getByRole("button", { name: "Select server" })).toHaveText("Local server")
+  await expect(page).toHaveURL((url) => !url.searchParams.has("server") && !url.pathname.includes("/settings"))
+  await expect(page.getByRole("button", { name: "Select server" })).toHaveCount(0)
 })
 
 test("sessions with identical IDs stay attached to their server across tabs and reload", async ({
@@ -46,31 +55,31 @@ test("sessions with identical IDs stay attached to their server across tabs and 
   request,
 }, testInfo) => {
   const errors: string[] = []
+  const alpha = Buffer.from("http://127.0.0.1:18042").toString("base64url")
+  const beta = Buffer.from("http://127.0.0.1:18043").toString("base64url")
   const streams = async (port: number) => (await request.get(`http://127.0.0.1:${port}/test/streams`)).json()
   page.on("pageerror", (error) => errors.push(error.message))
   await page.goto("./")
-  await page.getByRole("button", { name: "Select server" }).click()
+  await openServers(page)
   await page.getByRole("button", { name: "Add server" }).click()
   await page.getByLabel("Server URL", { exact: true }).fill("http://127.0.0.1:18042")
   await page.getByLabel("Name", { exact: true }).fill("Alpha")
   await page.getByRole("button", { name: "Connect", exact: true }).click()
-  await expect(page.getByRole("button", { name: "Select server" })).toHaveText("Alpha")
+  await expect(page).toHaveURL((url) => url.searchParams.get("server") === alpha && !url.pathname.includes("/settings"))
   await expect.poll(() => streams(18041)).toBe(0)
   await expect.poll(() => streams(18042)).toBe(1)
-  const alpha = new URL(page.url()).searchParams.get("server")!
   await page.goto(`./L3dvcmtzcGFjZQ/session/ses_shared?server=${alpha}`)
   await expect(page.getByRole("navigation", { name: "Open sessions" })).toContainText("Alpha session")
-  await page.getByRole("button", { name: "Select server" }).click()
+  await openServers(page)
   await page.getByRole("button", { name: "Add server" }).click()
   await page.getByLabel("Server URL", { exact: true }).fill("http://127.0.0.1:18043")
   await page.getByLabel("Name", { exact: true }).fill("Beta")
   await page.getByLabel("Authentication", { exact: true }).selectOption("basic")
   await page.getByLabel("Password", { exact: true }).fill("beta-secret")
   await page.getByRole("button", { name: "Connect", exact: true }).click()
-  await expect(page.getByRole("button", { name: "Select server" })).toHaveText("Beta")
+  await expect(page).toHaveURL((url) => url.searchParams.get("server") === beta && !url.pathname.includes("/settings"))
   await expect.poll(() => streams(18042)).toBe(1)
   await expect.poll(() => streams(18043)).toBe(1)
-  const beta = new URL(page.url()).searchParams.get("server")!
   await page.goto(`./L3dvcmtzcGFjZQ/session/ses_shared?server=${beta}`)
   const tabs = page.getByRole("navigation", { name: "Open sessions" })
   await expect(tabs).toContainText("Beta session")
@@ -80,12 +89,12 @@ test("sessions with identical IDs stay attached to their server across tabs and 
   await expect.poll(() => received.join("")).toContain("Beta terminal")
   await page.getByRole("button", { name: "Toggle Terminal", exact: true }).click()
   await tabs.getByRole("button", { name: /^Alpha.*Alpha session$/ }).click()
-  await expect(page.getByRole("button", { name: "Select server" })).toHaveText("Alpha")
+  await expect(page).toHaveURL((url) => url.searchParams.get("server") === alpha)
   await expect(page.getByRole("heading", { name: "Alpha session", exact: true })).toBeVisible()
   await page.getByPlaceholder("Type a message... (Tab to switch agent, / for commands)").fill("Alpha draft only")
   await expect(tabs.getByRole("button", { name: /^Alpha.*Alpha session$/ })).toHaveAttribute("aria-current", "page")
   await tabs.getByRole("button", { name: /^Beta.*Beta session$/ }).click()
-  await expect(page.getByRole("button", { name: "Select server" })).toHaveText("Beta")
+  await expect(page).toHaveURL((url) => url.searchParams.get("server") === beta)
   await expect(page.getByRole("heading", { name: "Beta session", exact: true })).toBeVisible()
   await expect(page.getByPlaceholder("Type a message... (Tab to switch agent, / for commands)")).toHaveValue("")
   await page.getByPlaceholder("Type a message... (Tab to switch agent, / for commands)").fill("Beta draft only")

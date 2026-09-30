@@ -87,18 +87,23 @@ A full settings page with tabs for:
 5. **Project Config** -- edit project tools, permissions, and configuration
 6. **Appearance** -- Light / Dark / System theme
 
-The **Servers** settings page and the titlebar server selector manage local and
-external OpenCode connections. Session tabs show their server name; switching a
+The **Settings → Servers** page manages local and external OpenCode connections.
+Session tabs show their server name; switching a
 tab restores its own server, project, draft and settings scope.
 
 ### External OpenCode servers
 
-1. Open the titlebar server selector or **Settings → Servers** and choose **Add server**.
+1. Open **Settings → Servers** and choose **Add server**.
 2. Enter the OpenCode API base URL and an optional display name.
 3. Choose no authentication, username/password (default username: `opencode`),
    or a Bearer token. **Connect** checks `/global/health` before saving.
 4. Open a discovered project or choose **New session**. Existing sessions and
    new-session drafts remain attached to their original server when switching tabs.
+
+The workspace has no persistent server dropdown or connection-status header.
+The tab strip offers a **+** action for new sessions. Missing connections or
+credentials link to a backend-independent server settings page, so connection
+management remains accessible even when the selected backend cannot be used.
 
 For a personal prokube.ai sandbox, use its full published connect URL, for example
 `https://cluster.example/svc/personal-sandbox/connect/workspace/sbx-id`, and a

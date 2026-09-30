@@ -747,7 +747,7 @@ Add your project-specific instructions here.
 
           {/* Providers Tab */}
           <Show when={activeTab() === "servers"}>
-            <ServerManager inline open onClose={() => undefined} onSelect={id => navigate(serverHref(id, "/"))} />
+            <ServerManager current={server.id} onSelect={id => navigate(serverHref(id, "/"))} />
           </Show>
           <Show when={activeTab() === "providers"}>
             <div class="space-y-6">

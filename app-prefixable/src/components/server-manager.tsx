@@ -1,17 +1,11 @@
 import { createSignal, createUniqueId, For, onCleanup, Show } from "solid-js"
-import * as Dialog from "@kobalte/core/dialog"
-import { Plus, Pencil, Trash2, X, Server, Check } from "lucide-solid"
+import { Plus, Pencil, Trash2, Server, Check } from "lucide-solid"
 import { Button } from "./ui/button"
 import { useConnections } from "../context/server"
 import { base64Encode, getServerUrl } from "../utils/path"
 import { normalizeServerUrl, remoteProxyUrl, serverAuthHeaders, type ServerConnection } from "../utils/servers"
 
-export function ServerManager(props: {
-  open: boolean
-  inline?: boolean
-  onClose: () => void
-  onSelect: (id: string) => void
-}) {
+export function ServerManager(props: { current?: string; onSelect: (id: string) => void }) {
   const registry = useConnections()
   const fieldId = createUniqueId()
   const [editing, setEditing] = createSignal<string>()
@@ -65,7 +59,6 @@ export function ServerManager(props: {
       registry.save(item, auth() === "none" ? "" : secret)
       setEditing(undefined)
       props.onSelect(item.id)
-      props.onClose()
     } catch (failure) {
       setError(
         controller.signal.aborted
@@ -80,18 +73,13 @@ export function ServerManager(props: {
     }
   }
   const field = "w-full rounded-md px-3 py-2 text-sm border bg-transparent"
-  const content = () => (
-    <>
+  return (
+    <section class="w-full max-w-2xl">
       <div class="flex items-center justify-between mb-5">
         <h2 class="font-medium text-lg">{editing() ? "Connect to server" : "Servers"}</h2>
-        <Show when={!props.inline}>
-          <button type="button" disabled={busy()} aria-label="Close server settings" onClick={props.onClose}>
-            <X size={18} />
-          </button>
-        </Show>
       </div>
       <p class="text-sm mb-5" style={{ color: "var(--text-weak)" }}>
-        Connect OpenCode servers and open their sessions in separate tabs.
+        Open a server's projects or manage its connection. Existing session tabs keep their own server.
       </p>
       <Show
         when={editing()}
@@ -107,9 +95,9 @@ export function ServerManager(props: {
                   <button
                     type="button"
                     class="min-w-0 flex-1 text-left"
+                    aria-pressed={props.current === item.id}
                     onClick={() => {
                       props.onSelect(item.id)
-                      props.onClose()
                     }}
                   >
                     <div class="font-medium truncate">{item.name}</div>
@@ -117,6 +105,11 @@ export function ServerManager(props: {
                       {item.id === "local" ? "Built-in connection" : item.url}
                     </div>
                   </button>
+                  <Show when={props.current === item.id}>
+                    <span title="Current server">
+                      <Check size={16} aria-hidden="true" />
+                    </span>
+                  </Show>
                   <Show when={item.id !== "local"}>
                     <button type="button" aria-label={`Edit ${item.name}`} onClick={() => edit(item)}>
                       <Pencil size={16} />
@@ -229,37 +222,6 @@ export function ServerManager(props: {
           </div>
         </form>
       </Show>
-    </>
-  )
-  return (
-    <Show
-      when={props.inline}
-      fallback={
-        <Dialog.Root
-          open={props.open}
-          onOpenChange={(open) => {
-            if (!open && !busy()) props.onClose()
-          }}
-        >
-          <Dialog.Portal>
-            <Dialog.Overlay class="fixed inset-0 z-[110] bg-black/50" />
-            <Dialog.Content
-              class="fixed left-1/2 top-1/2 z-[111] w-[min(560px,calc(100vw-2rem))] max-h-[85vh] -translate-x-1/2 -translate-y-1/2 overflow-y-auto rounded-xl p-6 shadow-xl"
-              style={{
-                background: "var(--background-base)",
-                color: "var(--text-base)",
-                border: "1px solid var(--border-base)",
-              }}
-            >
-              <Dialog.Title class="sr-only">Server connections</Dialog.Title>
-              <Dialog.Description class="sr-only">Manage connections to OpenCode servers.</Dialog.Description>
-              {content()}
-            </Dialog.Content>
-          </Dialog.Portal>
-        </Dialog.Root>
-      }
-    >
-      <section class="w-full max-w-2xl">{content()}</section>
-    </Show>
+    </section>
   )
 }
