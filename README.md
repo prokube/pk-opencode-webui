@@ -8,6 +8,7 @@ A feature-rich, prefix-aware Web UI for [OpenCode](https://github.com/anomalyco/
 
 - **Full reverse proxy support** -- every URL, asset, and API call respects the configured base path
 - **Multi-project workspace** -- switch between projects without restarting; each gets its own session
+- **Multiple OpenCode servers** -- select a server while keeping projects, sessions and drafts isolated
 - **MCP server management** -- add, remove, connect, and disconnect MCP servers from the UI
 - **Keyboard shortcuts** -- core navigation and panel shortcuts with an in-app reference
 - **Manual session rename** -- keep session titles organized from the sidebar
@@ -86,7 +87,76 @@ A full settings page with tabs for:
 5. **Project Config** -- edit project tools, permissions, and configuration
 6. **Appearance** -- Light / Dark / System theme
 
-The UI connects only to its local OpenCode API through the prefix-aware, same-origin UI proxy. Arbitrary remote OpenCode server targets are not accepted by the browser or UI server.
+**Settings → Servers** configures local and external OpenCode connections.
+The **Select server** dropdown at the top of the session sidebar
+selects the active server. The existing project and session sidebar shows only
+that server's workspace. On Home, the selector sits at the bottom beside Terminal
+and Settings.
+
+### External OpenCode servers
+
+1. Open **Settings → Servers** and choose **Add server**.
+2. Enter the OpenCode API base URL and an optional display name.
+3. Choose **Browser-Session**, no authentication, username/password (default username: `opencode`),
+   or a Bearer token. **Save connection** checks `/global/health` before saving,
+   without navigating away from your current work context.
+4. Use **Select server** at the top of the sidebar to choose a configured connection. The active name stays visible; collapsed and mobile sidebars use an icon with the name and URL in its tooltip.
+   The menu lists configured names, exposes URLs as tooltips and marks the current server.
+5. Use the existing **Open Project** and session sidebar on that server.
+
+Switching back restores the server's last workspace route during this app visit.
+Switching servers within Settings keeps the current settings tab and uses the
+target server's project scope; **Back to workspace** returns to that server's
+remembered workspace. Drafts remain isolated in memory and
+background session streams remain server-bound. Switching does not stop running
+sessions. There is no cross-server session tab strip or per-session server chooser.
+Connection rows in **Settings → Servers** have edit and remove actions and do not
+switch workspaces. Missing connections or credentials link to a backend-independent
+server settings page, so management remains reachable without a working backend.
+
+**New Session** immediately selects a removable local draft in the project's sidebar.
+Repeated clicks reuse the current empty draft; a draft with text or attachments can
+be left behind when starting another. Navigating between projects and servers
+restores the selected route and composer during the app visit. The first send uses
+the standard session-create API and promotes that sidebar entry in place. Opening
+or removing a local draft does not create or delete a backend session. Composer
+contents retain the existing in-memory, 40-draft limit and are not reload-persistent.
+
+For a personal prokube.ai sandbox, use its full published connect URL, for example
+`https://cluster.example/svc/personal-sandbox/connect/workspace/sbx-id`, and a
+key with that sandbox's `connect` permission. Provider credentials such as the
+ChatGPT device-code login are managed by the selected OpenCode server separately.
+
+**Browser-Session** uses an existing browser login, commonly established by an
+OIDC gateway. The WebUI does not act as an OIDC client or read login cookies.
+The server URL must have the same origin (scheme, host and port) as the WebUI,
+and the login cookie must cover that URL. HTTP, SSE and terminal WebSockets go
+directly from the browser to the server URL, bypassing the notebook's remote
+relay. No extra credential or terminal ticket is needed in this mode.
+
+For the personal sandbox backend the authenticated URL is
+`https://cluster.example/pkui/api/namespaces/workspace/sandboxes/sbx-id/connect`.
+The gateway authenticates the user; the backend checks workspace membership,
+sandbox ownership and the `connect` permission. Mutations and WebSocket upgrades
+require a matching Origin. Platform credentials are stripped before forwarding
+to the guest. Expired or denied sessions display a sign-in/reload message.
+
+This mode does not support cross-origin cookie authentication. Basic/Bearer
+connections continue to use the credential-isolating relay; filesystem-backed
+local-only features remain unavailable for all remote connections.
+
+Connection metadata and server-bound session tracking persist in browser localStorage. Passwords and
+Bearer tokens are kept separately in sessionStorage for the current browser tab
+session. After they expire or that browser session ends, edit the connection to
+authenticate again. Removing a connection forgets its credential and session tracking; it
+does not delete sessions on the external server.
+
+Native OpenCode APIs (sessions, providers, files, MCP connect/disconnect/add and
+PTY terminals) use the selected server. Our filesystem-backed extensions
+(`/api/ext/*`: saved prompts, direct file/config writes, directory creation and
+MCP config removal) are local-only. Remote directory browsing uses OpenCode's
+file API, and the UI marks local-only settings unavailable. Remote requests can
+never fall back to the UI host's filesystem.
 
 ## Quick Start
 
@@ -135,11 +205,46 @@ bun install && bun run dev
 | `BRANDING_URL` | _(empty)_ | URL for the branding link |
 | `BRANDING_ICON` | _(empty)_ | Custom icon URL (HTTP, relative path, or data URI) |
 
-### Local-only security model
+### Connection and deployment model
 
-This core branch does not support browser-supplied OpenCode backend credentials or backend auth tickets. The OpenCode backend must be reachable only by the UI server, while Kubeflow or another authenticated ingress protects the UI, proxied backend routes, and `/api/ext/*` routes externally. Do not expose the local backend or UI server directly to untrusted networks.
+Kubeflow or another authenticated ingress protects the UI and all its proxy and
+`/api/ext/*` routes. Keep the built-in OpenCode backend private to the UI server.
+External servers must be reachable from the UI server's network. The same-origin
+relay preserves API URL prefixes, so browsers do not need remote CORS access.
+Only explicitly configured remote credentials are forwarded; platform cookies,
+JWTs and user-identity headers are stripped. Redirects are rejected instead of
+forwarding credentials to a second destination.
 
-PTY WebSockets use the same prefix-aware UI proxy and external deployment authentication as the rest of the UI. The UI server does not add separate PTY credentials or claim ticket-based PTY authentication.
+External PTY WebSockets obtain a single-use, server/PTY-bound relay ticket via
+an authenticated same-origin POST. Tickets expire after 30 seconds and contain
+no credentials. The relay adds the remote Authorization header to the upstream
+WebSocket handshake. As with local terminal access, server connection management
+is intended for the authenticated owner of this UI deployment.
+
+The connection registry and server-bound session tracking adapt upstream
+OpenCode concepts to our existing prefix-aware router,
+same-origin relay and local extended API. It supports HTTP(S) connections; SSH
+and desktop-sidecar transports belong to the upstream desktop application.
+
+### Testing
+
+In `app-prefixable/`:
+
+```sh
+bun install --frozen-lockfile
+bun run typecheck
+bun run lint
+bun run test
+node node_modules/playwright/cli.js install chromium
+bun run test:browser
+```
+
+Browser tests run the production UI server against isolated local mock OpenCode
+servers at root and notebook-prefixed URLs. They cover Basic authentication,
+same-ID sessions on two servers, draft isolation, mutation routing, background
+SSE, terminal WebSockets, reload, missing credentials and connection removal.
+An installed Chrome binary can be selected with
+`PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH` instead of downloading Chromium.
 
 ## Deployment
 

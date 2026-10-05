@@ -1,8 +1,9 @@
 import { type ParentProps, createSignal, For, onCleanup, onMount, Show } from "solid-js"
-import { useNavigate } from "@solidjs/router"
+import { useServerNavigate as useNavigate } from "../context/server-navigation"
 import { createOpencodeClient } from "../sdk/client"
 import { base64Encode } from "../utils/path"
-import { useServer } from "../context/server"
+import { useConnections, useServer } from "../context/server"
+import { ServerSelector } from "../components/server-selector"
 import { CoreProviders } from "../context/core-providers"
 import { ProjectDialog } from "../components/project-dialog"
 import { Terminal } from "../components/terminal"
@@ -29,6 +30,8 @@ export function HomeLayout(props: ParentProps) {
 function HomeContent(props: ParentProps) {
   const navigate = useNavigate()
   const { serverUrl, authHeaders } = useServer()
+  const serverId = useServer().id
+  const connections = useConnections()
 
   const projects = useProjects()
   const activity = useProjectActivity()
@@ -127,16 +130,16 @@ function HomeContent(props: ParentProps) {
 
   function handleProjectSelect(worktree: string) {
     projects.touch(worktree)
-    navigate(`/${base64Encode(worktree)}/session`)
+    navigate(connections.projectRoute(serverId, worktree) || `/${base64Encode(worktree)}/session`)
   }
 
   function navigateToProject(worktree: string) {
     projects.touch(worktree)
-    navigate(`/${base64Encode(worktree)}/session`)
+    navigate(connections.projectRoute(serverId, worktree) || `/${base64Encode(worktree)}/session`)
   }
 
   return (
-    <div class="flex h-screen" style={{ background: "var(--background-stronger)" }}>
+    <div class="flex h-full min-h-0" style={{ background: "var(--background-stronger)" }}>
       <CommandPalette />
       {/* Project Dialog */}
               <ProjectDialog
@@ -197,11 +200,12 @@ function HomeContent(props: ParentProps) {
                   </button>
                 </div>
 
-                {/* Bottom: Terminal & Settings */}
+                {/* Bottom: Server, Terminal & Settings */}
                 <div
                   class="flex flex-col items-center gap-2 py-3"
                   style={{ "border-top": "1px solid var(--border-base)" }}
                 >
+                  <ServerSelector compact />
                   <button
                     onClick={toggleTerminal}
                     class="w-10 h-10 rounded-lg flex items-center justify-center transition-colors"

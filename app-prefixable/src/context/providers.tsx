@@ -1,9 +1,9 @@
-import { createContext, useContext, createResource, createEffect, createMemo, type ParentProps, onMount } from "solid-js"
+import { createContext, useContext, createResource, createEffect, createMemo, type ParentProps, onMount, onCleanup } from "solid-js"
 import { createStore, produce } from "solid-js/store"
 import { useSDK } from "./sdk"
 import { useConfig } from "./config"
 import { cycleModelVariant, getConfiguredAgentVariant, resolveModelVariant } from "./model-variant"
-import { LOCAL_SERVER_ID } from "./server"
+import { useServer } from "./server"
 import { useSync, type ProviderData } from "./sync"
 import { legacyStorageValue, serverStorageKey, workspaceStorageKey } from "../utils/storage"
 
@@ -133,10 +133,12 @@ export function ProviderProvider(props: ParentProps) {
   const { client, global, directory } = useSDK()
   const sync = useSync()
   const cfg = useConfig()
-  const serverId = LOCAL_SERVER_ID
+  const serverId = useServer().id
   const workspace = directory ?? ""
   const storageKey = workspaceStorageKey(serverId, workspace, "modelsByAgent")
   const variantKey = workspaceStorageKey(serverId, workspace, "variantsBySession")
+  let disposed = false
+  onCleanup(() => { disposed = true })
 
   const [store, setStore] = createStore({
     modelsByAgent: {} as Record<string, ModelKey>,
@@ -245,7 +247,8 @@ export function ProviderProvider(props: ParentProps) {
   // localStorage selections take priority (user's runtime choice wins).
   createEffect(() => {
     const data = providerData()
-    if (!data) return
+    // The empty pre-bootstrap list is not evidence that a saved model disappeared.
+    if (!sync.ready || sync.bootstrapError) return
 
     // Resolve default agent from config (project overrides global) or fallback,
     // validating against known agents
@@ -450,8 +453,9 @@ export function ProviderProvider(props: ParentProps) {
   }
 
   async function connectProvider(providerID: string, apiKey: string): Promise<boolean> {
+    if (disposed) return false
     try {
-      await client.auth.set({
+      await global.auth.set({
         providerID,
         auth: { type: "api", key: apiKey },
       })
@@ -470,8 +474,9 @@ export function ProviderProvider(props: ParentProps) {
   }
 
   async function disconnectProvider(providerID: string): Promise<boolean> {
+    if (disposed) return false
     try {
-      await client.auth.remove({ providerID })
+      await global.auth.remove({ providerID })
     } catch (e) {
       console.error("Failed to disconnect provider:", e)
       return (await providerConnected(providerID)) === false
@@ -487,20 +492,25 @@ export function ProviderProvider(props: ParentProps) {
   }
 
   async function providerConnected(providerID: string): Promise<boolean | undefined> {
+    if (disposed) return undefined
     return (await sync.provider.refresh())?.connected.includes(providerID)
   }
 
   async function refreshProviderAuthInstance() {
+    if (disposed) return undefined
     sync.provider.invalidate()
     await global.global.dispose()
+    if (disposed) return undefined
     return sync.provider.refresh()
   }
 
   async function waitProviderConnected(providerID: string, expected: boolean) {
+    if (disposed) return undefined
     const initial = await refreshProviderAuthInstance()
     if (initial?.connected.includes(providerID) === expected) return expected
     for (const delay of [500, 1000, 2000, 3000, 5000, 8000]) {
       await new Promise((resolve) => setTimeout(resolve, delay))
+      if (disposed) return undefined
       const connected = (await sync.provider.refresh())?.connected.includes(providerID)
       if (connected === expected) return connected
     }
@@ -508,12 +518,13 @@ export function ProviderProvider(props: ParentProps) {
   }
 
   async function startOAuth(providerID: string, methodIndex: number): Promise<OAuthAuthorization | undefined> {
+    if (disposed) return undefined
     try {
       const res = await client.provider.oauth.authorize({
         providerID,
         method: methodIndex,
       })
-      return res.data as OAuthAuthorization | undefined
+      return disposed ? undefined : res.data as OAuthAuthorization | undefined
     } catch (e) {
       console.error("Failed to start OAuth:", e)
       return undefined
@@ -521,6 +532,7 @@ export function ProviderProvider(props: ParentProps) {
   }
 
   async function completeOAuth(providerID: string, methodIndex: number, code?: string): Promise<boolean> {
+    if (disposed) return false
     try {
       await client.provider.oauth.callback({
         providerID,
@@ -538,11 +550,13 @@ export function ProviderProvider(props: ParentProps) {
     } catch (e) {
       console.error("Completed OAuth, but failed to reload provider state:", e)
     }
+    if (disposed) return false
     sync.provider.updateConnected(providerID, true)
     return true
   }
 
   function refetch() {
+    if (disposed) return
     sync.provider.refresh()
     refetchAgents()
     refetchAuth()

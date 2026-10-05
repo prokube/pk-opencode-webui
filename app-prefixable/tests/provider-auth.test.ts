@@ -2,6 +2,12 @@ import { describe, expect, test } from "bun:test"
 import { browserOAuthUnsupported, extractProviderAuthCode, isLocalBrowserHost, isNotebookBasePath, providerOAuthMethodUnsupported } from "../src/utils/provider-auth"
 
 describe("provider auth helpers", () => {
+  test("a localhost UI still blocks loopback OAuth for its external server", () => {
+    const authUrl = "https://auth.openai.com/oauth?redirect_uri=http%3A%2F%2Flocalhost%3A1455%2Fcallback"
+    expect(browserOAuthUnsupported({ authUrl, method: "auto", browserHostname: "localhost", remote: true })).toBe(true)
+    expect(providerOAuthMethodUnsupported({ providerID: "openai", label: "Browser login", browserHostname: "localhost", remote: true })).toBe(true)
+    expect(providerOAuthMethodUnsupported({ providerID: "openai", label: "Headless login", browserHostname: "localhost", remote: true })).toBe(false)
+  })
   test("extracts GitHub-style device codes", () => {
     expect(extractProviderAuthCode("Enter code: ABCD-EFGH")).toBe("ABCD-EFGH")
   })

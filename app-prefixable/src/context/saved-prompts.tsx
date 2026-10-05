@@ -1,6 +1,7 @@
 import { createContext, createEffect, createMemo, createSignal, on, onCleanup, useContext, type ParentProps } from "solid-js"
 import { createSavedPrompt, deleteSavedPrompt, readSavedPrompts, updateSavedPrompt, type PromptScope, type SavedPrompt, type SavedPromptState } from "../utils/extended-api"
 import { useSDK } from "./sdk"
+import { useServer } from "./server"
 
 interface SavedPromptsContextValue {
   prompts: () => SavedPrompt[]
@@ -40,6 +41,7 @@ export function legacyPromptKeys(directory?: string) {
 
 export function SavedPromptsProvider(props: ParentProps) {
   const sdk = useSDK()
+  const local = useServer().local
   const [state, setState] = createSignal<SavedPromptState>({ global: [], project: [] })
   const [loading, setLoading] = createSignal(true)
   const [saving, setSaving] = createSignal(false)
@@ -49,6 +51,11 @@ export function SavedPromptsProvider(props: ParentProps) {
   let pending = 0
 
   async function load() {
+    if (!local) {
+      setLoading(false)
+      setError("Saved prompts require the local UI filesystem API.")
+      return
+    }
     const current = ++version
     const directory = sdk.directory
     setLoading(true)
@@ -127,6 +134,10 @@ export function SavedPromptsProvider(props: ParentProps) {
   })
 
   function mutate(run: (directory?: string) => Promise<SavedPromptState>) {
+    if (!local) {
+      setError("Saved prompts require the local UI filesystem API.")
+      return Promise.resolve(false)
+    }
     const directory = sdk.directory
     const current = ++version
     setLoading(false)

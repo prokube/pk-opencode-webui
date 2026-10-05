@@ -3,6 +3,11 @@ import { Spinner } from "../components/ui/spinner"
 import { useProviders } from "../context/providers"
 import { useMCP } from "../context/mcp"
 import { useSDK } from "../context/sdk"
+import { useConnections, useServer } from "../context/server"
+import { useNavigate } from "@solidjs/router"
+import { serverHref } from "../utils/servers"
+import { terminalFrame, terminalSocketUrl } from "../utils/terminal-connection"
+import { ServerManager } from "../components/server-manager"
 import { useBasePath } from "../context/base-path"
 import { useConfig } from "../context/config"
 import { MCPAddDialog } from "../components/mcp-add-dialog"
@@ -23,6 +28,9 @@ import { parseProjectConfig, removeProjectDefault, removeProjectPermissionPatter
 const NON_REMOVABLE_PROVIDER_IDS = new Set(["amazon-bedrock", "opencode"])
 
 export function Settings() {
+  const server = useServer()
+  const connections = useConnections()
+  const navigate = useNavigate()
   const providers = useProviders()
   const mcp = useMCP()
   const { client, global, url, directory } = useSDK()
@@ -39,9 +47,9 @@ export function Settings() {
   // Initialize tab from URL hash, default to "providers"
   const getInitialTab = () => {
     const hash = window.location.hash.slice(1)
-    const baseTabs: string[] = [...SETTINGS_BASE_TABS]
+    const baseTabs: string[] = [...SETTINGS_BASE_TABS, "servers"]
     const validTabs = directory ? [...baseTabs, "config"] : baseTabs
-    return validTabs.includes(hash) ? hash : "providers"
+    return validTabs.includes(hash) && (server.local || !["prompts", "instructions", "config"].includes(hash)) ? hash : "providers"
   }
   const [activeTab, setActiveTab] = createSignal(getInitialTab())
   const [showMCPAddDialog, setShowMCPAddDialog] = createSignal(false)
@@ -76,6 +84,12 @@ export function Settings() {
   } | null>(null)
   const [oauthCode, setOauthCode] = createSignal("")
   const [codeCopied, setCodeCopied] = createSignal(false)
+  let disposed = false
+  let oauthOperation = 0
+  onCleanup(() => {
+    disposed = true
+    oauthOperation += 1
+  })
 
   // Git SSH Key state - read-only, display all existing keys
   interface SshKey {
@@ -148,6 +162,7 @@ export function Settings() {
   })
 
   async function runPtyCommand(command: string, timeout = 5000): Promise<string> {
+    const pending = { id: undefined as string | undefined }
     console.log("[runPtyCommand] Starting with command:", command)
     try {
       // Create PTY that directly runs the command via sh -c
@@ -175,12 +190,14 @@ export function Settings() {
       }
 
       const ptyId = ptyRes.data.id
-      const wsUrl = url.replace(/^http/, "ws") + `/pty/${ptyId}/connect`
-      console.log("[runPtyCommand] Connecting to:", wsUrl)
+      pending.id = ptyId
+      const wsUrl = await terminalSocketUrl({ url, id: ptyId, remote: server.relay, headers: server.authHeaders() })
 
       const output = await new Promise<string>((resolve) => {
         let data = ""
         const ws = new WebSocket(wsUrl)
+        ws.binaryType = "arraybuffer"
+        const decoder = new TextDecoder()
 
         const timeoutId = setTimeout(() => {
           console.log("[runPtyCommand] Timeout reached. Data collected:", data)
@@ -193,7 +210,9 @@ export function Settings() {
         })
 
         ws.addEventListener("message", async (event) => {
-          const text = event.data instanceof Blob ? await event.data.text() : String(event.data)
+          const frame = terminalFrame(event.data)
+          if (frame.output === undefined) return
+          const text = typeof frame.output === "string" ? frame.output : decoder.decode(frame.output, { stream: true })
           console.log("[runPtyCommand] Received message:", text)
           data += text
 
@@ -220,11 +239,12 @@ export function Settings() {
       })
 
       console.log("[runPtyCommand] Final output:", output)
-      await global.pty.remove({ ptyID: ptyId }).catch(() => {})
       return output
     } catch (e) {
       console.error("[runPtyCommand] Error:", e)
       return ""
+    } finally {
+      if (pending.id) await global.pty.remove({ ptyID: pending.id }).catch(() => undefined)
     }
   }
 
@@ -443,6 +463,7 @@ Add your project-specific instructions here.
     setSuccess(null)
 
     const ok = await providers.connectProvider(providerID, key)
+    if (disposed) return
 
     setConnecting(false)
 
@@ -469,6 +490,7 @@ Add your project-specific instructions here.
     setSuccess(null)
 
     const ok = await providers.disconnectProvider(providerID)
+    if (disposed) return
 
     setDisconnecting(null)
 
@@ -481,6 +503,7 @@ Add your project-specific instructions here.
   }
 
   async function handleOAuthStart(providerID: string, methodIndex: number) {
+    const operation = ++oauthOperation
     setError(null)
     setSuccess(null)
 
@@ -493,6 +516,7 @@ Add your project-specific instructions here.
     }
 
     const result = await providers.startOAuth(providerID, methodIndex)
+    if (disposed || operation !== oauthOperation) return
 
     if (result) {
       const code = extractProviderAuthCode(result.instructions)
@@ -501,6 +525,7 @@ Add your project-specific instructions here.
         authUrl: result.url,
         method: result.method,
         browserHostname: window.location.hostname,
+        remote: !server.local,
       })) {
         setError(`${providerName} browser authentication redirects to a loopback address (localhost/127.0.0.1/::1) and is only supported when this UI runs on your local machine. Use API key authentication or a headless/code method instead.`)
         return
@@ -534,10 +559,9 @@ Add your project-specific instructions here.
 
         // Start the callback immediately - it will poll until user authorizes
         // This call blocks until authorization succeeds or fails
-        console.log("[OAuth] Starting auto callback for", providerID, "with code:", code)
         setConnecting(true)
         const ok = await providers.completeOAuth(providerID, methodIndex)
-        console.log("[OAuth] Callback result:", ok)
+        if (disposed || operation !== oauthOperation) return
         setConnecting(false)
 
         if (ok) {
@@ -556,10 +580,11 @@ Add your project-specific instructions here.
   }
 
   function oauthMethodUnsupported(providerID: string, label: string) {
-    return providerOAuthMethodUnsupported({ providerID, label, browserHostname: window.location.hostname, basePath })
+    return providerOAuthMethodUnsupported({ providerID, label, browserHostname: window.location.hostname, basePath, remote: !server.local })
   }
 
   async function handleOAuthComplete() {
+    const operation = oauthOperation
     const pending = oauthPending()
     if (!pending) return
 
@@ -568,6 +593,7 @@ Add your project-specific instructions here.
 
     const code = pending.method === "code" ? oauthCode().trim() : undefined
     const ok = await providers.completeOAuth(pending.providerID, pending.methodIndex, code)
+    if (disposed || operation !== oauthOperation) return
 
     setConnecting(false)
 
@@ -583,6 +609,7 @@ Add your project-specific instructions here.
   }
 
   function cancelOAuth() {
+    oauthOperation += 1
     setOauthPending(null)
     setOauthCode("")
     setCodeCopied(false)
@@ -631,6 +658,7 @@ Add your project-specific instructions here.
 
   const tabs = createMemo(() => {
     const base: Array<{ id: string; label: string; icon: () => JSX.Element; scope: ScopeBadge }> = [
+      { id: "servers", label: "Servers", icon: () => <Server class="w-4 h-4" />, scope: null },
       { id: "providers", label: "Providers", icon: () => <Plug class="w-4 h-4" />, scope: "Global + Project" },
       { id: "git", label: "Git", icon: () => <GitBranch class="w-4 h-4" />, scope: "Global" },
       { id: "mcp", label: "MCP Servers", icon: () => <Server class="w-4 h-4" />, scope: "Global + Project" },
@@ -658,6 +686,10 @@ Add your project-specific instructions here.
         <div class="text-xs font-medium uppercase tracking-wide px-3 py-2" style={{ color: "var(--text-weak)" }}>
           Settings
         </div>
+        <button type="button" class="px-3 py-2 text-left text-sm" onClick={() => navigate(connections.workspace(server.id) || serverHref(server.id, "/"))}>
+          Back to workspace
+        </button>
+        <div class="px-3 pb-2 text-xs truncate" style={{ color: "var(--text-weak)" }} title={server.name}>{server.name}</div>
         {/* Project indicator */}
         <Show when={directory}>
           <div
@@ -677,7 +709,9 @@ Add your project-specific instructions here.
             {(tab) => (
               <button
                 onClick={() => onTabChange(tab.id)}
-                class="w-full flex items-center gap-2 px-3 py-2 rounded-md text-sm transition-colors text-left"
+                disabled={!server.local && ["prompts", "instructions", "config"].includes(tab.id)}
+                title={!server.local && ["prompts", "instructions", "config"].includes(tab.id) ? "Requires the local UI filesystem API" : undefined}
+                class="w-full flex items-center gap-2 px-3 py-2 rounded-md text-sm transition-colors text-left disabled:opacity-40"
                 style={{
                   color: activeTab() === tab.id ? "var(--text-interactive-base)" : "var(--text-base)",
                   background: activeTab() === tab.id ? "var(--surface-inset)" : "transparent",
@@ -729,6 +763,9 @@ Add your project-specific instructions here.
           </Show>
 
           {/* Providers Tab */}
+          <Show when={activeTab() === "servers"}>
+            <ServerManager />
+          </Show>
           <Show when={activeTab() === "providers"}>
             <div class="space-y-6">
               <header>
@@ -736,7 +773,7 @@ Add your project-specific instructions here.
                   Providers
                 </h1>
                 <p class="text-sm mt-1" style={{ color: "var(--text-weak)" }}>
-                  Connect AI providers to enable chat functionality
+                  Providers for {server.name}. Global settings and credentials apply to this server; project configuration can override provider options and models.
                 </p>
               </header>
 
@@ -1267,7 +1304,7 @@ Add your project-specific instructions here.
                         </Show>
 
                         <p class="text-xs" style={{ color: "var(--text-weak)" }}>
-                          Your credentials are stored securely and never shared.
+                          Credentials are stored on {server.name} and apply across its projects. Project configuration can override provider options and models.
                         </p>
                       </div>
                     </Show>
@@ -1493,7 +1530,7 @@ Add your project-specific instructions here.
                   MCP Servers
                 </h1>
                 <p class="text-sm mt-1" style={{ color: "var(--text-weak)" }}>
-                  Model Context Protocol servers extend AI capabilities with tools and resources
+                  MCP connections for {server.name}. Global configuration applies across this server's projects; project configuration applies to {directory || "the selected project"}.
                 </p>
               </header>
 
@@ -1668,13 +1705,14 @@ Add your project-specific instructions here.
                               {/* Delete Button */}
                               <button
                                 onClick={() => {
-                                  if (mcpLoading() || mcpDeleting()) return
+                                  if (!server.local || mcpLoading() || mcpDeleting()) return
                                   setMcpToDelete(name)
                                 }}
-                                disabled={mcpLoading() === name || mcpDeleting() === name}
+                                disabled={!server.local || mcpLoading() === name || mcpDeleting() === name}
                                 class="p-1 rounded transition-colors opacity-50 hover:opacity-100 disabled:opacity-30"
                                 style={{ color: "var(--icon-critical-base)" }}
-                                title="Remove server"
+                                aria-label={`Remove ${name} MCP server`}
+                                title={server.local ? "Remove server" : "Removal is unavailable for remote servers. Use the connection toggle to disconnect instead."}
                               >
                                 <Show when={mcpDeleting() === name} fallback={<Trash2 class="w-4 h-4" />}>
                                   <Spinner class="w-4 h-4" />

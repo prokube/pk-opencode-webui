@@ -9,7 +9,8 @@ import {
   onCleanup,
   createEffect,
 } from "solid-js";
-import { A, useLocation, useNavigate } from "@solidjs/router";
+import { useLocation } from "@solidjs/router";
+import { ServerLink as A, useServerNavigate as useNavigate } from "../context/server-navigation";
 import { useSDK } from "../context/sdk";
 import { useEvents } from "../context/events";
 import { useProviders } from "../context/providers";
@@ -69,7 +70,9 @@ import { ConstrainDragXAxis } from "../utils/solid-dnd";
 import { useProjects } from "../context/projects";
 import { sessionHasQuestion, buildChildMap, sessionDescendantIds, sessionTreeIsWorking } from "../utils/session-tree-request";
 import { useProjectActivity } from "../context/project-activity";
-import { LOCAL_SERVER_ID } from "../context/server";
+import { useConnections, useServer } from "../context/server";
+import { tabHref } from "../utils/servers";
+import { ServerSelector } from "../components/server-selector";
 import { legacyStorageValue, serverStorageKey, workspaceStorageKey } from "../utils/storage";
 import { sessionNeighbor } from "../utils/session-load";
 import { isSessionNotFound, mapWithConcurrency, selectSessionRange, selectedRootSessions, toggleSessionSelection } from "../utils/session-selection";
@@ -153,7 +156,10 @@ export function Layout(props: ParentProps) {
   const projectActivity = useProjectActivity();
   const location = useLocation();
   const navigate = useNavigate();
-  const serverId = LOCAL_SERVER_ID;
+  const serverId = useServer().id;
+  const connections = useConnections();
+  const localEntries = createMemo(() => connections.tabs().filter(item =>
+    item.server === serverId && item.directory === directory && (item.draftID || item.sidebarID)));
   const sidebarExpandedKey = serverStorageKey(serverId, "sidebarExpanded");
   const showArchivedKey = serverStorageKey(serverId, "showArchived");
   const pinnedSessionsKey = directory ? workspaceStorageKey(serverId, directory, "pinnedSessions") : undefined;
@@ -687,7 +693,7 @@ export function Layout(props: ParentProps) {
 
   function handleProjectSelect(worktree: string) {
     projects.touch(worktree);
-    navigate(`/${base64Encode(worktree)}/session`);
+    navigate(connections.projectRoute(serverId, worktree) || `/${base64Encode(worktree)}/session`);
   }
 
   const currentProject = createMemo(() =>
@@ -728,7 +734,7 @@ export function Layout(props: ParentProps) {
   );
 
   const hasSessions = createMemo(
-    () => projectSessions().length > 0 || archivedSessions().length > 0,
+    () => localEntries().length > 0 || projectSessions().length > 0 || archivedSessions().length > 0,
   );
 
   const [now, setNow] = createSignal(new Date());
@@ -757,7 +763,7 @@ export function Layout(props: ParentProps) {
 
   const unpinnedSessions = createMemo(() => {
     const pins = new Set(pinnedIds());
-    return projectSessions().filter((s) => !pins.has(s.id));
+    return projectSessions().filter((s) => !pins.has(s.id) && !localEntries().some(item => item.sessionId === s.id));
   });
 
   const groupedSessions = createMemo(() =>
@@ -770,6 +776,7 @@ export function Layout(props: ParentProps) {
 
   // Flat ordered list of session IDs for keyboard navigation (skips group headers)
   const flatSessionIds = createMemo(() => [
+    ...localEntries().filter(item => !item.draftID && !pinnedIds().includes(item.sessionId) && projectSessions().some(session => session.id === item.sessionId)).map(item => item.sessionId),
     ...pinnedSessions().map((s) => s.id),
     ...groupedSessions().flatMap((g) => g.sessions.map((s) => s.id)),
   ]);
@@ -780,6 +787,19 @@ export function Layout(props: ParentProps) {
       ...flatSessionIds(),
       ...(showArchived() ? archivedSessions().map((session) => session.id) : []),
     ];
+  });
+
+  const draftEntry = (id: string) => localEntries().find(item => item.draftID && `draft:${item.draftID}` === id);
+  const navigationIds = createMemo(() => searchQuery().trim() ? visibleSessionIds() : [
+    ...localEntries().filter(item => item.draftID || (!pinnedIds().includes(item.sessionId) && projectSessions().some(session => session.id === item.sessionId)))
+      .map(item => item.draftID ? `draft:${item.draftID}` : item.sessionId),
+    ...visibleSessionIds().filter(id => pinnedIds().includes(id) || !localEntries().some(item => item.sessionId === id)),
+  ]);
+  createEffect(() => {
+    const focused = focusedId();
+    if (!focused || navigationIds().includes(focused)) return;
+    const promoted = localEntries().find(item => item.sidebarID && `draft:${item.sidebarID}` === focused);
+    setFocusedId(promoted?.sessionId || navigationIds()[0] || null);
   });
 
   function toggleSelectedSession(id: string, range = false) {
@@ -810,7 +830,7 @@ export function Layout(props: ParentProps) {
     // those DOM elements are unmounted and aria-activedescendant would dangle.
     if (searchQuery().trim()) return;
     const current = currentSessionId();
-    const ids = visibleSessionIds();
+    const ids = navigationIds();
     if (current && ids.includes(current)) {
       setFocusedId(current);
       scrollSessionIntoView(current);
@@ -842,6 +862,8 @@ export function Layout(props: ParentProps) {
 
     if (e.key === " " && focusedId() && target.getAttribute("role") === "listbox") {
       e.preventDefault();
+      const draft = draftEntry(focusedId()!);
+      if (draft) { navigate(tabHref(draft)); return; }
       toggleSelectedSession(focusedId()!, e.shiftKey);
       return;
     }
@@ -940,7 +962,7 @@ export function Layout(props: ParentProps) {
       return;
     }
 
-    const ids = visibleSessionIds();
+    const ids = navigationIds();
     if (!ids.length) return;
 
     // If context menu is open, delegate to menu keyboard handler
@@ -984,7 +1006,10 @@ export function Layout(props: ParentProps) {
     if (e.key === "Enter") {
       e.preventDefault();
       const focused = focusedId();
-      if (focused) navigate(`/${dirSlug()}/session/${focused}`);
+      if (focused) {
+        const draft = draftEntry(focused);
+        navigate(draft ? tabHref(draft) : `/${dirSlug()}/session/${focused}`);
+      }
       return;
     }
 
@@ -996,7 +1021,7 @@ export function Layout(props: ParentProps) {
     ) {
       e.preventDefault();
       const focused = focusedId();
-      if (focused) {
+      if (focused && !draftEntry(focused)) {
         setMenuOpenId(focused);
         setMenuFocusIndex(0);
       }
@@ -1468,6 +1493,7 @@ export function Layout(props: ParentProps) {
 
   function createNewSession() {
     if (!directory) return;
+    if (location.pathname.endsWith("/session") && connections.composerEmpty(serverId, directory)) return;
     navigate(`/${dirSlug()}/session?new=${crypto.randomUUID()}`);
   }
 
@@ -1621,7 +1647,7 @@ export function Layout(props: ParentProps) {
   function clearLastSession(ids: Set<string>) {
     if (!directory) return;
     try {
-      const key = workspaceStorageKey(LOCAL_SERVER_ID, directory, "lastSession");
+      const key = workspaceStorageKey(serverId, directory, "lastSession");
       const stored = window.localStorage.getItem(key);
       if (stored && ids.has(stored)) window.localStorage.removeItem(key);
     } catch (err) {
@@ -1644,7 +1670,7 @@ export function Layout(props: ParentProps) {
       console.error("Failed to save sidebar state:", e);
     }
     projects.touch(worktree);
-    navigate(`/${base64Encode(worktree)}/session`);
+    navigate(connections.projectRoute(serverId, worktree) || `/${base64Encode(worktree)}/session`);
   }
 
   function navigateToHome() {
@@ -1653,7 +1679,7 @@ export function Layout(props: ParentProps) {
 
   return (
     <div
-      class="flex h-screen"
+      class="flex h-full min-h-0"
       style={{ background: "var(--background-stronger)" }}
     >
       {/* Project Dialog */}
@@ -1682,6 +1708,7 @@ export function Layout(props: ParentProps) {
         </button>
 
         {/* Project icons */}
+        <Show when={!showSidebar()}><ServerSelector compact /></Show>
         <div class="flex-1 flex flex-col items-center gap-2 overflow-y-auto w-full px-2 py-3">
           <For each={projects.projects()}>
             {(project) => (
@@ -1811,6 +1838,7 @@ export function Layout(props: ParentProps) {
         }}
       >
         <div class="h-full flex flex-col" style={{ "min-width": `${layout.sidebar.width()}px` }}>
+          <Show when={showSidebar()}><ServerSelector /></Show>
           {/* Project Header with collapse toggle */}
           <div
             class="px-3 h-12 flex items-center gap-2"
@@ -1947,6 +1975,38 @@ export function Layout(props: ParentProps) {
             aria-activedescendant={focusedId() ? `session-${focusedId()}` : undefined}
             tabIndex={0}
           >
+            <Show when={!searchQuery().trim()}>
+              <For each={localEntries().map(item => item.draftID || item.sidebarID!)}>{key => {
+                const entry = () => localEntries().find(item => (item.draftID || item.sidebarID) === key)!;
+                const session = () => sync.session.get(entry()?.sessionId || "");
+                const selected = () => entry()?.draftID
+                  ? location.pathname.endsWith("/session") && (new URLSearchParams(location.search).get("new") || dirSlug()) === entry().draftID
+                  : location.pathname.endsWith(`/session/${entry()?.sessionId}`);
+                return <div data-draft-entry={key}>
+                  <Show when={entry()?.draftID} fallback={
+                    <Show when={session() && !session()!.time.archived && !pinnedIds().includes(session()!.id)}>
+                      {renderSessionItem(session()!, false)}
+                    </Show>
+                  }>
+                    <div role="option" id={`session-draft:${key}`} aria-label="New session Draft" aria-selected={selected()}
+                      class="flex h-9 items-center gap-1 rounded-md px-2 text-sm" style={{ background: selected() || focusedId() === `draft:${key}` ? "var(--surface-inset)" : "transparent", color: selected() ? "var(--text-interactive-base)" : "var(--text-base)", outline: focusedId() === `draft:${key}` ? "2px solid var(--border-focus, var(--interactive-base))" : "none", "outline-offset": "-2px" }}>
+                      <button type="button" class="min-w-0 flex-1 py-2 text-left" aria-current={selected() ? "page" : undefined}
+                        onClick={() => navigate(tabHref(entry()))}>New session <span class="text-xs" style={{ color: "var(--text-weak)" }}>Draft</span></button>
+                      <button type="button" aria-label="Remove draft" class="rounded p-1" onClick={() => {
+                        const active = selected();
+                        const item = entry();
+                        connections.close(item);
+                        if (active) {
+                          const next = localEntries()[0];
+                          const existing = projectSessions()[0];
+                          navigate(next ? tabHref(next) : existing ? `/${dirSlug()}/session/${existing.id}` : "/");
+                        }
+                      }}><X size={14} /></button>
+                    </div>
+                  </Show>
+                </div>;
+              }}</For>
+            </Show>
             <Show when={!sync.ready && !searchQuery().trim()}>
               <div
                 class="flex flex-col items-center justify-center py-8 gap-2"

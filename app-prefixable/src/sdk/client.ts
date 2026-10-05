@@ -42,7 +42,7 @@ export function createOpencodeClient(config?: Config & { directory?: string }): 
     const customFetch: any = (req: any) => {
       // @ts-ignore
       req.timeout = false
-      return fetch(req)
+      return fetch(req, { redirect: "error", credentials: "same-origin" })
     }
     config = {
       ...config,

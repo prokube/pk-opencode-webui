@@ -4,7 +4,8 @@ import type { Part, ToolPart as SDKToolPart, ToolState } from "../sdk/client";
 import { ChevronDown, ExternalLink, Users } from "lucide-solid";
 import { ContentDiff } from "./diff/content-diff";
 import { useSync } from "../context/sync";
-import { useParams, useNavigate } from "@solidjs/router";
+import { useParams } from "@solidjs/router";
+import { useServerNavigate as useNavigate } from "../context/server-navigation";
 import { base64Encode } from "../utils/path";
 import { useSDK } from "../context/sdk";
 

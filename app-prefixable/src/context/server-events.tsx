@@ -13,6 +13,7 @@ type ServerEventHandler = (event: ServerEvent) => void
 type ServerRecoveryHandler = (reason: "connected" | "overflow") => void
 
 interface ServerEventsContextValue {
+  authenticationRequired: () => boolean
   connected: () => boolean
   unhealthy: () => boolean
   recover: (handler: ServerRecoveryHandler) => () => void
@@ -53,12 +54,12 @@ export function serverEventIsCurrent(event: ServerEvent, source: AbortSignal | u
   return source !== undefined && source === current
 }
 
-export function ServerEventsProvider(props: ParentProps) {
-  const server = useServer()
+export function createServerEvents(server: { serverUrl: () => string; authHeaders: () => Record<string, string>; session?: boolean }): ServerEventsContextValue {
   const handlers = new Set<ServerEventHandler>()
   const recoveries = new Set<ServerRecoveryHandler>()
   const [connected, setConnected] = createSignal(false)
   const [unhealthy, setUnhealthy] = createSignal(false)
+  const [authenticationRequired, setAuthenticationRequired] = createSignal(false)
   const encoder = new TextEncoder()
   const handshakes = new WeakMap<ServerEvent, AbortSignal>()
   const sizes = new WeakMap<ServerEvent, number>()
@@ -111,7 +112,16 @@ export function ServerEventsProvider(props: ParentProps) {
       const response = await fetch(`${server.serverUrl().replace(/\/$/, "")}/global/event`, {
         headers: { ...server.authHeaders(), Accept: "text/event-stream" },
         signal,
+        credentials: "same-origin",
+        redirect: "manual",
       })
+      if (server.session && (response.type === "opaqueredirect" || [401, 403].includes(response.status) || response.ok && !response.headers.get("content-type")?.includes("text/event-stream"))) {
+        await response.body?.cancel()
+        setConnected(false)
+        setUnhealthy(true)
+        setAuthenticationRequired(true)
+        return
+      }
       if (!response.ok || !response.body) throw new Error(`SSE connection failed: ${response.status}`)
       connected.at = Date.now()
       setUnhealthy(false)
@@ -162,8 +172,8 @@ export function ServerEventsProvider(props: ParentProps) {
     if (reconnect) clearTimeout(reconnect)
   })
 
-  return (
-    <ServerEventsContext.Provider value={{
+  return {
+      authenticationRequired,
       connected,
       unhealthy,
       recover: (handler) => {
@@ -178,10 +188,11 @@ export function ServerEventsProvider(props: ParentProps) {
           handlers.delete(handler)
         }
       },
-    }}>
-      {props.children}
-    </ServerEventsContext.Provider>
-  )
+  }
+}
+
+export function ServerEventsProvider(props: ParentProps) {
+  return <ServerEventsContext.Provider value={useServer().events}>{props.children}</ServerEventsContext.Provider>
 }
 
 export function useServerEvents() {

@@ -1195,12 +1195,13 @@ export function SyncProvider(props: ParentProps) {
   }
 
   async function refreshProvider() {
+    if (disposed) return undefined
     const version = providerRefresh.begin()
     providerRequests += 1
     setProviderLoading(true)
     try {
       const res = await client.provider.list()
-      if (!res.data) return undefined
+      if (disposed || !res.data) return undefined
       const applied = providerRefresh.apply(version, () => setStore("provider", reconcile(res.data!)))
       return applied ? res.data : store.provider
     } catch (err) {

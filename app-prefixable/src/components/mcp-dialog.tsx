@@ -1,5 +1,6 @@
 import { createSignal, createMemo, Show, For } from "solid-js"
 import { useMCP } from "../context/mcp"
+import { useServer } from "../context/server"
 import { X, Plus, Trash2 } from "lucide-solid"
 import { Button } from "./ui/button"
 import { ConfirmDialog } from "./confirm-dialog"
@@ -12,6 +13,7 @@ interface Props {
 
 export function MCPDialog(props: Props) {
   const mcp = useMCP()
+  const server = useServer()
   const [loading, setLoading] = createSignal<string | null>(null)
   const [deleting, setDeleting] = createSignal<string | null>(null)
   const [toDelete, setToDelete] = createSignal<string | null>(null)
@@ -45,7 +47,7 @@ export function MCPDialog(props: Props) {
   }
 
   function requestDelete(name: string) {
-    if (loading() || deleting()) return
+    if (!server.local || loading() || deleting()) return
     setToDelete(name)
   }
 
@@ -225,8 +227,9 @@ export function MCPDialog(props: Props) {
                       }}
                       class="p-1 rounded transition-colors opacity-50 hover:opacity-100"
                       style={{ color: "var(--icon-critical-base)" }}
-                      disabled={loading() === item.name || deleting() === item.name}
-                      title="Remove server"
+                      disabled={!server.local || loading() === item.name || deleting() === item.name}
+                      aria-label={`Remove ${item.name} MCP server`}
+                      title={server.local ? "Remove server" : "Removal is unavailable for remote servers. Use the connection toggle to disconnect instead."}
                     >
                       <Trash2 class="w-4 h-4" />
                     </button>

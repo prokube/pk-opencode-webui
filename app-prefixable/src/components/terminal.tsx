@@ -3,6 +3,8 @@ import { Terminal as XTerm } from "@xterm/xterm"
 import { FitAddon } from "@xterm/addon-fit"
 import "@xterm/xterm/css/xterm.css"
 import { useSDK } from "../context/sdk"
+import { useServer } from "../context/server"
+import { terminalFrame, terminalSocketUrl } from "../utils/terminal-connection"
 import { useTheme } from "../context/theme"
 import { Sun, Moon, Monitor } from "lucide-solid"
 import type { ITheme } from "@xterm/xterm"
@@ -94,6 +96,7 @@ export interface TerminalProps {
 }
 
 export function Terminal(props: TerminalProps) {
+  const server = useServer()
   const { client, url, directory } = useSDK()
   const appTheme = useTheme()
   let container!: HTMLDivElement
@@ -105,6 +108,7 @@ export function Terminal(props: TerminalProps) {
   let stableTimer: ReturnType<typeof setTimeout> | undefined
   let reconnectAttempts = 0
   let disposed = false
+  let cursor: number | undefined
 
   const [status, setStatus] = createSignal<"connecting" | "connected" | "error" | "disconnected">("connecting")
   const [error, setError] = createSignal<string | null>(null)
@@ -127,18 +131,37 @@ export function Terminal(props: TerminalProps) {
     term.write(`${colors[type]}${message}\x1b[0m\r\n`)
   }
 
-  function connect() {
+  function reconnect(message = "Reconnecting") {
+    if (disposed) return
+    if (reconnectAttempts >= 5) {
+      writeStatus("Reconnect limit reached", "error")
+      return
+    }
+    const delay = Math.min(1000 * 2 ** reconnectAttempts, 10_000)
+    reconnectAttempts += 1
+    writeStatus(`${message} in ${delay / 1000} seconds...`, "info")
+    reconnectTimer = setTimeout(() => connect(), delay)
+  }
+
+  async function connect() {
     if (disposed || !term) return
 
     // Build WebSocket URL
-    const wsUrl =
-      url.replace(/^http/, "ws") + `/pty/${props.ptyId}/connect?directory=${encodeURIComponent(directory || "")}`
-    console.log("[Terminal] Connecting to:", wsUrl)
+    const wsUrl = await terminalSocketUrl({ url, id: props.ptyId, directory: directory || "", cursor, remote: server.relay, headers: server.authHeaders() }).catch(() => undefined)
+    if (disposed) return
+    if (!wsUrl) {
+      setStatus("error")
+      setError("Could not authorize the terminal connection")
+      writeStatus("Could not authorize the terminal connection", "error")
+      reconnect("Retrying terminal authorization")
+      return
+    }
 
     setStatus("connecting")
     setError(null)
 
     ws = new WebSocket(wsUrl)
+    ws.binaryType = "arraybuffer"
 
     ws.addEventListener("open", () => {
       console.log("[Terminal] WebSocket connected")
@@ -166,7 +189,13 @@ export function Terminal(props: TerminalProps) {
     })
 
     ws.addEventListener("message", (event) => {
-      term?.write(event.data)
+      if (disposed) return
+      const frame = terminalFrame(event.data)
+      if (frame.cursor !== undefined) cursor = frame.cursor
+      if (frame.output !== undefined) {
+        term?.write(frame.output)
+        if (cursor !== undefined) cursor += frame.output.length
+      }
     })
 
     ws.addEventListener("error", (e) => {
@@ -198,23 +227,9 @@ export function Terminal(props: TerminalProps) {
             props.onClose?.()
             return
           }
-          if (reconnectAttempts >= 5) {
-            writeStatus("Reconnect limit reached", "error")
-            return
-          }
-          const delay = Math.min(1000 * 2 ** reconnectAttempts, 10_000)
-          reconnectAttempts += 1
-          writeStatus(`Reconnecting in ${delay / 1000} seconds...`, "info")
-          reconnectTimer = setTimeout(() => connect(), delay)
+          reconnect()
         }).catch(() => {
-          if (disposed || reconnectAttempts >= 5) {
-            writeStatus("Unable to reconnect terminal", "error")
-            return
-          }
-          const delay = Math.min(1000 * 2 ** reconnectAttempts, 10_000)
-          reconnectAttempts += 1
-          writeStatus(`Terminal state unavailable; retrying in ${delay / 1000} seconds...`, "info")
-          reconnectTimer = setTimeout(() => connect(), delay)
+          reconnect("Terminal state unavailable; retrying")
         })
       }
     })
