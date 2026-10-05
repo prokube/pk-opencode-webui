@@ -8,6 +8,7 @@ import {
   onCleanup,
   onMount,
   useContext,
+  Show,
   type ParentProps,
 } from "solid-js"
 import { getServerUrl, base64Encode } from "../utils/path"
@@ -16,7 +17,8 @@ import {
   normalizeServerUrl,
   parseConnections,
   parseTabs,
-  remoteProxyUrl,
+  connectionUrl,
+  needsServerCredential,
   serverAuthHeaders,
   tabKey,
   type ServerConnection,
@@ -76,6 +78,10 @@ function createConnections() {
     ),
   )
   const [busy, setBusy] = createSignal<Record<string, boolean>>({})
+  const workspaces = new Map<string, string>()
+  const projectRoutes = new Map<string, string>()
+  const composers = new Map<string, { empty: () => boolean; discard: (token: string) => void }>()
+  const [leases, setLeases] = createSignal<string[]>([])
   const idle = () => undefined
   const [active, setActive] = createSignal<() => string | undefined>(idle)
   const streams = new Map<
@@ -87,7 +93,9 @@ function createConnections() {
     id: item.id,
     name: item.name,
     local: item.id === LOCAL_SERVER_ID,
-    serverUrl: () => (item.id === LOCAL_SERVER_ID ? local.url : remoteProxyUrl(local.url, item.url)),
+    session: item.auth === "session",
+    relay: item.id !== LOCAL_SERVER_ID && item.auth !== "session",
+    serverUrl: () => connectionUrl(local.url, item),
     authHeaders: () => serverAuthHeaders(item, credentials()[item.id]),
   })
   createEffect(() => write("localStorage", CONNECTIONS, connections()))
@@ -140,9 +148,10 @@ function createConnections() {
   }
   createEffect(() => {
     const open = new Set(tabs().map((tab) => tab.server))
+    for (const id of leases()) open.add(id)
     const current = active()()
     if (current) open.add(current)
-    const wanted = list().filter((item) => open.has(item.id) && (item.auth === "none" || credentials()[item.id]))
+    const wanted = list().filter((item) => open.has(item.id) && (!needsServerCredential(item) || credentials()[item.id]))
     const ids = new Set(wanted.map((item) => item.id))
     for (const [id, source] of streams) {
       if (ids.has(id)) continue
@@ -158,12 +167,34 @@ function createConnections() {
     )
   })
   return {
+    composer(server: string, directory: string, empty: () => boolean, discard: (token: string) => void) {
+      const key = JSON.stringify([server, directory])
+      const composer = { empty, discard }
+      composers.set(key, composer)
+      return () => { if (composers.get(key) === composer) composers.delete(key) }
+    },
+    composerEmpty(server: string, directory: string) {
+      return composers.get(JSON.stringify([server, directory]))?.empty() === true
+    },
+    rememberWorkspace(id: string, href: string) { workspaces.set(id, href) },
+    rememberProject(id: string, directory: string, href: string) { projectRoutes.set(JSON.stringify([id, directory]), href) },
+    projectRoute(id: string, directory: string) { return projectRoutes.get(JSON.stringify([id, directory])) },
+    workspace(id: string) { return workspaces.get(id) },
     list,
     tabs,
     busy,
     credentials,
     transport,
     events,
+    retain(id: string) {
+      setLeases((previous) => [...previous, id])
+      return () => setLeases((previous) => {
+        const next = [...previous]
+        const index = next.indexOf(id)
+        if (index !== -1) next.splice(index, 1)
+        return next
+      })
+    },
     followActive(read: () => string | undefined) {
       setActive(() => read)
       return () => {
@@ -173,10 +204,11 @@ function createConnections() {
     save(input: Omit<ServerConnection, "id">, secret: string) {
       const url = normalizeServerUrl(input.url)
       const item = { ...input, url, id: base64Encode(url) }
+      connectionUrl(local.url, item)
       if (!connections().some((row) => row.id === item.id) && connections().length >= 20)
         throw new Error("At most 20 server connections can be saved")
       batch(() => {
-        setCredentials((previous) => ({ ...previous, [item.id]: secret }))
+        setCredentials((previous) => ({ ...Object.fromEntries(Object.entries(previous).filter(([id]) => id !== item.id)), ...(needsServerCredential(item) ? { [item.id]: secret } : {}) }))
         setConnections((previous) => [...previous.filter((row) => row.id !== item.id), item])
       })
       return item
@@ -196,21 +228,27 @@ function createConnections() {
         const current = previous.find((item) => tabKey(item) === tabKey(tab))
         if (current && current.title === tab.title && current.directory === tab.directory) return previous
         return current
-          ? previous.map((item) => (tabKey(item) === tabKey(tab) ? tab : item))
+          ? previous.map((item) => (tabKey(item) === tabKey(tab) ? { ...tab, sidebarID: item.sidebarID } : item))
           : [...previous, tab].slice(-40)
       })
     },
     promote(server: string, draftID: string, tab: SessionTab) {
       setTabs((previous) => {
-        const index = previous.findIndex((item) => item.server === server && item.draftID === draftID)
+        const index = previous.findIndex((item) => item.server === server && item.directory === tab.directory && item.draftID === draftID)
         if (index < 0)
           return previous.some((item) => tabKey(item) === tabKey(tab)) ? previous : [...previous, tab].slice(-40)
         return previous.flatMap((item, position) =>
-          position === index ? [tab] : tabKey(item) === tabKey(tab) ? [] : [item],
+          position === index ? [{ ...tab, sidebarID: draftID }] : tabKey(item) === tabKey(tab) ? [] : [item],
         )
       })
     },
     close(tab: SessionTab) {
+      if (tab.draftID) {
+        const key = JSON.stringify([tab.server, tab.directory])
+        composers.get(key)?.discard(tab.draftID)
+        const href = projectRoutes.get(key)
+        if (href && new URL(href, "http://workspace.invalid").searchParams.get("new") === tab.draftID) projectRoutes.delete(key)
+      }
       setTabs((previous) => previous.filter((item) => tabKey(item) !== tabKey(tab)))
       setBusy((previous) => Object.fromEntries(Object.entries(previous).filter(([key]) => key !== tabKey(tab))))
     },
@@ -234,7 +272,15 @@ const ServerContext = createContext<Connection>()
 export function ServerScope(props: ParentProps & { connection: ServerConnection }) {
   const registry = useConnections()
   const value = { ...registry.transport(props.connection), events: registry.events(props.connection) }
-  return <ServerContext.Provider value={value}>{props.children}</ServerContext.Provider>
+  return <ServerContext.Provider value={value}>
+    <Show when={!value.session || !value.events.authenticationRequired()} fallback={
+      <div class="p-8" role="alert">
+        <p>Browser-Session expired or access denied for {props.connection.name}.</p>
+        <p>Sign in again and check your access to this server.</p>
+        <button type="button" class="mt-3 underline" onClick={() => window.location.reload()}>Reload and sign in</button>
+      </div>
+    }>{props.children}</Show>
+  </ServerContext.Provider>
 }
 export function useServer() {
   const context = useContext(ServerContext)

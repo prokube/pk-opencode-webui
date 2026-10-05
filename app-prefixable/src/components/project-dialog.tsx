@@ -1,4 +1,4 @@
-import { createSignal, For, Show, onMount, createEffect, createMemo } from "solid-js"
+import { createSignal, For, Show, onMount, onCleanup, createEffect, createMemo } from "solid-js"
 import { createOpencodeClient, type Event } from "../sdk/client"
 import { useServer } from "../context/server"
 import { useSDK } from "../context/sdk"
@@ -6,7 +6,6 @@ import { Spinner } from "./ui/spinner"
 import { Button } from "./ui/button"
 import { Folder, X, GitBranch, AlertCircle } from "lucide-solid"
 import { Terminal } from "./terminal"
-import { useEvents } from "../context/events"
 import { mkdir, listDirs } from "../utils/extended-api"
 import { createBackdropDismiss } from "../utils/backdrop"
 import fuzzysort from "fuzzysort"
@@ -63,7 +62,6 @@ export function ProjectDialog(props: ProjectDialogProps) {
   const { url } = useSDK()
   const { authHeaders } = useServer()
   const server = useServer()
-  const events = useEvents()
 
   const [homeDirectory, setHomeDirectory] = createSignal<string | null>(null)
   const [filter, setFilter] = createSignal("")
@@ -87,6 +85,7 @@ export function ProjectDialog(props: ProjectDialogProps) {
   let searchToken = 0
   let inputRef: HTMLInputElement | undefined
   let cloneUnsubscribe: (() => void) | null = null
+  onCleanup(() => cloneUnsubscribe?.())
 
   const client = createOpencodeClient({ baseUrl: url, headers: authHeaders(), throwOnError: false })
   const global = createOpencodeClient({ baseUrl: url, headers: authHeaders(), throwOnError: false })
@@ -409,7 +408,7 @@ export function ProjectDialog(props: ProjectDialogProps) {
         }
       }
 
-      cloneUnsubscribe = events.subscribe(handlePtyExit)
+      cloneUnsubscribe = server.events.subscribe(({ payload }) => handlePtyExit(payload as Event))
     } catch (e) {
       console.error("Clone error:", e)
       setCloneError("Failed to clone repository")
@@ -450,6 +449,8 @@ export function ProjectDialog(props: ProjectDialogProps) {
       >
         {/* Dialog */}
         <div
+          role="dialog"
+          aria-label={`Open project on ${server.name}`}
           class="w-full max-w-lg mx-4 rounded-xl shadow-2xl"
           style={{ background: "var(--background-base)", border: "1px solid var(--border-base)" }}
         >
@@ -460,8 +461,10 @@ export function ProjectDialog(props: ProjectDialogProps) {
           >
             <h2 class="text-lg font-semibold" style={{ color: "var(--text-strong)" }}>
               {showCloneForm() ? "Clone Git Repository" : "Open Project"}
+              <span class="block text-xs font-normal" style={{ color: "var(--text-weak)" }}>{server.name}</span>
             </h2>
             <button
+              aria-label="Close project dialog"
               onClick={() => (showCloneForm() ? setShowCloneForm(false) : props.onClose())}
               class="p-1 rounded-md transition-colors"
               style={{ color: "var(--icon-base)" }}

@@ -3,10 +3,13 @@ import { Plus, Pencil, Trash2, Server, Check } from "lucide-solid"
 import { Button } from "./ui/button"
 import { useConnections } from "../context/server"
 import { base64Encode, getServerUrl } from "../utils/path"
-import { normalizeServerUrl, remoteProxyUrl, serverAuthHeaders, type ServerConnection } from "../utils/servers"
+import { normalizeServerUrl, connectionUrl, needsServerCredential, serverAuthHeaders, serverHref, type ServerConnection } from "../utils/servers"
+import { useLocation, useNavigate } from "@solidjs/router"
 
-export function ServerManager(props: { current?: string; onSelect: (id: string) => void }) {
+export function ServerManager() {
   const registry = useConnections()
+  const location = useLocation()
+  const navigate = useNavigate()
   const fieldId = createUniqueId()
   const [editing, setEditing] = createSignal<string>()
   const [url, setUrl] = createSignal("")
@@ -46,19 +49,22 @@ export function ServerManager(props: { current?: string; onSelect: (id: string) 
         auth: auth(),
         username: username() || "opencode",
       }
-      if (item.auth !== "none" && !secret) throw new Error("Enter the server credential")
-      const response = await fetch(remoteProxyUrl(getServerUrl(), endpoint) + "/global/health", {
+      if (needsServerCredential(item) && !secret) throw new Error("Enter the server credential")
+      const response = await fetch(connectionUrl(getServerUrl(), item) + "/global/health", {
         headers: serverAuthHeaders(item, secret),
+        credentials: "same-origin",
+        redirect: "manual",
         signal: controller.signal,
       })
+      if (item.auth === "session" && (!response.ok || !response.headers.get("content-type")?.includes("application/json")))
+        throw new Error("Browser-Session requires an active browser login and access to this server. Sign in again, then reconnect.")
       if (!response.ok) throw new Error(`Connection failed (HTTP ${response.status}). Check the URL and credentials.`)
       const health: unknown = await response.json()
       if (!health || typeof health !== "object" || !("healthy" in health) || health.healthy !== true)
         throw new Error("The URL did not return an OpenCode health response")
       if (controller.signal.aborted) return
-      registry.save(item, auth() === "none" ? "" : secret)
+      registry.save(item, needsServerCredential(item) ? secret : "")
       setEditing(undefined)
-      props.onSelect(item.id)
     } catch (failure) {
       setError(
         controller.signal.aborted
@@ -76,10 +82,10 @@ export function ServerManager(props: { current?: string; onSelect: (id: string) 
   return (
     <section class="w-full max-w-2xl">
       <div class="flex items-center justify-between mb-5">
-        <h2 class="font-medium text-lg">{editing() ? "Connect to server" : "Servers"}</h2>
+        <h2 class="font-medium text-lg">{editing() ? "Connection settings" : "Manage servers"}</h2>
       </div>
       <p class="text-sm mb-5" style={{ color: "var(--text-weak)" }}>
-        Open a server's projects or manage its connection. Existing session tabs keep their own server.
+        Add, edit or remove connections. Select the active server in the sidebar.
       </p>
       <Show
         when={editing()}
@@ -92,29 +98,21 @@ export function ServerManager(props: { current?: string; onSelect: (id: string) 
                   style={{ "border-color": "var(--border-base)" }}
                 >
                   <Server size={18} />
-                  <button
-                    type="button"
-                    class="min-w-0 flex-1 text-left"
-                    aria-pressed={props.current === item.id}
-                    onClick={() => {
-                      props.onSelect(item.id)
-                    }}
-                  >
+                  <div class="min-w-0 flex-1 text-left">
                     <div class="font-medium truncate">{item.name}</div>
                     <div class="text-xs truncate" style={{ color: "var(--text-weak)" }}>
                       {item.id === "local" ? "Built-in connection" : item.url}
                     </div>
-                  </button>
-                  <Show when={props.current === item.id}>
-                    <span title="Current server">
-                      <Check size={16} aria-hidden="true" />
-                    </span>
-                  </Show>
+                  </div>
                   <Show when={item.id !== "local"}>
                     <button type="button" aria-label={`Edit ${item.name}`} onClick={() => edit(item)}>
                       <Pencil size={16} />
                     </button>
-                    <button type="button" aria-label={`Remove ${item.name}`} onClick={() => registry.remove(item.id)}>
+                    <button type="button" aria-label={`Remove ${item.name}`} onClick={() => {
+                      if (new URLSearchParams(location.search).get("server") === item.id)
+                        navigate(serverHref(item.id, "/settings/servers"), { replace: true })
+                      registry.remove(item.id)
+                    }}>
                       <Trash2 size={16} />
                     </button>
                   </Show>
@@ -168,6 +166,7 @@ export function ServerManager(props: { current?: string; onSelect: (id: string) 
               onChange={(event) => setAuth(event.currentTarget.value as ServerConnection["auth"])}
             >
               <option value="none">None</option>
+              <option value="session">Browser-Session</option>
               <option value="basic">Username and password</option>
               <option value="bearer">Bearer token</option>
             </select>
@@ -186,7 +185,10 @@ export function ServerManager(props: { current?: string; onSelect: (id: string) 
               />
             </div>
           </Show>
-          <Show when={auth() !== "none"}>
+          <Show when={auth() === "session"}>
+            <p class="text-sm" style={{ color: "var(--text-weak)" }}>Uses your existing browser login. Connects directly to a server on the same origin; no additional credentials required.</p>
+          </Show>
+          <Show when={auth() === "basic" || auth() === "bearer"}>
             <div>
               <label for={`${fieldId}-password`} class="block text-sm mb-1">
                 {auth() === "basic" ? "Password" : "Bearer token"}
@@ -217,7 +219,7 @@ export function ServerManager(props: { current?: string; onSelect: (id: string) 
             </Button>
             <Button type="submit" disabled={busy()}>
               <Check size={16} />
-              {busy() ? "Connecting…" : "Connect"}
+              {busy() ? "Checking…" : "Save connection"}
             </Button>
           </div>
         </form>

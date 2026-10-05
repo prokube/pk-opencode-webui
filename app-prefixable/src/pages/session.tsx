@@ -528,6 +528,19 @@ export function Session() {
     storeDraft(key, { text, files, images, height: inputRef?.style.height ?? "", drag: untrack(dragHeight) });
   }
 
+  onCleanup(connections.composer(serverId, directory ?? base64Decode(params.dir),
+    () => !loading() && !input().trim() && !fileContext().length && !imageAttachments().length,
+    token => {
+      const key = sessionDraftKey(serverId, params.dir, undefined, token);
+      drafts.delete(key);
+      reviseDraft(key);
+      if (!params.id && token === newToken()) {
+        setInput("");
+        setFileContext([]);
+        setImageAttachments([]);
+      }
+    }));
+
   createEffect(on(() => sessionDraftKey(serverId, params.dir, params.id, newToken()), (key, prevKey) => {
     const id = params.id;
     const preservesSubmission = !!id && untrack(sessionId) === id && untrack(loading);
@@ -1603,11 +1616,16 @@ export function Session() {
 
         id = data.id;
         createdID = id;
+        sync.session.upsert(data);
         if (originalDraftToken) connections.promote(serverId, originalDraftToken, { server: serverId, sessionId: id, directory: submitDirectory, title: data.title || "New session" });
         scope.sessionID = id;
         scope.route = sessionRouteKey(serverId, submitDirectory, id);
         scope.draft = sessionDraftKey(serverId, submitDirSlug, id);
-        drafts.delete(scope.draft);
+        // Text entered while creation was pending belongs to the promoted entry.
+        saveComposerDraft(originalDraft);
+        const continuing = drafts.get(originalDraft);
+        if (continuing) storeDraft(scope.draft, continuing);
+        else drafts.delete(scope.draft);
         scope.draftVersion = reviseDraft(scope.draft);
         setSessionId(id);
         navigate(`/${dirSlug()}/session/${id}`, { replace: true });

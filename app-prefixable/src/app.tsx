@@ -2,9 +2,7 @@ import { Router, Route, useLocation, useNavigate, useParams } from "@solidjs/rou
 import {
   createEffect,
   createMemo,
-  createSignal,
   ErrorBoundary,
-  For,
   on,
   onCleanup,
   Show,
@@ -13,9 +11,10 @@ import {
 import { BasePathProvider, useBasePath } from "./context/base-path"
 import { LOCAL_SERVER_ID, ServerProvider, ServerScope, useConnections, useServer } from "./context/server"
 import { useServerNavigate } from "./context/server-navigation"
-import { serverHref, tabHref, tabKey } from "./utils/servers"
+import { serverHref } from "./utils/servers"
 import { ServerManager } from "./components/server-manager"
-import { ArrowLeft, Plus, X } from "lucide-solid"
+import { ServerSelector } from "./components/server-selector"
+import { ArrowLeft } from "lucide-solid"
 import { BrandingProvider } from "./context/branding"
 import { ThemeProvider } from "./context/theme"
 import { CommandProvider } from "./context/command"
@@ -26,8 +25,7 @@ import { HomeLayout } from "./pages/home-layout"
 import { Session } from "./pages/session"
 import { Settings } from "./pages/settings"
 import { ProjectPicker } from "./pages/project-picker"
-import { base64Decode, base64Encode, deriveDirectoryFromPathname } from "./utils/path"
-import { createOpencodeClient } from "./sdk/client"
+import { base64Decode } from "./utils/path"
 import { legacyStorageValue, workspaceStorageKey } from "./utils/storage"
 import { BrowserNotificationsProvider } from "./context/browser-notifications"
 import { ServerEventsProvider } from "./context/server-events"
@@ -167,18 +165,20 @@ function AppRoutes() {
 // Connection management must remain reachable without a working backend or
 // stored credential. It uses only the browser's connection registry.
 function ServerSettings() {
+  const registry = useConnections()
   const navigate = useNavigate()
-  const location = useLocation()
+  const location = useLocation<{ workspace?: string }>()
   const id = () => new URLSearchParams(location.search).get("server") || LOCAL_SERVER_ID
   return (
     <main class="h-full overflow-y-auto p-6">
       <div class="mx-auto max-w-2xl space-y-6">
-        <button type="button" class="flex items-center gap-2 text-sm" onClick={() => navigate(serverHref(id(), "/"))}>
+        <button type="button" class="flex items-center gap-2 text-sm" onClick={() => navigate(registry.workspace(id()) || serverHref(id(), "/"))}>
           <ArrowLeft size={16} />
           Back to workspace
         </button>
         <h1 class="text-xl font-medium">Settings</h1>
-        <ServerManager current={id()} onSelect={(key) => navigate(serverHref(key, "/"))} />
+        <ServerSelector />
+        <ServerManager />
       </div>
     </main>
   )
@@ -192,112 +192,28 @@ function ConnectionLayout(props: ParentProps) {
   const id = () => new URLSearchParams(location.search).get("server") || LOCAL_SERVER_ID
   const connection = createMemo(() => registry.list().find((item) => item.id === id()))
   const serverSettings = () => location.pathname.replace(/\/$/, "") === prefix("/settings/servers")
-  const openServerSettings = () => navigate(serverHref(id(), "/settings/servers"))
+  const openServerSettings = () => {
+    if (serverSettings()) return
+    const workspace = location.pathname.slice(prefix("/").length - 1) + location.search
+    navigate(serverHref(id(), "/settings/servers"), { state: { workspace } })
+  }
   const needsCredential = () => {
     const item = connection()
-    return !!item && item.auth !== "none" && !registry.credentials()[item.id]
+    return !!item && (item.auth === "basic" || item.auth === "bearer") && !registry.credentials()[item.id]
   }
   onCleanup(registry.followActive(() => (serverSettings() || needsCredential() ? undefined : connection()?.id)))
-  const [starting, setStarting] = createSignal(false)
-  const [startError, setStartError] = createSignal("")
-  const selected = (tab: ReturnType<typeof registry.tabs>[number]) =>
-    tab.server === id() &&
-    (tab.draftID
-      ? location.pathname.endsWith(`/${base64Encode(tab.directory)}/session`) &&
-        (new URLSearchParams(location.search).get("new") || base64Encode(tab.directory)) === tab.draftID
-      : location.pathname.endsWith(`/session/${tab.sessionId}`))
-  async function newSession() {
-    const item = connection()
-    if (!item) return
-    setStarting(true)
-    setStartError("")
-    try {
-      const target = registry.transport(item)
-      const client = createOpencodeClient({
-        baseUrl: target.serverUrl(),
-        headers: target.authHeaders(),
-        throwOnError: true,
-      })
-      const directory = deriveDirectoryFromPathname() || (await client.path.get()).data?.directory
-      if (id() !== item.id) return
-      if (!directory) throw new Error("Select a project before starting a session")
-      navigate(serverHref(item.id, `/${base64Encode(directory)}/session?new=${crypto.randomUUID()}`))
-    } catch {
-      if (id() === item.id) setStartError("Could not open a new session. Check the server connection.")
-    } finally {
-      setStarting(false)
-    }
-  }
+  createEffect(() => {
+    if (!serverSettings() && !location.pathname.endsWith("/settings") && connection())
+      registry.rememberWorkspace(id(), location.pathname.slice(prefix("/").length - 1) + location.search + location.hash)
+    const path = location.pathname.slice(prefix("/").length - 1)
+    const match = path.match(/^\/([^/]+)\/session(?:\/|$)/)
+    if (connection() && match) registry.rememberProject(id(), base64Decode(match[1]), path + location.search + location.hash)
+  })
   return (
     <div
       class="flex h-screen min-h-0 flex-col"
       style={{ background: "var(--background-stronger)", color: "var(--text-base)" }}
     >
-      <Show when={registry.tabs().length}>
-        <div class="flex shrink-0 items-center border-b" style={{ "border-color": "var(--border-base)" }}>
-          <nav aria-label="Open sessions" class="flex min-w-0 flex-1 overflow-x-auto">
-            <For each={registry.tabs()}>
-              {(tab) => (
-                <div
-                  class="flex min-w-0 shrink-0 items-center gap-1 border-r px-2"
-                  style={{
-                    background: selected(tab) ? "var(--background-base)" : "transparent",
-                    "border-color": "var(--border-base)",
-                  }}
-                >
-                  <button
-                    type="button"
-                    class="max-w-56 truncate py-2 text-sm"
-                    aria-current={selected(tab) ? "page" : undefined}
-                    onClick={() => navigate(tabHref(tab))}
-                  >
-                    <span class="mr-2 text-xs" style={{ color: "var(--text-weak)" }}>
-                      {registry.list().find((server) => server.id === tab.server)?.name}
-                    </span>
-                    <Show when={registry.busy()[tabKey(tab)]}>
-                      <span aria-label="Running" class="mr-1" style={{ color: "var(--text-interactive-base)" }}>
-                        ●
-                      </span>
-                    </Show>
-                    {tab.title}
-                  </button>
-                  <button
-                    type="button"
-                    aria-label={`Close ${tab.title}`}
-                    class="p-1"
-                    onClick={() => {
-                      const active = selected(tab)
-                      const index = registry.tabs().findIndex((item) => tabKey(item) === tabKey(tab))
-                      registry.close(tab)
-                      if (active) {
-                        const next = registry.tabs()[Math.max(0, index - 1)]
-                        navigate(next ? tabHref(next) : serverHref(id(), "/"))
-                      }
-                    }}
-                  >
-                    <X size={12} />
-                  </button>
-                </div>
-              )}
-            </For>
-          </nav>
-          <button
-            type="button"
-            aria-label="New session"
-            title={`New session on ${connection()?.name || "selected server"}`}
-            class="shrink-0 p-3"
-            disabled={starting() || !connection() || needsCredential()}
-            onClick={() => void newSession()}
-          >
-            <Plus size={14} />
-          </button>
-        </div>
-      </Show>
-      <Show when={startError()}>
-        <p role="alert" class="px-3 py-1 text-xs">
-          {startError()}
-        </p>
-      </Show>
       <div class="min-h-0 flex-1">
         <Show
           when={serverSettings()}
@@ -308,6 +224,7 @@ function ConnectionLayout(props: ParentProps) {
               fallback={
                 <div class="p-8">
                   <p>This server connection is not configured in this browser.</p>
+                  <ServerSelector />
                   <button type="button" class="mt-3 underline" onClick={openServerSettings}>
                     Server settings
                   </button>
@@ -320,6 +237,7 @@ function ConnectionLayout(props: ParentProps) {
                   fallback={
                     <div class="p-8">
                       <p role="status">Authentication required for {item.name}.</p>
+                      <ServerSelector />
                       <p>Enter credentials in Settings to open its sessions.</p>
                       <button type="button" class="mt-3 underline" onClick={openServerSettings}>
                         Server settings

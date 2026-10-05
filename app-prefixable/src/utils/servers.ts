@@ -7,13 +7,14 @@ export interface ServerConnection {
   id: string
   url: string
   name: string
-  auth: "none" | "basic" | "bearer"
+  auth: "none" | "basic" | "bearer" | "session"
   username?: string
 }
 export interface SessionTab {
   server: string
   sessionId: string
   draftID?: string
+  sidebarID?: string
   directory: string
   title: string
 }
@@ -22,8 +23,21 @@ export function remoteProxyUrl(local: string, url: string) {
   return `${local}/api/remote/${base64Encode(normalizeServerUrl(url))}`
 }
 
+export function needsServerCredential(connection: ServerConnection) {
+  return connection.auth === "basic" || connection.auth === "bearer"
+}
+
+export function connectionUrl(local: string, connection: ServerConnection) {
+  if (connection.id === LOCAL_SERVER_ID) return local
+  if (connection.auth !== "session") return remoteProxyUrl(local, connection.url)
+  const url = normalizeServerUrl(connection.url)
+  if (new URL(url).origin !== new URL(local).origin)
+    throw new Error("Browser-Session requires a server on the same origin as this WebUI")
+  return url
+}
+
 export function serverAuthHeaders(connection: ServerConnection, secret = ""): Record<string, string> {
-  if (connection.id === LOCAL_SERVER_ID || connection.auth === "none" || !secret) return {}
+  if (connection.id === LOCAL_SERVER_ID || !needsServerCredential(connection) || !secret) return {}
   const value =
     connection.auth === "bearer"
       ? `Bearer ${secret}`
@@ -39,14 +53,21 @@ export function serverHref(server: string, href: string) {
   return pathname + (query.size ? `?${query}` : "") + (hash === undefined ? "" : `#${hash}`)
 }
 
+// Settings follow the target workspace, never the source server's directory.
+export function serverSettingsHref(server: string, workspace: string | undefined, hash: string) {
+  const target = new URL(workspace || "/", "http://workspace.invalid")
+  const project = target.pathname.match(/^\/([^/]+)\/session(?:\/|$)/)
+  return serverHref(server, `${project ? `/${project[1]}` : ""}/settings${hash}`)
+}
+
 export function tabHref(tab: SessionTab) {
   if (tab.draftID)
     return serverHref(tab.server, `/${base64Encode(tab.directory)}/session?new=${encodeURIComponent(tab.draftID)}`)
   return serverHref(tab.server, `/${base64Encode(tab.directory)}/session/${encodeURIComponent(tab.sessionId)}`)
 }
 
-export function tabKey(tab: Pick<SessionTab, "server" | "sessionId" | "draftID">) {
-  return JSON.stringify([tab.server, tab.draftID ? { draft: tab.draftID } : tab.sessionId])
+export function tabKey(tab: Pick<SessionTab, "server" | "sessionId" | "draftID"> & Partial<Pick<SessionTab, "directory">>) {
+  return JSON.stringify([tab.server, tab.draftID ? { draft: tab.draftID, directory: tab.directory } : tab.sessionId])
 }
 
 export function parseConnections(value: string | null): ServerConnection[] {
@@ -69,7 +90,7 @@ export function parseConnections(value: string | null): ServerConnection[] {
         id,
         url,
         name: item.name || url,
-        auth: ["basic", "bearer"].includes(item.auth) ? item.auth : "none",
+        auth: ["basic", "bearer", "session"].includes(item.auth) ? item.auth : "none",
         username: typeof item.username === "string" ? item.username : undefined,
       })
     }
@@ -101,6 +122,7 @@ export function parseTabs(value: string | null, servers: string[]): SessionTab[]
         server: tab.server,
         sessionId: tab.sessionId,
         ...(tab.draftID ? { draftID: tab.draftID } : {}),
+        ...(typeof tab.sidebarID === "string" ? { sidebarID: tab.sidebarID } : {}),
         directory: tab.directory,
         title: tab.title,
       }))

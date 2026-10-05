@@ -3,10 +3,10 @@ import { Spinner } from "../components/ui/spinner"
 import { useProviders } from "../context/providers"
 import { useMCP } from "../context/mcp"
 import { useSDK } from "../context/sdk"
-import { useServer } from "../context/server"
-import { terminalFrame, terminalSocketUrl } from "../utils/terminal-connection"
+import { useConnections, useServer } from "../context/server"
 import { useNavigate } from "@solidjs/router"
 import { serverHref } from "../utils/servers"
+import { terminalFrame, terminalSocketUrl } from "../utils/terminal-connection"
 import { ServerManager } from "../components/server-manager"
 import { useBasePath } from "../context/base-path"
 import { useConfig } from "../context/config"
@@ -29,6 +29,7 @@ const NON_REMOVABLE_PROVIDER_IDS = new Set(["amazon-bedrock", "opencode"])
 
 export function Settings() {
   const server = useServer()
+  const connections = useConnections()
   const navigate = useNavigate()
   const providers = useProviders()
   const mcp = useMCP()
@@ -83,6 +84,12 @@ export function Settings() {
   } | null>(null)
   const [oauthCode, setOauthCode] = createSignal("")
   const [codeCopied, setCodeCopied] = createSignal(false)
+  let disposed = false
+  let oauthOperation = 0
+  onCleanup(() => {
+    disposed = true
+    oauthOperation += 1
+  })
 
   // Git SSH Key state - read-only, display all existing keys
   interface SshKey {
@@ -184,7 +191,7 @@ export function Settings() {
 
       const ptyId = ptyRes.data.id
       pending.id = ptyId
-      const wsUrl = await terminalSocketUrl({ url, id: ptyId, remote: !server.local, headers: server.authHeaders() })
+      const wsUrl = await terminalSocketUrl({ url, id: ptyId, remote: server.relay, headers: server.authHeaders() })
 
       const output = await new Promise<string>((resolve) => {
         let data = ""
@@ -456,6 +463,7 @@ Add your project-specific instructions here.
     setSuccess(null)
 
     const ok = await providers.connectProvider(providerID, key)
+    if (disposed) return
 
     setConnecting(false)
 
@@ -482,6 +490,7 @@ Add your project-specific instructions here.
     setSuccess(null)
 
     const ok = await providers.disconnectProvider(providerID)
+    if (disposed) return
 
     setDisconnecting(null)
 
@@ -494,6 +503,7 @@ Add your project-specific instructions here.
   }
 
   async function handleOAuthStart(providerID: string, methodIndex: number) {
+    const operation = ++oauthOperation
     setError(null)
     setSuccess(null)
 
@@ -506,6 +516,7 @@ Add your project-specific instructions here.
     }
 
     const result = await providers.startOAuth(providerID, methodIndex)
+    if (disposed || operation !== oauthOperation) return
 
     if (result) {
       const code = extractProviderAuthCode(result.instructions)
@@ -548,10 +559,9 @@ Add your project-specific instructions here.
 
         // Start the callback immediately - it will poll until user authorizes
         // This call blocks until authorization succeeds or fails
-        console.log("[OAuth] Starting auto callback for", providerID, "with code:", code)
         setConnecting(true)
         const ok = await providers.completeOAuth(providerID, methodIndex)
-        console.log("[OAuth] Callback result:", ok)
+        if (disposed || operation !== oauthOperation) return
         setConnecting(false)
 
         if (ok) {
@@ -574,6 +584,7 @@ Add your project-specific instructions here.
   }
 
   async function handleOAuthComplete() {
+    const operation = oauthOperation
     const pending = oauthPending()
     if (!pending) return
 
@@ -582,6 +593,7 @@ Add your project-specific instructions here.
 
     const code = pending.method === "code" ? oauthCode().trim() : undefined
     const ok = await providers.completeOAuth(pending.providerID, pending.methodIndex, code)
+    if (disposed || operation !== oauthOperation) return
 
     setConnecting(false)
 
@@ -597,6 +609,7 @@ Add your project-specific instructions here.
   }
 
   function cancelOAuth() {
+    oauthOperation += 1
     setOauthPending(null)
     setOauthCode("")
     setCodeCopied(false)
@@ -673,6 +686,10 @@ Add your project-specific instructions here.
         <div class="text-xs font-medium uppercase tracking-wide px-3 py-2" style={{ color: "var(--text-weak)" }}>
           Settings
         </div>
+        <button type="button" class="px-3 py-2 text-left text-sm" onClick={() => navigate(connections.workspace(server.id) || serverHref(server.id, "/"))}>
+          Back to workspace
+        </button>
+        <div class="px-3 pb-2 text-xs truncate" style={{ color: "var(--text-weak)" }} title={server.name}>{server.name}</div>
         {/* Project indicator */}
         <Show when={directory}>
           <div
@@ -747,7 +764,7 @@ Add your project-specific instructions here.
 
           {/* Providers Tab */}
           <Show when={activeTab() === "servers"}>
-            <ServerManager current={server.id} onSelect={id => navigate(serverHref(id, "/"))} />
+            <ServerManager />
           </Show>
           <Show when={activeTab() === "providers"}>
             <div class="space-y-6">
@@ -756,7 +773,7 @@ Add your project-specific instructions here.
                   Providers
                 </h1>
                 <p class="text-sm mt-1" style={{ color: "var(--text-weak)" }}>
-                  Connect AI providers to enable chat functionality
+                  Providers for {server.name}. Global settings and credentials apply to this server; project configuration can override provider options and models.
                 </p>
               </header>
 
@@ -1287,7 +1304,7 @@ Add your project-specific instructions here.
                         </Show>
 
                         <p class="text-xs" style={{ color: "var(--text-weak)" }}>
-                          Your credentials are stored securely and never shared.
+                          Credentials are stored on {server.name} and apply across its projects. Project configuration can override provider options and models.
                         </p>
                       </div>
                     </Show>
@@ -1513,7 +1530,7 @@ Add your project-specific instructions here.
                   MCP Servers
                 </h1>
                 <p class="text-sm mt-1" style={{ color: "var(--text-weak)" }}>
-                  Model Context Protocol servers extend AI capabilities with tools and resources
+                  MCP connections for {server.name}. Global configuration applies across this server's projects; project configuration applies to {directory || "the selected project"}.
                 </p>
               </header>
 

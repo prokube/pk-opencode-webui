@@ -9,17 +9,35 @@ const servers = ["Local", "Alpha", "Beta"].map((name, index) => {
   })
   const sessions = [initial()]
   const writes: string[] = []
+   const requests: { path: string; method: string; directory: string | null; cookie: boolean; authorization: string | null }[] = []
+  const pending = new Map<string, () => void>()
+  const held = new Set<string>()
+  let connected = true
   const streams = new Set<ReadableStreamDefaultController<Uint8Array>>()
   const encoder = new TextEncoder()
   return Bun.serve({
     port: 18041 + index,
-    fetch(req, server) {
+    async fetch(req, server) {
       const url = new URL(req.url)
+      if (url.pathname === "/test/requests") return Response.json(requests)
+      if (url.pathname === "/test/hold") { held.add(url.searchParams.get("path")!); return Response.json(true) }
+      if (url.pathname === "/test/release") {
+        const path = url.searchParams.get("path")!
+        held.delete(path)
+        pending.get(path)?.()
+        pending.delete(path)
+        return Response.json(true)
+      }
       if (url.pathname === "/test/writes") return Response.json(writes)
       if (url.pathname === "/test/streams") return Response.json(streams.size)
       if (url.pathname === "/test/reset") {
         sessions.splice(0, sessions.length, initial())
         writes.length = 0
+        requests.length = 0
+        connected = true
+        held.clear()
+        for (const release of pending.values()) release()
+        pending.clear()
         return Response.json(true)
       }
       if (url.pathname === "/test/event")
@@ -30,6 +48,24 @@ const servers = ["Local", "Alpha", "Beta"].map((name, index) => {
         })
       if (index === 2 && req.headers.get("authorization") !== `Basic ${btoa("opencode:beta-secret")}`)
         return new Response("Unauthorized", { status: 401 })
+      requests.push({ path: url.pathname, method: req.method, directory: req.headers.get("x-opencode-directory"), cookie: req.headers.has("cookie"), authorization: req.headers.get("authorization") })
+      if (held.has(url.pathname)) await new Promise<void>((resolve) => pending.set(url.pathname, resolve))
+      // Drain mocked mutation bodies before responding so pooled connections can
+      // safely carry the following session/provider request.
+      const body = req.body ? await req.text() : ""
+      if (url.pathname === "/auth/mock") {
+        connected = req.method !== "DELETE"
+        writes.push(`auth:${req.method}`)
+        return Response.json(true)
+      }
+      if (url.pathname === "/provider/mock/oauth/authorize")
+        return Response.json({ url: "https://provider.example/authorize", method: "auto", instructions: `${name} device code` })
+      if (url.pathname === "/provider/mock/oauth/callback") {
+        connected = true
+        writes.push("oauth:callback")
+        return Response.json(true)
+      }
+      if (url.pathname === "/global/dispose") { writes.push("dispose"); return Response.json(true) }
       if (url.pathname === "/pty/pty_test/connect" && req.headers.get("upgrade")?.toLowerCase() === "websocket") {
         if (server.upgrade(req)) return
         return new Response("Upgrade failed", { status: 500 })
@@ -67,7 +103,7 @@ const servers = ["Local", "Alpha", "Beta"].map((name, index) => {
         return new Response(null, { status: 204 })
       }
       if (req.method === "PATCH" && url.pathname.startsWith("/session/"))
-        return req.json().then((body) => {
+        return Promise.resolve(JSON.parse(body)).then((body) => {
           const session = sessions.find((item) => item.id === url.pathname.split("/")[2])!
           session.title = (body as { title: string }).title
           writes.push(session.title)
@@ -112,13 +148,17 @@ const servers = ["Local", "Alpha", "Beta"].map((name, index) => {
           all: [
             {
               id: "mock",
-              name: "Mock",
+               name: `${name} Provider`,
               env: [],
-              models: {
-                echo: {
+               models: {
+                 alternate: {
+                   id: "alternate", providerID: "mock", name: `${name} Alternate`,
+                   limit: { context: 32768, output: 4096 },
+                 },
+                 echo: {
                   id: "echo",
                   providerID: "mock",
-                  name: "Echo",
+                   name: `${name} Model`,
                   api: { id: "echo", url: "http://mock.invalid", npm: "@ai-sdk/openai-compatible" },
                   limit: { context: 32768, output: 4096 },
                   cost: { input: 0, output: 0, cache: { read: 0, write: 0 } },
@@ -140,13 +180,13 @@ const servers = ["Local", "Alpha", "Beta"].map((name, index) => {
               },
             },
           ],
-          connected: ["mock"],
+           connected: connected ? ["mock"] : [],
           default: { mock: "echo" },
         })
-      if (url.pathname === "/provider/auth") return Response.json({})
+       if (url.pathname === "/provider/auth") return Response.json({ mock: [{ type: "api", label: `${name} API key` }, { type: "oauth", label: `${name} device login` }] })
+      if (url.pathname === "/mcp") return Response.json({ shared: { status: "failed", error: `${name} MCP detail` } })
       if (
         url.pathname === "/session/status" ||
-        url.pathname === "/mcp" ||
         url.pathname === "/config" ||
         url.pathname === "/global/config"
       )
@@ -186,10 +226,45 @@ const uis = [
     stderr: "inherit",
   }),
 )
+// Model a cookie-authenticated gateway. Browser-session traffic never enters
+// the notebook server's /api/remote relay; websocket upgrades terminate here.
+const gateways = [18045, 18046].map((port, index) => {
+  let valid = true
+  return Bun.serve({
+    port,
+    async fetch(req, server) {
+      const url = new URL(req.url)
+      if (url.pathname === "/test/session/reset") { valid = true; return Response.json(true) }
+      if (url.pathname === "/test/session/expire") { valid = false; return Response.json(true) }
+      if (url.pathname.startsWith("/browser-server/")) {
+        if (!valid || !req.headers.get("cookie")?.includes("browser-session=valid")) return new Response("Login required", { status: 401 })
+        if (req.headers.has("authorization") || req.headers.has("x-opencode-server-authorization")) return new Response("Unexpected credential", { status: 400 })
+        if (url.pathname.endsWith("/connect") && req.headers.get("upgrade") === "websocket") {
+          if (server.upgrade(req)) return
+          return new Response("Upgrade failed", { status: 500 })
+        }
+        const path = url.pathname.slice("/browser-server".length)
+        // Do not forward browser framing headers with a re-encoded request body.
+        // Bun can otherwise send conflicting framing on pooled POST connections.
+        const headers = new Headers(req.headers)
+        headers.delete("content-length")
+        headers.delete("transfer-encoding")
+        const body = req.body ? await req.arrayBuffer() : undefined
+        return fetch(`http://127.0.0.1:18042${path}${url.search}`, { method: req.method, headers, body, signal: req.signal })
+      }
+      return fetch(`http://127.0.0.1:${index ? 18044 : 18040}${url.pathname}${url.search}`, { method: req.method, headers: req.headers, body: req.body, signal: req.signal })
+    },
+    websocket: {
+      open(ws) { ws.send("Browser session terminal\r\n") },
+      message(ws, data) { ws.send(data) },
+    },
+  })
+})
 for (const signal of ["SIGINT", "SIGTERM"] as const)
   process.on(signal, () => {
     uis.forEach((ui) => ui.kill())
     servers.forEach((server) => server.stop(true))
+    gateways.forEach((server) => server.stop(true))
     process.exit(0)
   })
 await Promise.all(uis.map((ui) => ui.exited))

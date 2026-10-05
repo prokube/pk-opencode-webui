@@ -8,7 +8,7 @@ A feature-rich, prefix-aware Web UI for [OpenCode](https://github.com/anomalyco/
 
 - **Full reverse proxy support** -- every URL, asset, and API call respects the configured base path
 - **Multi-project workspace** -- switch between projects without restarting; each gets its own session
-- **Multiple OpenCode servers** -- manage connections and keep session/draft tabs attached to their server
+- **Multiple OpenCode servers** -- select a server while keeping projects, sessions and drafts isolated
 - **MCP server management** -- add, remove, connect, and disconnect MCP servers from the UI
 - **Keyboard shortcuts** -- core navigation and panel shortcuts with an in-app reference
 - **Manual session rename** -- keep session titles organized from the sidebar
@@ -87,33 +87,68 @@ A full settings page with tabs for:
 5. **Project Config** -- edit project tools, permissions, and configuration
 6. **Appearance** -- Light / Dark / System theme
 
-The **Settings → Servers** page manages local and external OpenCode connections.
-Session tabs show their server name; switching a
-tab restores its own server, project, draft and settings scope.
+**Settings → Servers** configures local and external OpenCode connections.
+The **Select server** dropdown at the top of the session sidebar
+selects the active server. The existing project and session sidebar shows only
+that server's workspace. On Home, the selector sits at the bottom beside Terminal
+and Settings.
 
 ### External OpenCode servers
 
 1. Open **Settings → Servers** and choose **Add server**.
 2. Enter the OpenCode API base URL and an optional display name.
-3. Choose no authentication, username/password (default username: `opencode`),
-   or a Bearer token. **Connect** checks `/global/health` before saving.
-4. Open a discovered project or choose **New session**. Existing sessions and
-   new-session drafts remain attached to their original server when switching tabs.
+3. Choose **Browser-Session**, no authentication, username/password (default username: `opencode`),
+   or a Bearer token. **Save connection** checks `/global/health` before saving,
+   without navigating away from your current work context.
+4. Use **Select server** at the top of the sidebar to choose a configured connection. The active name stays visible; collapsed and mobile sidebars use an icon with the name and URL in its tooltip.
+   The menu lists configured names, exposes URLs as tooltips and marks the current server.
+5. Use the existing **Open Project** and session sidebar on that server.
 
-The workspace has no persistent server dropdown or connection-status header.
-The tab strip offers a **+** action for new sessions. Missing connections or
-credentials link to a backend-independent server settings page, so connection
-management remains accessible even when the selected backend cannot be used.
+Switching back restores the server's last workspace route during this app visit.
+Switching servers within Settings keeps the current settings tab and uses the
+target server's project scope; **Back to workspace** returns to that server's
+remembered workspace. Drafts remain isolated in memory and
+background session streams remain server-bound. Switching does not stop running
+sessions. There is no cross-server session tab strip or per-session server chooser.
+Connection rows in **Settings → Servers** have edit and remove actions and do not
+switch workspaces. Missing connections or credentials link to a backend-independent
+server settings page, so management remains reachable without a working backend.
+
+**New Session** immediately selects a removable local draft in the project's sidebar.
+Repeated clicks reuse the current empty draft; a draft with text or attachments can
+be left behind when starting another. Navigating between projects and servers
+restores the selected route and composer during the app visit. The first send uses
+the standard session-create API and promotes that sidebar entry in place. Opening
+or removing a local draft does not create or delete a backend session. Composer
+contents retain the existing in-memory, 40-draft limit and are not reload-persistent.
 
 For a personal prokube.ai sandbox, use its full published connect URL, for example
 `https://cluster.example/svc/personal-sandbox/connect/workspace/sbx-id`, and a
 key with that sandbox's `connect` permission. Provider credentials such as the
 ChatGPT device-code login are managed by the selected OpenCode server separately.
 
-Connection metadata and open tabs persist in browser localStorage. Passwords and
+**Browser-Session** uses an existing browser login, commonly established by an
+OIDC gateway. The WebUI does not act as an OIDC client or read login cookies.
+The server URL must have the same origin (scheme, host and port) as the WebUI,
+and the login cookie must cover that URL. HTTP, SSE and terminal WebSockets go
+directly from the browser to the server URL, bypassing the notebook's remote
+relay. No extra credential or terminal ticket is needed in this mode.
+
+For the personal sandbox backend the authenticated URL is
+`https://cluster.example/pkui/api/namespaces/workspace/sandboxes/sbx-id/connect`.
+The gateway authenticates the user; the backend checks workspace membership,
+sandbox ownership and the `connect` permission. Mutations and WebSocket upgrades
+require a matching Origin. Platform credentials are stripped before forwarding
+to the guest. Expired or denied sessions display a sign-in/reload message.
+
+This mode does not support cross-origin cookie authentication. Basic/Bearer
+connections continue to use the credential-isolating relay; filesystem-backed
+local-only features remain unavailable for all remote connections.
+
+Connection metadata and server-bound session tracking persist in browser localStorage. Passwords and
 Bearer tokens are kept separately in sessionStorage for the current browser tab
 session. After they expire or that browser session ends, edit the connection to
-authenticate again. Removing a connection forgets its credential and tabs; it
+authenticate again. Removing a connection forgets its credential and session tracking; it
 does not delete sessions on the external server.
 
 Native OpenCode APIs (sessions, providers, files, MCP connect/disconnect/add and
@@ -186,10 +221,8 @@ no credentials. The relay adds the remote Authorization header to the upstream
 WebSocket handshake. As with local terminal access, server connection management
 is intended for the authenticated owner of this UI deployment.
 
-The connection list and server-bound session/draft tabs follow the upstream
-[v1.18.33 server](https://github.com/anomalyco/opencode/blob/v1.18.33/packages/app/src/context/server.tsx)
-and [tab](https://github.com/anomalyco/opencode/blob/v1.18.33/packages/app/src/context/tabs.tsx)
-concepts. This implementation adapts them to our existing prefix-aware router,
+The connection registry and server-bound session tracking adapt upstream
+OpenCode concepts to our existing prefix-aware router,
 same-origin relay and local extended API. It supports HTTP(S) connections; SSH
 and desktop-sidecar transports belong to the upstream desktop application.
 

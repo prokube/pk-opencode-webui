@@ -135,7 +135,7 @@ export function Terminal(props: TerminalProps) {
     if (disposed || !term) return
 
     // Build WebSocket URL
-    const wsUrl = await terminalSocketUrl({ url, id: props.ptyId, directory: directory || "", cursor, remote: !server.local, headers: server.authHeaders() }).catch(() => undefined)
+    const wsUrl = await terminalSocketUrl({ url, id: props.ptyId, directory: directory || "", cursor, remote: server.relay, headers: server.authHeaders() }).catch(() => undefined)
     if (disposed) return
     if (!wsUrl) { setStatus("error"); setError("Could not authorize the terminal connection"); writeStatus("Could not authorize the terminal connection", "error"); return }
 
