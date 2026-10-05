@@ -1705,13 +1705,14 @@ Add your project-specific instructions here.
                               {/* Delete Button */}
                               <button
                                 onClick={() => {
-                                  if (mcpLoading() || mcpDeleting()) return
+                                  if (!server.local || mcpLoading() || mcpDeleting()) return
                                   setMcpToDelete(name)
                                 }}
-                                disabled={mcpLoading() === name || mcpDeleting() === name}
+                                disabled={!server.local || mcpLoading() === name || mcpDeleting() === name}
                                 class="p-1 rounded transition-colors opacity-50 hover:opacity-100 disabled:opacity-30"
                                 style={{ color: "var(--icon-critical-base)" }}
-                                title="Remove server"
+                                aria-label={`Remove ${name} MCP server`}
+                                title={server.local ? "Remove server" : "Removal is unavailable for remote servers. Use the connection toggle to disconnect instead."}
                               >
                                 <Show when={mcpDeleting() === name} fallback={<Trash2 class="w-4 h-4" />}>
                                   <Spinner class="w-4 h-4" />

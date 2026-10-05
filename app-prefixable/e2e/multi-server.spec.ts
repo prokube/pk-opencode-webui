@@ -87,6 +87,27 @@ test("settings switching retains provider, MCP and appearance tabs and returns t
   }
 })
 
+test("remote MCP removal is unavailable in settings and the session dialog", async ({ page, request }) => {
+  for (const id of [alpha, "local"]) {
+    const query = id === "local" ? "" : `?server=${id}`
+    await page.goto(`./L3dvcmtzcGFjZQ/settings${query}#mcp`)
+    const remove = page.getByRole("button", { name: "Remove shared MCP server", exact: true })
+    if (id === alpha) {
+      await expect(remove).toBeDisabled()
+      await expect(remove).toHaveAttribute("title", /disconnect instead/)
+      await expect(page.getByRole("switch", { name: "Toggle shared connection", exact: true })).toBeEnabled()
+    } else await expect(remove).toBeEnabled()
+    await page.goto(`./L3dvcmtzcGFjZQ/session/ses_shared${query}`)
+    await page.getByRole("button", { name: "MCP Servers", exact: true }).click()
+    if (id === alpha) {
+      await expect(remove).toBeDisabled()
+      await expect(remove).toHaveAttribute("title", /disconnect instead/)
+    } else await expect(remove).toBeEnabled()
+  }
+  for (const port of [18041, 18042])
+    expect(await (await request.get(`http://127.0.0.1:${port}/test/writes`)).json()).toEqual([])
+})
+
 test("late provider and MCP responses cannot replace the selected settings server", async ({ page, request }) => {
   await request.post("http://127.0.0.1:18042/test/hold?path=/provider")
   await request.post("http://127.0.0.1:18042/test/hold?path=/mcp")
