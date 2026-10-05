@@ -108,6 +108,33 @@ test("remote MCP removal is unavailable in settings and the session dialog", asy
     expect(await (await request.get(`http://127.0.0.1:${port}/test/writes`)).json()).toEqual([])
 })
 
+test("terminal ticket failures retry and recover without changing servers", async ({ page }) => {
+  let attempts = 0
+  const frames: string[] = []
+  await page.route("**/connect-ticket", route => ++attempts === 1 ? route.fulfill({ status: 503, body: "Unavailable" }) : route.continue())
+  page.on("websocket", socket => socket.on("framereceived", frame => frames.push(String(frame.payload))))
+  await page.goto(`./L3dvcmtzcGFjZQ/session/ses_shared?server=${beta}`)
+  await page.getByRole("button", { name: "Toggle Terminal", exact: true }).click()
+  await expect.poll(() => frames.join("")).toContain("Beta terminal")
+  expect(attempts).toBe(2)
+  await expect(page).toHaveURL(url => url.searchParams.get("server") === beta)
+})
+
+test("terminal ticket retries stop at the existing five-retry limit", async ({ page }) => {
+  await page.clock.install()
+  let attempts = 0
+  await page.route("**/connect-ticket", route => { attempts++; return route.fulfill({ status: 503, body: "Unavailable" }) })
+  await page.goto(`./L3dvcmtzcGFjZQ/session/ses_shared?server=${beta}`)
+  await page.getByRole("button", { name: "Toggle Terminal", exact: true }).click()
+  await expect.poll(() => attempts).toBe(1)
+  for (const [index, delay] of [1000, 2000, 4000, 8000, 10000].entries()) {
+    await page.clock.runFor(delay + 100)
+    await expect.poll(() => attempts).toBe(index + 2)
+  }
+  await page.clock.runFor(30000)
+  expect(attempts).toBe(6)
+})
+
 test("late provider and MCP responses cannot replace the selected settings server", async ({ page, request }) => {
   await request.post("http://127.0.0.1:18042/test/hold?path=/provider")
   await request.post("http://127.0.0.1:18042/test/hold?path=/mcp")

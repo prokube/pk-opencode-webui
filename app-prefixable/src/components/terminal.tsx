@@ -131,13 +131,31 @@ export function Terminal(props: TerminalProps) {
     term.write(`${colors[type]}${message}\x1b[0m\r\n`)
   }
 
+  function reconnect(message = "Reconnecting") {
+    if (disposed) return
+    if (reconnectAttempts >= 5) {
+      writeStatus("Reconnect limit reached", "error")
+      return
+    }
+    const delay = Math.min(1000 * 2 ** reconnectAttempts, 10_000)
+    reconnectAttempts += 1
+    writeStatus(`${message} in ${delay / 1000} seconds...`, "info")
+    reconnectTimer = setTimeout(() => connect(), delay)
+  }
+
   async function connect() {
     if (disposed || !term) return
 
     // Build WebSocket URL
     const wsUrl = await terminalSocketUrl({ url, id: props.ptyId, directory: directory || "", cursor, remote: server.relay, headers: server.authHeaders() }).catch(() => undefined)
     if (disposed) return
-    if (!wsUrl) { setStatus("error"); setError("Could not authorize the terminal connection"); writeStatus("Could not authorize the terminal connection", "error"); return }
+    if (!wsUrl) {
+      setStatus("error")
+      setError("Could not authorize the terminal connection")
+      writeStatus("Could not authorize the terminal connection", "error")
+      reconnect("Retrying terminal authorization")
+      return
+    }
 
     setStatus("connecting")
     setError(null)
@@ -209,23 +227,9 @@ export function Terminal(props: TerminalProps) {
             props.onClose?.()
             return
           }
-          if (reconnectAttempts >= 5) {
-            writeStatus("Reconnect limit reached", "error")
-            return
-          }
-          const delay = Math.min(1000 * 2 ** reconnectAttempts, 10_000)
-          reconnectAttempts += 1
-          writeStatus(`Reconnecting in ${delay / 1000} seconds...`, "info")
-          reconnectTimer = setTimeout(() => connect(), delay)
+          reconnect()
         }).catch(() => {
-          if (disposed || reconnectAttempts >= 5) {
-            writeStatus("Unable to reconnect terminal", "error")
-            return
-          }
-          const delay = Math.min(1000 * 2 ** reconnectAttempts, 10_000)
-          reconnectAttempts += 1
-          writeStatus(`Terminal state unavailable; retrying in ${delay / 1000} seconds...`, "info")
-          reconnectTimer = setTimeout(() => connect(), delay)
+          reconnect("Terminal state unavailable; retrying")
         })
       }
     })
