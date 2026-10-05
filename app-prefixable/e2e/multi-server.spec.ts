@@ -303,7 +303,11 @@ test("draft options support session-list keyboard navigation without backend bul
   await page.getByRole("link", { name: "Alpha session", exact: true }).click()
   await expect(page.getByRole("heading", { name: "Alpha session", exact: true })).toBeVisible()
   await expect(prompt).toBeVisible()
+  // Finish the clicked link's blur/navigation frame before moving keyboard focus.
+  await page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))))
   const list = page.getByRole("listbox", { name: "Sessions", exact: true })
+  await list.focus()
+  await expect(list).toBeFocused()
   await list.press("Home")
   await expect(list).toHaveAttribute("aria-activedescendant", "session-draft:keyboard")
   await expect(page.getByRole("option", { name: "New session Draft", exact: true })).toHaveAttribute("aria-selected", "false")
