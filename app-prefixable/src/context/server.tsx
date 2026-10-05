@@ -79,6 +79,7 @@ function createConnections() {
   )
   const [busy, setBusy] = createSignal<Record<string, boolean>>({})
   const workspaces = new Map<string, string>()
+  const removalHandlers = new Set<(id: string) => void>()
   const projectRoutes = new Map<string, string>()
   const composers = new Map<string, { empty: () => boolean; discard: (token: string) => void }>()
   const [leases, setLeases] = createSignal<string[]>([])
@@ -167,6 +168,7 @@ function createConnections() {
     )
   })
   return {
+    onRemove(handler: (id: string) => void) { removalHandlers.add(handler) },
     composer(server: string, directory: string, empty: () => boolean, discard: (token: string) => void) {
       const key = JSON.stringify([server, directory])
       const composer = { empty, discard }
@@ -216,12 +218,15 @@ function createConnections() {
     remove(id: string) {
       streams.get(id)?.dispose()
       streams.delete(id)
+      workspaces.delete(id)
+      for (const key of projectRoutes.keys()) if (JSON.parse(key)[0] === id) projectRoutes.delete(key)
       batch(() => {
         setConnections((previous) => previous.filter((row) => row.id !== id))
         setCredentials((previous) => Object.fromEntries(Object.entries(previous).filter(([key]) => key !== id)))
         setTabs((previous) => previous.filter((tab) => tab.server !== id))
         setBusy((previous) => Object.fromEntries(Object.entries(previous).filter(([key]) => JSON.parse(key)[0] !== id)))
       })
+      for (const handler of removalHandlers) handler(id)
     },
     remember(tab: SessionTab) {
       setTabs((previous) => {

@@ -90,6 +90,11 @@ const drafts = new Map<string, SessionDraft>();
 const draftVersions = new Map<string, number>();
 const DRAFT_LIMIT = 40;
 
+function forgetServerDrafts(server: string) {
+  for (const key of drafts.keys()) if (key.startsWith(`${server}:`)) drafts.delete(key);
+  for (const key of draftVersions.keys()) if (key.startsWith(`${server}:`)) draftVersions.delete(key);
+}
+
 function reviseDraft(key: string) {
   const version = advanceDraftVersion(draftVersions, key);
   for (const removed of trimDraftVersions(draftVersions, DRAFT_LIMIT)) drafts.delete(removed);
@@ -111,6 +116,8 @@ function storeDraft(key: string, draft: SessionDraft) {
 export function Session() {
   const serverId = useServer().id;
   const connections = useConnections();
+  // Module-level drafts outlive individual routes; register once per registry.
+  connections.onRemove(forgetServerDrafts);
   const params = useParams<{ dir: string; id?: string }>();
   const [search] = useSearchParams<{ new?: string }>();
   const navigate = useNavigate();
@@ -517,6 +524,7 @@ export function Session() {
   // Track the composite dir+id key so the effect fires on directory changes too,
   // preventing drafts from leaking across projects when id stays undefined.
   function saveComposerDraft(key: string) {
+    if (!connections.list().some(item => item.id === serverId)) return;
     const text = untrack(input);
     const files = untrack(fileContext);
     const images = untrack(imageAttachments);
@@ -547,7 +555,7 @@ export function Session() {
     console.log("[Session] URL param changed:", key);
 
     // Save draft from the previous session before switching.
-    if (prevKey && prevKey !== key) saveComposerDraft(prevKey);
+    if (prevKey && prevKey !== key && activeDraft.key === prevKey) saveComposerDraft(prevKey);
     activeDraft.key = key;
 
     setSessionId(id);
@@ -1626,6 +1634,10 @@ export function Session() {
         const continuing = drafts.get(originalDraft);
         if (continuing) storeDraft(scope.draft, continuing);
         else drafts.delete(scope.draft);
+        drafts.delete(originalDraft);
+        draftVersions.delete(originalDraft);
+        // The route effect must not save the retired temporary key again.
+        activeDraft.key = scope.draft;
         scope.draftVersion = reviseDraft(scope.draft);
         setSessionId(id);
         navigate(`/${dirSlug()}/session/${id}`, { replace: true });

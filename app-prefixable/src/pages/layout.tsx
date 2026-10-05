@@ -789,6 +789,19 @@ export function Layout(props: ParentProps) {
     ];
   });
 
+  const draftEntry = (id: string) => localEntries().find(item => item.draftID && `draft:${item.draftID}` === id);
+  const navigationIds = createMemo(() => searchQuery().trim() ? visibleSessionIds() : [
+    ...localEntries().filter(item => item.draftID || (!pinnedIds().includes(item.sessionId) && projectSessions().some(session => session.id === item.sessionId)))
+      .map(item => item.draftID ? `draft:${item.draftID}` : item.sessionId),
+    ...visibleSessionIds().filter(id => pinnedIds().includes(id) || !localEntries().some(item => item.sessionId === id)),
+  ]);
+  createEffect(() => {
+    const focused = focusedId();
+    if (!focused || navigationIds().includes(focused)) return;
+    const promoted = localEntries().find(item => item.sidebarID && `draft:${item.sidebarID}` === focused);
+    setFocusedId(promoted?.sessionId || navigationIds()[0] || null);
+  });
+
   function toggleSelectedSession(id: string, range = false) {
     const anchor = selectionAnchor();
     setSelectedIds((current) => range && anchor
@@ -817,7 +830,7 @@ export function Layout(props: ParentProps) {
     // those DOM elements are unmounted and aria-activedescendant would dangle.
     if (searchQuery().trim()) return;
     const current = currentSessionId();
-    const ids = visibleSessionIds();
+    const ids = navigationIds();
     if (current && ids.includes(current)) {
       setFocusedId(current);
       scrollSessionIntoView(current);
@@ -849,6 +862,8 @@ export function Layout(props: ParentProps) {
 
     if (e.key === " " && focusedId() && target.getAttribute("role") === "listbox") {
       e.preventDefault();
+      const draft = draftEntry(focusedId()!);
+      if (draft) { navigate(tabHref(draft)); return; }
       toggleSelectedSession(focusedId()!, e.shiftKey);
       return;
     }
@@ -947,7 +962,7 @@ export function Layout(props: ParentProps) {
       return;
     }
 
-    const ids = visibleSessionIds();
+    const ids = navigationIds();
     if (!ids.length) return;
 
     // If context menu is open, delegate to menu keyboard handler
@@ -991,7 +1006,10 @@ export function Layout(props: ParentProps) {
     if (e.key === "Enter") {
       e.preventDefault();
       const focused = focusedId();
-      if (focused) navigate(`/${dirSlug()}/session/${focused}`);
+      if (focused) {
+        const draft = draftEntry(focused);
+        navigate(draft ? tabHref(draft) : `/${dirSlug()}/session/${focused}`);
+      }
       return;
     }
 
@@ -1003,7 +1021,7 @@ export function Layout(props: ParentProps) {
     ) {
       e.preventDefault();
       const focused = focusedId();
-      if (focused) {
+      if (focused && !draftEntry(focused)) {
         setMenuOpenId(focused);
         setMenuFocusIndex(0);
       }
@@ -1970,7 +1988,8 @@ export function Layout(props: ParentProps) {
                       {renderSessionItem(session()!, false)}
                     </Show>
                   }>
-                    <div class="flex h-9 items-center gap-1 rounded-md px-2 text-sm" style={{ background: selected() ? "var(--surface-inset)" : "transparent", color: selected() ? "var(--text-interactive-base)" : "var(--text-base)" }}>
+                    <div role="option" id={`session-draft:${key}`} aria-label="New session Draft" aria-selected={selected()}
+                      class="flex h-9 items-center gap-1 rounded-md px-2 text-sm" style={{ background: selected() || focusedId() === `draft:${key}` ? "var(--surface-inset)" : "transparent", color: selected() ? "var(--text-interactive-base)" : "var(--text-base)", outline: focusedId() === `draft:${key}` ? "2px solid var(--border-focus, var(--interactive-base))" : "none", "outline-offset": "-2px" }}>
                       <button type="button" class="min-w-0 flex-1 py-2 text-left" aria-current={selected() ? "page" : undefined}
                         onClick={() => navigate(tabHref(entry()))}>New session <span class="text-xs" style={{ color: "var(--text-weak)" }}>Draft</span></button>
                       <button type="button" aria-label="Remove draft" class="rounded p-1" onClick={() => {
