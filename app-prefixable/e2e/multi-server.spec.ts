@@ -326,7 +326,7 @@ test("Home recent projects, project dialog and command palette restore the selec
   await prompt.fill("Remember me through every project picker")
   const route = page.url()
   await page.getByTitle("Home", { exact: true }).click()
-  await page.getByRole("button", { name: /^\/workspace/ }).click()
+  await page.getByRole("button", { name: /^(\/workspace|~)/ }).click()
   await expect(page).toHaveURL(route)
   await expect(prompt).toHaveValue("Remember me through every project picker")
   await page.getByTitle("Home", { exact: true }).click()

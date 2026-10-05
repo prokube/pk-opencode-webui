@@ -14,6 +14,8 @@ export async function terminalSocketUrl(input: {
     const response = await fetch(base + "/connect-ticket", {
       method: "POST",
       headers: input.headers,
+      redirect: "error",
+      credentials: "same-origin",
       signal: AbortSignal.timeout(10_000),
     })
     if (!response.ok) throw new Error(`Terminal authorization failed (HTTP ${response.status})`)
