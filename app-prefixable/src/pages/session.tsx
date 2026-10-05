@@ -1632,13 +1632,13 @@ export function Session() {
         // Text entered while creation was pending belongs to the promoted entry.
         saveComposerDraft(originalDraft);
         const continuing = drafts.get(originalDraft);
+        scope.draftVersion = reviseDraft(scope.draft);
         if (continuing) storeDraft(scope.draft, continuing);
         else drafts.delete(scope.draft);
         drafts.delete(originalDraft);
         draftVersions.delete(originalDraft);
         // The route effect must not save the retired temporary key again.
         activeDraft.key = scope.draft;
-        scope.draftVersion = reviseDraft(scope.draft);
         setSessionId(id);
         navigate(`/${dirSlug()}/session/${id}`, { replace: true });
         // Store the model for the new session

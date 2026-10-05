@@ -296,6 +296,54 @@ test("removing and readding a server forgets its routes and composer drafts", as
   await expect(prompt).toHaveValue("")
 })
 
+for (const failure of ["create", "prompt"]) {
+  test(`newer composer typing survives first-send ${failure} failure`, async ({ page }) => {
+    await page.goto(`./L3dvcmtzcGFjZQ/session?new=failure-continuation&server=${alpha}`)
+    await expect(page.getByRole("button", { name: "Model: Alpha Model", exact: true })).toBeVisible()
+    let release!: () => void
+    const gate = new Promise<void>(resolve => { release = resolve })
+    await page.route(`**/api/remote/${alpha}/session`, async route => {
+      if (route.request().method() !== "POST") return route.continue()
+      await gate
+      if (failure === "create") return route.fulfill({ status: 503, body: "Unavailable" })
+      return route.continue()
+    })
+    await page.route("**/prompt_async", route => route.fulfill({ status: 503, body: "Unavailable" }))
+    const prompt = page.getByPlaceholder("Type a message... (Tab to switch agent, / for commands)")
+    await prompt.fill("Submitted message")
+    await prompt.press("Enter")
+    await expect(prompt).toHaveValue("")
+    await prompt.fill("Newer typing must survive")
+    release()
+    await expect(page.getByText(/Failed to send the first message/)).toBeVisible()
+    await expect(prompt).toHaveValue("Newer typing must survive")
+  })
+}
+
+test("Home recent projects, project dialog and command palette restore the selected draft", async ({ page }) => {
+  await page.goto(`./L3dvcmtzcGFjZQ/session?new=remembered&server=${alpha}`)
+  const prompt = page.getByPlaceholder("Type a message... (Tab to switch agent, / for commands)")
+  await prompt.fill("Remember me through every project picker")
+  const route = page.url()
+  await page.getByTitle("Home", { exact: true }).click()
+  await page.getByRole("button", { name: /^\/workspace/ }).click()
+  await expect(page).toHaveURL(route)
+  await expect(prompt).toHaveValue("Remember me through every project picker")
+  await page.getByTitle("Home", { exact: true }).click()
+  await page.getByRole("button", { name: "Open Project", exact: true }).last().click()
+  await page.getByRole("textbox", { name: "Search directories", exact: true }).fill("/workspace")
+  await page.getByRole("button", { name: "Open path", exact: true }).click()
+  await expect(page).toHaveURL(route)
+  await expect(prompt).toHaveValue("Remember me through every project picker")
+  await page.getByTitle("Home", { exact: true }).click()
+  await page.keyboard.press("Control+k")
+  const search = page.getByRole("combobox")
+  await search.fill("#workspace")
+  await search.press("Enter")
+  await expect(page).toHaveURL(route)
+  await expect(prompt).toHaveValue("Remember me through every project picker")
+})
+
 test("draft options support session-list keyboard navigation without backend bulk selection", async ({ page, request }) => {
   await page.goto(`./L3dvcmtzcGFjZQ/session?new=keyboard&server=${alpha}`)
   const prompt = page.getByPlaceholder("Type a message... (Tab to switch agent, / for commands)")

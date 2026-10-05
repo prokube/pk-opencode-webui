@@ -7,7 +7,7 @@ import { ProjectDialog } from "../components/project-dialog"
 import { useBranding } from "../context/branding"
 import { useProjects } from "../context/projects"
 import { createOpencodeClient } from "../sdk/client"
-import { useServer } from "../context/server"
+import { useConnections, useServer } from "../context/server"
 import { useSDK } from "../context/sdk"
 import { Button } from "../components/ui/button"
 
@@ -73,6 +73,8 @@ export function ProjectPicker() {
   const branding = useBranding()
   const { url } = useSDK()
   const { authHeaders } = useServer()
+  const server = useServer()
+  const connections = useConnections()
   const projects = useProjects()
   const [dialogOpen, setDialogOpen] = createSignal(false)
   const [dialogView, setDialogView] = createSignal<"browse" | "clone">("browse")
@@ -95,12 +97,12 @@ export function ProjectPicker() {
 
   function handleProjectSelect(worktree: string) {
     projects.touch(worktree)
-    navigate(`/${base64Encode(worktree)}/session`)
+    navigate(connections.projectRoute(server.id, worktree) || `/${base64Encode(worktree)}/session`)
   }
 
   function openRecentProject(worktree: string) {
     projects.touch(worktree)
-    navigate(`/${base64Encode(worktree)}/session`)
+    navigate(connections.projectRoute(server.id, worktree) || `/${base64Encode(worktree)}/session`)
   }
 
   return (

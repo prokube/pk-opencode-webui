@@ -4,6 +4,7 @@ import { useServerNavigate as useNavigate } from "../context/server-navigation"
 import { FolderOpen, Loader2, MessageCircle, Search, Zap } from "lucide-solid"
 import { formatKeybind, useCommand } from "../context/command"
 import { useProjects } from "../context/projects"
+import { useConnections, useServer } from "../context/server"
 import { useSDK } from "../context/sdk"
 import { useSync } from "../context/sync"
 import type { Session } from "../sdk/client"
@@ -15,6 +16,8 @@ import { getFilename } from "./shared"
 export function CommandPalette() {
   const command = useCommand()
   const projects = useProjects()
+  const server = useServer()
+  const connections = useConnections()
   const sdk = useSDK()
   const sync = useSync()
   const navigate = useNavigate()
@@ -104,7 +107,7 @@ export function CommandPalette() {
         category: "project",
         run: () => {
           projects.touch(project.worktree)
-          navigate(`/${base64Encode(project.worktree)}/session`)
+          navigate(connections.projectRoute(server.id, project.worktree) || `/${base64Encode(project.worktree)}/session`)
         },
       })
     }
